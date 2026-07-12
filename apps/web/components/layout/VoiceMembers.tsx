@@ -15,41 +15,6 @@ import { useVoiceStore } from '@/stores/voice';
  * Справа — индикаторы: перечёркнутый микрофон (мут) и наушники (глушилка,
  * участник не слышит канал); состояние раздаёт сервер в том же presence.
  */
-/**
- * Компактный стек аватарок сидящих в голосовом канале — на самой строке канала
- * (как в Discord). Показываем до трёх, остальных сворачиваем в «+N». Полный
- * список с именами/мутами по-прежнему живёт ниже в {@link VoiceMembers}.
- */
-export function VoiceAvatarStack({ room }: { room: string }) {
-  const members = useVoiceStore((s) => s.presence[room]);
-  if (!members || members.length === 0) return null;
-
-  const shown = members.slice(0, 3);
-  const extra = members.length - shown.length;
-  return (
-    <span
-      className="flex items-center"
-      aria-label={`В канале: ${members.length}`}
-      title={members.map((m) => m.name || 'Аноним').join(', ')}
-    >
-      <span className="flex -space-x-1.5">
-        {shown.map((m) => (
-          <span
-            key={m.id}
-            className="h-[18px] w-[18px] rounded-full bg-cover bg-center ring-2 ring-bg-sidebar"
-            style={avatarStyle(m.name || 'Аноним')}
-          />
-        ))}
-      </span>
-      {extra > 0 && (
-        <span className="ml-1 text-[11px] font-semibold tabular-nums text-text-muted">
-          +{extra}
-        </span>
-      )}
-    </span>
-  );
-}
-
 export function VoiceMembers({ room }: { room: string }) {
   const members = useVoiceStore((s) => s.presence[room]);
   const myId = useVoiceStore((s) => s.myId);

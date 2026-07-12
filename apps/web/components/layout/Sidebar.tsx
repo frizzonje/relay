@@ -24,7 +24,7 @@ import {
 import { deleteChannel } from '@/lib/channels';
 import { deleteServer } from '@/lib/servers';
 import { useVoiceStore } from '@/stores/voice';
-import { VoiceMembers, VoiceAvatarStack } from '@/components/layout/VoiceMembers';
+import { VoiceMembers } from '@/components/layout/VoiceMembers';
 import { CreateChannelDialog } from '@/components/layout/CreateChannelDialog';
 
 /** Заголовок секции с необязательной кнопкой «+» (появляется на ховере, как в Discord). */
@@ -62,7 +62,6 @@ function ChannelRow({
   onClick,
   onDelete,
   deleteLabel,
-  accessory,
   children,
 }: {
   active?: boolean;
@@ -70,8 +69,6 @@ function ChannelRow({
   onClick?: () => void;
   onDelete?: () => void;
   deleteLabel?: string;
-  /** Правый элемент строки (напр. стек аватарок голосового канала). */
-  accessory?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -103,23 +100,18 @@ function ChannelRow({
         />
       )}
       <span className="relative z-[1] flex min-w-0 items-center gap-1.5">{children}</span>
-      {(accessory || onDelete) && (
-        <span className="relative z-[1] ml-auto flex shrink-0 items-center gap-1.5">
-          {accessory}
-          {onDelete && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete();
-              }}
-              title={deleteLabel}
-              aria-label={deleteLabel}
-              className="grid h-5 w-5 shrink-0 place-items-center rounded text-lg leading-none text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-danger focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100"
-            >
-              ×
-            </button>
-          )}
-        </span>
+      {onDelete && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          title={deleteLabel}
+          aria-label={deleteLabel}
+          className="relative z-[1] ml-auto grid h-5 w-5 shrink-0 place-items-center rounded text-lg leading-none text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-danger focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100"
+        >
+          ×
+        </button>
       )}
     </div>
   );
@@ -301,7 +293,6 @@ export function Sidebar() {
                 onClick={() => void joinVoice(c.slug, c.name)}
                 onDelete={c.removable ? () => deleteChannel(c.id) : undefined}
                 deleteLabel="Удалить канал"
-                accessory={<VoiceAvatarStack room={c.slug} />}
               >
                 <Icon name="volume-2" className="text-[18px]" />
                 <span>{c.name}</span>
@@ -318,7 +309,6 @@ export function Sidebar() {
                 active={view === 'voice' && voiceRoom === r}
                 connected={voiceRoom === r}
                 onClick={() => void joinVoice(r, r)}
-                accessory={<VoiceAvatarStack room={r} />}
               >
                 <Icon name="volume-2" className="text-[18px]" />
                 <span>{r}</span>

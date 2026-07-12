@@ -7,7 +7,10 @@ import { Logo } from '@/components/ui/Logo';
 import { cn } from '@/lib/utils';
 import { MAIN_SERVER_ID } from '@/lib/constants';
 import { serverGradient, serverInitials } from '@/lib/server-visual';
+import { avatarStyle } from '@/lib/avatar';
 import { isServerUnlocked, useServersStore } from '@/stores/servers';
+import { useChannelsStore } from '@/stores/channels';
+import { useVoiceStore } from '@/stores/voice';
 import { CreateServerDialog } from '@/components/layout/CreateServerDialog';
 import { UnlockServerDialog } from '@/components/layout/UnlockServerDialog';
 import { SettingsDialog } from '@/components/layout/SettingsDialog';
@@ -41,6 +44,50 @@ function Pill({ active }: { active: boolean }) {
         active ? 'h-10' : 'h-0 opacity-0 group-hover/srv:h-5 group-hover/srv:opacity-100',
       )}
     />
+  );
+}
+
+/**
+ * Аватарки тех, кто прямо сейчас сидит в любом голосовом канале этого сервера —
+ * компактным стеком под иконкой в рейке (как индикатор «тут кипит жизнь»).
+ * Агрегируем presence по всем voice-каналам сервера; показываем до трёх, остальных
+ * сворачиваем в «+N». Пусто — ничего не рисуем.
+ */
+function ServerVoiceStack({ serverId }: { serverId: string }) {
+  const channels = useChannelsStore((s) => s.channels);
+  const presence = useVoiceStore((s) => s.presence);
+
+  const names: string[] = [];
+  for (const c of channels) {
+    if (c.serverId === serverId && c.type === 'voice') {
+      for (const m of presence[c.slug] ?? []) names.push(m.name || 'Аноним');
+    }
+  }
+  if (names.length === 0) return null;
+
+  const shown = names.slice(0, 3);
+  const extra = names.length - shown.length;
+  return (
+    <div
+      className="pointer-events-none mt-1 flex items-center justify-center"
+      aria-label={`В голосовых: ${names.length}`}
+      title={names.join(', ')}
+    >
+      <span className="flex -space-x-1.5">
+        {shown.map((n, i) => (
+          <span
+            key={i}
+            className="h-4 w-4 rounded-full bg-cover bg-center ring-2 ring-bg-rail"
+            style={avatarStyle(n)}
+          />
+        ))}
+      </span>
+      {extra > 0 && (
+        <span className="ml-0.5 text-[10px] font-semibold leading-none tabular-nums text-text-muted">
+          +{extra}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -88,16 +135,19 @@ export function ServerRail() {
   return (
     <nav className="panel panel-rail relative z-10 flex w-16 shrink-0 flex-col items-center gap-2 border-r border-line py-3">
       {/* Главный сервер — relay: наш знак mesh-триады на чистой брендовой плашке */}
-      <div className="group/srv relative">
-        <Pill active={activeServerId === (main?.id ?? MAIN_SERVER_ID)} />
-        <button
-          onClick={() => setActiveServer(main?.id ?? MAIN_SERVER_ID)}
-          aria-label={main?.name ?? 'relay'}
-          className="relative grid h-12 w-12 place-items-center rounded-2xl bg-bg-elev ring-1 ring-inset ring-white/10 outline-none transition-[box-shadow,background-color] duration-200 hover:bg-bg-active hover:ring-white/15 focus-visible:ring-2 focus-visible:ring-line-strong"
-        >
-          <Logo size={28} animate nodeBg="#111418" />
-        </button>
-        <RailTooltip label={main?.name ?? 'relay'} />
+      <div className="group/srv relative flex flex-col items-center">
+        <div className="relative">
+          <Pill active={activeServerId === (main?.id ?? MAIN_SERVER_ID)} />
+          <button
+            onClick={() => setActiveServer(main?.id ?? MAIN_SERVER_ID)}
+            aria-label={main?.name ?? 'relay'}
+            className="relative grid h-12 w-12 place-items-center rounded-2xl bg-bg-elev ring-1 ring-inset ring-white/10 outline-none transition-[box-shadow,background-color] duration-200 hover:bg-bg-active hover:ring-white/15 focus-visible:ring-2 focus-visible:ring-line-strong"
+          >
+            <Logo size={28} animate nodeBg="#111418" />
+          </button>
+          <RailTooltip label={main?.name ?? 'relay'} />
+        </div>
+        <ServerVoiceStack serverId={main?.id ?? MAIN_SERVER_ID} />
       </div>
 
       <span className="my-1 h-0.5 w-8 rounded-full bg-white/10" />
@@ -163,40 +213,43 @@ function ServerIcon({
   onClick: () => void;
 }) {
   return (
-    <div className="group/srv relative">
-      <Pill active={active} />
-      <button
-        onClick={onClick}
-        aria-label={locked ? `${server.name} — под паролем` : server.name}
-        aria-pressed={active}
-        style={{ background: serverGradient(server.id) }}
-        className={cn(
-          'grid h-12 w-12 place-items-center overflow-hidden text-white outline-none ring-1 ring-inset ring-white/10',
-          'transition-[border-radius,box-shadow] duration-200 hover:rounded-2xl focus-visible:rounded-2xl',
-          'focus-visible:ring-2 focus-visible:ring-accent',
-          active ? 'rounded-2xl shadow-[0_0_16px_-4px_rgba(255,255,255,0.5)]' : 'rounded-[50%]',
-        )}
-      >
-        {server.emoji ? (
-          <span className="grayscale text-[24px] leading-none drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
-            {server.emoji}
-          </span>
-        ) : (
-          <span className="text-lg font-bold drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
-            {serverInitials(server.name)}
-          </span>
-        )}
-      </button>
-      <RailTooltip label={locked ? `${server.name} — под паролем` : server.name} />
-      {/* Бейдж-замок у закрытых серверов (пока не введён пароль) */}
-      {locked && (
-        <span
-          aria-hidden
-          className="pointer-events-none absolute -bottom-0.5 -right-0.5 grid h-[18px] w-[18px] place-items-center rounded-full border-2 border-bg-rail bg-bg-deep text-[9px] leading-none shadow"
+    <div className="group/srv relative flex flex-col items-center">
+      <div className="relative">
+        <Pill active={active} />
+        <button
+          onClick={onClick}
+          aria-label={locked ? `${server.name} — под паролем` : server.name}
+          aria-pressed={active}
+          style={{ background: serverGradient(server.id) }}
+          className={cn(
+            'grid h-12 w-12 place-items-center overflow-hidden text-white outline-none ring-1 ring-inset ring-white/10',
+            'transition-[border-radius,box-shadow] duration-200 hover:rounded-2xl focus-visible:rounded-2xl',
+            'focus-visible:ring-2 focus-visible:ring-accent',
+            active ? 'rounded-2xl shadow-[0_0_16px_-4px_rgba(255,255,255,0.5)]' : 'rounded-[50%]',
+          )}
         >
-          🔒
-        </span>
-      )}
+          {server.emoji ? (
+            <span className="grayscale text-[24px] leading-none drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+              {server.emoji}
+            </span>
+          ) : (
+            <span className="text-lg font-bold drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+              {serverInitials(server.name)}
+            </span>
+          )}
+        </button>
+        <RailTooltip label={locked ? `${server.name} — под паролем` : server.name} />
+        {/* Бейдж-замок у закрытых серверов (пока не введён пароль) */}
+        {locked && (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute -bottom-0.5 -right-0.5 grid h-[18px] w-[18px] place-items-center rounded-full border-2 border-bg-rail bg-bg-deep text-[9px] leading-none shadow"
+          >
+            🔒
+          </span>
+        )}
+      </div>
+      <ServerVoiceStack serverId={server.id} />
     </div>
   );
 }
