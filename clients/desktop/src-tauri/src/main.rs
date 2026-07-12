@@ -21,6 +21,7 @@ use tauri::{
 };
 use serde_json::json;
 use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_updater::UpdaterExt;
@@ -65,10 +66,12 @@ fn main() {
             }
         }))
         .plugin(tauri_plugin_notification::init())
-        // Обновления. Плагин даёт UpdaterExt; ничего не ставится само —
-        // проверка и установка идут только по запросу из web-настроек (события
-        // `check-updates` / `install-update`, см. .setup()). Не Microsoft: без
-        // принудительного авто-рестарта, решение ставить — за пользователем.
+        .plugin(tauri_plugin_dialog::init())
+        // Обновления. Проверка идёт ДВУМЯ путями: (1) нативно из Rust при старте
+        // и по пункту трея «Проверить обновления» — надёжно, без веб-моста;
+        // (2) best-effort из web-настроек (события `check-updates`/`install-update`).
+        // Ничего не ставится само: находим апдейт → нативный диалог «Обновить?».
+        // Не Microsoft — решение и момент установки за пользователем.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
@@ -148,6 +151,16 @@ fn main() {
             handle.listen("install-update", move |_event| {
                 let app = h.clone();
                 tauri::async_runtime::spawn(async move { install_update(app).await });
+            });
+
+            // Нативная проверка обновлений при старте — НЕ зависит от web→Rust
+            // моста (на удалённом origin он ненадёжен). Ждём прогрузку окна,
+            // тихо проверяем; есть апдейт → нативный диалог с выбором. Если всё
+            // актуально или сеть недоступна — молчим, не мешаем.
+            let h = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(4)).await;
+                native_update_flow(h, false).await;
             });
 
             Ok(())
@@ -272,6 +285,59 @@ async fn install_update(app: AppHandle) {
     }
 }
 
+/// Нативный сценарий обновления: проверить релизы из Rust (без web-моста) и,
+/// если апдейт есть, спросить нативным диалогом «Обновить сейчас?». Согласие →
+/// загрузка+установка+перезапуск (переиспользуем `install_update`). `announce`:
+/// при ручном вызове (трей) сообщаем результат даже когда всё актуально или
+/// проверка не удалась; при тихой стартовой проверке — молчим.
+async fn native_update_flow(app: AppHandle, announce: bool) {
+    ulog(&format!("native flow start (announce={announce})"));
+    match run_check(&app, 30).await {
+        Ok(Some(update)) => {
+            let version = update.version.clone();
+            ulog(&format!("native flow: {version} available, asking user"));
+            let confirmed = app
+                .dialog()
+                .message(format!(
+                    "Доступна новая версия relay — {version}.\nУстановить сейчас? Приложение перезапустится."
+                ))
+                .title("Обновление relay")
+                .buttons(MessageDialogButtons::OkCancelCustom(
+                    "Обновить".to_string(),
+                    "Позже".to_string(),
+                ))
+                .blocking_show();
+            if confirmed {
+                ulog("native flow: user confirmed → install");
+                install_update(app).await;
+            } else {
+                ulog("native flow: user postponed");
+            }
+        }
+        Ok(None) => {
+            ulog("native flow: up-to-date");
+            if announce {
+                let _ = app
+                    .dialog()
+                    .message("У вас последняя версия relay.")
+                    .title("Обновление relay")
+                    .blocking_show();
+            }
+        }
+        Err(e) => {
+            ulog(&format!("native flow: check failed: {e}"));
+            if announce {
+                let _ = app
+                    .dialog()
+                    .message(format!("Не удалось проверить обновления:\n{e}"))
+                    .title("Обновление relay")
+                    .kind(MessageDialogKind::Error)
+                    .blocking_show();
+            }
+        }
+    }
+}
+
 /// Снять прежний PTT-хоткей и зарегистрировать новый (по акселератору из UI).
 fn reassign_ptt(app: &AppHandle, accelerator: &str) -> Result<(), String> {
     let sc = Shortcut::from_str(accelerator).map_err(|e| e.to_string())?;
@@ -304,8 +370,17 @@ fn build_menu(app: &AppHandle, in_call: bool, muted: bool) -> tauri::Result<Menu
         false,
         None::<&str>,
     )?;
+    let check = MenuItem::with_id(app, "check-updates", "Проверить обновления", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Выйти из relay", true, None::<&str>)?;
-    Menu::with_items(app, &[&status, &PredefinedMenuItem::separator(app)?, &quit])
+    Menu::with_items(
+        app,
+        &[
+            &status,
+            &PredefinedMenuItem::separator(app)?,
+            &check,
+            &quit,
+        ],
+    )
 }
 
 /// Монохромный силуэт-триада для menu bar (template image). В отличие от
@@ -322,10 +397,15 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .tooltip(format!("relay — {}", status_text(false, false)))
         .icon_as_template(true)
         .menu(&menu)
-        .on_menu_event(|app, event| {
-            if event.id.as_ref() == "quit" {
-                app.exit(0);
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "quit" => app.exit(0),
+            "check-updates" => {
+                // Ручная проверка из трея — нативный путь, всегда рабочий.
+                // announce=true: сообщаем результат даже когда всё актуально.
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move { native_update_flow(app, true).await });
             }
+            _ => {}
         });
 
     if let Ok(icon) = tauri::image::Image::from_bytes(TRAY_ICON) {

@@ -1,6 +1,6 @@
 [package]
 name = "relay-desktop"
-version = "0.3.5"
+version = "0.3.6"
 description = "relay desktop — Tauri v2 оболочка над web-клиентом"
 authors = ["relay"]
 edition = "2021"
@@ -17,6 +17,9 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-global-shortcut = "2"
 # Нативные уведомления (упоминания, входящий звонок).
 tauri-plugin-notification = "2"
+# Нативный диалог «Обновить? Да/Позже» — стартовая проверка апдейтов идёт из
+# Rust и спрашивает пользователя нативно, без зависимости от web→Rust моста.
+tauri-plugin-dialog = "2"
 # Автостарт при входе в систему.
 tauri-plugin-autostart = "2"
 # Автообновление: проверка/загрузка/установка подписанных релизов с GitHub.
