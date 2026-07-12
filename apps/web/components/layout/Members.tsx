@@ -1,7 +1,10 @@
 'use client';
 
+import { AnimatePresence, motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
+import { listItem, springLayout } from '@/lib/motion';
 import { Icon } from '@/components/ui/icon';
+import { AnimatedCount } from '@/components/ui/AnimatedCount';
 import { useUiStore } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import { avatarStyle } from '@/lib/avatar';
@@ -23,19 +26,26 @@ export function Members() {
 
   return (
     <aside className="panel panel-sidebar flex w-[232px] shrink-0 flex-col overflow-hidden border-l border-line max-md:grow max-md:border-l-0">
-      <h3 className="flex h-[52px] shrink-0 items-center border-b border-line px-4 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-text-faint shadow-[0_1px_2px_rgba(0,0,0,0.2)]">
-        В канале — {tiles.length}
+      <h3 className="flex h-[52px] shrink-0 items-center gap-1 border-b border-line px-4 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-text-faint shadow-[0_1px_2px_rgba(0,0,0,0.2)]">
+        В канале — <AnimatedCount value={tiles.length} />
       </h3>
       <div className="flex-1 overflow-y-auto px-2 py-3">
-        {tiles.map((t) => {
-          const speaking = speakingIds.includes(t.id);
-          // Мут знаем достоверно только для своей плитки (микрофон в сторе).
-          const selfMuted = (t.isLocal || t.id === myId) && !micOn;
-          return (
-            <div
-              key={t.id}
-              className="flex items-center gap-2.5 rounded-[8px] px-2 py-1.5 transition-colors hover:bg-bg-hover"
-            >
+        <AnimatePresence initial={false}>
+          {tiles.map((t) => {
+            const speaking = speakingIds.includes(t.id);
+            // Мут знаем достоверно только для своей плитки (микрофон в сторе).
+            const selfMuted = (t.isLocal || t.id === myId) && !micOn;
+            return (
+              <motion.div
+                key={t.id}
+                layout
+                variants={listItem}
+                initial="hidden"
+                animate="show"
+                exit="exit"
+                transition={springLayout}
+                className="flex items-center gap-2.5 rounded-[8px] px-2 py-1.5 transition-colors hover:bg-bg-hover"
+              >
               <div
                 className={cn(
                   'relative h-8 w-8 shrink-0 rounded-full',
@@ -55,16 +65,17 @@ export function Members() {
                   {selfMuted ? 'без звука' : speaking ? 'говорит' : 'в эфире'}
                 </div>
               </div>
-              {selfMuted && (
-                <Icon
-                  name="mic-off"
-                  className="shrink-0 text-[15px] text-danger/85"
-                  title="Микрофон выключен"
-                />
-              )}
-            </div>
-          );
-        })}
+                {selfMuted && (
+                  <Icon
+                    name="mic-off"
+                    className="shrink-0 text-[15px] text-danger/85"
+                    title="Микрофон выключен"
+                  />
+                )}
+              </motion.div>
+            );
+          })}
+        </AnimatePresence>
       </div>
     </aside>
   );

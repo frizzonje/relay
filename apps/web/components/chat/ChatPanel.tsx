@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
   MAX_UPLOAD_BYTES,
@@ -9,6 +10,7 @@ import {
   type UploadResponse,
 } from '@relay/shared';
 import { cn } from '@/lib/utils';
+import { chatMessage, springPop } from '@/lib/motion';
 import { avatarStyle } from '@/lib/avatar';
 import { fmtBytes, fmtClock } from '@/lib/format';
 import { getSocket } from '@/lib/socket';
@@ -89,26 +91,47 @@ function ReactionBar({
   if (!entries.length) return null;
   return (
     <div className="mt-1 flex flex-wrap gap-1">
-      {entries.map(([emoji, names]) => {
-        const mine = names.includes(me);
-        return (
-          <button
-            key={emoji}
-            type="button"
-            onClick={() => react(id, emoji)}
-            title={names.join(', ')}
-            className={cn(
-              'flex items-center gap-1 rounded-full border px-2 py-0.5 text-[13px] leading-none transition-colors',
-              mine
-                ? 'border-accent/70 bg-accent/25 text-text-header'
-                : 'border-white/5 bg-black/25 text-text-muted hover:border-white/15 hover:bg-black/40',
-            )}
-          >
-            <span className="text-[14px]">{emoji}</span>
-            <span className="font-semibold tabular-nums">{names.length}</span>
-          </button>
-        );
-      })}
+      <AnimatePresence initial={false}>
+        {entries.map(([emoji, names]) => {
+          const mine = names.includes(me);
+          return (
+            <motion.button
+              key={emoji}
+              layout
+              initial={{ opacity: 0, scale: 0.6 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.6 }}
+              transition={springPop}
+              type="button"
+              onClick={() => react(id, emoji)}
+              title={names.join(', ')}
+              className={cn(
+                'flex items-center gap-1 rounded-full border px-2 py-0.5 text-[13px] leading-none transition-colors',
+                mine
+                  ? 'border-accent/70 bg-accent/25 text-text-header'
+                  : 'border-white/5 bg-black/25 text-text-muted hover:border-white/15 hover:bg-black/40',
+              )}
+            >
+              <span className="text-[14px]">{emoji}</span>
+              {/* key по счётчику: число «щёлкает» при изменении, не переползая */}
+              <span className="font-semibold tabular-nums">
+                <AnimatePresence mode="popLayout" initial={false}>
+                  <motion.span
+                    key={names.length}
+                    initial={{ y: -8, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    exit={{ y: 8, opacity: 0 }}
+                    transition={{ duration: 0.16 }}
+                    className="inline-block"
+                  >
+                    {names.length}
+                  </motion.span>
+                </AnimatePresence>
+              </span>
+            </motion.button>
+          );
+        })}
+      </AnimatePresence>
     </div>
   );
 }
@@ -140,38 +163,67 @@ function AddReaction({ id }: { id: string }) {
       >
         🙂
       </button>
-      {open && (
-        <div className="absolute left-0 top-8 z-10 flex gap-0.5 rounded-lg border border-white/10 bg-bg-deep p-1 shadow-xl">
-          {REACTION_EMOJIS.map((emoji) => (
-            <button
-              key={emoji}
-              type="button"
-              onClick={() => {
-                react(id, emoji);
-                setOpen(false);
-              }}
-              className="grid h-8 w-8 place-items-center rounded-md text-lg transition-transform hover:scale-125 hover:bg-white/10"
-            >
-              {emoji}
-            </button>
-          ))}
-        </div>
-      )}
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -4, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -4, scale: 0.9 }}
+            transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
+            style={{ transformOrigin: 'top left' }}
+            className="absolute left-0 top-8 z-10 flex gap-0.5 rounded-lg border border-white/10 bg-bg-deep p-1 shadow-xl"
+          >
+            {REACTION_EMOJIS.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                onClick={() => {
+                  react(id, emoji);
+                  setOpen(false);
+                }}
+                className="grid h-8 w-8 place-items-center rounded-md text-lg transition-transform hover:scale-125 hover:bg-white/10"
+              >
+                {emoji}
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
 /** Одно сообщение ленты: системное (вход/выход) или обычное. */
-function Message({ msg, mine, me }: { msg: ChatMessage; mine: boolean; me: string }) {
+function Message({
+  msg,
+  mine,
+  me,
+  enter,
+}: {
+  msg: ChatMessage;
+  mine: boolean;
+  me: string;
+  enter: boolean;
+}) {
+  // enter=false для истории при открытии канала — тогда сообщения появляются
+  // мгновенно; новые (пришедшие уже открытым каналом) — с подъёмом.
+  const anim = {
+    variants: chatMessage,
+    initial: enter ? ('hidden' as const) : false,
+    animate: 'show' as const,
+  };
   if (msg.system) {
     return (
-      <div className="justify-center px-2 py-1 text-center text-xs italic text-text-muted">
+      <motion.div
+        {...anim}
+        className="justify-center px-2 py-1 text-center text-xs italic text-text-muted"
+      >
         {msg.text}
-      </div>
+      </motion.div>
     );
   }
   return (
-    <div className="group flex items-start">
+    <motion.div {...anim} className="group flex items-start">
       <div className="flex min-w-0 max-w-full gap-3 rounded-md px-2 py-1 hover:bg-black/[0.12]">
         <div
           className="mt-0.5 h-[38px] w-[38px] shrink-0 rounded-full"
@@ -199,7 +251,7 @@ function Message({ msg, mine, me }: { msg: ChatMessage; mine: boolean; me: strin
           <AddReaction id={msg.id} />
         </div>
       )}
-    </div>
+    </motion.div>
   );
 }
 
@@ -222,13 +274,24 @@ export function ChatPanel() {
 
   const me = callsign.trim() || 'Аноним';
 
+  // Анимируем ВХОД сообщений только после того, как канал прогрузил историю:
+  // иначе вся лента «влетает» пачкой при открытии. Гасим на смену канала,
+  // включаем через пару кадров — тогда подъёмом появляются лишь новые реплики.
+  const [enterAnim, setEnterAnim] = useState(false);
+  useEffect(() => {
+    setEnterAnim(false);
+    const raf = requestAnimationFrame(() => requestAnimationFrame(() => setEnterAnim(true)));
+    return () => cancelAnimationFrame(raf);
+  }, [textRoom]);
+
   // Автопрокрутка вниз, если уже у дна (как atBottom-логика в addChatMessage).
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    if (atBottom) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (atBottom)
+      el.scrollTo({ top: el.scrollHeight, behavior: enterAnim ? 'smooth' : 'auto' });
+  }, [messages, enterAnim]);
 
   // Отзываем object URL превьюшек при размонтировании — иначе утечка блобов.
   useEffect(() => {
@@ -327,7 +390,13 @@ export function ChatPanel() {
           Это начало канала <b className="text-text-header">#{textLabel}</b>. Поздоровайтесь.
         </div>
         {messages.map((m, i) => (
-          <Message key={m.id ?? i} msg={m} mine={!m.system && m.name === me} me={me} />
+          <Message
+            key={m.id ?? i}
+            msg={m}
+            mine={!m.system && m.name === me}
+            me={me}
+            enter={enterAnim}
+          />
         ))}
       </div>
 

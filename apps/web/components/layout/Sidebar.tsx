@@ -1,9 +1,11 @@
 'use client';
 
 import { type ReactNode } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { Icon } from '@/components/ui/icon';
 import { Logo } from '@/components/ui/Logo';
 import { cn } from '@/lib/utils';
+import { listItem, springLayout } from '@/lib/motion';
 import { useUiStore } from '@/stores/ui';
 import { useChannelsStore } from '@/stores/channels';
 import { useServersStore } from '@/stores/servers';
@@ -82,12 +84,22 @@ function ChannelRow({
         }
       }}
       className={cn(
-        'group/row flex cursor-pointer select-none items-center gap-1.5 rounded px-2 py-[7px] text-[15px] text-text-muted outline-none transition-colors hover:bg-bg-hover hover:text-text focus-visible:ring-2 focus-visible:ring-accent/70',
+        'group/row relative flex cursor-pointer select-none items-center gap-1.5 rounded px-2 py-[7px] text-[15px] text-text-muted outline-none transition-colors hover:text-text focus-visible:ring-2 focus-visible:ring-accent/70',
+        !active && 'hover:bg-bg-hover',
         connected && !active && 'text-ok',
-        active && 'bg-bg-active text-text-header hover:bg-bg-active hover:text-text-header',
+        active && 'text-text-header',
       )}
     >
-      {children}
+      {/* Подсветка активного канала «переезжает» между строками (общий layoutId),
+          как пилюля на рейке серверов. */}
+      {active && (
+        <motion.span
+          layoutId="channel-active"
+          transition={springLayout}
+          className="pointer-events-none absolute inset-0 rounded bg-bg-active"
+        />
+      )}
+      <span className="relative z-[1] flex min-w-0 items-center gap-1.5">{children}</span>
       {onDelete && (
         <button
           onClick={(e) => {
@@ -96,7 +108,7 @@ function ChannelRow({
           }}
           title={deleteLabel}
           aria-label={deleteLabel}
-          className="ml-auto grid h-5 w-5 shrink-0 place-items-center rounded text-lg leading-none text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-danger focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100"
+          className="relative z-[1] ml-auto grid h-5 w-5 shrink-0 place-items-center rounded text-lg leading-none text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-danger focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100"
         >
           ×
         </button>
@@ -237,37 +249,58 @@ export function Sidebar() {
         <Category onAdd={() => openCreate('text')} addLabel="Создать текстовый канал">
           — Текстовые
         </Category>
-        {textChannels.map((c) => (
-          <ChannelRow
-            key={c.id}
-            active={view === 'text' && textRoom === c.slug}
-            onClick={() => openTextChannel(c.slug, c.name)}
-            onDelete={c.removable ? () => deleteChannel(c.id) : undefined}
-            deleteLabel="Удалить канал"
-          >
-            <span className="text-text-muted/70">#</span>
-            <span>{c.name}</span>
-          </ChannelRow>
-        ))}
+        <AnimatePresence key={`text-${activeServerId}`} initial={false}>
+          {textChannels.map((c) => (
+            <motion.div
+              key={c.id}
+              layout
+              variants={listItem}
+              initial="hidden"
+              animate="show"
+              exit="exit"
+              transition={springLayout}
+            >
+              <ChannelRow
+                active={view === 'text' && textRoom === c.slug}
+                onClick={() => openTextChannel(c.slug, c.name)}
+                onDelete={c.removable ? () => deleteChannel(c.id) : undefined}
+                deleteLabel="Удалить канал"
+              >
+                <span className="text-text-muted/70">#</span>
+                <span>{c.name}</span>
+              </ChannelRow>
+            </motion.div>
+          ))}
+        </AnimatePresence>
 
         <Category onAdd={() => openCreate('voice')} addLabel="Создать голосовой канал">
           — Голосовые
         </Category>
-        {voiceChannels.map((c) => (
-          <div key={c.id}>
-            <ChannelRow
-              active={view === 'voice' && voiceRoom === c.slug}
-              connected={voiceRoom === c.slug}
-              onClick={() => void joinVoice(c.slug, c.name)}
-              onDelete={c.removable ? () => deleteChannel(c.id) : undefined}
-              deleteLabel="Удалить канал"
+        <AnimatePresence key={`voice-${activeServerId}`} initial={false}>
+          {voiceChannels.map((c) => (
+            <motion.div
+              key={c.id}
+              layout
+              variants={listItem}
+              initial="hidden"
+              animate="show"
+              exit="exit"
+              transition={springLayout}
             >
-              <Icon name="volume-2" className="text-[18px]" />
-              <span>{c.name}</span>
-            </ChannelRow>
-            <VoiceMembers room={c.slug} />
-          </div>
-        ))}
+              <ChannelRow
+                active={view === 'voice' && voiceRoom === c.slug}
+                connected={voiceRoom === c.slug}
+                onClick={() => void joinVoice(c.slug, c.name)}
+                onDelete={c.removable ? () => deleteChannel(c.id) : undefined}
+                deleteLabel="Удалить канал"
+              >
+                <Icon name="volume-2" className="text-[18px]" />
+                <span>{c.name}</span>
+              </ChannelRow>
+              <VoiceMembers room={c.slug} />
+            </motion.div>
+          ))}
+        </AnimatePresence>
         {/* Занятые эфиры вне реестра — временные строки, чтобы никого не потерять */}
         {isMain &&
           orphanRooms.map((r) => (

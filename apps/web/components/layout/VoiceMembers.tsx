@@ -1,7 +1,9 @@
 'use client';
 
+import { AnimatePresence, motion } from 'framer-motion';
 import { avatarStyle } from '@/lib/avatar';
 import { cn } from '@/lib/utils';
+import { listItem, springLayout } from '@/lib/motion';
 import { Icon } from '@/components/ui/icon';
 import { useVoiceStore } from '@/stores/voice';
 
@@ -21,15 +23,22 @@ export function VoiceMembers({ room }: { room: string }) {
 
   return (
     <div className="my-px mb-1 flex flex-col gap-px">
-      {members.map((m) => {
-        const name = m.name || 'Аноним';
-        const me = m.id === myId;
-        const muted = m.micOn === false;
-        return (
-          <div
-            key={m.id}
-            className="flex cursor-default items-center gap-2 rounded py-1 pl-[26px] pr-2 text-sm text-text-muted transition-colors hover:bg-bg-hover"
-          >
+      <AnimatePresence initial={false}>
+        {members.map((m) => {
+          const name = m.name || 'Аноним';
+          const me = m.id === myId;
+          const muted = m.micOn === false;
+          return (
+            <motion.div
+              key={m.id}
+              layout
+              variants={listItem}
+              initial="hidden"
+              animate="show"
+              exit="exit"
+              transition={springLayout}
+              className="flex cursor-default items-center gap-2 rounded py-1 pl-[26px] pr-2 text-sm text-text-muted transition-colors hover:bg-bg-hover"
+            >
             <div
               className="relative h-[22px] w-[22px] shrink-0 rounded-full after:absolute after:-bottom-px after:-right-px after:h-2 after:w-2 after:rounded-full after:border-2 after:border-bg-sidebar after:bg-ok after:content-['']"
               style={avatarStyle(name)}
@@ -50,10 +59,11 @@ export function VoiceMembers({ room }: { room: string }) {
                 className={cn('text-[14px]', m.deafened ? 'animate-member-badge' : 'invisible')}
                 title="Звук выключен — не слышит канал"
               />
-            </div>
-          </div>
-        );
-      })}
+              </div>
+            </motion.div>
+          );
+        })}
+      </AnimatePresence>
     </div>
   );
 }
