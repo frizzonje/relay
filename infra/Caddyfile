@@ -17,7 +17,9 @@
 }
 
 {$DOMAIN:localhost} {
-	tls internal
+	# TLS не задаём явно: Caddy сам выбирает по имени хоста — localhost получает
+	# внутренний CA (self-signed), реальный домен — сертификат Let's Encrypt.
+	# Форсить `tls internal` нельзя: на проде это ломает доверенный HTTPS.
 
 	@backend path /api/* /socket.io/* /uploads/*
 	handle @backend {
