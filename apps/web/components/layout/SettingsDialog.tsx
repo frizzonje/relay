@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { checkForUpdates, installUpdate } from '@/lib/desktop';
+import { getTheme, setTheme, type Theme } from '@/lib/theme';
 import { useDesktopStore } from '@/stores/desktop';
 import { useVoiceStore } from '@/stores/voice';
 import {
@@ -241,6 +242,16 @@ export function SettingsDialog({
   const currentCamId = useVoiceStore((s) => s.currentCamId);
   const noiseSuppression = useVoiceStore((s) => s.noiseSuppression);
   const pushToTalk = useVoiceStore((s) => s.pushToTalk);
+  const [theme, setThemeVal] = useState<Theme>('dark');
+
+  // Отражаем реально применённую тему (её ставит скрипт в <head> до отрисовки).
+  useEffect(() => setThemeVal(getTheme()), []);
+
+  function toggleTheme(light: boolean) {
+    const next: Theme = light ? 'light' : 'dark';
+    setTheme(next);
+    setThemeVal(next);
+  }
 
   // При открытии подтягиваем актуальные списки устройств и тогглы из хранилища.
   useEffect(() => {
@@ -354,6 +365,15 @@ export function SettingsDialog({
                     hint="Убирает фоновый шум с вашего микрофона."
                   />
                 </div>
+              </div>
+            ) : tab === 'appearance' ? (
+              <div className="flex flex-col gap-2.5">
+                <Toggle
+                  checked={theme === 'light'}
+                  onChange={toggleTheme}
+                  title="Светлая тема"
+                  hint="Переключить оформление между тёмным и светлым."
+                />
               </div>
             ) : (
               <Placeholder>раздел появится позже</Placeholder>

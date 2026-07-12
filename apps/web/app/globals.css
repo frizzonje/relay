@@ -64,6 +64,41 @@
 }
 
 /* ============================================================================
+   Светлая тема
+   Переопределяет цветовые токены под data-theme="light" (ставится скриптом в
+   <head> и тумблером Настройки → Внешний вид, см. lib/theme.ts). Утилиты
+   Tailwind v4 читают var(--color-*), поэтому переключение — чисто рантайм.
+   Акцент инвертируется в тёмный: primary-кнопки (bg-accent-strong + text-bg-app)
+   становятся тёмными со светлым текстом — читаемо на светлом фоне.
+   ========================================================================== */
+:root[data-theme='light'] {
+  --color-bg-app: #f4f5f7;
+  --color-bg-rail: #e8eaee;
+  --color-bg-sidebar: #eef0f3;
+  --color-bg-main: #f7f8fa;
+  --color-bg-panel: #ffffff;
+  --color-bg-elev: #ffffff;
+  --color-bg-deep: #e8eaee;
+  --color-bg-hover: rgba(0, 0, 0, 0.045);
+  --color-bg-active: rgba(0, 0, 0, 0.07);
+
+  --color-text: #1b1e22;
+  --color-text-header: #0c0e11;
+  --color-text-muted: #5b616b;
+  --color-text-dim: #6b7079;
+  --color-text-faint: #888e97;
+
+  --color-accent: #2b2e33;
+  --color-accent-strong: #1b1e22;
+
+  --color-ok: #1f9d57;
+  --color-danger: #d23b22;
+
+  --color-line: rgba(0, 0, 0, 0.1);
+  --color-line-strong: rgba(0, 0, 0, 0.16);
+}
+
+/* ============================================================================
    База
    ========================================================================== */
 @layer base {

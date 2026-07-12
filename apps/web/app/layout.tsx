@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { IBM_Plex_Sans, IBM_Plex_Mono } from 'next/font/google';
 import { APP_NAME } from '@relay/shared';
 import { Background } from '@/components/layout/Background';
+import { THEME_INIT_SCRIPT } from '@/lib/theme';
 import { Providers } from './providers';
 
 /**
@@ -40,7 +41,11 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="ru" className={`${plexSans.variable} ${plexMono.variable}`}>
+    <html lang="ru" data-theme="dark" className={`${plexSans.variable} ${plexMono.variable}`}>
+      <head>
+        {/* Применяем сохранённую тему до отрисовки — иначе светлая мигнёт тёмным. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
       <body>
         <Background />
         <Providers>{children}</Providers>
