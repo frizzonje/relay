@@ -205,12 +205,12 @@ fn ulog(msg: &str) {
     }
 }
 
-/// Проверка релизов с ЖЁСТКИМ таймаутом. Плагинный `.timeout()` при некоторых
-/// зависаниях (IPv6-stall и т.п.) не отменяет запрос — оборачиваем будущее в
-/// `tokio::time::timeout`, который гарантированно бросает его: вместо вечного
-/// «Проверяю...» пользователь получает ошибку. Возвращаем найденный `Update`
-/// (нужен для загрузки) либо человекочитаемую строку ошибки.
-async fn run_check(app: &AppHandle, secs: u64) -> Result<Option<tauri_plugin_updater::Update>, String> {
+/// Одна попытка проверки релизов с ЖЁСТКИМ таймаутом. Плагинный `.timeout()` при
+/// некоторых зависаниях (IPv6-stall и т.п.) не отменяет запрос — оборачиваем
+/// будущее в `tokio::time::timeout`, который гарантированно бросает его: вместо
+/// вечного «Проверяю...» получаем ошибку. Возвращаем найденный `Update` (нужен
+/// для загрузки) либо человекочитаемую строку ошибки.
+async fn check_once(app: &AppHandle, secs: u64) -> Result<Option<tauri_plugin_updater::Update>, String> {
     let updater = match app.updater_builder().timeout(Duration::from_secs(secs)).build() {
         Ok(u) => u,
         Err(e) => {
@@ -233,6 +233,31 @@ async fn run_check(app: &AppHandle, secs: u64) -> Result<Option<tauri_plugin_upd
             Err(format!("нет ответа от GitHub за {secs}с (таймаут)"))
         }
     }
+}
+
+/// Проверка релизов с АВТО-РЕТРАЕМ. Раньше проверка «работала через раз, помогал
+/// только перезапуск»: причина — happy-eyeballs/IPv6-stall на первом соединении,
+/// а свежий процесс просто вытягивал удачный маршрут. Жёсткий таймаут превращал
+/// зависание в ошибку, но НЕ давал успеха — отсюда «раз через раз». Одна повторная
+/// попытка после короткой паузы (новое соединение/DNS) убирает большинство
+/// осечек, не заставляя пользователя перезапускаться. Успех сразу возвращаем;
+/// повторяем только транзиентную ошибку/таймаут.
+async fn run_check(app: &AppHandle, secs: u64) -> Result<Option<tauri_plugin_updater::Update>, String> {
+    const ATTEMPTS: u32 = 2;
+    let mut last_err = String::new();
+    for attempt in 1..=ATTEMPTS {
+        match check_once(app, secs).await {
+            Ok(opt) => return Ok(opt),
+            Err(e) => {
+                last_err = e;
+                if attempt < ATTEMPTS {
+                    ulog(&format!("check() retry {attempt}/{ATTEMPTS} after error: {last_err}"));
+                    tokio::time::sleep(Duration::from_millis(1500)).await;
+                }
+            }
+        }
+    }
+    Err(last_err)
 }
 
 /// Проверить релизы и доложить статус. НИЧЕГО не ставит — установка только по
@@ -361,8 +386,18 @@ fn status_text(in_call: bool, muted: bool) -> &'static str {
     }
 }
 
-/// Меню трея: статус (неактивный пункт) + разделитель + выход.
+/// Меню трея: версия + статус (неактивные пункты) + разделитель + выход.
+/// Версия берётся из Cargo.toml на этапе компиляции (`CARGO_PKG_VERSION`), поэтому
+/// после авто-обновления в трее сразу виден новый номер — наглядная проверка, что
+/// апдейт применился, без правок фронта.
 fn build_menu(app: &AppHandle, in_call: bool, muted: bool) -> tauri::Result<Menu<Wry>> {
+    let version = MenuItem::with_id(
+        app,
+        "version",
+        format!("relay {}", env!("CARGO_PKG_VERSION")),
+        false,
+        None::<&str>,
+    )?;
     let status = MenuItem::with_id(
         app,
         "status",
@@ -375,6 +410,7 @@ fn build_menu(app: &AppHandle, in_call: bool, muted: bool) -> tauri::Result<Menu
     Menu::with_items(
         app,
         &[
+            &version,
             &status,
             &PredefinedMenuItem::separator(app)?,
             &check,
