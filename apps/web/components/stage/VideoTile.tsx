@@ -81,6 +81,18 @@ const NET_LABEL: Record<TileNet['grade'], string> = {
   bad: 'плохая',
 };
 
+// Короткая подпись пилюли аплинка + разъяснение в title (на своей плитке).
+const UPLINK_PILL: Record<'cpu' | 'bandwidth', { short: string; title: string }> = {
+  bandwidth: {
+    short: 'слабый аплинк',
+    title: 'Не хватает исходящего канала — качество вашего видео режется. Помогает выключить видео/демонстрацию или снизить их разрешение.',
+  },
+  cpu: {
+    short: 'перегрузка ЦП',
+    title: 'Машина не тянет кодирование — качество вашего видео режется. Помогает закрыть тяжёлые вкладки/приложения или выключить видео.',
+  },
+};
+
 /**
  * Индикатор качества связи с собеседником — четыре нарастающие «палочки» в чипе
  * имени (как в Discord). Горящих палочек — по grade, цвет — зелёный/янтарь/красный.
@@ -94,7 +106,7 @@ function SignalBars({ net }: { net: TileNet }) {
     <span
       className="group/net relative -ml-0.5 inline-flex h-3.5 items-end gap-[2px]"
       role="img"
-      aria-label={`Связь: ${NET_LABEL[net.grade]}`}
+      aria-label={`Связь: ${NET_LABEL[net.grade]}${net.relay ? ', через реле' : ''}`}
     >
       {[0, 1, 2, 3].map((i) => (
         <span
@@ -106,6 +118,17 @@ function SignalBars({ net }: { net: TileNet }) {
           style={{ height: `${5 + i * 3}px` }}
         />
       ))}
+
+      {/* Реле-метка: прямой путь — норма, поэтому помечаем только заметный случай
+          (через TURN) — маленькая янтарная «R». Полная строка — в тултипе ниже. */}
+      {net.relay && (
+        <span
+          className="ml-0.5 grid h-3.5 w-3.5 place-items-center self-center rounded-[3px] bg-[#e0b23a]/20 text-[9px] font-bold leading-none text-[#e0b23a]"
+          aria-hidden
+        >
+          R
+        </span>
+      )}
 
       {/* Тултип со статами — над палочками, по наведению. Открывается вправо от
           палочек (left-0), чтобы не упираться в левый край плитки (overflow-hidden). */}
@@ -127,6 +150,31 @@ function SignalBars({ net }: { net: TileNet }) {
           <span className="text-right text-white">
             {net.jitterMs != null ? `${net.jitterMs} мс` : '—'}
           </span>
+          <span>Соединение</span>
+          <span className="text-right text-white">
+            {net.relay == null ? '—' : net.relay ? 'через реле' : 'напрямую'}
+          </span>
+          <span>Битрейт</span>
+          <span className="text-right text-white">
+            {net.recvKbps != null || net.sendKbps != null
+              ? `↓${net.recvKbps ?? '—'} ↑${net.sendKbps ?? '—'} кбит/с`
+              : '—'}
+          </span>
+          {net.videoRes && (
+            <>
+              <span>Видео</span>
+              <span className="text-right text-white">
+                {net.videoRes}
+                {net.fps != null ? ` · ${net.fps}fps` : ''}
+              </span>
+            </>
+          )}
+          {net.codec && (
+            <>
+              <span>Кодек</span>
+              <span className="text-right text-white">{net.codec}</span>
+            </>
+          )}
         </span>
       </span>
     </span>
@@ -155,6 +203,8 @@ export function VideoTile({
   // Обводка «говорит сейчас»: булев селектор — плитка перерисуется только на
   // смене состояния, а не на каждый тик опроса уровня.
   const speaking = useVoiceStore((s) => s.speakingIds.includes(tile.id));
+  // Здоровье своего аплинка — предупреждение показываем только на своей плитке.
+  const uplink = useVoiceStore((s) => (tile.isLocal ? s.uplink : 'ok'));
 
   const [hasVideo, setHasVideo] = useState(false);
   // Тег качества в углу плитки: разрешение живого видео («720p»), «видео» без
@@ -409,6 +459,20 @@ export function VideoTile({
         {tile.name}
         {tile.isLocal && !micOn && <Icon name="mic-off" className="h-3.5 w-3.5 text-danger" />}
       </div>
+
+      {/* Предупреждение о своём аплинке: в mesh исходящий канал — частое узкое
+          место, а «палочки» показывают только входящее от собеседников. */}
+      {tile.isLocal && uplink !== 'ok' && (
+        <div
+          title={UPLINK_PILL[uplink].title}
+          className="absolute bottom-2 right-2 z-[3] flex items-center gap-1 rounded-[8px] bg-[#e0b23a]/90 px-2 py-1 text-[11px] font-bold text-black backdrop-blur-[6px]"
+        >
+          <span className="grid h-3.5 w-3.5 place-items-center rounded-full bg-black/25 text-[10px] leading-none text-black">
+            !
+          </span>
+          {UPLINK_PILL[uplink].short}
+        </div>
+      )}
 
       {/* Громкость звука демонстрации: иконка снизу справа, пока у пира идёт звук экрана */}
       {!tile.isLocal && tile.hasScreenAudio && (

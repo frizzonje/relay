@@ -13,7 +13,13 @@ import {
 } from '@/lib/desktop-screen-audio';
 import { useUiStore, myName } from '@/stores/ui';
 import { loadClientId } from '@/lib/identity';
-import { useVoiceStore, type ScreenMode, type TileNet, type VoiceTile } from '@/stores/voice';
+import {
+  useVoiceStore,
+  type ScreenMode,
+  type TileNet,
+  type UplinkStatus,
+  type VoiceTile,
+} from '@/stores/voice';
 
 const sfx = () => getSfx();
 
@@ -272,7 +278,13 @@ function setTileNet(id: string, net: TileNet) {
     p.grade === net.grade &&
     p.rttMs === net.rttMs &&
     p.lossPct === net.lossPct &&
-    p.jitterMs === net.jitterMs
+    p.jitterMs === net.jitterMs &&
+    p.relay === net.relay &&
+    p.sendKbps === net.sendKbps &&
+    p.recvKbps === net.recvKbps &&
+    p.videoRes === net.videoRes &&
+    p.fps === net.fps &&
+    p.codec === net.codec
   )
     return;
   tiles.set(id, { ...t, net });
@@ -1169,6 +1181,8 @@ function teardownPeers() {
     peer.pc.close();
   });
   peers.clear();
+  netHistory.clear();
+  useVoiceStore.getState().setUplink('ok'); // пиров нет — своё «узкое место» сбрасываем
   peerAudio.forEach((pa) => {
     pa.entries.forEach((e) => {
       e.source.disconnect();
@@ -1648,7 +1662,9 @@ function escalateToRelay(peerId: string) {
   old.pc.close();
   cleanupPeerAudio(peerId);
   peers.delete(peerId);
-  setTileState(peerId, 'переподключение…');
+  // Стадия 2 лестницы: отдельная подпись — прямой путь не собрался, идём через
+  // TURN. Отличаем от обычного «переподключение…» (стадия 1, ICE-restart).
+  setTileState(peerId, 'резервный канал…');
   createPeer(peerId, name, true, true); // инициатор, relay-only
 }
 
@@ -1748,7 +1764,16 @@ async function updateVoicePing() {
 // накопленным итогом с начала звонка. Результат кладём в tile.net — рисует
 // SignalBars в VideoTile.
 
-const netHistory = new Map<string, { lost: number; recv: number }>();
+// Снимок счётчиков с прошлого тика: потери/приём — для % потерь за интервал;
+// байты + метка времени — для мгновенного битрейта (дельта/дельта_времени).
+interface NetSnapshot {
+  lost: number;
+  recv: number;
+  bytesSent: number;
+  bytesRecv: number;
+  ts: number;
+}
+const netHistory = new Map<string, NetSnapshot>();
 
 // Класс качества по потерям (главный враг звука) и RTT. Пороги в духе Discord:
 // сперва смотрим на потери — они рвут голос сильнее задержки.
@@ -1759,13 +1784,42 @@ function gradeQuality(rtt: number | null, lossPct: number): TileNet['grade'] {
   return 'strong';
 }
 
+// qualityLimitationReason → наш UplinkStatus. 'none'/'other'/пусто = всё ок.
+function limitReason(r: string | undefined): UplinkStatus {
+  if (r === 'bandwidth') return 'bandwidth';
+  if (r === 'cpu') return 'cpu';
+  return 'ok';
+}
+
+// Байты→кбит/с за интервал ts_prev→ts_now (мс). Отрицательную дельту (сброс
+// счётчика при ренеготиации) гасим в 0.
+function kbps(bytesNow: number, bytesPrev: number, dtMs: number): number | null {
+  if (dtMs <= 0) return null;
+  return Math.max(0, Math.round(((bytesNow - bytesPrev) * 8) / dtMs)); // *8/1000/(ms/1000)=*8/ms
+}
+
 async function updatePeerQuality() {
   if (!room) return;
+  // Худшее «узкое место» аплинка по всем пирам (bandwidth важнее cpu). Считаем
+  // за один проход и раскладываем в стор после цикла — это СВОЙ показатель, общий.
+  let worstUplink: UplinkStatus = 'ok';
+
   for (const [id, peer] of peers) {
     // Связь переустанавливается — палочки гаснут (bad), метрики неизвестны.
     if (peer.connState !== 'connected') {
       netHistory.delete(id);
-      setTileNet(id, { grade: 'bad', rttMs: null, lossPct: null, jitterMs: null });
+      setTileNet(id, {
+        grade: 'bad',
+        rttMs: null,
+        lossPct: null,
+        jitterMs: null,
+        relay: null,
+        sendKbps: null,
+        recvKbps: null,
+        videoRes: null,
+        fps: null,
+        codec: null,
+      });
       continue;
     }
 
@@ -1773,41 +1827,100 @@ async function updatePeerQuality() {
     let lost = 0;
     let recv = 0;
     let jitterMs: number | null = null;
+    let bytesSent = 0;
+    let bytesRecv = 0;
+    let width: number | null = null;
+    let height: number | null = null;
+    let fps: number | null = null;
+    let videoCodecId: string | undefined;
+    // Кандидат-пары: id выбранной (наименьший RTT) — по нему потом читаем тип пути.
+    let bestPairLocalId: string | undefined;
+    let bestPairRemoteId: string | undefined;
+    let stats: RTCStatsReport;
     try {
-      const stats = await peer.pc.getStats();
-      stats.forEach((r) => {
-        if (
-          r.type === 'candidate-pair' &&
-          r.state === 'succeeded' &&
-          r.currentRoundTripTime != null
-        ) {
-          const ms = Math.round(r.currentRoundTripTime * 1000);
-          if (rtt === null || ms < rtt) rtt = ms;
-        }
-        const kind = (r as { kind?: string; mediaType?: string }).kind ?? r.mediaType;
-        if (r.type === 'inbound-rtp' && (kind === 'audio' || kind === 'video')) {
-          lost += (r as { packetsLost?: number }).packetsLost ?? 0;
-          recv += (r as { packetsReceived?: number }).packetsReceived ?? 0;
-          // Джиттер снимаем с аудио (в секундах) — он чувствительнее к качеству голоса.
-          const j = (r as { jitter?: number }).jitter;
-          if (kind === 'audio' && j != null) jitterMs = Math.round(j * 1000);
-        }
-      });
+      stats = await peer.pc.getStats();
     } catch {
       /* getStats может кинуть на закрывающемся pc — пропускаем пира */
       continue;
     }
+    stats.forEach((r) => {
+      if (
+        r.type === 'candidate-pair' &&
+        r.state === 'succeeded' &&
+        r.currentRoundTripTime != null
+      ) {
+        const ms = Math.round(r.currentRoundTripTime * 1000);
+        if (rtt === null || ms < rtt) {
+          rtt = ms;
+          bestPairLocalId = (r as { localCandidateId?: string }).localCandidateId;
+          bestPairRemoteId = (r as { remoteCandidateId?: string }).remoteCandidateId;
+        }
+      }
+      const kind = (r as { kind?: string; mediaType?: string }).kind ?? r.mediaType;
+      if (r.type === 'inbound-rtp' && (kind === 'audio' || kind === 'video')) {
+        lost += (r as { packetsLost?: number }).packetsLost ?? 0;
+        recv += (r as { packetsReceived?: number }).packetsReceived ?? 0;
+        bytesRecv += (r as { bytesReceived?: number }).bytesReceived ?? 0;
+        const j = (r as { jitter?: number }).jitter;
+        if (kind === 'audio' && j != null) jitterMs = Math.round(j * 1000);
+        if (kind === 'video') {
+          const rv = r as {
+            frameWidth?: number;
+            frameHeight?: number;
+            framesPerSecond?: number;
+            codecId?: string;
+          };
+          if (rv.frameWidth && rv.frameHeight) {
+            width = rv.frameWidth;
+            height = rv.frameHeight;
+          }
+          if (rv.framesPerSecond != null) fps = Math.round(rv.framesPerSecond);
+          if (rv.codecId) videoCodecId = rv.codecId;
+        }
+      }
+      if (r.type === 'outbound-rtp' && (kind === 'audio' || kind === 'video')) {
+        bytesSent += (r as { bytesSent?: number }).bytesSent ?? 0;
+        if (kind === 'video') {
+          const reason = limitReason((r as { qualityLimitationReason?: string }).qualityLimitationReason);
+          if (reason === 'bandwidth') worstUplink = 'bandwidth';
+          else if (reason === 'cpu' && worstUplink === 'ok') worstUplink = 'cpu';
+        }
+      }
+    });
 
-    // Потери за интервал: дельта потерянных / (дельта потерянных + принятых).
-    // Первый тик после подключения базы ещё не имеет — там потери считаем 0.
+    // Тип пути: реле, если локальный ИЛИ удалённый кандидат выбранной пары — relay.
+    let relay: boolean | null = null;
+    const localCand = bestPairLocalId ? stats.get(bestPairLocalId) : undefined;
+    const remoteCand = bestPairRemoteId ? stats.get(bestPairRemoteId) : undefined;
+    if (localCand || remoteCand) {
+      const lt = (localCand as { candidateType?: string } | undefined)?.candidateType;
+      const rt = (remoteCand as { candidateType?: string } | undefined)?.candidateType;
+      relay = lt === 'relay' || rt === 'relay';
+    }
+
+    // Кодек входящего видео из codecId → mimeType «video/VP8» → «VP8».
+    let codec: string | null = null;
+    if (videoCodecId) {
+      const mime = (stats.get(videoCodecId) as { mimeType?: string } | undefined)?.mimeType;
+      if (mime) codec = mime.split('/')[1]?.toUpperCase() ?? null;
+    }
+
+    // Потери и битрейт за интервал: дельта относительно прошлого снимка.
+    // Первый тик базы ещё не имеет — потери 0, битрейт неизвестен.
     const prev = netHistory.get(id);
-    netHistory.set(id, { lost, recv });
+    const now = Date.now();
+    netHistory.set(id, { lost, recv, bytesSent, bytesRecv, ts: now });
     let lossPct: number | null = null;
+    let sendKbps: number | null = null;
+    let recvKbps: number | null = null;
     if (prev) {
       const dLost = Math.max(0, lost - prev.lost);
       const dRecv = Math.max(0, recv - prev.recv);
       const total = dLost + dRecv;
       lossPct = total > 0 ? Math.round((dLost / total) * 1000) / 10 : 0;
+      const dt = now - prev.ts;
+      sendKbps = kbps(bytesSent, prev.bytesSent, dt);
+      recvKbps = kbps(bytesRecv, prev.bytesRecv, dt);
     }
 
     setTileNet(id, {
@@ -1815,8 +1928,16 @@ async function updatePeerQuality() {
       rttMs: rtt,
       lossPct,
       jitterMs,
+      relay,
+      sendKbps,
+      recvKbps,
+      videoRes: width && height ? `${width}×${height}` : null,
+      fps,
+      codec,
     });
   }
+
+  useVoiceStore.getState().setUplink(worstUplink);
 }
 
 // ─────────────────────────────────────────────────────────────────────────

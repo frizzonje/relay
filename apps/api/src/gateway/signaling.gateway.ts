@@ -284,6 +284,41 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // каналов, по которым держим историю, чтобы реестр не рос без предела.
   private static readonly MAX_CHAT_ROOMS = 200;
 
+  // ── Токен-бакет на сокет ────────────────────────────────────────────────
+  // Гасим флуд событий, каждое из которых иначе вызывает рассылку на весь
+  // сервер (presence/чат/реестр) — O(n) обход+emit на всех. Живому человеку
+  // 20 действий/с с запасом хватает (join, мут, сообщения — единицы в минуту),
+  // бот на тысячах/с упрётся в пустой бакет. Заодно тормозит перебор пароля
+  // закрытого сервера (server-unlock). Негоциацию (offer/answer/ice) НЕ трогаем:
+  // она бывает легитимно бурстовой и релеится 1:1, дёшево.
+  private static readonly RL_CAPACITY = 40;
+  private static readonly RL_REFILL_PER_SEC = 20;
+
+  // Presence меняется пачками (заход нескольких, серия media-update) —
+  // коалесцируем рассылку в один emit за короткое окно вместо O(n) обхода+emit
+  // на каждое событие. 80 мс незаметны на индикаторах мута/эфира.
+  private static readonly PRESENCE_DEBOUNCE_MS = 80;
+  private presenceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Списываем токен; false → бакет пуст (флуд), обработчик молча выходит.
+  private allow(client: Socket): boolean {
+    const now = Date.now();
+    const bucket = (client.data.rl as { tokens: number; ts: number } | undefined) ?? {
+      tokens: SignalingGateway.RL_CAPACITY,
+      ts: now,
+    };
+    const elapsed = (now - bucket.ts) / 1000;
+    bucket.tokens = Math.min(
+      SignalingGateway.RL_CAPACITY,
+      bucket.tokens + elapsed * SignalingGateway.RL_REFILL_PER_SEC,
+    );
+    bucket.ts = now;
+    client.data.rl = bucket;
+    if (bucket.tokens < 1) return false;
+    bucket.tokens -= 1;
+    return true;
+  }
+
   // Socket.io цепляется к http-серверу мимо express-миддлвар,
   // поэтому пропуск проверяем прямо в handshake
   handleConnection(client: Socket) {
@@ -345,6 +380,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ServerCreatePayload,
   ) {
+    if (!this.allow(client)) return;
     // id генерирует клиент — принимаем как есть (санитизируем длину), чтобы он мог
     // сразу открыть новый сервер и создавать в нём каналы, не дожидаясь ответа.
     const id = typeof payload?.id === 'string' ? payload.id.trim().slice(0, 64) : '';
@@ -375,6 +411,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ServerUnlockPayload,
   ) {
+    if (!this.allow(client)) return;
     const id = typeof payload?.id === 'string' ? payload.id : '';
     const password = typeof payload?.password === 'string' ? payload.password : '';
     const srv = this.servers.find((s) => s.id === id);
@@ -401,6 +438,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ServerDeletePayload,
   ) {
+    if (!this.allow(client)) return;
     const id = typeof payload?.id === 'string' ? payload.id : '';
     if (!id) return;
     const idx = this.servers.findIndex((s) => s.id === id && s.removable);
@@ -427,6 +465,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ChannelCreatePayload,
   ) {
+    if (!this.allow(client)) return;
     const type = payload?.type === 'voice' ? 'voice' : payload?.type === 'text' ? 'text' : null;
     if (!type) return;
     // Сервер-владелец должен существовать (иначе канал повиснет вне рейки).
@@ -451,9 +490,10 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   @SubscribeMessage('channel-delete')
   handleChannelDelete(
-    @ConnectedSocket() _client: Socket,
+    @ConnectedSocket() client: Socket,
     @MessageBody() payload: ChannelDeletePayload,
   ) {
+    if (!this.allow(client)) return;
     const id = typeof payload?.id === 'string' ? payload.id : '';
     if (!id) return;
     const idx = this.channels.findIndex((c) => c.id === id && c.removable);
@@ -465,6 +505,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   @SubscribeMessage('join')
   handleJoin(@ConnectedSocket() client: Socket, @MessageBody() payload: JoinPayload) {
+    if (!this.allow(client)) return;
     const room = typeof payload?.room === 'string' ? payload.room.trim().slice(0, 32) : '';
     if (!room) return;
     const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 20) : undefined;
@@ -534,6 +575,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @MessageBody()
     payload: { camOn?: unknown; screenOn?: unknown; micOn?: unknown; deafened?: unknown },
   ) {
+    if (!this.allow(client)) return;
     const room = client.data.room as string | undefined;
     if (!room) return;
     // Мут/глушилку запоминаем на сокете — их раздаёт voice-presence (индикаторы в
@@ -560,6 +602,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // плиток у собеседников) и в текстовом канале (ростер). Пустое имя игнорируем.
   @SubscribeMessage('rename')
   handleRename(@ConnectedSocket() client: Socket, @MessageBody() payload: { name?: unknown }) {
+    if (!this.allow(client)) return;
     const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 20) : '';
     if (!name) return;
 
@@ -581,6 +624,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   @SubscribeMessage('chat-join')
   handleChatJoin(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatPayload) {
+    if (!this.allow(client)) return;
     const slug = typeof payload?.room === 'string' ? payload.room.trim().slice(0, 32) : '';
     if (!slug) return;
     const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 20) : '';
@@ -605,6 +649,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   @SubscribeMessage('chat-message')
   handleChatMessage(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatPayload) {
+    if (!this.allow(client)) return;
     const room = client.data.chatRoom as string | undefined;
     if (!room) return;
     const text = typeof payload?.text === 'string' ? payload.text.trim().slice(0, 500) : '';
@@ -636,6 +681,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // Состояние храним в истории канала и рассылаем всем читающим — как и сами сообщения.
   @SubscribeMessage('chat-react')
   handleChatReact(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatReactPayload) {
+    if (!this.allow(client)) return;
     const room = client.data.chatRoom as string | undefined;
     if (!room) return;
     const id = typeof payload?.id === 'string' ? payload.id : '';
@@ -755,8 +801,15 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     return presence;
   }
 
+  // Коалесцирующий (trailing-edge) дебаунс: пачка событий за окно = один emit
+  // с итоговым состоянием. Таймер уже взведён — ничего не делаем.
   private broadcastVoicePresence() {
-    this.server.emit('voice-presence', this.buildVoicePresence());
+    if (this.presenceTimer) return;
+    this.presenceTimer = setTimeout(() => {
+      this.presenceTimer = null;
+      this.server.emit('voice-presence', this.buildVoicePresence());
+    }, SignalingGateway.PRESENCE_DEBOUNCE_MS);
+    this.presenceTimer.unref?.();
   }
 
   private leaveChatRoom(client: Socket) {

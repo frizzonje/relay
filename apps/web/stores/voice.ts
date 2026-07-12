@@ -14,7 +14,7 @@ export interface VoiceTile {
   name: string;
   /** Медиапоток (у себя — localStream, у собеседников — e.streams[0]). */
   stream: MediaStream | null;
-  /** Подпись статуса: '' | 'соединение…' | 'переподключение…'. */
+  /** Подпись статуса: '' | 'соединение…' | 'переподключение…' | 'резервный канал…'. */
   state: string;
   isLocal: boolean;
   /** Локальная демонстрация экрана — плитку не зеркалим и показываем целиком. */
@@ -59,7 +59,32 @@ export interface TileNet {
   lossPct: number | null;
   /** Джиттер входящего аудио, мс (null — нет данных). */
   jitterMs: number | null;
+  /**
+   * Путь медиа: true — через TURN-реле (выбранная candidate-pair опирается на
+   * relay-кандидат), false — напрямую (host/srflx), null — пока не определён.
+   * Реле всегда добавляет задержку — объясняет высокий пинг «на ровном месте».
+   */
+  relay?: boolean | null;
+  /** Исходящий к собеседнику битрейт (аудио+видео), кбит/с; null — нет базы. */
+  sendKbps?: number | null;
+  /** Входящий от собеседника битрейт (аудио+видео), кбит/с; null — нет базы. */
+  recvKbps?: number | null;
+  /** Разрешение входящего видео, напр. «1280×720» (null — видео нет). */
+  videoRes?: string | null;
+  /** Кадры/с входящего видео (null — видео нет). */
+  fps?: number | null;
+  /** Кодек входящего видео, напр. «VP8» / «H264» (null — видео нет). */
+  codec?: string | null;
 }
+
+/**
+ * Здоровье СВОЕГО аплинка (getStats outbound-rtp.qualityLimitationReason,
+ * худшее по всем пирам). В mesh именно исходящий канал чаще всего узкое место, а
+ * per-peer метрики «net» отражают только ВХОДЯЩее от собеседников. 'ok' — всё в
+ * норме; 'bandwidth' — не хватает канала (кодек режет битрейт); 'cpu' — не тянет
+ * машина. Показываем предупреждением на своей плитке.
+ */
+export type UplinkStatus = 'ok' | 'cpu' | 'bandwidth';
 
 export type ScreenMode = 'quality' | 'fps';
 
@@ -117,6 +142,8 @@ interface VoiceState {
   noiseSuppression: boolean;
   /** Режим Push-to-talk: микрофон открыт, только пока удерживается пробел. */
   pushToTalk: boolean;
+  /** Здоровье своего аплинка (см. UplinkStatus) — предупреждение на своей плитке. */
+  uplink: UplinkStatus;
 
   setTiles: (tiles: VoiceTile[]) => void;
   setMedia: (m: Partial<Pick<VoiceState, 'micOn' | 'camOn' | 'screenOn' | 'screenMode'>>) => void;
@@ -136,6 +163,7 @@ interface VoiceState {
   setCurrentCamera: (id: string | null, label: string) => void;
   setNoiseSuppression: (v: boolean) => void;
   setPushToTalk: (v: boolean) => void;
+  setUplink: (v: UplinkStatus) => void;
 }
 
 export const useVoiceStore = create<VoiceState>((set) => ({
@@ -163,6 +191,7 @@ export const useVoiceStore = create<VoiceState>((set) => ({
   currentCamLabel: '',
   noiseSuppression: true,
   pushToTalk: false,
+  uplink: 'ok',
 
   setTiles: (tiles) => set({ tiles }),
   setMedia: (m) => set(m),
@@ -182,4 +211,5 @@ export const useVoiceStore = create<VoiceState>((set) => ({
   setCurrentCamera: (id, label) => set({ currentCamId: id, currentCamLabel: label }),
   setNoiseSuppression: (v) => set({ noiseSuppression: v }),
   setPushToTalk: (v) => set({ pushToTalk: v }),
+  setUplink: (v) => set({ uplink: v }),
 }));
