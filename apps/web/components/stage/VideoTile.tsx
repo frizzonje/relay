@@ -442,16 +442,17 @@ export function VideoTile({
         <Icon name={isFs || cssFs ? 'minimize-2' : 'maximize-2'} className="text-lg" />
       </button>
 
-      {/* Статус соединения — либо тег качества в углу, когда связь установлена */}
+      {/* Статус соединения — либо тег разрешения в углу при видео. Тег «аудио»
+          (нет камеры/экрана) не показываем — он лишний шум на голосовой плитке. */}
       {tile.state ? (
         <div className="absolute right-2.5 top-2.5 z-[2] rounded-[8px] bg-black/65 px-2.5 py-1 text-xs font-semibold text-text-dim backdrop-blur-[6px]">
           {tile.state}
         </div>
-      ) : (
+      ) : quality !== 'аудио' ? (
         <div className="absolute right-2.5 top-2.5 z-[2] rounded-[8px] bg-black/55 px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-text-muted backdrop-blur-[6px]">
           {quality}
         </div>
-      )}
+      ) : null}
 
       {/* Чип имени + индикатор связи + микрофон (blur, раздел 02 референса) */}
       <div className="absolute bottom-2 left-2 z-[2] flex items-center gap-1.5 rounded-[8px] bg-black/55 px-2.5 py-1 text-[13px] font-semibold text-white backdrop-blur-[6px]">
