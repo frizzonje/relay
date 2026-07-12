@@ -52,7 +52,7 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "Relay Desktop (nightly)" \
-              --notes "Автосборка последнего main — коммит ${GITHUB_SHA:0:7}." \
+              --notes "Automated build of the latest main — commit ${GITHUB_SHA:0:7}." \
               --prerelease
             echo "tag=nightly"                  >> "$GITHUB_OUTPUT"
             echo "name=Relay Desktop (nightly)" >> "$GITHUB_OUTPUT"
@@ -98,6 +98,13 @@ jobs:
           # Релиз уже создан job'ой setup — заливаем в него установщики.
           tagName: ${{ needs.setup.outputs.tag }}
           releaseName: ${{ needs.setup.outputs.name }}
+          # Release notes are kept in English (user-facing).
+          releaseBody: |
+            Relay desktop client for macOS, Windows and Linux.
+
+            Download the installer for your platform from the assets below.
+            The app keeps itself up to date — open Settings → “Check for updates”
+            to install the newest version.
           releaseDraft: false
           prerelease: ${{ needs.setup.outputs.prerelease }}
           args: ${{ matrix.args }}
