@@ -1,6 +1,6 @@
 [package]
 name = "relay-desktop"
-version = "0.3.4"
+version = "0.3.5"
 description = "relay desktop — Tauri v2 оболочка над web-клиентом"
 authors = ["relay"]
 edition = "2021"
@@ -25,6 +25,8 @@ tauri-plugin-updater = "2"
 # Разбор payload'ов событий из web-UI (voice-status / set-ptt-shortcut).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# tokio::time::timeout — жёсткий предохранитель вокруг updater.check() (см. main.rs).
+tokio = { version = "1", features = ["time"] }
 # PCM-кадры нативного звука демонстрации → base64 в события Tauri.
 base64 = "0.22"
 

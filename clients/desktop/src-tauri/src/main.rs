@@ -171,25 +171,64 @@ fn emit_update_status(app: &AppHandle, value: serde_json::Value) {
     let _ = app.emit("update-status", value);
 }
 
-/// Апдейтер с явным таймаутом запроса. Без него зависшее соединение к GitHub
-/// (частый случай — IPv6-stall, когда браузер через happy-eyeballs уходит на
-/// IPv4, а reqwest ждёт AAAA) держит проверку бесконечно: пользователь видит
-/// вечное «Проверяю...». При простое лучше отдать ошибку, чем висеть.
-fn build_updater(app: &AppHandle, secs: u64) -> tauri_plugin_updater::Result<tauri_plugin_updater::Updater> {
-    app.updater_builder().timeout(Duration::from_secs(secs)).build()
+/// Диагностический лог обновлений: строка в stderr + append в
+/// `$HOME/relay-update.log`. Временный — чтобы вживую увидеть, на каком шаге
+/// встаёт проверка на машине пользователя (событие дошло? check() висит? ошибка?).
+fn ulog(msg: &str) {
+    eprintln!("[relay-update] {msg}");
+    if let Ok(home) = std::env::var("HOME") {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(format!("{home}/relay-update.log"))
+        {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let _ = writeln!(f, "{ts} {msg}");
+        }
+    }
+}
+
+/// Проверка релизов с ЖЁСТКИМ таймаутом. Плагинный `.timeout()` при некоторых
+/// зависаниях (IPv6-stall и т.п.) не отменяет запрос — оборачиваем будущее в
+/// `tokio::time::timeout`, который гарантированно бросает его: вместо вечного
+/// «Проверяю...» пользователь получает ошибку. Возвращаем найденный `Update`
+/// (нужен для загрузки) либо человекочитаемую строку ошибки.
+async fn run_check(app: &AppHandle, secs: u64) -> Result<Option<tauri_plugin_updater::Update>, String> {
+    let updater = match app.updater_builder().timeout(Duration::from_secs(secs)).build() {
+        Ok(u) => u,
+        Err(e) => {
+            ulog(&format!("updater build failed: {e}"));
+            return Err(e.to_string());
+        }
+    };
+    ulog(&format!("check() start (hard timeout {secs}s)"));
+    match tokio::time::timeout(Duration::from_secs(secs), updater.check()).await {
+        Ok(Ok(opt)) => {
+            ulog(&format!("check() ok -> {:?}", opt.as_ref().map(|u| u.version.clone())));
+            Ok(opt)
+        }
+        Ok(Err(e)) => {
+            ulog(&format!("check() error: {e}"));
+            Err(e.to_string())
+        }
+        Err(_elapsed) => {
+            ulog(&format!("check() HARD TIMEOUT after {secs}s"));
+            Err(format!("нет ответа от GitHub за {secs}с (таймаут)"))
+        }
+    }
 }
 
 /// Проверить релизы и доложить статус. НИЧЕГО не ставит — установка только по
 /// явному `install-update`. Канал — стабильные `desktop-v*` (endpoint/pubkey в
 /// tauri.conf.json → `plugins.updater`); nightly-пре-релизы сюда не попадают.
 async fn check_updates(app: AppHandle, notify: bool) {
+    ulog(&format!("check-updates received (notify={notify})"));
     emit_update_status(&app, json!({ "state": "checking" }));
-    // latest.json — крохотный; 20с с запасом, дальше считаем сеть недоступной.
-    let result = match build_updater(&app, 20) {
-        Ok(u) => u.check().await,
-        Err(e) => Err(e),
-    };
-    match result {
+    match run_check(&app, 20).await {
         Ok(Some(update)) => {
             emit_update_status(&app, json!({ "state": "available", "version": update.version }));
             if notify {
@@ -206,30 +245,30 @@ async fn check_updates(app: AppHandle, notify: bool) {
             }
         }
         Ok(None) => emit_update_status(&app, json!({ "state": "up-to-date" })),
-        Err(e) => emit_update_status(&app, json!({ "state": "error", "message": e.to_string() })),
+        Err(msg) => emit_update_status(&app, json!({ "state": "error", "message": msg })),
     }
 }
 
 /// Скачать и установить свежий релиз, затем перезапуститься. Приходит только по
 /// кнопке «Установить и перезапустить» — явное согласие пользователя.
 async fn install_update(app: AppHandle) {
+    ulog("install-update received");
     // Тут же качается ~3 МБ .app.tar.gz — таймаут щедрее под медленные сети.
-    let result = match build_updater(&app, 120) {
-        Ok(u) => u.check().await,
-        Err(e) => Err(e),
-    };
-    match result {
+    match run_check(&app, 120).await {
         Ok(Some(update)) => {
             emit_update_status(&app, json!({ "state": "installing", "version": update.version }));
+            ulog(&format!("downloading {}", update.version));
             if let Err(e) = update.download_and_install(|_chunk, _total| {}, || {}).await {
+                ulog(&format!("install failed: {e}"));
                 emit_update_status(&app, json!({ "state": "error", "message": e.to_string() }));
                 return;
             }
+            ulog("installed, restarting");
             // На всех платформах перезапуск применяет свежую версию сразу.
             app.restart();
         }
         Ok(None) => emit_update_status(&app, json!({ "state": "up-to-date" })),
-        Err(e) => emit_update_status(&app, json!({ "state": "error", "message": e.to_string() })),
+        Err(msg) => emit_update_status(&app, json!({ "state": "error", "message": msg })),
     }
 }
 
