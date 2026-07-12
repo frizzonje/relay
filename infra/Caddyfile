@@ -1,0 +1,31 @@
+# Единый Caddyfile для dev и прода.
+# /api, /socket.io, /uploads → Nest (api:3000), всё прочее → Next (web:3001).
+# Один origin ⇒ кука relay_pass общая, WebRTC получает secure-context (getUserMedia).
+#
+# TLS определяется именем хоста автоматически:
+#   localhost  → внутренний CA Caddy (self-signed, доверенный в системе)
+#   реальный домен → Let's Encrypt (ACME, сертификат берётся автоматически)
+#
+# Домен задаётся через переменную окружения DOMAIN (прод-compose передаёт её).
+# В dev-compose DOMAIN не задан → {$DOMAIN:localhost} → localhost.
+
+# При заходе по голому IP (телефон → https://192.168.x.x) браузер НЕ шлёт SNI,
+# и Caddy без подсказки не знает, какой сертификат отдать → handshake падает.
+# default_sni говорит, какой серт показывать по умолчанию.
+{
+	default_sni {$DOMAIN:localhost}
+}
+
+{$DOMAIN:localhost} {
+	tls internal
+
+	@backend path /api/* /socket.io/* /uploads/*
+	handle @backend {
+		# reverse_proxy сам выполняет апгрейд WebSocket для /socket.io.
+		reverse_proxy api:3000
+	}
+
+	handle {
+		reverse_proxy web:3001
+	}
+}

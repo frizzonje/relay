@@ -1,0 +1,103 @@
+# Сборка десктоп-клиента (clients/desktop, Tauri v2). Отдельно от основного CI:
+# у нативного клиента свой тулчейн (Rust), pnpm/turbo его не трогают.
+#
+# Триггеры:
+#   • push в main         → «катящийся» пре-релиз `nightly` (перезаписывается
+#                           свежими установщиками на каждом пуше).
+#   • тег `desktop-v*`    → обычный версионный релиз (не prerelease).
+#   • workflow_dispatch   → ручной запуск (даёт nightly).
+#
+# Перед первым зелёным прогоном нужны иконки (`cargo tauri icon`, см.
+# src-tauri/icons/README.md); для подписи автообновлений добавить секреты
+# TAURI_SIGNING_PRIVATE_KEY(+PASSWORD).
+name: desktop
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ["desktop-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  # Определяем параметры релиза один раз. Для nightly здесь же пересоздаём
+  # релиз+тег, чтобы установщики от матрицы (4 ОС) лились в один свежий релиз
+  # и старые сборки не копились. Матрица ниже только заливает в него артефакты.
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      name: ${{ steps.v.outputs.name }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/desktop-v* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+            echo "tag=$tag"                  >> "$GITHUB_OUTPUT"
+            echo "name=Relay Desktop $tag"   >> "$GITHUB_OUTPUT"
+            echo "prerelease=false"          >> "$GITHUB_OUTPUT"
+          else
+            # Катящийся nightly: сносим прошлый релиз+тег и создаём заново на
+            # текущем коммите. `|| true` — на самом первом прогоне релиза ещё нет.
+            gh release delete nightly --yes --cleanup-tag \
+              --repo "$GITHUB_REPOSITORY" || true
+            gh release create nightly \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Relay Desktop (nightly)" \
+              --notes "Автосборка последнего main — коммит ${GITHUB_SHA:0:7}." \
+              --prerelease
+            echo "tag=nightly"                  >> "$GITHUB_OUTPUT"
+            echo "name=Relay Desktop (nightly)" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true"              >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, args: "--target aarch64-apple-darwin" }
+          - { os: macos-latest, args: "--target x86_64-apple-darwin" }
+          - { os: ubuntu-22.04, args: "" }
+          - { os: windows-latest, args: "" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux system deps (WebKitGTK, appindicator)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev build-essential
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/desktop/src-tauri
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: clients/desktop
+          # Релиз уже создан job'ой setup — заливаем в него установщики.
+          tagName: ${{ needs.setup.outputs.tag }}
+          releaseName: ${{ needs.setup.outputs.name }}
+          releaseDraft: false
+          prerelease: ${{ needs.setup.outputs.prerelease }}
+          args: ${{ matrix.args }}

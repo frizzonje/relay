@@ -1,0 +1,54 @@
+# XcodeGen-описание проекта. .xcodeproj НЕ коммитим — генерируется командой
+#   xcodegen generate
+# из этого каталога (нужен `brew install xcodegen`). См. clients/ios/README.md.
+name: Relay
+options:
+  bundleIdPrefix: tech.overhype.relay
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  developmentLanguage: ru
+
+packages:
+  SocketIO:
+    url: https://github.com/socketio/socket.io-client-swift
+    from: "16.1.0"
+  # Официальный бинарный WebRTC.xcframework (сборка Google от stasel). Мажор =
+  # веха Chromium (M137, M149…), поэтому диапазон, а не `from` (тот упёрся бы в
+  # < следующего мажора). Точную версию пинит Package.resolved.
+  WebRTC:
+    url: https://github.com/stasel/WebRTC
+    minVersion: "130.0.0"
+    maxVersion: "200.0.0"
+
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    # Симуляторная сборка в CI/локально — без подписи.
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  Relay:
+    type: application
+    platform: iOS
+    sources:
+      - path: Relay
+        # Info.plist подключается через INFOPLIST_FILE — в build-фазу ресурсов его
+        # добавлять нельзя (иначе «Multiple commands produce Info.plist»).
+        excludes:
+          - "App/Info.plist"
+    dependencies:
+      - package: SocketIO
+        product: SocketIO
+      - package: WebRTC
+        product: WebRTC
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: tech.overhype.relay
+        INFOPLIST_FILE: Relay/App/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_USER_SCRIPT_SANDBOXING: "YES"
+        GENERATE_INFOPLIST_FILE: "NO"
+        TARGETED_DEVICE_FAMILY: "1"

@@ -1,0 +1,52 @@
+[package]
+name = "relay-desktop"
+version = "0.3.1"
+description = "relay desktop — Tauri v2 оболочка над web-клиентом"
+authors = ["relay"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# Одно окно на инсталляцию: второй запуск фокусирует существующее.
+tauri-plugin-single-instance = "2"
+# Глобальный push-to-talk / mute-хоткей вне фокуса окна.
+tauri-plugin-global-shortcut = "2"
+# Нативные уведомления (упоминания, входящий звонок).
+tauri-plugin-notification = "2"
+# Автостарт при входе в систему.
+tauri-plugin-autostart = "2"
+# Автообновление: проверка/загрузка/установка подписанных релизов с GitHub.
+# Работает из Rust (см. main.rs) — удалённому web-UI JS-API апдейтера НЕ даём.
+tauri-plugin-updater = "2"
+# Разбор payload'ов событий из web-UI (voice-status / set-ptt-shortcut).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# PCM-кадры нативного звука демонстрации → base64 в события Tauri.
+base64 = "0.22"
+
+# Нативный захват звука экрана (process-loopback exclude) — только Windows.
+# WASAPI + COM через windows-rs. На macOS/Linux screen_audio компилируется в
+# заглушку (см. cfg в src/screen_audio.rs), поэтому этот блок здесь безопасен.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "implement",
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_Security",        # CreateEventW/SECURITY_ATTRIBUTES гейтятся этой фичей
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp", # снимок процессов → PID браузера WebView2
+] }
+# Макрос #[implement] раскрывается в пути `windows_core::…` — нужен как прямой крейт.
+windows-core = "0.58"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

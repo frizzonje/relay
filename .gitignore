@@ -1,0 +1,27 @@
+node_modules/
+dist/
+uploads/
+.env
+webrtc-test/
+.DS_Store
+.claude/
+
+# монорепо / сборка
+.next/
+.turbo/
+out/
+next-env.d.ts
+*.tsbuildinfo
+.pnpm-store/
+
+# e2e (Playwright)
+e2e/test-results/
+e2e/playwright-report/
+e2e/.last-run.json
+
+# Реестр серверов/каналов в дев-режиме (persist в bind-mount)
+apps/api/data/
+
+# Внутренние рабочие заметки и референсы (вне репозитория)
+docs/plan.md
+reference/

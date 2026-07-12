@@ -1,0 +1,12 @@
+{
+  "name": "relay-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Playwright e2e relay — гоняется против прод-стека (Caddy) в Docker",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.49.0"
+  }
+}

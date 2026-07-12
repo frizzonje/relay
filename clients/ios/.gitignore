@@ -1,0 +1,8 @@
+# Генерится XcodeGen'ом — не коммитим (см. README).
+Relay.xcodeproj/
+# Локальные сборки и разрешённые пакеты.
+build/
+DerivedData/
+.swiftpm/
+*.xcworkspace/
+.DS_Store

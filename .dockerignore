@@ -1,0 +1,39 @@
+# Исключаем из контекста сборки Docker то, что не нужно внутри образов.
+# Контекст = корень монорепо (docker-compose.yml использует context: .).
+#
+# Рантайм-образам api/web нужны только: pnpm-workspace.yaml, pnpm-lock.yaml,
+# package.json, apps/{web,api}, packages/shared. Всё остальное — балласт в
+# контексте сборки, из-за него `docker compose up --build` тянет лишнее.
+
+.git
+.DS_Store
+*.log
+
+# node_modules пересобираются внутри контейнера
+**/node_modules
+
+# Артефакты сборки (пересобираются внутри контейнера)
+apps/web/.next
+apps/api/dist
+**/.turbo
+**/*.tsbuildinfo
+.pnpm-store
+
+# Нативные клиенты (Tauri desktop, iOS) — свои тулчейны (Rust/Xcode), в
+# серверные образы не входят. Именно тут лежат «билдеры приложений» + гигабайты
+# clients/desktop/src-tauri/target — деплою сервера они не нужны.
+clients
+
+# Локальные секреты
+.env*
+
+# Документация, референсы, e2e, CI, редактор — в рантайм-образы не нужны
+docs
+scripts
+e2e
+reference
+.github
+.claude
+
+# Загрузки (монтируются как volume)
+uploads

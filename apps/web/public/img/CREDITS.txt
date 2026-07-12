@@ -1,0 +1,5 @@
+Иконки интерфейса (img/icons/*.svg) — в стиле Lucide (https://lucide.dev),
+лицензия ISC. Используются в компоненте Icon (apps/web/components/ui/icon).
+
+Звуки эфира (../sfx/*.mp3) — оригинальные, синтезируются процедурно скриптом
+tools/gen-sfx.py (аддитивный синтез + стерео-реверб). Public domain (CC0).

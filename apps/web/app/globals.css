@@ -1,0 +1,486 @@
+@import 'tailwindcss';
+
+/* ============================================================================
+   Дизайн-система relay
+   Тёмная строгая тех-эстетика по reference/relay-design-reference.html.
+   CSS-first конфиг Tailwind v4: токены ниже генерируют утилиты
+   (bg-bg-main, text-text-muted, text-ok, font-mono, …) и одновременно
+   доступны как CSS-переменные (--color-*, …).
+   ========================================================================== */
+
+@theme {
+  /* — Фоны: по вложенности рейка темнее сайдбара темнее сцены — */
+  --color-bg-app: #08090b; /* корень приложения, самый тёмный */
+  --color-bg-rail: #0a0b0d; /* вертикальная рейка серверов */
+  --color-bg-sidebar: #0f1114; /* сайдбар и правая колонка */
+  --color-bg-main: #0c0e11; /* сцена звонка/чата */
+  --color-bg-panel: #0d0f12; /* карточки, плавающие панели */
+  --color-bg-elev: #111418; /* поля ввода, селекторы */
+  --color-bg-deep: #0a0b0d; /* утопленные поверхности */
+  --color-bg-hover: rgba(255, 255, 255, 0.04);
+  --color-bg-active: rgba(255, 255, 255, 0.06);
+
+  /* — Текст — */
+  --color-text: #e7e9ec;
+  --color-text-header: #f2f3f5;
+  --color-text-muted: #8b9199;
+  --color-text-dim: #7b818a;
+  --color-text-faint: #5b6169; /* моно-лейблы капсом */
+
+  /* — Акцент (монохром): кнопки, узел лого, активные состояния — */
+  --color-accent: #d7dbe0;
+  --color-accent-strong: #e8eaed;
+
+  /* — Семантика (функциональная, не декоративная) — */
+  --color-ok: #46c17f; /* онлайн / в эфире */
+  --color-danger: #e5573f; /* ошибка / выход / заглушено */
+
+  /* — Рамки-как-цвета (для border-line / ring-line) — */
+  --color-line: rgba(255, 255, 255, 0.07);
+  --color-line-strong: rgba(255, 255, 255, 0.12);
+
+  /* — Типографика: IBM Plex Sans (UI) + IBM Plex Mono (метки/метрики/таймстампы).
+       Переменные --font-plex-* приходят из next/font (app/layout.tsx). — */
+  --font-sans: var(--font-plex-sans), 'IBM Plex Sans', 'Segoe UI', 'Helvetica Neue',
+    Arial, sans-serif;
+  --font-mono: var(--font-plex-mono), 'IBM Plex Mono', ui-monospace, 'SFMono-Regular',
+    Consolas, monospace;
+
+  /* — Радиусы — */
+  --radius-card: 15px; /* карточки/окна 14–16px */
+  --radius-control: 10px; /* поля/крупные кнопки 9–11px */
+  --radius-chip: 8px; /* мелкие иконки-кнопки 7–10px */
+  --radius-glass: 15px; /* совместимость: старое имя = карточка */
+
+  /* — Анимации как утилиты animate-* — */
+  --animate-pulse-dot: pulseDot 2s infinite;
+  --animate-lobby-rise: lobbyRise 0.5s ease both;
+  --animate-tile-pop: tilePop 0.32s ease both;
+  --animate-tile-zoom: tileZoom 0.24s cubic-bezier(0.2, 0.8, 0.3, 1.1);
+  --animate-seg-pop: segPop 0.26s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  --animate-eq: eq 0.4s ease-in-out infinite alternate;
+  --animate-member-badge: memberBadge 0.22s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  --animate-speak-ring: speakRing 1.8s ease-in-out infinite;
+}
+
+/* ============================================================================
+   База
+   ========================================================================== */
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background: var(--color-bg-app);
+    color: var(--color-text);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* ============================================================================
+   Атмосфера фона relay (раздел 08 референса) — см. components/layout/Background.tsx.
+   Угольная точечная сетка + два холодных дрейфующих пятна. Кладётся под весь
+   контент (fixed, z-index:-1, pointer-events:none). Интерактивный спотлайт
+   под курсором добавляет отдельный клиентский слой на экране входа.
+   Только transform/opacity (GPU). prefers-reduced-motion гасит дрейф внизу файла.
+   ========================================================================== */
+@layer components {
+  .atmos {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    overflow: hidden;
+    pointer-events: none;
+    background: var(--color-bg-app);
+    contain: layout paint;
+  }
+
+  /* Точечная сетка: 1px точки, маска-виньетка к краям */
+  .atmos__dots {
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1.5px);
+    background-size: 26px 26px;
+    -webkit-mask-image: radial-gradient(130% 120% at 50% 40%, #000 20%, transparent 82%);
+    mask-image: radial-gradient(130% 120% at 50% 40%, #000 20%, transparent 82%);
+  }
+
+  /* Два медленно дрейфующих холодных световых пятна */
+  .atmos__glow {
+    position: absolute;
+    filter: blur(48px);
+    mix-blend-mode: screen;
+    will-change: transform;
+  }
+  .atmos__glow--a {
+    width: 52%;
+    height: 160%;
+    left: -6%;
+    top: -30%;
+    background: radial-gradient(circle at center, rgba(120, 150, 200, 0.16), transparent 60%);
+    animation: bbDrift1 22s ease-in-out infinite;
+  }
+  .atmos__glow--b {
+    width: 48%;
+    height: 160%;
+    right: -8%;
+    bottom: -32%;
+    background: radial-gradient(circle at center, rgba(190, 196, 214, 0.11), transparent 60%);
+    animation: bbDrift2 28s ease-in-out infinite;
+  }
+
+  /* Интерактивный спотлайт: холодный свет под курсором (--mx/--my задаёт
+     клиентский слой через ref без ре-рендера). */
+  .atmos__spot {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+    mix-blend-mode: screen;
+    pointer-events: none;
+    background: radial-gradient(
+      240px circle at var(--mx, 50%) var(--my, 50%),
+      rgba(150, 180, 235, 0.2),
+      rgba(150, 180, 235, 0.07) 40%,
+      transparent 66%
+    );
+  }
+  /* Проступающая mesh-сетка более ярких точек в радиусе спотлайта */
+  .atmos__mesh {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+    pointer-events: none;
+    background-image: radial-gradient(rgba(180, 205, 255, 0.9) 1px, transparent 1.6px);
+    background-size: 26px 26px;
+    -webkit-mask-image: radial-gradient(
+      150px circle at var(--mx, 50%) var(--my, 50%),
+      #000,
+      transparent 70%
+    );
+    mask-image: radial-gradient(
+      150px circle at var(--mx, 50%) var(--my, 50%),
+      #000,
+      transparent 70%
+    );
+  }
+  .atmos.is-active .atmos__spot,
+  .atmos.is-active .atmos__mesh {
+    opacity: 1;
+  }
+}
+
+/* ============================================================================
+   Поверхности relay. Плоские тёмные панели: непрозрачный фон, тонкая рамка,
+   крупная мягкая тень для «парения».
+   ========================================================================== */
+@layer components {
+  .glass {
+    position: relative;
+    background: var(--color-bg-panel);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-card);
+    box-shadow: 0 40px 120px rgba(0, 0, 0, 0.55);
+  }
+  /* Уровни глубины — чуть разный фон карточки */
+  .glass-1 {
+    background: #0b0c0e;
+  }
+  .glass-2 {
+    background: var(--color-bg-panel);
+  }
+  .glass-3 {
+    background: #101216;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  }
+  /* Ранее «жидкий» шум — в relay плоско, класс оставлен как no-op */
+  .glass-noise {
+  }
+
+  /* Каркасные панели shell-а (рейка/сайдбар/состав/топбар) — встык, без радиуса */
+  .panel {
+    background: var(--color-bg-sidebar);
+  }
+  .panel-rail {
+    background: var(--color-bg-rail);
+  }
+  .panel-sidebar {
+    background: var(--color-bg-sidebar);
+  }
+  .panel-deep {
+    background: var(--color-bg-app);
+  }
+}
+
+/* ============================================================================
+   Иконки: SVG-маски (line-icons), красятся через currentColor.
+   <span class="ico" style={{ '--icon': "url(/img/icons/mic.svg)" }} />
+   ========================================================================== */
+@layer components {
+  .ico {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    flex-shrink: 0;
+    background-color: currentColor;
+    -webkit-mask: var(--icon) center / contain no-repeat;
+    mask: var(--icon) center / contain no-repeat;
+  }
+
+  /* Анимированное многоточие «…» в подписи панели голоса (vp-sub.waiting). */
+  .vp-dots::after {
+    content: '';
+    animation: vpDots 1.4s steps(4, end) infinite;
+  }
+}
+
+/* ============================================================================
+   Keyframes — единый дом для всех анимаций.
+   ========================================================================== */
+@keyframes pulseDot {
+  50% {
+    opacity: 0.4;
+  }
+}
+@keyframes vpDots {
+  0% {
+    content: '';
+  }
+  25% {
+    content: '.';
+  }
+  50% {
+    content: '..';
+  }
+  75% {
+    content: '...';
+  }
+  100% {
+    content: '';
+  }
+}
+@keyframes lobbyRise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes tilePop {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes tileZoom {
+  from {
+    transform: scale(0.93);
+    opacity: 0.35;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes fsIn {
+  from {
+    opacity: 0.3;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes memberBadge {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes segPop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* scaleY вместо height: композитная анимация без reflow. База бара 4px;
+   transform-origin:bottom задаётся на самом элементе. */
+@keyframes eq {
+  from {
+    transform: scaleY(0.75);
+  }
+  to {
+    transform: scaleY(3.5);
+  }
+}
+/* Тихое «дыхание» аватара на плитке без видео */
+@keyframes avatarBreath {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.045);
+  }
+}
+
+/* — relay: логотип mesh-триада (draw-in при маунте, затем тихо туда-обратно) — */
+@keyframes drawEdge {
+  0% {
+    stroke-dashoffset: var(--len);
+  }
+  35% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes nodeIn {
+  0% {
+    opacity: 0;
+    transform: scale(0);
+  }
+  25% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  35% {
+    transform: scale(1);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+/* — relay: атмосфера фона (дрейф пятен) — */
+@keyframes bbDrift1 {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(8%, -7%, 0) scale(1.18);
+  }
+}
+@keyframes bbDrift2 {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1.1);
+  }
+  50% {
+    transform: translate3d(-9%, 6%, 0) scale(1.28);
+  }
+}
+
+/* — relay: мигающий каретка-курсор (моно-поля пароля/композера) — */
+@keyframes blinkCaret {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* — relay: пульсирующая рамка говорящего (плитка звонка) — */
+@keyframes speakRing {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(70, 193, 127, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(70, 193, 127, 0.35);
+  }
+}
+
+/* — Радикс-диалог: вход/выход (центрирование через translate) — */
+@keyframes dialogOverlayIn {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes dialogOverlayOut {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes dialogContentIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.95);
+  }
+}
+@keyframes dialogContentOut {
+  to {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.95);
+  }
+}
+.dialog-overlay[data-state='open'] {
+  animation: dialogOverlayIn 0.18s ease;
+}
+.dialog-overlay[data-state='closed'] {
+  animation: dialogOverlayOut 0.15s ease forwards;
+}
+.dialog-content[data-state='open'] {
+  animation: dialogContentIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dialog-content[data-state='closed'] {
+  animation: dialogContentOut 0.15s ease forwards;
+}
+
+/* ============================================================================
+   Доступность: уважаем prefers-reduced-motion.
+   Framer Motion гасится через <MotionConfig reducedMotion="user">.
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

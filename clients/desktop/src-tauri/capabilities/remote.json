@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-ui",
+  "description": "Права удалённого web-UI relay в окне main: только события Tauri (PTT из Rust + voice-status/set-ptt-shortcut обратно). Кастомных команд и мощных плагинов удалённому origin не даём. urls — wildcard, т.к. адрес сервера вводит пользователь; для конкретного деплоя сузить до своего origin (напр. https://relay.example.com/*).",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://*/*", "https://*/*"]
+  },
+  "permissions": ["core:event:default"]
+}

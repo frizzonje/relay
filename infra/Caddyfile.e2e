@@ -1,0 +1,17 @@
+# Caddyfile только для e2e-прогона в Docker-сети.
+# local_certs форсит внутренний CA для любого хоста (без ACME), а хост relay.test
+# (в отличие от *.localhost) нормально резолвится через --add-host в контейнере
+# Playwright. Маршруты идентичны проду (infra/Caddyfile).
+{
+	local_certs
+}
+
+relay.test {
+	@backend path /api/* /socket.io/* /uploads/*
+	handle @backend {
+		reverse_proxy api:3000
+	}
+	handle {
+		reverse_proxy web:3001
+	}
+}

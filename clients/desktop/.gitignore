@@ -1,0 +1,8 @@
+# Rust / Tauri build output
+/src-tauri/target
+/src-tauri/gen/schemas
+# Локальный Linux-бандл из Docker-проверки (см. README, «Проверка»)
+/.linux-build
+
+# Ключи автообновления — НИКОГДА не коммитить (см. README, «Автообновление»)
+*.key

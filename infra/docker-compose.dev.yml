@@ -1,0 +1,89 @@
+# Dev-стек: api (Nest, watch) + web (Next, Turbopack) + caddy (единый TLS).
+# Поднять из корня репо:  docker compose -f infra/docker-compose.dev.yml up
+# Затем открыть https://localhost (самоподписанный internal-CA Caddy).
+#
+# Нет локального Node: всё крутится в node:20-alpine (corepack → pnpm).
+# node_modules держим в именованных томах, чтобы bind-mount исходников с macOS
+# не затирал установленные в контейнере зависимости (и наоборот).
+
+name: relay-dev
+
+x-node: &node
+  image: node:20-alpine
+  working_dir: /app
+  environment:
+    # macOS bind-mount не шлёт inotify — включаем polling для надёжного hot-reload.
+    - WATCHPACK_POLLING=true
+    - CHOKIDAR_USEPOLLING=true
+  volumes:
+    - ..:/app
+    - nm_root:/app/node_modules
+    - nm_api:/app/apps/api/node_modules
+    - nm_web:/app/apps/web/node_modules
+    - nm_shared:/app/packages/shared/node_modules
+
+services:
+  # Одноразовая установка зависимостей: остальные сервисы ждут её завершения,
+  # чтобы не было гонки за общий pnpm-store при параллельном install.
+  install:
+    <<: *node
+    command: sh -c "corepack enable && pnpm install --frozen-lockfile"
+
+  api:
+    <<: *node
+    working_dir: /app/apps/api
+    command: sh -c "corepack enable && pnpm dev"
+    depends_on:
+      install:
+        condition: service_completed_successfully
+    environment:
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
+      - PORT=3000
+      - UPLOAD_DIR=/app/apps/api/uploads
+      - SITE_PASSWORD=${SITE_PASSWORD:-}
+      - SERVER_HOST=${SERVER_HOST:-localhost}
+      - STUN_URLS=${STUN_URLS:-}
+      - TURN_URLS=${TURN_URLS:-}
+      - TURN_USERNAME=${TURN_USERNAME:-webrtc}
+      - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
+    expose:
+      - "3000"
+
+  web:
+    <<: *node
+    working_dir: /app/apps/web
+    command: sh -c "corepack enable && pnpm dev"
+    depends_on:
+      install:
+        condition: service_completed_successfully
+    environment:
+      # Polling — для hot-reload на macOS bind-mount (как в anchor x-node).
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
+      # Гейт доступа теперь в Next middleware — ему нужен тот же SITE_PASSWORD,
+      # что и у api, иначе verifyToken не сойдётся с выданной кукой.
+      - SITE_PASSWORD=${SITE_PASSWORD:-}
+    expose:
+      - "3001"
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - api
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  nm_root:
+  nm_api:
+  nm_web:
+  nm_shared:
+  caddy_data:
+  caddy_config:

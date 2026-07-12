@@ -1,0 +1,17 @@
+node_modules
+.next
+dist
+.turbo
+.pnpm-store
+coverage
+pnpm-lock.yaml
+**/next-env.d.ts
+**/*.tsbuildinfo
+e2e/test-results
+e2e/playwright-report
+
+# Prettier ведёт только код. YAML не трогаем (в docker-compose — выверенный
+# shell-блок coturn), Markdown-доки авторские — формат-чек их не касается.
+*.yml
+*.yaml
+*.md

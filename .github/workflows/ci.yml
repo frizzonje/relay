@@ -1,0 +1,60 @@
+# CI: lint + typecheck + unit tests + package build, then production Docker
+# image builds. e2e (Playwright) runs as a separate job against the deployed
+# production stack (infra/docker-compose.e2e.yml).
+name: CI
+
+on:
+  push:
+    branches: [main, 'refactor/**']
+  pull_request:
+
+jobs:
+  build-test:
+    name: lint · typecheck · test · build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm turbo run typecheck test build
+
+  docker:
+    name: docker build (api + web)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build api image
+        run: docker build -f apps/api/Dockerfile -t relay-api:ci .
+      - name: Build web image
+        run: docker build -f apps/web/Dockerfile -t relay-web:ci .
+
+  e2e:
+    name: e2e (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Up prod stack (e2e overlay)
+        env:
+          SITE_PASSWORD: testpass123
+        run: docker compose -f docker-compose.yml -f infra/docker-compose.e2e.yml up -d --build
+      - name: Wait for Caddy internal cert
+        run: sleep 15
+      - name: Run Playwright
+        run: |
+          CADDY_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' relay-caddy-1)
+          docker run --rm --network relay_default --add-host "relay.test:$CADDY_IP" \
+            -v "$PWD":/work -w /work/e2e \
+            -e BASE_URL=https://relay.test -e SITE_PASSWORD=testpass123 -e CI=1 \
+            mcr.microsoft.com/playwright:v1.49.0-noble \
+            sh -c 'npm install --no-save @playwright/test@1.49.0 && npx playwright test'
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f infra/docker-compose.e2e.yml down -v

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <defs>
+    <linearGradient id="plate" x1="512" y1="64" x2="512" y2="960" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1c1f26"/>
+      <stop offset="1" stop-color="#08090b"/>
+    </linearGradient>
+    <linearGradient id="glassShine" x1="180" y1="120" x2="620" y2="480" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Непрозрачная тёмная плашка: macOS сам подставляет белую подложку под
+       иконки со сквозной альфой внутри squircle, поэтому "стекло" здесь —
+       это градиент + блик поверх сплошного чёрного, а не настоящая прозрачность. -->
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#plate)"/>
+  <rect x="64.75" y="64.75" width="894.5" height="894.5" rx="199.25" fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="1.5"/>
+  <path d="M96 380 V264 C96 176 168 104 256 104 H520" fill="none" stroke="url(#glassShine)" stroke-width="120" stroke-linecap="round"/>
+
+  <svg x="232" y="232" width="560" height="560" viewBox="0 0 48 48" fill="none">
+    <line x1="24" y1="13" x2="12.5" y2="34" stroke="#8a929c" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="24" y1="13" x2="35.5" y2="34" stroke="#8a929c" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="12.5" y1="34" x2="35.5" y2="34" stroke="#8a929c" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="12.5" cy="34" r="5" fill="#08090b" stroke="#aab0b8" stroke-width="1.5"/>
+    <circle cx="35.5" cy="34" r="5" fill="#08090b" stroke="#aab0b8" stroke-width="1.5"/>
+    <circle cx="24" cy="13" r="6" fill="#f2f3f5"/>
+  </svg>
+</svg>

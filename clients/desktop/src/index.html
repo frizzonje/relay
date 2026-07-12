@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>relay</title>
+    <style>
+      /* Токены из apps/web (relay dark). Локальный экран выбора сервера —
+         единственная «своя» страница десктопа; всё остальное грузится из web-UI. */
+      :root {
+        --bg: #08090b;
+        --panel: #0f1114;
+        --text: #e7e9ec;
+        --muted: #8b9199;
+        --line: rgba(255, 255, 255, 0.1);
+        --accent: #e8eaed;
+        --danger: #e5573f;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+        display: grid;
+        place-items: center;
+      }
+      .card {
+        width: 360px;
+        max-width: calc(100vw - 48px);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 28px 24px;
+        box-shadow: 0 40px 120px rgba(0, 0, 0, 0.55);
+      }
+      .brand { font-weight: 600; letter-spacing: 0.04em; margin: 0 0 4px; }
+      .hint { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+      label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+      input {
+        width: 100%;
+        padding: 11px 12px;
+        background: #0b0c0f;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        color: var(--text);
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+        font-size: 14px;
+        outline: none;
+      }
+      input:focus { border-color: rgba(255, 255, 255, 0.24); }
+      button {
+        margin-top: 16px;
+        width: 100%;
+        padding: 11px 12px;
+        background: var(--accent);
+        color: #0b0c0f;
+        border: 0;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.5; cursor: default; }
+      .err { color: var(--danger); font-size: 12px; min-height: 16px; margin-top: 10px; }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <p class="brand">relay</p>
+      <p class="hint">Адрес вашей инсталляции relay</p>
+      <form id="form">
+        <label for="url">Сервер</label>
+        <input id="url" name="url" type="url" inputmode="url"
+               placeholder="https://relay.example.com" autocomplete="off" spellcheck="false" />
+        <button id="go" type="submit">Подключиться</button>
+        <p class="err" id="err"></p>
+      </form>
+    </main>
+    <script src="main.js"></script>
+  </body>
+</html>
