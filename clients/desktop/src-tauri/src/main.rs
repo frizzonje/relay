@@ -12,6 +12,7 @@ mod screen_audio;
 
 use std::str::FromStr;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -170,12 +171,21 @@ fn emit_update_status(app: &AppHandle, value: serde_json::Value) {
     let _ = app.emit("update-status", value);
 }
 
+/// Апдейтер с явным таймаутом запроса. Без него зависшее соединение к GitHub
+/// (частый случай — IPv6-stall, когда браузер через happy-eyeballs уходит на
+/// IPv4, а reqwest ждёт AAAA) держит проверку бесконечно: пользователь видит
+/// вечное «Проверяю...». При простое лучше отдать ошибку, чем висеть.
+fn build_updater(app: &AppHandle, secs: u64) -> tauri_plugin_updater::Result<tauri_plugin_updater::Updater> {
+    app.updater_builder().timeout(Duration::from_secs(secs)).build()
+}
+
 /// Проверить релизы и доложить статус. НИЧЕГО не ставит — установка только по
 /// явному `install-update`. Канал — стабильные `desktop-v*` (endpoint/pubkey в
 /// tauri.conf.json → `plugins.updater`); nightly-пре-релизы сюда не попадают.
 async fn check_updates(app: AppHandle, notify: bool) {
     emit_update_status(&app, json!({ "state": "checking" }));
-    let result = match app.updater() {
+    // latest.json — крохотный; 20с с запасом, дальше считаем сеть недоступной.
+    let result = match build_updater(&app, 20) {
         Ok(u) => u.check().await,
         Err(e) => Err(e),
     };
@@ -203,7 +213,8 @@ async fn check_updates(app: AppHandle, notify: bool) {
 /// Скачать и установить свежий релиз, затем перезапуститься. Приходит только по
 /// кнопке «Установить и перезапустить» — явное согласие пользователя.
 async fn install_update(app: AppHandle) {
-    let result = match app.updater() {
+    // Тут же качается ~3 МБ .app.tar.gz — таймаут щедрее под медленные сети.
+    let result = match build_updater(&app, 120) {
         Ok(u) => u.check().await,
         Err(e) => Err(e),
     };
