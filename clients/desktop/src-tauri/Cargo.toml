@@ -1,6 +1,6 @@
 [package]
 name = "relay-desktop"
-version = "0.3.7"
+version = "0.3.8"
 description = "relay desktop — Tauri v2 оболочка над web-клиентом"
 authors = ["relay"]
 edition = "2021"
