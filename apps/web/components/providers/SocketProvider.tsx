@@ -29,8 +29,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // reconnect, замер пинга) — один раз на приложение, до connect().
     initVoice();
     // Десктоп-оболочка (Tauri): глобальный PTT-хоткей ↔ микрофон, статус в трее.
-    // Вне Tauri — no-op.
-    initDesktopBridge();
+    // Вне Tauri — no-op. Асинхронный (ждёт навешивания слушателей), не блокируем.
+    void initDesktopBridge();
 
     socket.on('chat', (msg) => {
       if (!ui().textRoom) return;

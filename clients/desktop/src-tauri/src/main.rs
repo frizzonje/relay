@@ -11,6 +11,7 @@
 mod screen_audio;
 
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -36,6 +37,12 @@ const DEFAULT_PTT: &str = "F8";
 #[derive(Default)]
 struct AppState {
     ptt: Mutex<Option<Shortcut>>,
+    /// Идёт ли уже web-проверка обновлений (события `check-updates`). Гасит
+    /// дубли: мост шлёт notify=true на каждый (пере)запуск фронта, и они
+    /// накладывались на ручную проверку/стартовый нативный поток — несколько
+    /// `updater.check()` в одну секунду засоряли канал `update-status` и роняли
+    /// события. Пока флаг взведён — новый `check-updates` просто игнорируем.
+    checking: AtomicBool,
 }
 
 /// Статус звонка, приходящий из web-UI событием `voice-status`.
@@ -265,8 +272,28 @@ async fn run_check(app: &AppHandle, secs: u64) -> Result<Option<tauri_plugin_upd
 /// tauri.conf.json → `plugins.updater`); nightly-пре-релизы сюда не попадают.
 async fn check_updates(app: AppHandle, notify: bool) {
     ulog(&format!("check-updates received (notify={notify})"));
-    emit_update_status(&app, json!({ "state": "checking" }));
-    match run_check(&app, 20).await {
+    // Коалесинг конкурентных проверок: пока одна идёт, следующий `check-updates`
+    // просто пропускаем — иначе несколько `updater.check()` в одну секунду
+    // засоряют канал `update-status`, а запоздавшие события роняют/перекрывают
+    // друг друга. Флаг снимаем сразу после проверки (до эмита статуса).
+    if app
+        .state::<AppState>()
+        .checking
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        ulog("check-updates skipped (already in flight)");
+        return;
+    }
+    // ВАЖНО: фоновая/авто проверка НЕ шлёт `checking` в UI — «Проверяю…» ставит
+    // только кнопка настроек локально (см. checkForUpdates в lib/desktop.ts).
+    // Иначе запоздавший фоновый `checking` перекрывал уже показанный результат и
+    // кнопка залипала на «Проверяю…».
+    let result = run_check(&app, 20).await;
+    app.state::<AppState>()
+        .checking
+        .store(false, Ordering::Release);
+    match result {
         Ok(Some(update)) => {
             emit_update_status(&app, json!({ "state": "available", "version": update.version }));
             if notify {

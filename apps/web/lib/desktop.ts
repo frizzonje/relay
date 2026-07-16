@@ -55,10 +55,47 @@ declare global {
 let initialized = false;
 
 /**
+ * Сторож «зависшей» проверки. UI-состояние `checking`/`installing` снимается
+ * только терминальным `update-status` от Rust. Если это событие потеряется в
+ * IPC (удалённый origin, core:event) или Rust не ответит — кнопка навсегда
+ * застрянет на «Проверяю…». Поэтому на время проверки/установки заводим таймер:
+ * не пришёл терминальный статус за отведённый срок → показываем ошибку и снова
+ * даём нажать. Терминальный статус (в т.ч. запоздавший) чинит стор сам.
+ */
+let watchdog: ReturnType<typeof setTimeout> | null = null;
+
+function clearWatchdog() {
+  if (watchdog !== null) {
+    clearTimeout(watchdog);
+    watchdog = null;
+  }
+}
+
+/** Взвести сторож на `ms`; по срабатыванию — ошибка, если всё ещё «в процессе». */
+function armWatchdog(ms: number) {
+  clearWatchdog();
+  watchdog = setTimeout(() => {
+    watchdog = null;
+    const kind = useDesktopStore.getState().update.kind;
+    if (kind === 'checking' || kind === 'installing') {
+      useDesktopStore
+        .getState()
+        .setUpdate({ kind: 'error', message: 'нет ответа — попробуйте ещё раз' });
+    }
+  }, ms);
+}
+
+// Проверка укладывается в ~41с (2 попытки по 20с + пауза, см. run_check в
+// main.rs); ставим сторож с запасом, чтобы бить только по реально потерянному
+// событию, а не по медленной сети. Установка качает ~3 МБ — срок щедрее.
+const CHECK_WATCHDOG_MS = 45_000;
+const INSTALL_WATCHDOG_MS = 240_000;
+
+/**
  * Навесить десктоп-мост. Идемпотентно; вне Tauri ничего не делает, поэтому
  * безопасно звать из общего провайдера (SocketProvider) вместе с initVoice.
  */
-export function initDesktopBridge() {
+export async function initDesktopBridge() {
   if (initialized || typeof window === 'undefined') return;
   const tauri = window.__TAURI__;
   if (!tauri) return; // обычный браузер — нативных фич нет
@@ -70,13 +107,22 @@ export function initDesktopBridge() {
   // Rust эмитит `ptt` при нажатии/отпускании глобального хоткея.
   void tauri.event.listen<boolean>('ptt', (e) => desktopPtt(e.payload === true));
 
-  // Статус обновления от Rust (checking/up-to-date/available/installing/error).
-  void tauri.event.listen<UpdateStatusPayload>('update-status', (e) => {
-    useDesktopStore.getState().setUpdate(toUpdateStatus(e.payload));
+  // Статус обновления от Rust (up-to-date/available/installing/error): применяем
+  // и снимаем/переводим сторож. Терминальный статус гасит сторож; `installing`
+  // продлевает его на время загрузки. `check-updates` фоновые (авто/трей) сюда
+  // `checking` больше НЕ шлют — «Проверяю…» ставит только кнопка (checkForUpdates),
+  // иначе запоздавший фоновый `checking` мог перекрыть уже показанный результат.
+  await tauri.event.listen<UpdateStatusPayload>('update-status', (e) => {
+    const status = toUpdateStatus(e.payload);
+    useDesktopStore.getState().setUpdate(status);
+    if (status.kind === 'installing') armWatchdog(INSTALL_WATCHDOG_MS);
+    else if (status.kind !== 'checking') clearWatchdog();
   });
 
   // Тихая проверка при старте: notify=true разрешает Rust показать системную
   // подсказку, если апдейт вышел. Установку не запускаем — только осведомляем.
+  // Эмитим ПОСЛЕ навешивания слушателя выше (listen асинхронный) — иначе первый
+  // ответ Rust мог прийти в пустоту.
   void tauri.event.emit('check-updates', { notify: true });
 
   // Отражаем состояние звонка в трее оболочки: в эфире (есть voiceRoom) и mute.
@@ -106,6 +152,7 @@ export function checkForUpdates() {
   const tauri = window.__TAURI__;
   if (!tauri) return;
   useDesktopStore.getState().setUpdate({ kind: 'checking' });
+  armWatchdog(CHECK_WATCHDOG_MS); // не залипнуть на «Проверяю…», если ответ потеряется
   void tauri.event.emit('check-updates', { notify: false });
 }
 
@@ -117,5 +164,12 @@ export function installUpdate() {
   if (typeof window === 'undefined') return;
   const tauri = window.__TAURI__;
   if (!tauri) return;
+  // Оптимистично переводим в «Устанавливаю…»: прячем кнопку (нет двойного клика)
+  // и взводим сторож сразу — Rust сначала перепроверит релиз (до ~120с) и лишь
+  // потом пришлёт свой `installing`. Версию берём из уже найденного апдейта.
+  const cur = useDesktopStore.getState().update;
+  const version = cur.kind === 'available' ? cur.version : '';
+  useDesktopStore.getState().setUpdate({ kind: 'installing', version });
+  armWatchdog(INSTALL_WATCHDOG_MS);
   void tauri.event.emit('install-update');
 }
