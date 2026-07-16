@@ -108,3 +108,28 @@ jobs:
           releaseDraft: false
           prerelease: ${{ needs.setup.outputs.prerelease }}
           args: ${{ matrix.args }}
+
+  # Arch has no .deb/.rpm; the client ships as AUR PKGBUILDs
+  # (clients/desktop/packaging/arch). This job keeps those recipes honest —
+  # it lints them with namcap and proves each parses into a valid .SRCINFO.
+  # Independent of the release matrix: a broken PKGBUILD shouldn't wait for a tag.
+  arch:
+    name: arch package (lint)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Tooling
+        run: pacman -Syu --noconfirm --needed base-devel git namcap pacman-contrib
+      - uses: actions/checkout@v4
+      - name: Lint PKGBUILDs
+        run: |
+          set -euo pipefail
+          # makepkg/namcap refuse to run as root — do the work as an unprivileged user.
+          useradd -m builder
+          cp -a clients/desktop/packaging/arch /tmp/arch
+          chown -R builder /tmp/arch
+          for d in relay-desktop-bin relay-desktop; do
+            echo "::group::$d"
+            runuser -u builder -- bash -c "cd /tmp/arch/$d && makepkg --printsrcinfo >/dev/null && namcap PKGBUILD"
+            echo "::endgroup::"
+          done

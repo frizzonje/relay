@@ -1,0 +1,36 @@
+# Maintainer: relay contributors <https://github.com/frizzonje/relay>
+#
+# Binary package: repackages the official Debian installer that CI already
+# publishes with every desktop release (relay_<ver>_amd64.deb) into a native
+# pacman package. No Rust toolchain required — install in seconds.
+#
+# The .deb ships a clean FHS layout (/usr/bin, /usr/share/applications,
+# /usr/share/icons) produced by tauri-bundler, so we just re-home its payload.
+#
+# `pkgver` and `sha256sums` are bumped per release by ../release.sh (it runs
+# `updpkgsums` to pin the real checksum; the committed template keeps SKIP
+# because the checksum only exists once the release is published).
+
+pkgname=relay-desktop-bin
+pkgver=0.3.7
+pkgrel=1
+pkgdesc="relay desktop client — native Tauri shell over the relay web app (prebuilt)"
+arch=('x86_64')
+url="https://github.com/frizzonje/relay"
+license=('MIT')
+depends=('webkit2gtk-4.1' 'gtk3' 'libayatana-appindicator' 'hicolor-icon-theme')
+provides=('relay-desktop')
+conflicts=('relay-desktop')
+# The upstream binary is already stripped with LTO; leave it untouched.
+options=('!strip')
+source=("relay-desktop-${pkgver}.deb::${url}/releases/download/desktop-v${pkgver}/relay_${pkgver}_amd64.deb")
+sha256sums=('SKIP')
+
+package() {
+  cd "${srcdir}"
+  # A .deb is an `ar` archive of {debian-binary, control.tar.*, data.tar.*};
+  # bsdtar (libarchive, always present on Arch) unpacks both layers and
+  # auto-detects the inner compression (gz/xz/zst).
+  bsdtar -xf "relay-desktop-${pkgver}.deb"
+  bsdtar -xpf data.tar.* -C "${pkgdir}"
+}

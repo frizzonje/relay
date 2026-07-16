@@ -8,7 +8,8 @@
 - окно/трей/автостарт, глобальный хоткей push-to-talk / mute;
 - бейдж непрочитанного, нативные уведомления;
 - автообновление (tauri-plugin-updater), установщики: MSI/NSIS (Windows),
-  AppImage/deb/rpm (Linux), dmg (macOS).
+  AppImage/deb/rpm (Linux), dmg (macOS); Arch Linux — через AUR
+  ([packaging/arch](packaging/arch)).
 
 ## Архитектура
 
@@ -50,6 +51,9 @@ clients/desktop/
     capabilities/default.json  права локального окна (server-picker)
     capabilities/remote.json   права удалённого web-UI: только core:event
     icons/           знак relay (mesh-триада): icon.svg + сгенерённый набор
+  packaging/
+    arch/            AUR PKGBUILD-ы (relay-desktop-bin / relay-desktop) +
+                     release.sh (бамп версии/чек-сумм) — см. packaging/arch/README.md
 ```
 
 > ✅ **Собирается на двух платформах.**
@@ -78,6 +82,24 @@ cargo tauri dev                                # dev-окно с экраном 
 
 Полный бандл (`cargo tauri build`) собирает `.app`/`.dmg` (macOS),
 `.msi`/NSIS (Windows), `.AppImage`/`.deb` (Linux) — иконки уже в репозитории.
+
+## Arch Linux (AUR)
+
+tauri-bundler не умеет в pacman-пакеты, а Arch-юзер ждёт `paru -S`, а не
+скачивания тарбола из релиза. Поэтому клиент под Arch раздаётся идиоматично —
+**PKGBUILD-ами в AUR**, каноном которых служат рецепты в
+[`packaging/arch`](packaging/arch) (версионируются вместе с кодом, на релизе
+копируются в AUR-репозитории). Два пакета по стандартной AUR-схеме:
+
+- **`relay-desktop-bin`** — репак официального `relay_<ver>_amd64.deb` из релиза
+  (ставится за секунды, Rust не нужен);
+- **`relay-desktop`** — сборка из тега системным тулчейном (Node/pnpm не нужны:
+  `frontendDist` статичен и впекается в бинарь, `cargo build` — и всё).
+
+CI линтит оба рецепта в arch-контейнере (`namcap` + проверка, что `.SRCINFO`
+парсится) — job `arch` в [`desktop.yml`](../../.github/workflows/desktop.yml).
+Бамп версии/чек-сумм и публикация — `packaging/arch/release.sh` и
+[packaging/arch/README.md](packaging/arch/README.md).
 
 ## Готово (нативная связка)
 
