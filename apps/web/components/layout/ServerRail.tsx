@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Server } from '@relay/shared';
 import { Icon } from '@/components/ui/icon';
 import { Logo } from '@/components/ui/Logo';
@@ -8,9 +8,12 @@ import { cn } from '@/lib/utils';
 import { MAIN_SERVER_ID } from '@/lib/constants';
 import { serverGradient, serverInitials } from '@/lib/server-visual';
 import { avatarStyle } from '@/lib/avatar';
+import { hostLabel, isCurrentHost, type RemoteHost } from '@/lib/hosts';
 import { isServerUnlocked, useServersStore } from '@/stores/servers';
 import { useChannelsStore } from '@/stores/channels';
+import { useHostsStore } from '@/stores/hosts';
 import { useVoiceStore } from '@/stores/voice';
+import { AddHostDialog } from '@/components/layout/AddHostDialog';
 import { CreateServerDialog } from '@/components/layout/CreateServerDialog';
 import { UnlockServerDialog } from '@/components/layout/UnlockServerDialog';
 import { SettingsDialog } from '@/components/layout/SettingsDialog';
@@ -31,6 +34,27 @@ function GearIcon() {
     >
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+
+/** Глобус — «другая инсталляция» (инлайновый line-icon, как GearIcon). */
+function GlobeIcon({ size = 20 }: { size?: number }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <path d="M2 12h20" />
+      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
     </svg>
   );
 }
@@ -113,6 +137,13 @@ export function ServerRail() {
   const openUnlock = useServersStore((s) => s.openUnlock);
   const [createOpen, setCreateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [addHostOpen, setAddHostOpen] = useState(false);
+
+  // «Другие хосты» — отдельные инсталляции relay (не гильдии этого бэкенда).
+  const hosts = useHostsStore((s) => s.hosts);
+  const hydrateHosts = useHostsStore((s) => s.hydrate);
+  const removeHost = useHostsStore((s) => s.removeHost);
+  useEffect(() => hydrateHosts(), [hydrateHosts]);
 
   const main = servers.find((s) => s.id === MAIN_SERVER_ID);
   const others = servers.filter((s) => s.id !== MAIN_SERVER_ID);
@@ -169,6 +200,28 @@ export function ServerRail() {
         </button>
       </div>
 
+      {/* Другие хосты: чужие инсталляции relay вкладками. Клик — переход браузера
+          на тот origin (свой логин/кука у каждого). Секция видна, когда есть хоть
+          один хост; «глобус-плюс» добавляет новый. */}
+      <span className="my-1 h-0.5 w-8 rounded-full bg-white/10" />
+      {hosts.map((h) => (
+        <HostIcon key={h.url} host={h} onRemove={() => {
+          if (window.confirm(`Убрать хост «${hostLabel(h)}» из списка?`)) removeHost(h.url);
+        }} />
+      ))}
+      <div className="group/srv relative">
+        <button
+          onClick={() => setAddHostOpen(true)}
+          title="Добавить хост"
+          aria-label="Добавить хост"
+          className="group grid h-12 w-12 place-items-center rounded-[50%] bg-white/[0.04] text-text-muted outline-none transition-[background-color,border-radius,color] duration-200 hover:rounded-2xl hover:bg-accent/15 hover:text-text-header focus-visible:rounded-2xl focus-visible:ring-2 focus-visible:ring-accent/60 active:scale-95"
+        >
+          <span className="pointer-events-none absolute inset-1 rounded-[inherit] border border-dashed border-white/15 transition-opacity duration-200 group-hover:opacity-0" />
+          <GlobeIcon />
+        </button>
+        <RailTooltip label="Добавить хост" />
+      </div>
+
       {/* Настройки — внизу рейки */}
       <div className="group/srv relative mt-auto">
         <button
@@ -185,7 +238,63 @@ export function ServerRail() {
       <CreateServerDialog open={createOpen} onOpenChange={setCreateOpen} />
       <UnlockServerDialog />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <AddHostDialog open={addHostOpen} onOpenChange={setAddHostOpen} />
     </nav>
+  );
+}
+
+/**
+ * Плашка «другого хоста»: инициалы hostname на градиенте (детерминированном от
+ * origin), глобус-бейдж как маркер внешней инсталляции. Клик — переход на хост;
+ * hover-«×» убирает его из списка. Текущий origin помечен активной пилюлей и
+ * никуда не ведёт.
+ */
+function HostIcon({ host, onRemove }: { host: RemoteHost; onRemove: () => void }) {
+  const current = isCurrentHost(host.url);
+  const label = hostLabel(host);
+  return (
+    <div className="group/srv relative">
+      <Pill active={current} />
+      <button
+        onClick={() => {
+          if (!current) window.location.assign(host.url);
+        }}
+        aria-label={current ? `${label} — текущий хост` : `Перейти на ${label}`}
+        style={{ background: serverGradient(host.url) }}
+        className={cn(
+          'grid h-12 w-12 place-items-center overflow-hidden text-white outline-none ring-1 ring-inset ring-white/10',
+          'transition-[border-radius,box-shadow] duration-200 hover:rounded-2xl focus-visible:rounded-2xl',
+          'focus-visible:ring-2 focus-visible:ring-accent',
+          current
+            ? 'cursor-default rounded-2xl shadow-[0_0_16px_-4px_rgba(255,255,255,0.5)]'
+            : 'rounded-[50%]',
+        )}
+      >
+        <span className="text-lg font-bold drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+          {serverInitials(label)}
+        </span>
+      </button>
+      <RailTooltip label={current ? `${label} — вы здесь` : label} />
+      {/* Глобус-бейдж: это внешняя инсталляция, не гильдия этого сервера */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute -bottom-0.5 -right-0.5 grid h-[18px] w-[18px] place-items-center rounded-full border-2 border-bg-rail bg-bg-deep text-text-muted shadow group-hover/srv:opacity-0"
+      >
+        <GlobeIcon size={10} />
+      </span>
+      {/* Убрать хост — появляется на ховере поверх бейджа */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove();
+        }}
+        title="Убрать хост"
+        aria-label={`Убрать хост ${label}`}
+        className="absolute -bottom-0.5 -right-0.5 grid h-[18px] w-[18px] place-items-center rounded-full border-2 border-bg-rail bg-bg-deep text-[11px] leading-none text-text-muted opacity-0 shadow outline-none transition-[opacity,color] hover:text-danger focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/srv:opacity-100"
+      >
+        ×
+      </button>
+    </div>
   );
 }
 
