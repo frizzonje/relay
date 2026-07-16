@@ -53,14 +53,38 @@ struct VoiceStatus {
 }
 
 fn main() {
-    // WebKitGTK на Linux по умолчанию рендерит через DMABUF, и этот путь стабильно
-    // тормозит/мигает/чернит экран на свежем графстеке (NVIDIA, новая Mesa) — по
-    // этому больно бьёт AppImage на rolling-дистрибутивах вроде Arch. Софтверный
-    // путь без DMABUF заметно плавнее. Ставим до инициализации webview и только
-    // если пользователь не задал переменную сам.
+    // DMABUF-рендер WebKitGTK ломался на проприетарном NVIDIA до 2.46 (белое/
+    // чёрное окно) — там его надо гасить. С 2.46 upstream сам отключает DMABUF
+    // на проблемных драйверах, а принудительный запрет на свежих версиях (Arch
+    // и прочие rolling с 2.48+) сам по себе даёт глюки софтверного пути. Поэтому
+    // флаг ставим только на старом webkit и только если пользователь не задал
+    // переменную сам. Версию берём из libwebkit2gtk ДО инициализации GTK —
+    // webkit_get_*_version() это простые геттеры, init не требуют.
     #[cfg(target_os = "linux")]
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    {
+        let (maj, min) = unsafe {
+            (
+                webkit2gtk_sys::webkit_get_major_version(),
+                webkit2gtk_sys::webkit_get_minor_version(),
+            )
+        };
+        let forced = if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some() {
+            "user"
+        } else if (maj, min) < (2, 46) {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+            "yes(old webkit)"
+        } else {
+            "no"
+        };
+        // Слепок окружения в лог: по нему видно, какой graphics-путь у машины
+        // пользователя, когда «не работает» без единой ошибки на экране.
+        let env = |k: &str| std::env::var(k).unwrap_or_else(|_| "-".into());
+        ulog(&format!(
+            "linux env: webkit {maj}.{min}, dmabuf-disable={forced}, session={}, wayland={}, gdk-backend={}",
+            env("XDG_SESSION_TYPE"),
+            env("WAYLAND_DISPLAY"),
+            env("GDK_BACKEND"),
+        ));
     }
 
     tauri::Builder::default()
@@ -172,6 +196,16 @@ fn main() {
 
             Ok(())
         })
+        // След навигаций webview в тот же диагностический лог: когда у
+        // пользователя «сервер не грузится» молча, по паре started/finished
+        // видно, дошла ли навигация до сети и чем кончилась.
+        .on_page_load(|_, payload| {
+            let phase = match payload.event() {
+                tauri::webview::PageLoadEvent::Started => "started",
+                tauri::webview::PageLoadEvent::Finished => "finished",
+            };
+            ulog(&format!("page load {phase}: {}", payload.url()));
+        })
         .run(tauri::generate_context!())
         .expect("failed to run relay desktop");
 }
@@ -191,9 +225,10 @@ fn emit_update_status(app: &AppHandle, value: serde_json::Value) {
     let _ = app.emit("update-status", value);
 }
 
-/// Диагностический лог обновлений: строка в stderr + append в
-/// `$HOME/relay-update.log`. Временный — чтобы вживую увидеть, на каком шаге
-/// встаёт проверка на машине пользователя (событие дошло? check() висит? ошибка?).
+/// Диагностический лог: строка в stderr + append в `$HOME/relay-update.log`.
+/// Начинался как лог апдейтера, теперь туда же пишем окружение Linux и след
+/// навигаций webview — чтобы по одному файлу с машины пользователя видеть,
+/// на каком шаге всё встало (файл не переименовываем, его уже знают).
 fn ulog(msg: &str) {
     eprintln!("[relay-update] {msg}");
     if let Ok(home) = std::env::var("HOME") {

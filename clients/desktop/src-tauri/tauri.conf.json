@@ -12,6 +12,7 @@
       {
         "label": "main",
         "title": "relay",
+        "center": true,
         "width": 1280,
         "height": 788,
         "minWidth": 960,

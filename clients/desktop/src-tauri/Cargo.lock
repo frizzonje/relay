@@ -2940,6 +2940,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tokio",
+ "webkit2gtk-sys",
  "windows 0.58.0",
  "windows-core 0.58.0",
 ]

@@ -63,6 +63,9 @@
       }
       button:disabled { opacity: 0.5; cursor: default; }
       .err { color: var(--danger); font-size: 12px; min-height: 16px; margin-top: 10px; }
+      /* :not([hidden]) — иначе display перебил бы UA-стиль атрибута hidden. */
+      .skip:not([hidden]) { display: inline-block; color: var(--muted); font-size: 12px; margin-top: 4px; }
+      .skip:hover { color: var(--text); }
     </style>
   </head>
   <body>
@@ -75,6 +78,9 @@
                placeholder="https://relay.example.com" autocomplete="off" spellcheck="false" />
         <button id="go" type="submit">Подключиться</button>
         <p class="err" id="err"></p>
+        <!-- Показывается только когда probe сервера упал: обход на случай,
+             если проверка ошибается, а навигация прошла бы. -->
+        <a class="skip" id="skip" href="#" hidden>Перейти всё равно</a>
       </form>
     </main>
     <script src="main.js"></script>

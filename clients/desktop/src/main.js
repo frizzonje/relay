@@ -40,15 +40,57 @@ function normalize(raw) {
   return validHost.test(u.hostname) ? u.origin : null;
 }
 
-form.addEventListener("submit", (e) => {
+const btn = document.getElementById("go");
+const skip = document.getElementById("skip");
+
+// Раньше при недоступном сервере жали «Подключиться» — и тишина: навигация
+// молча падала где-то в webview, без ошибки на экране (так «не работал» клиент
+// на Arch). Поэтому перед навигацией — быстрый probe тем же сетевым стеком
+// webview: упал → показываем причину. Пробе можно не доверять (вдруг fetch с
+// tauri:// зарезан, а навигация прошла бы) — на этот случай ссылка
+// «перейти всё равно».
+async function probe(origin) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 10000);
+  try {
+    // no-cors: ответ непрозрачный, но сетевые ошибки (DNS/TLS/refused) всё
+    // равно бросают TypeError — нам только это и нужно.
+    await fetch(origin + "/", { mode: "no-cors", cache: "no-store", signal: ctrl.signal });
+    return null;
+  } catch (e) {
+    return e.name === "AbortError" ? "нет ответа за 10 секунд" : (e.message || String(e));
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function connect(origin) {
+  localStorage.setItem(KEY, origin);
+  // Уводим окно на web-UI. Кука relay_pass живёт в webview, логин — /login там же.
+  window.location.href = origin;
+}
+
+form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const origin = normalize(input.value);
   if (!origin) {
     err.textContent = "Введите адрес вида https://relay.example.com";
     return;
   }
+  err.textContent = "Проверяю доступность…";
+  skip.hidden = true;
+  btn.disabled = true;
+  const fail = await probe(origin);
+  btn.disabled = false;
+  if (fail) {
+    err.textContent = `Сервер недоступен: ${fail}. Проверьте адрес и сеть.`;
+    skip.hidden = false;
+    skip.onclick = (ev) => {
+      ev.preventDefault();
+      connect(origin);
+    };
+    return;
+  }
   err.textContent = "";
-  localStorage.setItem(KEY, origin);
-  // Уводим окно на web-UI. Кука relay_pass живёт в webview, логин — /login там же.
-  window.location.href = origin;
+  connect(origin);
 });

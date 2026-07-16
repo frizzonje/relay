@@ -33,6 +33,12 @@ tokio = { version = "1", features = ["time"] }
 # PCM-кадры нативного звука демонстрации → base64 в события Tauri.
 base64 = "0.22"
 
+# Версия системного WebKitGTK в рантайме (webkit_get_*_version) — решаем,
+# нужен ли WEBKIT_DISABLE_DMABUF_RENDERER (см. main()). Крейт уже в дереве
+# зависимостей через wry, прямая ссылка ничего не тянет.
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk-sys = "2.0"
+
 # Нативный захват звука экрана (process-loopback exclude) — только Windows.
 # WASAPI + COM через windows-rs. На macOS/Linux screen_audio компилируется в
 # заглушку (см. cfg в src/screen_audio.rs), поэтому этот блок здесь безопасен.
