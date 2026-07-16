@@ -25,7 +25,8 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  // Пропускаем без проверки: api/*, uploads/* (гейтит Nest), внутренние пути
-  // Next (_next/*) и любую статику с расширением (точка в пути) — ассеты логина.
-  matcher: ['/((?!api/|uploads/|_next/|.*\\.).*)'],
+  // Пропускаем без проверки: api/*, uploads/* (гейтит Nest), invite/* (гостевой
+  // вход — токен проверяет сама страница), внутренние пути Next (_next/*) и
+  // любую статику с расширением (точка в пути) — ассеты логина.
+  matcher: ['/((?!api/|uploads/|invite/|_next/|.*\\.).*)'],
 };

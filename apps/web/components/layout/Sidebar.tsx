@@ -1,6 +1,6 @@
 'use client';
 
-import { type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Icon } from '@/components/ui/icon';
 import { Logo } from '@/components/ui/Logo';
@@ -26,6 +26,7 @@ import { deleteServer } from '@/lib/servers';
 import { useVoiceStore } from '@/stores/voice';
 import { VoiceMembers } from '@/components/layout/VoiceMembers';
 import { CreateChannelDialog } from '@/components/layout/CreateChannelDialog';
+import { InviteDialog, LinkIcon } from '@/components/layout/InviteDialog';
 
 /** Заголовок секции с необязательной кнопкой «+» (появляется на ховере, как в Discord). */
 function Category({
@@ -60,6 +61,7 @@ function ChannelRow({
   active,
   connected,
   onClick,
+  onInvite,
   onDelete,
   deleteLabel,
   children,
@@ -67,6 +69,8 @@ function ChannelRow({
   active?: boolean;
   connected?: boolean;
   onClick?: () => void;
+  /** Голосовые каналы: hover-кнопка «Пригласить по ссылке». */
+  onInvite?: () => void;
   onDelete?: () => void;
   deleteLabel?: string;
   children: ReactNode;
@@ -100,6 +104,19 @@ function ChannelRow({
         />
       )}
       <span className="relative z-[1] flex min-w-0 items-center gap-1.5">{children}</span>
+      {onInvite && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onInvite();
+          }}
+          title="Пригласить по ссылке"
+          aria-label="Пригласить по ссылке"
+          className="relative z-[1] ml-auto grid h-5 w-5 shrink-0 place-items-center rounded text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-text-header focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100"
+        >
+          <LinkIcon size={13} />
+        </button>
+      )}
       {onDelete && (
         <button
           onClick={(e) => {
@@ -151,6 +168,9 @@ export function Sidebar() {
   const openCreate = useUiStore((s) => s.openCreateChannel);
   const setCreateOpen = useUiStore((s) => s.setCreateChannelOpen);
   const openJoinByCode = useUiStore((s) => s.setJoinByCodeOpen);
+
+  // Инвайт-ссылка на войс-канал: null — модалка закрыта.
+  const [inviteTarget, setInviteTarget] = useState<{ slug: string; label: string } | null>(null);
 
   // Занятые эфиры, которых нет ни в одном сервере реестра (напр. канал удалили,
   // пока в нём сидят) — не роняем из виду. Слаги считаем глобально (не по активному
@@ -291,6 +311,7 @@ export function Sidebar() {
                 active={view === 'voice' && voiceRoom === c.slug}
                 connected={voiceRoom === c.slug}
                 onClick={() => void joinVoice(c.slug, c.name)}
+                onInvite={() => setInviteTarget({ slug: c.slug, label: c.name })}
                 onDelete={c.removable ? () => deleteChannel(c.id) : undefined}
                 deleteLabel="Удалить канал"
               >
@@ -414,6 +435,12 @@ export function Sidebar() {
         open={createOpen}
         initialType={createType}
         onOpenChange={setCreateOpen}
+      />
+      <InviteDialog
+        target={inviteTarget}
+        onOpenChange={(open) => {
+          if (!open) setInviteTarget(null);
+        }}
       />
     </aside>
   );

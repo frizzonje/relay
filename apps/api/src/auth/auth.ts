@@ -37,6 +37,48 @@ export function verifyToken(token: string | undefined): boolean {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
+// ── Гостевой инвайт-токен (sync-близнец packages/shared/src/auth.ts) ──────
+// Формат: `g1.<b64url(slug)>.<exp>.<sig>`, sig = HMAC всего префикса на ключе
+// 'relay-guest-v1:'+пароль — отдельный контекст, гостевой токен не пройдёт как
+// relay_pass. Подпись/срок проверяются даже при пустом SITE_PASSWORD: токен
+// несёт scope (какой войс-канал), а не просто «доступ». Байт-в-байт с shared.
+const GUEST_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+
+function guestHmac(message: string): string {
+  return createHmac('sha256', 'relay-guest-v1:' + sitePassword())
+    .update(message)
+    .digest('base64url');
+}
+
+export function issueGuestToken(slug: string, ttlMs = GUEST_TOKEN_TTL_MS): {
+  token: string;
+  exp: number;
+} {
+  const exp = Date.now() + ttlMs;
+  const prefix = `g1.${Buffer.from(slug, 'utf8').toString('base64url')}.${exp}`;
+  return { token: `${prefix}.${guestHmac(prefix)}`, exp };
+}
+
+export function verifyGuestToken(token: string | undefined): { slug: string; exp: number } | null {
+  if (!token) return null;
+  const parts = token.split('.');
+  if (parts.length !== 4 || parts[0] !== 'g1') return null;
+  const [version, b64slug, expRaw, sig] = parts;
+  const exp = Number(expRaw);
+  if (!Number.isFinite(exp) || exp < Date.now()) return null;
+  let slug: string;
+  try {
+    slug = Buffer.from(b64slug, 'base64url').toString('utf8');
+  } catch {
+    return null;
+  }
+  if (!slug || slug.includes('�')) return null;
+  const expected = Buffer.from(guestHmac(`${version}.${b64slug}.${expRaw}`));
+  const actual = Buffer.from(sig);
+  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null;
+  return { slug, exp };
+}
+
 // Сравнение паролей за постоянное время — через хэши, чтобы не утекала длина
 export function passwordMatches(candidate: string): boolean {
   const a = createHash('sha256').update(candidate).digest();

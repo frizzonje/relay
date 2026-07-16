@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { AUTH_COOKIE, TOKEN_TTL_MS, issueToken, verifyToken, parseCookies } from './auth';
+import {
+  AUTH_COOKIE,
+  GUEST_TOKEN_TTL_MS,
+  TOKEN_TTL_MS,
+  issueGuestToken,
+  issueToken,
+  verifyGuestToken,
+  verifyToken,
+  parseCookies,
+} from './auth';
 
 const PASS = 'secret-пароль-123';
 
@@ -44,6 +53,56 @@ describe('issueToken / verifyToken (Web Crypto)', () => {
     const { value } = await issueToken(PASS);
     const exp = value.slice(0, value.indexOf('.'));
     expect(await verifyToken(`${exp}.tampered_signature`, PASS)).toBe(false);
+  });
+});
+
+describe('issueGuestToken / verifyGuestToken', () => {
+  it('round-trip: токен возвращает слаг и срок (в т.ч. кириллица в слаге)', async () => {
+    const token = await issueGuestToken('переговорка-1', PASS);
+    expect(token).toMatch(/^g1\.[A-Za-z0-9_-]+\.\d+\.[A-Za-z0-9_-]+$/);
+    const payload = await verifyGuestToken(token, PASS);
+    expect(payload?.slug).toBe('переговорка-1');
+    expect(payload?.exp).toBeGreaterThan(Date.now());
+    expect(payload!.exp - Date.now()).toBeLessThanOrEqual(GUEST_TOKEN_TTL_MS);
+  });
+
+  it('смена пароля отзывает инвайт', async () => {
+    const token = await issueGuestToken('voice-obshchii', PASS);
+    expect(await verifyGuestToken(token, 'другой-пароль')).toBeNull();
+  });
+
+  it('просроченный токен → null', async () => {
+    const token = await issueGuestToken('voice-obshchii', PASS, -1000);
+    expect(await verifyGuestToken(token, PASS)).toBeNull();
+  });
+
+  it('подмена слага ломает подпись', async () => {
+    const token = await issueGuestToken('voice-obshchii', PASS);
+    const [, , exp, sig] = token.split('.');
+    const forged = `g1.${btoa('other-room').replace(/=+$/, '')}.${exp}.${sig}`;
+    expect(await verifyGuestToken(forged, PASS)).toBeNull();
+  });
+
+  it('кросс-тип: relay_pass не проходит как гостевой и наоборот', async () => {
+    const pass = await issueToken(PASS);
+    expect(await verifyGuestToken(pass.value, PASS)).toBeNull();
+    const guest = await issueGuestToken('voice-obshchii', PASS);
+    expect(await verifyToken(guest, PASS)).toBe(false);
+  });
+
+  it('пустой пароль НЕ отключает проверку (в отличие от verifyToken)', async () => {
+    expect(await verifyGuestToken('что угодно', '')).toBeNull();
+    expect(await verifyGuestToken('g1.abc.999999999999999.fake', '')).toBeNull();
+    // но честно выданный на пустом пароле токен — работает
+    const token = await issueGuestToken('voice-obshchii', '');
+    expect((await verifyGuestToken(token, ''))?.slug).toBe('voice-obshchii');
+  });
+
+  it('битый формат → null', async () => {
+    expect(await verifyGuestToken(undefined, PASS)).toBeNull();
+    expect(await verifyGuestToken('', PASS)).toBeNull();
+    expect(await verifyGuestToken('g2.a.1.b', PASS)).toBeNull();
+    expect(await verifyGuestToken('g1.мусор.abc.sig', PASS)).toBeNull();
   });
 });
 

@@ -11,7 +11,7 @@ import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypt
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Server, Socket } from 'socket.io';
-import { isAuthorized } from '../auth/auth';
+import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
 import { Attachment, UploadsService } from '../uploads';
 
 interface JoinPayload {
@@ -83,6 +83,13 @@ interface ServerUnlockPayload {
   id?: unknown;
   password?: unknown;
 }
+interface InviteCreatePayload {
+  room?: unknown;
+}
+// Ответ invite-create (ack) — формат совпадает с InviteCreateResult из shared.
+type InviteCreateResult =
+  | { ok: true; token: string; exp: number }
+  | { ok: false; error: 'not-found' | 'forbidden' };
 
 // Пароль сервера храним как `salt:hash` hex (scrypt) — не обратимо, соль на
 // каждый сервер своя. Проверка за постоянное время (timingSafeEqual).
@@ -322,7 +329,13 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // Socket.io цепляется к http-серверу мимо express-миддлвар,
   // поэтому пропуск проверяем прямо в handshake
   handleConnection(client: Socket) {
-    if (!isAuthorized(client.handshake)) {
+    // Гость по инвайт-ссылке: вместо куки предъявляет подписанный токен в
+    // handshake.auth.guest. Валиден → сокет помечен гостем и «пришит» к своему
+    // войс-каналу; реестры серверов/каналов ему НЕ шлём (нечего подглядывать),
+    // presence — только срез его комнаты.
+    const guestRaw = (client.handshake.auth as { guest?: unknown } | undefined)?.guest;
+    const guest = typeof guestRaw === 'string' ? verifyGuestToken(guestRaw) : null;
+    if (!guest && !isAuthorized(client.handshake)) {
       client.disconnect(true);
       return;
     }
@@ -333,6 +346,16 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       clearTimeout(pending);
       this.pendingLeave.delete(client.id);
     }
+    if (guest) {
+      client.data.guest = true;
+      client.data.guestRoom = guest.slug;
+      const presence = this.buildVoicePresence();
+      client.emit(
+        'voice-presence',
+        guest.slug in presence ? { [guest.slug]: presence[guest.slug] } : {},
+      );
+      return;
+    }
     // Набор серверов, разблокированных этим сокетом (закрытые под паролем).
     // `??=` — чтобы восстановление сессии (CSR) не сбросило уже введённые пароли.
     (client.data.unlocked as Set<string>) ??= new Set<string>();
@@ -342,6 +365,12 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     client.emit('servers', this.publicServers());
     client.emit('channels', this.channelsFor(client));
     client.emit('voice-presence', this.buildVoicePresence());
+  }
+
+  // Гость по инвайту: разрешён только эфир своей комнаты (join/leave/сигналинг/
+  // media-update/rename) — остальные обработчики выходят на этом гарде.
+  private isGuest(client: Socket): boolean {
+    return client.data.guest === true;
   }
 
   // Публичная форма реестра серверов: без хэша пароля, с флагом `locked`.
@@ -380,7 +409,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ServerCreatePayload,
   ) {
-    if (!this.allow(client)) return;
+    if (!this.allow(client) || this.isGuest(client)) return;
     // id генерирует клиент — принимаем как есть (санитизируем длину), чтобы он мог
     // сразу открыть новый сервер и создавать в нём каналы, не дожидаясь ответа.
     const id = typeof payload?.id === 'string' ? payload.id.trim().slice(0, 64) : '';
@@ -411,7 +440,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ServerUnlockPayload,
   ) {
-    if (!this.allow(client)) return;
+    if (!this.allow(client) || this.isGuest(client)) return;
     const id = typeof payload?.id === 'string' ? payload.id : '';
     const password = typeof payload?.password === 'string' ? payload.password : '';
     const srv = this.servers.find((s) => s.id === id);
@@ -438,7 +467,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ServerDeletePayload,
   ) {
-    if (!this.allow(client)) return;
+    if (!this.allow(client) || this.isGuest(client)) return;
     const id = typeof payload?.id === 'string' ? payload.id : '';
     if (!id) return;
     const idx = this.servers.findIndex((s) => s.id === id && s.removable);
@@ -465,7 +494,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ChannelCreatePayload,
   ) {
-    if (!this.allow(client)) return;
+    if (!this.allow(client) || this.isGuest(client)) return;
     const type = payload?.type === 'voice' ? 'voice' : payload?.type === 'text' ? 'text' : null;
     if (!type) return;
     // Сервер-владелец должен существовать (иначе канал повиснет вне рейки).
@@ -493,7 +522,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ChannelDeletePayload,
   ) {
-    if (!this.allow(client)) return;
+    if (!this.allow(client) || this.isGuest(client)) return;
     const id = typeof payload?.id === 'string' ? payload.id : '';
     if (!id) return;
     const idx = this.channels.findIndex((c) => c.id === id && c.removable);
@@ -503,11 +532,33 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     this.persist();
   }
 
+  // ===== Инвайт-ссылки =====
+
+  // Инвайт на войс-канал: подписанный токен без хранения на сервере (24 часа,
+  // многоразовый). Абсолютный URL строит клиент из window.location.origin.
+  // Возвращаемое значение = socket.io ack.
+  @SubscribeMessage('invite-create')
+  handleInviteCreate(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: InviteCreatePayload,
+  ): InviteCreateResult {
+    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
+    const slug = typeof payload?.room === 'string' ? payload.room.trim().slice(0, 32) : '';
+    // Канал должен существовать, быть голосовым и быть видимым этому сокету
+    // (каналы закрытых серверов — только после ввода пароля).
+    const channel = this.channelsFor(client).find((c) => c.type === 'voice' && c.slug === slug);
+    if (!channel) return { ok: false, error: 'not-found' };
+    const { token, exp } = issueGuestToken(slug);
+    return { ok: true, token, exp };
+  }
+
   @SubscribeMessage('join')
   handleJoin(@ConnectedSocket() client: Socket, @MessageBody() payload: JoinPayload) {
     if (!this.allow(client)) return;
     const room = typeof payload?.room === 'string' ? payload.room.trim().slice(0, 32) : '';
     if (!room) return;
+    // Гость «пришит» к каналу из своего токена — другие комнаты недоступны.
+    if (this.isGuest(client) && room !== client.data.guestRoom) return;
     const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 20) : undefined;
     const clientId =
       typeof payload?.clientId === 'string' ? payload.clientId.trim().slice(0, 64) : '';
@@ -526,10 +577,14 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const peerIds = this.server.sockets.adapter.rooms.get(room) ?? new Set<string>();
     const peers = [...peerIds]
       .filter((id) => this.server.sockets.sockets.has(id))
-      .map((id) => ({
-        id,
-        name: this.server.sockets.sockets.get(id)?.data.name as string | undefined,
-      }));
+      .map((id) => {
+        const sock = this.server.sockets.sockets.get(id);
+        return {
+          id,
+          name: sock?.data.name as string | undefined,
+          ...(sock?.data.guest === true ? { guest: true } : {}),
+        };
+      });
 
     client.join(room);
     client.data.room = room;
@@ -542,7 +597,11 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // Новичку — список тех, кто уже в канале (он шлёт им offer'ы),
     // остальным — уведомление о пополнении
     client.emit('peers', peers);
-    client.to(room).emit('peer-joined', { id: client.id, name });
+    client.to(room).emit('peer-joined', {
+      id: client.id,
+      name,
+      ...(this.isGuest(client) ? { guest: true } : {}),
+    });
     this.broadcastVoicePresence();
   }
 
@@ -624,7 +683,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   @SubscribeMessage('chat-join')
   handleChatJoin(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatPayload) {
-    if (!this.allow(client)) return;
+    if (!this.allow(client) || this.isGuest(client)) return;
     const slug = typeof payload?.room === 'string' ? payload.room.trim().slice(0, 32) : '';
     if (!slug) return;
     const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 20) : '';
@@ -649,7 +708,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   @SubscribeMessage('chat-message')
   handleChatMessage(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatPayload) {
-    if (!this.allow(client)) return;
+    if (!this.allow(client) || this.isGuest(client)) return;
     const room = client.data.chatRoom as string | undefined;
     if (!room) return;
     const text = typeof payload?.text === 'string' ? payload.text.trim().slice(0, 500) : '';
@@ -681,7 +740,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // Состояние храним в истории канала и рассылаем всем читающим — как и сами сообщения.
   @SubscribeMessage('chat-react')
   handleChatReact(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatReactPayload) {
-    if (!this.allow(client)) return;
+    if (!this.allow(client) || this.isGuest(client)) return;
     const room = client.data.chatRoom as string | undefined;
     if (!room) return;
     const id = typeof payload?.id === 'string' ? payload.id : '';
@@ -779,14 +838,15 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     }
   }
 
-  // Кто сейчас в каких голосовых каналах — { имя_канала: [{ id, name, micOn, deafened }] }
+  // Кто сейчас в каких голосовых каналах —
+  // { имя_канала: [{ id, name, micOn, deafened, guest? }] }
   private buildVoicePresence(): Record<
     string,
-    { id: string; name: string; micOn: boolean; deafened: boolean }[]
+    { id: string; name: string; micOn: boolean; deafened: boolean; guest?: boolean }[]
   > {
     const presence: Record<
       string,
-      { id: string; name: string; micOn: boolean; deafened: boolean }[]
+      { id: string; name: string; micOn: boolean; deafened: boolean; guest?: boolean }[]
     > = {};
     for (const [id, sock] of this.server.sockets.sockets) {
       const room = sock.data.room as string | undefined;
@@ -796,6 +856,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
         name: (sock.data.name as string) || 'Аноним',
         micOn: sock.data.micOn !== false,
         deafened: sock.data.deafened === true,
+        ...(sock.data.guest === true ? { guest: true } : {}),
       });
     }
     return presence;
@@ -803,11 +864,21 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   // Коалесцирующий (trailing-edge) дебаунс: пачка событий за окно = один emit
   // с итоговым состоянием. Таймер уже взведён — ничего не делаем.
+  // Рассылка пер-сокетная (как broadcastChannels): гостям — только срез их
+  // комнаты, чтобы состав остальных каналов не утекал за инвайт.
   private broadcastVoicePresence() {
     if (this.presenceTimer) return;
     this.presenceTimer = setTimeout(() => {
       this.presenceTimer = null;
-      this.server.emit('voice-presence', this.buildVoicePresence());
+      const presence = this.buildVoicePresence();
+      for (const sock of this.server.sockets.sockets.values()) {
+        if (sock.data.guest === true) {
+          const room = sock.data.guestRoom as string;
+          sock.emit('voice-presence', room in presence ? { [room]: presence[room] } : {});
+        } else {
+          sock.emit('voice-presence', presence);
+        }
+      }
     }, SignalingGateway.PRESENCE_DEBOUNCE_MS);
     this.presenceTimer.unref?.();
   }

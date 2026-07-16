@@ -17,6 +17,15 @@ export const APP_NAME = 'relay';
 // Единый формат для Next (middleware) и Nest — см. ./auth.
 export { AUTH_COOKIE, TOKEN_TTL_MS, issueToken, verifyToken, parseCookies } from './auth';
 
+// Гостевой инвайт-токен: подписанная ссылка на конкретный войс-канал (24 часа),
+// без хранения на сервере. Гость по ней попадает только в этот эфир.
+export {
+  GUEST_TOKEN_TTL_MS,
+  issueGuestToken,
+  verifyGuestToken,
+  type GuestTokenPayload,
+} from './auth';
+
 /** Лимит размера загружаемого файла — 25 МБ. */
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
@@ -207,6 +216,8 @@ export interface VoicePeer {
   micOn?: boolean;
   /** Заглушил себе звук (deafen) — не слышит канал; микрофон при этом тоже выключен. */
   deafened?: boolean;
+  /** Гость по инвайт-ссылке (доступ только к этому каналу). */
+  guest?: boolean;
 }
 
 /** Состав всех голосовых каналов: { имя_канала: участники }. */
@@ -283,6 +294,16 @@ export interface PeerRenamedRelay {
   name: string;
 }
 
+/** Запрос инвайт-ссылки на войс-канал (room — его слаг). */
+export interface InviteCreatePayload {
+  room: string;
+}
+
+/** Ответ на invite-create (ack): токен для ссылки `/invite/<token>` или отказ. */
+export type InviteCreateResult =
+  | { ok: true; token: string; exp: number }
+  | { ok: false; error: 'not-found' | 'forbidden' };
+
 /** Карта событий, отправляемых клиентом серверу. */
 export interface ClientToServerEvents {
   join: (payload: JoinPayload) => void;
@@ -301,6 +322,7 @@ export interface ClientToServerEvents {
   'server-unlock': (payload: ServerUnlockPayload) => void;
   'channel-create': (payload: ChannelCreatePayload) => void;
   'channel-delete': (payload: ChannelDeletePayload) => void;
+  'invite-create': (payload: InviteCreatePayload, cb: (res: InviteCreateResult) => void) => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -310,6 +332,8 @@ export interface ClientToServerEvents {
 export interface PeerJoinedPayload {
   id: string;
   name?: string;
+  /** Гость по инвайт-ссылке. */
+  guest?: boolean;
 }
 
 export interface PeerLeftPayload {

@@ -18,7 +18,13 @@ export const AUTH_COOKIE = 'relay_pass';
 /** Срок жизни пропуска — 30 дней. */
 export const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
+/** Срок жизни гостевой инвайт-ссылки — 24 часа. */
+export const GUEST_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+
 const KEY_PREFIX = 'relay-auth-v1:';
+// Гостевой токен подписывается ДРУГИМ ключом (другой контекст поверх того же
+// пароля) — гостевой токен никогда не пройдёт как relay_pass и наоборот.
+const GUEST_KEY_PREFIX = 'relay-guest-v1:';
 const encoder = new TextEncoder();
 
 /** Байты → base64url без паддинга (как у Node `digest('base64url')`). */
@@ -29,16 +35,37 @@ function base64url(bytes: ArrayBuffer): string {
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-async function sign(exp: number, password: string): Promise<string> {
+/** Строка → base64url её utf8-байтов (слаг канала внутри гостевого токена). */
+function base64urlEncodeText(text: string): string {
+  return base64url(encoder.encode(text).buffer as ArrayBuffer);
+}
+
+/** Обратно: base64url → utf8-строка; битый ввод → null. */
+function base64urlDecodeText(b64: string): string | null {
+  try {
+    const bin = atob(b64.replace(/-/g, '+').replace(/_/g, '/'));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+async function hmac(keyText: string, message: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
-    encoder.encode(KEY_PREFIX + password),
+    encoder.encode(keyText),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign'],
   );
-  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(String(exp)));
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(message));
   return base64url(sig);
+}
+
+function sign(exp: number, password: string): Promise<string> {
+  return hmac(KEY_PREFIX + password, String(exp));
 }
 
 /** Сравнение строк за постоянное время (без раннего выхода по длине). */
@@ -69,6 +96,48 @@ export async function verifyToken(token: string | undefined, password: string): 
   if (!Number.isFinite(exp) || exp < Date.now()) return false;
   const expected = await sign(exp, password);
   return timingSafeEqual(expected, token.slice(dot + 1));
+}
+
+// ── Гостевой инвайт-токен ────────────────────────────────────────────────
+// Формат: `g1.<b64url(slug)>.<exp>.<sig>`, sig = HMAC от всего префикса
+// (`g1.<b64slug>.<exp>`) на ключе GUEST_KEY_PREFIX+пароль. Токен несёт scope
+// (какой войс-канал), а не просто «доступ», поэтому подпись и срок проверяются
+// ДАЖЕ при пустом SITE_PASSWORD (в отличие от verifyToken). Смена пароля
+// отзывает все инвайты, как и обычные куки. Синхронный node-crypto близнец —
+// в apps/api/src/auth/auth.ts, формат обязан совпадать байт-в-байт.
+
+/** Полезная нагрузка гостевого токена: слаг войс-канала и срок действия. */
+export interface GuestTokenPayload {
+  slug: string;
+  exp: number;
+}
+
+/** Выдать гостевой токен на конкретный войс-канал (по умолчанию — на 24 часа). */
+export async function issueGuestToken(
+  slug: string,
+  password: string,
+  ttlMs = GUEST_TOKEN_TTL_MS,
+): Promise<string> {
+  const exp = Date.now() + ttlMs;
+  const prefix = `g1.${base64urlEncodeText(slug)}.${exp}`;
+  return `${prefix}.${await hmac(GUEST_KEY_PREFIX + password, prefix)}`;
+}
+
+/** Проверить гостевой токен: валидная подпись и срок → payload, иначе null. */
+export async function verifyGuestToken(
+  token: string | undefined,
+  password: string,
+): Promise<GuestTokenPayload | null> {
+  if (!token) return null;
+  const parts = token.split('.');
+  if (parts.length !== 4 || parts[0] !== 'g1') return null;
+  const [version, b64slug, expRaw, sig] = parts;
+  const exp = Number(expRaw);
+  if (!Number.isFinite(exp) || exp < Date.now()) return null;
+  const slug = base64urlDecodeText(b64slug);
+  if (!slug) return null;
+  const expected = await hmac(GUEST_KEY_PREFIX + password, `${version}.${b64slug}.${expRaw}`);
+  return timingSafeEqual(expected, sig) ? { slug, exp } : null;
 }
 
 /** Разбор Cookie-заголовка в map (для middleware/handshake). */

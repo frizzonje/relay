@@ -11,12 +11,30 @@ export type RelaySocket = Socket<ServerToClientEvents, ClientToServerEvents>;
  */
 let socket: RelaySocket | null = null;
 
+/**
+ * Гостевой токен из адреса `/invite/<token>` — гость предъявляет его в
+ * handshake вместо куки (отдельное поле `guest`, чтобы не пересекаться с
+ * `auth.token` обычного пропуска). Вне инвайт-страницы — null.
+ */
+export function guestTokenFromLocation(): string | null {
+  if (typeof window === 'undefined') return null;
+  const m = /^\/invite\/([^/]+)/.exec(window.location.pathname);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
 export function getSocket(): RelaySocket {
   if (!socket) {
     const url = process.env.NEXT_PUBLIC_SOCKET_URL;
     socket = io(url || undefined, {
       autoConnect: false,
       transports: ['websocket', 'polling'],
+      // auth-функция вычисляется на каждый connect (в т.ч. reconnect): на
+      // инвайт-странице гость шлёт токен, в остальном приложении — пусто
+      // (авторизация по куке relay_pass, как раньше).
+      auth: (cb) => {
+        const guest = guestTokenFromLocation();
+        cb(guest ? { guest } : {});
+      },
     });
   }
   return socket;

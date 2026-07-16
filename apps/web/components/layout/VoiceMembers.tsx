@@ -43,8 +43,17 @@ export function VoiceMembers({ room }: { room: string }) {
               className="relative h-[22px] w-[22px] shrink-0 rounded-full after:absolute after:-bottom-px after:-right-px after:h-2 after:w-2 after:rounded-full after:border-2 after:border-bg-sidebar after:bg-ok after:content-['']"
               style={avatarStyle(name)}
             />
-            <div className={cn('min-w-0 flex-1 truncate', me && 'font-semibold text-text')}>
-              {me ? name + ' (вы)' : name}
+            <div className={cn('flex min-w-0 flex-1 items-center gap-1.5', me && 'font-semibold text-text')}>
+              <span className="truncate">{me ? name + ' (вы)' : name}</span>
+              {/* Пришёл по инвайт-ссылке — доступ только к этому каналу */}
+              {m.guest && (
+                <span
+                  title="Гость по инвайт-ссылке"
+                  className="shrink-0 rounded border border-line bg-bg-elev px-1 py-px text-[9px] font-bold uppercase tracking-[0.06em] text-text-muted"
+                >
+                  гость
+                </span>
+              )}
             </div>
             {/* Слоты под иконки всегда зарезервированы (даже пустые), чтобы имя не
                 «прыгало» при переключении мута/глушилки по отдельности. */}
