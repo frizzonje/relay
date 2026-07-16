@@ -104,31 +104,35 @@ function ChannelRow({
         />
       )}
       <span className="relative z-[1] flex min-w-0 items-center gap-1.5">{children}</span>
-      {onInvite && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onInvite();
-          }}
-          title="Пригласить по ссылке"
-          aria-label="Пригласить по ссылке"
-          className="relative z-[1] ml-auto grid h-5 w-5 shrink-0 place-items-center rounded text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-text-header focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100"
-        >
-          <LinkIcon size={13} />
-        </button>
-      )}
-      {onDelete && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          title={deleteLabel}
-          aria-label={deleteLabel}
-          className="relative z-[1] ml-auto grid h-5 w-5 shrink-0 place-items-center rounded text-lg leading-none text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-danger focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100"
-        >
-          ×
-        </button>
+      {(onInvite || onDelete) && (
+        <span className="relative z-[1] ml-auto flex shrink-0 items-center gap-0.5">
+          {onInvite && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onInvite();
+              }}
+              title="Пригласить по ссылке"
+              aria-label="Пригласить по ссылке"
+              className="grid h-5 w-5 shrink-0 place-items-center rounded text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-text-header focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100"
+            >
+              <LinkIcon size={13} />
+            </button>
+          )}
+          {onDelete && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete();
+              }}
+              title={deleteLabel}
+              aria-label={deleteLabel}
+              className="grid h-5 w-5 shrink-0 place-items-center rounded text-lg leading-none text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-danger focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100"
+            >
+              ×
+            </button>
+          )}
+        </span>
       )}
     </div>
   );
