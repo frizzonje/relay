@@ -73,12 +73,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Linux system deps (WebKitGTK, appindicator)
+      - name: Linux system deps (WebKitGTK, appindicator, GStreamer)
         if: matrix.os == 'ubuntu-22.04'
+        # GStreamer runtime plugins are needed on the builder because the
+        # AppImage bundles the media framework (bundleMediaFramework in
+        # tauri.conf.json) — without them WebKit inside the AppImage has no
+        # autoaudiosink/pulsesrc and voice calls are silent (seen on Arch).
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
-            libayatana-appindicator3-dev librsvg2-dev build-essential
+            libayatana-appindicator3-dev librsvg2-dev build-essential \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-pulseaudio \
+            gstreamer1.0-pipewire gstreamer1.0-alsa gstreamer1.0-gl
 
       - uses: dtolnay/rust-toolchain@stable
         with:
