@@ -4,7 +4,8 @@
 // не форкает фронт — связь только через события Tauri:
 //
 //   • Rust → сюда: `ptt` (bool) от глобального хоткея → микрофон (desktopPtt);
-//   • сюда → Rust: `voice-status` ({ in_call, muted }) → статус в трее.
+//   • сюда → Rust: `voice-status` ({ in_call, muted }) → статус в трее,
+//     `switch-server` → вернуть окно на экран выбора сервера.
 //
 // Права удалённого origin ограничены core:event (capabilities/remote.json).
 
@@ -140,6 +141,16 @@ export async function initDesktopBridge() {
   useUiStore.subscribe((s, p) => {
     if (s.voiceRoom !== p.voiceRoom) pushStatus();
   });
+}
+
+/**
+ * Вернуть оболочку на экран выбора сервера (кнопка «Сменить сервер» в
+ * настройках). Навигацию делает Rust — у удалённого origin прав на окно нет,
+ * только события. Вне Tauri — no-op: в браузере адрес и так в адресной строке.
+ */
+export function switchServer() {
+  if (typeof window === 'undefined') return;
+  void window.__TAURI__?.event.emit('switch-server');
 }
 
 /**

@@ -6,7 +6,8 @@
 // удалённого UI даёт только `core:event`, без кастомных команд):
 //   • Rust → webview: событие `ptt` (bool) от глобального хоткея (см. lib/desktop.ts);
 //   • webview → Rust: `voice-status` ({in_call, muted}) обновляет трей,
-//     `set-ptt-shortcut` (строка-акселератор) переназначает хоткей.
+//     `set-ptt-shortcut` (строка-акселератор) переназначает хоткей,
+//     `switch-server` возвращает окно на локальный экран выбора сервера.
 
 mod screen_audio;
 
@@ -43,6 +44,12 @@ struct AppState {
     /// `updater.check()` в одну секунду засоряли канал `update-status` и роняли
     /// события. Пока флаг взведён — новый `check-updates` просто игнорируем.
     checking: AtomicBool,
+    /// Адрес локального экрана выбора сервера (`index.html` оболочки). Снимаем
+    /// его с окна при старте, ДО того как пикер уведёт webview на origin
+    /// сервера: схема у собранного приложения платформенная (`tauri://localhost`
+    /// на macOS/Linux, `http://tauri.localhost` на Windows, dev-URL в отладке),
+    /// так что хардкодить её нельзя — берём то, с чего окно фактически началось.
+    picker_url: Mutex<Option<tauri::Url>>,
 }
 
 /// Статус звонка, приходящий из web-UI событием `voice-status`.
@@ -128,6 +135,15 @@ fn main() {
         )
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // Запоминаем стартовый URL окна — это и есть экран выбора сервера
+            // (навигация на сервер случится позже, по клику в пикере).
+            if let Some(win) = handle.get_webview_window("main") {
+                if let Ok(url) = win.url() {
+                    *handle.state::<AppState>().picker_url.lock().unwrap() = Some(url);
+                }
+            }
+
             build_tray(&handle)?;
 
             // Linux: WebKitGTK на необработанный `permission-request` отвечает
@@ -194,6 +210,12 @@ fn main() {
                 if let Ok(acc) = serde_json::from_str::<String>(event.payload()) {
                     let _ = reassign_ptt(&h, &acc);
                 }
+            });
+
+            // web-UI просит вернуть на экран выбора сервера (кнопка в настройках).
+            let h = handle.clone();
+            handle.listen("switch-server", move |_event| {
+                show_picker(&h);
             });
 
             // Демонстрация экрана: нативный захват системного звука БЕЗ голосов
@@ -467,6 +489,32 @@ async fn native_update_flow(app: AppHandle, announce: bool) {
     }
 }
 
+/// Вернуть окно на локальный экран выбора сервера. Единственная дорога назад:
+/// пикер уводит webview на origin сервера безвозвратно, а сам сервер может
+/// оказаться не тем, лежачим или отдавать пустую страницу — тогда никакая
+/// кнопка внутри web-UI уже не поможет, и без этого пути клиент запирался на
+/// одном адресе до переустановки. Поэтому основной вход — пункт трея (живёт в
+/// Rust и не зависит от того, что творится в webview).
+fn show_picker(app: &AppHandle) {
+    let url = app.state::<AppState>().picker_url.lock().unwrap().clone();
+    let (Some(url), Some(win)) = (url, app.get_webview_window("main")) else {
+        ulog("switch-server: picker url or window missing");
+        return;
+    };
+    ulog(&format!("switch-server -> {url}"));
+    if let Err(e) = win.navigate(url) {
+        ulog(&format!("switch-server navigate failed: {e}"));
+        return;
+    }
+    // Пункт трея могли нажать при спрятанном/фоновом окне — показываем, иначе
+    // пикер откроется невидимо и «ничего не произошло».
+    let _ = win.show();
+    let _ = win.set_focus();
+    // Звонок (если был) рвётся вместе с уходом со страницы — трей об этом уже не
+    // услышит, обнуляем статус сами.
+    update_tray(app, false, false);
+}
+
 /// Снять прежний PTT-хоткей и зарегистрировать новый (по акселератору из UI).
 fn reassign_ptt(app: &AppHandle, accelerator: &str) -> Result<(), String> {
     let sc = Shortcut::from_str(accelerator).map_err(|e| e.to_string())?;
@@ -509,6 +557,7 @@ fn build_menu(app: &AppHandle, in_call: bool, muted: bool) -> tauri::Result<Menu
         false,
         None::<&str>,
     )?;
+    let switch = MenuItem::with_id(app, "switch-server", "Сменить сервер…", true, None::<&str>)?;
     let check = MenuItem::with_id(app, "check-updates", "Проверить обновления", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Выйти из relay", true, None::<&str>)?;
     Menu::with_items(
@@ -517,6 +566,7 @@ fn build_menu(app: &AppHandle, in_call: bool, muted: bool) -> tauri::Result<Menu
             &version,
             &status,
             &PredefinedMenuItem::separator(app)?,
+            &switch,
             &check,
             &quit,
         ],
@@ -539,6 +589,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "quit" => app.exit(0),
+            "switch-server" => show_picker(app),
             "check-updates" => {
                 // Ручная проверка из трея — нативный путь, всегда рабочий.
                 // announce=true: сообщаем результат даже когда всё актуально.

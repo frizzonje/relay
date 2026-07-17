@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { checkForUpdates, installUpdate } from '@/lib/desktop';
+import { checkForUpdates, installUpdate, switchServer } from '@/lib/desktop';
 import { getTheme, setTheme, type Theme } from '@/lib/theme';
 import { useDesktopStore } from '@/stores/desktop';
 import { useVoiceStore } from '@/stores/voice';
@@ -221,6 +221,26 @@ function UpdateBlock() {
 }
 
 /**
+ * «Сменить сервер» — возврат оболочки на её локальный экран выбора инсталляции
+ * (навигацию делает Rust, см. lib/desktop.ts). Только в Tauri: в браузере адрес
+ * и так меняется в адресной строке. Дубль пункта трея — здесь его ищут, когда
+ * окно открыто; трей остаётся запасным путём, если страница не загрузилась.
+ */
+function SwitchServerButton() {
+  const isDesktop = useDesktopStore((s) => s.isDesktop);
+  if (!isDesktop) return null;
+  return (
+    <button
+      type="button"
+      onClick={switchServer}
+      className="w-full rounded-[8px] px-3 py-2 text-left text-[14px] text-text-muted outline-none transition-colors hover:bg-bg-hover hover:text-text"
+    >
+      Сменить сервер
+    </button>
+  );
+}
+
+/**
  * Модалка настроек (раздел 06 референса, 860×600 поверх блюра). Левая колонка —
  * навигация по вкладкам + выход из аккаунта; правая — контент вкладки «Аудио и
  * видео»: селекторы устройств (enumerateDevices через lib/voice), живой уровень
@@ -300,6 +320,7 @@ export function SettingsDialog({
           ))}
           <div className="mt-auto pt-2">
             <UpdateBlock />
+            <SwitchServerButton />
             <button
               type="button"
               onClick={logout}
