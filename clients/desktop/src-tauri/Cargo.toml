@@ -1,6 +1,6 @@
 [package]
 name = "relay-desktop"
-version = "0.3.10"
+version = "0.3.11"
 description = "relay desktop — Tauri v2 оболочка над web-клиентом"
 authors = ["relay"]
 edition = "2021"
@@ -38,6 +38,10 @@ base64 = "0.22"
 # зависимостей через wry, прямая ссылка ничего не тянет.
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk-sys = "2.0"
+# Обработчик permission-request и настройки WebKit (enable-webrtc): wry на
+# webkitgtk НЕ разрешает медиа-запросы — делаем сами в setup() (см. main.rs).
+# Фича v2_38 — та же, с которой крейт уже собирается внутри wry.
+webkit2gtk = { version = "2.0", features = ["v2_38"] }
 
 # Нативный захват звука экрана (process-loopback exclude) — только Windows.
 # WASAPI + COM через windows-rs. На macOS/Linux screen_audio компилируется в

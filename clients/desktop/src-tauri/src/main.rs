@@ -130,6 +130,48 @@ fn main() {
             let handle = app.handle().clone();
             build_tray(&handle)?;
 
+            // Linux: WebKitGTK на необработанный `permission-request` отвечает
+            // отказом, а wry (0.55) на webkitgtk обработчик не вешает вовсе
+            // (в отличие от своих же Windows/macOS/Android-бэкендов) — из-за
+            // этого getUserMedia ВСЕГДА падал с NotAllowedError («нет доступа
+            // к микрофону»). Разрешаем запросы медиа-устройств сами: webview
+            // показывает только сервер, который пользователь выбрал в пикере,
+            // так что доступ к микрофону — его осознанный выбор (как в любом
+            // десктоп-мессенджере). Прочие типы запросов не трогаем — false
+            // отдаёт их дефолтному обработчику (отказ). Заодно включаем
+            // enable-webrtc: RTCPeerConnection в WebKitGTK по умолчанию
+            // выключен (флаг появился в 2.38), без него звонок упал бы сразу
+            // после выдачи микрофона.
+            #[cfg(target_os = "linux")]
+            if let Some(win) = handle.get_webview_window("main") {
+                let _ = win.with_webview(|webview| {
+                    use webkit2gtk::glib::prelude::*;
+                    use webkit2gtk::{
+                        DeviceInfoPermissionRequest, PermissionRequestExt, SettingsExt,
+                        UserMediaPermissionRequest, WebViewExt,
+                    };
+                    let wv = webview.inner();
+                    if let Some(s) = WebViewExt::settings(&wv) {
+                        s.set_enable_media_stream(true);
+                        s.set_enable_webrtc(true);
+                    }
+                    wv.connect_permission_request(|_, req| {
+                        let media = req.is::<UserMediaPermissionRequest>()
+                            || req.is::<DeviceInfoPermissionRequest>();
+                        ulog(&format!(
+                            "webview permission-request {}: {}",
+                            req.type_(),
+                            if media { "allow" } else { "default(deny)" }
+                        ));
+                        if media {
+                            req.allow();
+                        }
+                        media
+                    });
+                    ulog("linux webview: media permission handler installed");
+                });
+            }
+
             // Дефолтный PTT-хоткей. Если система его уже держит — молча пропускаем:
             // фронт сможет задать свой событием `set-ptt-shortcut`.
             if let Ok(sc) = Shortcut::from_str(DEFAULT_PTT) {

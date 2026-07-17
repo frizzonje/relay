@@ -2926,7 +2926,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "relay-desktop"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -2940,6 +2940,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tokio",
+ "webkit2gtk",
  "webkit2gtk-sys",
  "windows 0.58.0",
  "windows-core 0.58.0",
