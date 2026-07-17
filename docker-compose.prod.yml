@@ -1,0 +1,117 @@
+# relay — self-host stack on prebuilt GHCR images (no source build).
+#
+# This is what install.sh deploys: it downloads this file + Caddyfile + .env
+# into /opt/relay and runs `docker compose up -d`. Nothing is compiled on the
+# server — api/web are pulled from ghcr.io. To build from source instead, use
+# the repo's docker-compose.yml (build: context).
+#
+#   docker compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml --profile turn up -d   # with TURN
+#
+# Pin a release by exporting RELAY_VERSION (defaults to :latest):
+#   RELAY_VERSION=0.4.0 docker compose -f docker-compose.prod.yml up -d
+#
+# Config comes from .env in the same directory (SITE_PASSWORD, DOMAIN,
+# SERVER_HOST, TURN_CREDENTIAL, TURN_EXTERNAL_IP). See .env.example.
+
+name: relay
+
+services:
+  api:
+    image: ghcr.io/frizzonje/relay-api:${RELAY_VERSION:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    environment:
+      - PORT=3000
+      - UPLOAD_DIR=/app/uploads
+      - DATA_DIR=/app/uploads/state
+      - SITE_PASSWORD=${SITE_PASSWORD:-}
+      - SERVER_HOST=${SERVER_HOST:-localhost}
+      - STUN_URLS=${STUN_URLS:-}
+      - TURN_URLS=${TURN_URLS:-}
+      - TURN_USERNAME=${TURN_USERNAME:-webrtc}
+      - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
+    volumes:
+      - uploads:/app/uploads
+    expose:
+      - "3000"
+
+  web:
+    image: ghcr.io/frizzonje/relay-web:${RELAY_VERSION:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    environment:
+      - SITE_PASSWORD=${SITE_PASSWORD:-}
+    expose:
+      - "3001"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - api
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  # TURN relay (profile: turn) — needed for calls between strict NATs (mobile,
+  # CGNAT). host network so coturn sees real addresses. TURN over TLS on 5349
+  # reuses Caddy's cert from the shared caddy_data volume. Firewall: open
+  # 3478/udp, 3478/tcp, 5349/tcp, 49160-49200/udp.
+  coturn:
+    image: coturn/coturn:4-alpine
+    profiles: ["turn"]
+    network_mode: host
+    restart: unless-stopped
+    # Root: Caddy stores certs under a 0700 root dir (key 0600); coturn's default
+    # `nobody` user can't read them and TLS silently falls back. Root reads as-is.
+    user: "0:0"
+    depends_on:
+      - caddy
+    environment:
+      - SERVER_HOST=${SERVER_HOST:-localhost}
+      - TURN_USERNAME=${TURN_USERNAME:-webrtc}
+      - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
+      - TURN_EXTERNAL_IP=${TURN_EXTERNAL_IP:-}
+    volumes:
+      - caddy_data:/certs:ro
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        EXT="$${TURN_EXTERNAL_IP:-$$SERVER_HOST}"
+        case "$$EXT" in
+          ""|*[!0-9.]*) EXTFLAG="" ;;
+          *) EXTFLAG="--external-ip=$$EXT" ;;
+        esac
+        CERT=$$(find /certs/caddy/certificates -type f -name "$$SERVER_HOST.crt" 2>/dev/null | head -n1)
+        KEY=$$(find /certs/caddy/certificates -type f -name "$$SERVER_HOST.key" 2>/dev/null | head -n1)
+        if [ -n "$$CERT" ] && [ -n "$$KEY" ]; then
+          TLSFLAGS="--tls-listening-port=5349 --cert=$$CERT --pkey=$$KEY --no-dtls"
+        else
+          TLSFLAGS="--no-tls --no-dtls"
+        fi
+        exec turnserver -n --log-file=stdout \
+          --realm="$$SERVER_HOST" \
+          --listening-port=3478 \
+          --min-port=49160 --max-port=49200 \
+          --lt-cred-mech \
+          --user="$$TURN_USERNAME:$$TURN_CREDENTIAL" \
+          $$TLSFLAGS --no-cli \
+          --no-multicast-peers \
+          --denied-peer-ip=10.0.0.0-10.255.255.255 \
+          --denied-peer-ip=172.16.0.0-172.31.255.255 \
+          --denied-peer-ip=192.168.0.0-192.168.255.255 \
+          $$EXTFLAG
+
+volumes:
+  uploads:
+  caddy_data:
+  caddy_config:

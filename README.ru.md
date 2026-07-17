@@ -31,7 +31,26 @@ docker-compose.yml   прод-стек (точка входа)
 
 JS-часть — монорепо **pnpm workspaces + Turborepo**; все сервисы работают в Docker, локальный Node не обязателен. Нативные клиенты живут в `clients/` со своими тулчейнами и говорят с сервером по единому протоколу — [docs/protocol.md](docs/protocol.md).
 
-## Быстрый старт
+## Установка одной командой (Debian/Ubuntu)
+
+Развернуть на чистом сервере — поставит Docker, спросит домен/пароль, скачает
+готовые образы, откроет порты в фаерволе и запустит всё:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/frizzonje/relay/main/install.sh | bash
+```
+
+Лучше сперва прочитать скрипт (правило хорошего тона для любого `curl | bash`):
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/frizzonje/relay/main/install.sh
+less install.sh && bash install.sh
+```
+
+Дальше управляйте стеком через установленный CLI `relay`: `relay update`,
+`relay logs`, `relay config`, `relay backup`. Стек лежит в `/opt/relay`.
+
+## Быстрый старт (из исходников)
 
 **Dev** (hot-reload, self-signed TLS):
 
@@ -48,6 +67,13 @@ docker compose up --build
 
 # с TURN-ретранслятором (строгие NAT / мобильный интернет):
 docker compose --profile turn up --build
+```
+
+Развернуть без сборки — тянуть готовые образы из GHCR (именно это делает
+инсталлятор под капотом):
+
+```bash
+docker compose -f docker-compose.prod.yml up -d          # добавьте --profile turn для TURN
 ```
 
 ## Конфигурация (`.env`)
