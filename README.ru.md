@@ -4,6 +4,25 @@
 
 Self-hosted платформа для приватной голосовой, видео- и текстовой связи небольшой группы. Mesh-WebRTC звонки без медиасервера, текстовые каналы с вложениями и реакциями, доступ по общему паролю, TLS из коробки.
 
+## ⚡ Быстрый старт
+
+Поднять свой relay на чистом сервере **Debian/Ubuntu** одной командой:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/frizzonje/relay/main/install.sh | bash
+```
+
+Поставит Docker, спросит домен, пароль входа и TURN, скачает готовые образы, откроет порты в фаерволе и запустит всё — а затем даст CLI `relay` (`relay update`, `relay logs`, `relay config`, `relay backup`). Стек лежит в `/opt/relay`.
+
+> [!TIP]
+> Не любите слепой `curl | bash`? Скачайте и прочитайте сперва:
+> ```bash
+> curl -fsSLO https://raw.githubusercontent.com/frizzonje/relay/main/install.sh
+> less install.sh && bash install.sh
+> ```
+
+Хотите запустить локально или собрать из исходников? См. [Запуск из исходников](#запуск-из-исходников).
+
 ## Возможности
 
 - **Голос и видео** — mesh-WebRTC (P2P, до ~6–7 участников), камера, демонстрация экрана, индикаторы mute/deafen
@@ -31,26 +50,7 @@ docker-compose.yml   прод-стек (точка входа)
 
 JS-часть — монорепо **pnpm workspaces + Turborepo**; все сервисы работают в Docker, локальный Node не обязателен. Нативные клиенты живут в `clients/` со своими тулчейнами и говорят с сервером по единому протоколу — [docs/protocol.md](docs/protocol.md).
 
-## Установка одной командой (Debian/Ubuntu)
-
-Развернуть на чистом сервере — поставит Docker, спросит домен/пароль, скачает
-готовые образы, откроет порты в фаерволе и запустит всё:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/frizzonje/relay/main/install.sh | bash
-```
-
-Лучше сперва прочитать скрипт (правило хорошего тона для любого `curl | bash`):
-
-```bash
-curl -fsSLO https://raw.githubusercontent.com/frizzonje/relay/main/install.sh
-less install.sh && bash install.sh
-```
-
-Дальше управляйте стеком через установленный CLI `relay`: `relay update`,
-`relay logs`, `relay config`, `relay backup`. Стек лежит в `/opt/relay`.
-
-## Быстрый старт (из исходников)
+## Запуск из исходников
 
 **Dev** (hot-reload, self-signed TLS):
 

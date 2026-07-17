@@ -4,6 +4,25 @@
 
 Self-hosted platform for private voice, video, and text communication for small groups. Mesh WebRTC calls with no media server, text channels with attachments and reactions, shared-password access, TLS out of the box.
 
+## ⚡ Get started
+
+Spin up your own relay on a fresh **Debian/Ubuntu** server in one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/frizzonje/relay/main/install.sh | bash
+```
+
+It installs Docker, asks for your domain, login password, and TURN, pulls prebuilt images, opens the firewall, and starts everything — then hands you a `relay` CLI (`relay update`, `relay logs`, `relay config`, `relay backup`). The stack lives in `/opt/relay`.
+
+> [!TIP]
+> Prefer to read before you pipe into a shell? Download it first:
+> ```bash
+> curl -fsSLO https://raw.githubusercontent.com/frizzonje/relay/main/install.sh
+> less install.sh && bash install.sh
+> ```
+
+Want to run it locally or build from source instead? See [Quick start](#quick-start-from-source).
+
 ## Features
 
 - **Voice and video** — mesh WebRTC (P2P, up to ~6–7 participants), camera, screen sharing, mute/deafen indicators
@@ -30,25 +49,6 @@ docker-compose.yml   production stack (entry point)
 ```
 
 The JS part is a **pnpm workspaces + Turborepo** monorepo; all services run in Docker, a local Node install isn't required. Native clients live under `clients/` with their own toolchains and talk to the server over a shared protocol — [docs/protocol.md](docs/protocol.md).
-
-## One-command install (Debian/Ubuntu)
-
-Deploy on a fresh server — installs Docker, asks for your domain/password, pulls
-prebuilt images, opens the firewall, and starts everything:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/frizzonje/relay/main/install.sh | bash
-```
-
-Prefer to read the script first (recommended for any `curl | bash`):
-
-```bash
-curl -fsSLO https://raw.githubusercontent.com/frizzonje/relay/main/install.sh
-less install.sh && bash install.sh
-```
-
-Afterwards, manage the stack with the installed `relay` CLI: `relay update`,
-`relay logs`, `relay config`, `relay backup`. The stack lives in `/opt/relay`.
 
 ## Quick start (from source)
 
