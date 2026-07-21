@@ -16,7 +16,7 @@ function splitUrls(value: string | undefined): string[] {
 @Controller('api')
 export class ConfigController {
   @Get('config')
-  getConfig(): { iceServers: IceServer[] } {
+  getConfig(): { iceServers: IceServer[]; sfu: { available: boolean } } {
     const iceServers: IceServer[] = [];
 
     // Без TURN звонок не соберётся между «строгими» NAT (мобильные сети и т.п.)
@@ -57,6 +57,12 @@ export class ConfigController {
       iceServers.push({ urls: turnUrls, username, credential });
     }
 
-    return { iceServers };
+    // Медиасервер поднимается отдельным профилем compose (`--profile sfu`) и
+    // есть далеко не у всех: self-host без него обязан работать полностью на
+    // p2p. Признак — заданный SFU_URL: его же потом возьмёт клиент для
+    // подключения к namespace /sfu.
+    const sfu = { available: !!(process.env.SFU_URL ?? '').trim() };
+
+    return { iceServers, sfu };
   }
 }

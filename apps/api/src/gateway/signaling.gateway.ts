@@ -43,6 +43,9 @@ type ReactionMap = Record<string, string[]>;
 // Реестр направлений (api намеренно не тянет @relay/shared — типы дублируем, как и
 // прочие константы здесь; формат совпадает с Channel/Server из packages/shared).
 type ChannelType = 'text' | 'voice';
+// Транспорт голосового канала: p2p (mesh, каждый каждому) или sfu (через
+// медиасервер). Отсутствие поля = p2p — старые registry.json читаются как есть.
+type VoiceMode = 'p2p' | 'sfu';
 // Реестровый сервер (гильдия). Имя ServerEntry, чтобы не столкнуться с socket.io
 // `Server` (WebSocketServer) выше. Формат совпадает с Server из packages/shared.
 interface ServerEntry {
@@ -61,6 +64,9 @@ interface Channel {
   name: string;
   slug: string;
   removable: boolean;
+  // Только для type: 'voice'. Меняется через channel-mode, права — как у
+  // channel-delete: дефолтные каналы (removable: false) остаются на p2p.
+  mode?: VoiceMode;
 }
 interface ServerCreatePayload {
   id?: unknown;
@@ -75,6 +81,11 @@ interface ChannelCreatePayload {
   serverId?: unknown;
   type?: unknown;
   name?: unknown;
+  mode?: unknown;
+}
+interface ChannelModePayload {
+  id?: unknown;
+  mode?: unknown;
 }
 interface ChannelDeletePayload {
   id?: unknown;
@@ -132,9 +143,7 @@ const MAIN_SERVER_ID = 'relay-main';
 
 // Серверы по умолчанию — только главный. Участники добавляют свои через «+» в
 // рейке. Клиент держит такой же сид (lib/constants).
-const DEFAULT_SERVERS: ServerEntry[] = [
-  { id: MAIN_SERVER_ID, name: 'relay', removable: false },
-];
+const DEFAULT_SERVERS: ServerEntry[] = [{ id: MAIN_SERVER_ID, name: 'relay', removable: false }];
 
 // Каналы по умолчанию главного сервера. Их нельзя удалить; участники лишь
 // добавляют свои. Клиент держит такой же сид (lib/constants) — id/slug совпадают.
@@ -511,8 +520,38 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // на тип по всем серверам, повторное создание не плодит дубликаты.
     if (this.channels.some((c) => c.type === type && c.slug === slug)) return;
 
-    const channel: Channel = { id: randomUUID(), serverId, type, name: rawName, slug, removable: true };
+    const channel: Channel = {
+      id: randomUUID(),
+      serverId,
+      type,
+      name: rawName,
+      slug,
+      removable: true,
+      // Режим — только у голосовых; p2p по умолчанию не пишем, отсутствие поля
+      // и есть p2p (реестр не распухает, старые записи читаются одинаково).
+      ...(type === 'voice' && payload?.mode === 'sfu' ? { mode: 'sfu' as const } : {}),
+    };
     this.channels.push(channel);
+    this.broadcastChannels();
+    this.persist();
+  }
+
+  // Смена транспорта голосового канала. Права те же, что у channel-delete:
+  // трогать можно только созданные участниками каналы (removable), дефолтные
+  // остаются на p2p — они обязаны работать и без поднятого медиасервера.
+  @SubscribeMessage('channel-mode')
+  handleChannelMode(@ConnectedSocket() client: Socket, @MessageBody() payload: ChannelModePayload) {
+    if (!this.allow(client) || this.isGuest(client)) return;
+    const id = typeof payload?.id === 'string' ? payload.id : '';
+    const mode: VoiceMode | null =
+      payload?.mode === 'sfu' ? 'sfu' : payload?.mode === 'p2p' ? 'p2p' : null;
+    if (!id || !mode) return;
+    const channel = this.channels.find((c) => c.id === id && c.removable && c.type === 'voice');
+    if (!channel) return;
+    const next = mode === 'sfu' ? 'sfu' : undefined;
+    if (channel.mode === next) return;
+    if (next) channel.mode = next;
+    else delete channel.mode;
     this.broadcastChannels();
     this.persist();
   }

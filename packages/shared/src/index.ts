@@ -144,8 +144,19 @@ export interface ServerUnlockResult {
   ok: boolean;
 }
 
-/** Тип канала: текстовый (лента сообщений) или голосовой (mesh-эфир). */
+/** Тип канала: текстовый (лента сообщений) или голосовой (эфир). */
 export type ChannelType = 'text' | 'voice';
+
+/**
+ * Транспорт голосового канала:
+ * - `p2p` — mesh, все шлют медиа друг другу напрямую. Ниже задержка, ноль
+ *   нагрузки на сервер, но аплинк растёт линейно — потолок ~3 человека с видео;
+ * - `sfu` — через медиасервер: каждый отдаёт свой поток один раз. Требует
+ *   поднятого сервиса `sfu` (см. `ConfigResponse.sfu.available`).
+ *
+ * Отсутствие поля = `p2p`: старые записи реестра читаются без миграции.
+ */
+export type VoiceMode = 'p2p' | 'sfu';
 
 /**
  * Направление в реестре сервера. Сервер держит список в памяти, раздаёт его
@@ -164,16 +175,29 @@ export interface Channel {
   slug: string;
   /** Каналы по умолчанию удалять нельзя; созданные участниками — можно. */
   removable: boolean;
+  /**
+   * Транспорт голосового канала. Только для `type: 'voice'`; отсутствует = p2p.
+   * Менять можно лишь у `removable`-каналов — там же, где разрешено удаление.
+   */
+  mode?: VoiceMode;
 }
 
 export interface ChannelCreatePayload {
   serverId: string;
   type: ChannelType;
   name: string;
+  /** Режим для голосового канала; у текстовых игнорируется. */
+  mode?: VoiceMode;
 }
 
 export interface ChannelDeletePayload {
   id: string;
+}
+
+/** Смена транспорта голосового канала (только `removable`). */
+export interface ChannelModePayload {
+  id: string;
+  mode: VoiceMode;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -188,6 +212,12 @@ export interface IceServer {
 
 export interface ConfigResponse {
   iceServers: IceServer[];
+  /**
+   * Медиасервер (профиль `sfu` в compose). Поднят не у всех: self-host без него
+   * обязан работать полностью на p2p, поэтому фронт спрашивает заранее — чтобы
+   * не предлагать режим, которого нет, и знать, что делать при фолбэке.
+   */
+  sfu?: { available: boolean };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -322,6 +352,7 @@ export interface ClientToServerEvents {
   'server-unlock': (payload: ServerUnlockPayload) => void;
   'channel-create': (payload: ChannelCreatePayload) => void;
   'channel-delete': (payload: ChannelDeletePayload) => void;
+  'channel-mode': (payload: ChannelModePayload) => void;
   'invite-create': (payload: InviteCreatePayload, cb: (res: InviteCreateResult) => void) => void;
 }
 

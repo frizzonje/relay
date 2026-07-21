@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import type { ChannelType } from '@relay/shared';
+import type { ChannelType, VoiceMode } from '@relay/shared';
 import {
   Dialog,
   DialogContent,
@@ -14,10 +14,16 @@ import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
 import { cn } from '@/lib/utils';
 import { createChannel } from '@/lib/channels';
+import { useSfuAvailable } from '@/lib/use-sfu';
 
 const TYPES: { value: ChannelType; label: string; hint: string }[] = [
   { value: 'text', label: 'Текстовый', hint: 'Лента сообщений и файлов' },
   { value: 'voice', label: 'Голосовой', hint: 'Живой эфир: голос, видео, экран' },
+];
+
+const MODES: { value: VoiceMode; label: string; hint: string }[] = [
+  { value: 'p2p', label: 'Напрямую', hint: 'Меньше задержка. До 3 человек с видео' },
+  { value: 'sfu', label: 'Через сервер', hint: 'Держит 7 человек с видео' },
 ];
 
 /**
@@ -36,13 +42,16 @@ export function CreateChannelDialog({
 }) {
   const [type, setType] = useState<ChannelType>(initialType);
   const [name, setName] = useState('');
+  const [mode, setMode] = useState<VoiceMode>('p2p');
   const inputRef = useRef<HTMLInputElement>(null);
+  const sfuAvailable = useSfuAvailable();
 
-  // При каждом открытии — чистый ввод и тип с нажатого «+».
+  // При каждом открытии — чистый ввод, тип с нажатого «+» и режим по умолчанию.
   useEffect(() => {
     if (open) {
       setType(initialType);
       setName('');
+      setMode('p2p');
     }
   }, [open, initialType]);
 
@@ -50,7 +59,7 @@ export function CreateChannelDialog({
     e.preventDefault();
     const trimmed = name.trim();
     if (!trimmed) return;
-    createChannel(type, trimmed);
+    createChannel(type, trimmed, type === 'voice' ? mode : undefined);
     onOpenChange(false);
   }
 
@@ -103,6 +112,46 @@ export function CreateChannelDialog({
               })}
             </div>
           </div>
+
+          {/* Как ходит медиа — только у голосовых. Через сервер держит больше
+              народу с видео, но требует поднятого медиасервера. */}
+          {!isText && (
+            <div>
+              <div className="mb-1.5 text-[11px] font-bold uppercase tracking-[0.3px] text-text-muted">
+                Связь
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {MODES.map((m) => {
+                  const selected = mode === m.value;
+                  const disabled = m.value === 'sfu' && !sfuAvailable;
+                  return (
+                    <button
+                      key={m.value}
+                      type="button"
+                      onClick={() => setMode(m.value)}
+                      disabled={disabled}
+                      aria-pressed={selected}
+                      title={disabled ? 'Медиасервер не запущен на этом сервере' : undefined}
+                      className={cn(
+                        'flex flex-col items-start gap-1 rounded-lg border p-3 text-left outline-none transition-colors',
+                        'focus-visible:ring-2 focus-visible:ring-accent/70',
+                        disabled
+                          ? 'cursor-not-allowed border-line bg-bg-rail/20 text-text-muted/50'
+                          : selected
+                            ? 'border-accent/70 bg-accent/15 text-text-header'
+                            : 'border-line bg-bg-rail/40 text-text-muted hover:bg-bg-hover hover:text-text',
+                      )}
+                    >
+                      <span className="text-[15px] font-semibold">{m.label}</span>
+                      <span className="text-[11px] leading-tight opacity-80">
+                        {disabled ? 'Медиасервер не запущен' : m.hint}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Имя канала */}
           <div>

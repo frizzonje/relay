@@ -1,4 +1,4 @@
-import type { ChannelType } from '@relay/shared';
+import type { ChannelType, VoiceMode } from '@relay/shared';
 import { getSocket } from '@/lib/socket';
 import { useServersStore } from '@/stores/servers';
 
@@ -8,14 +8,23 @@ import { useServersStore } from '@/stores/servers';
  * (см. SocketProvider). Оптимистично ничего не рисуем — так у всех один порядок.
  * Канал создаётся в активном сервере (открытом в рейке).
  */
-export function createChannel(type: ChannelType, name: string): void {
+export function createChannel(type: ChannelType, name: string, mode?: VoiceMode): void {
   const trimmed = name.trim();
   if (!trimmed) return;
   const serverId = useServersStore.getState().activeServerId;
-  getSocket().emit('channel-create', { serverId, type, name: trimmed });
+  getSocket().emit('channel-create', { serverId, type, name: trimmed, ...(mode ? { mode } : {}) });
 }
 
 export function deleteChannel(id: string): void {
   if (!id) return;
   getSocket().emit('channel-delete', { id });
+}
+
+/**
+ * Сменить транспорт голосового канала. Сервер пустит только для созданных
+ * участниками каналов — у дефолтных режим не меняется (там всегда p2p).
+ */
+export function setChannelMode(id: string, mode: VoiceMode): void {
+  if (!id) return;
+  getSocket().emit('channel-mode', { id, mode });
 }
