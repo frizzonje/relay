@@ -2929,6 +2929,7 @@ name = "relay-desktop"
 version = "0.3.11"
 dependencies = [
  "base64 0.22.1",
+ "ctor",
  "serde",
  "serde_json",
  "tauri",

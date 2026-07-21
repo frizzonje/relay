@@ -32,6 +32,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["time"] }
 # PCM-кадры нативного звука демонстрации → base64 в события Tauri.
 base64 = "0.22"
+ctor = "0.8.0"
 
 # Версия системного WebKitGTK в рантайме (webkit_get_*_version) — решаем,
 # нужен ли WEBKIT_DISABLE_DMABUF_RENDERER (см. main()). Крейт уже в дереве
