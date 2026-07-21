@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 
 /**
- * Юнит-тест mesh-логики PeerManager (lib/voice.ts): perfect-negotiation
+ * Юнит-тест mesh-транспорта (lib/voice/mesh.ts) через публичный API дирижёра
+ * lib/voice.ts — проверяем связку целиком: perfect-negotiation
  * (offer/answer, glare-подавление у «невежливой» стороны) и очередь ICE-
  * кандидатов с дренажём после setRemoteDescription. RTCPeerConnection,
  * getUserMedia и socket замоканы — реальной сети/медиа не требуется.
