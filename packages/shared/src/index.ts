@@ -334,9 +334,14 @@ export type InviteCreateResult =
   | { ok: true; token: string; exp: number }
   | { ok: false; error: 'not-found' | 'forbidden' };
 
+/** Запрос пропуска. Комнату спрашивают ДО `join` — иначе транспорт не выбрать. */
+export interface SfuTokenPayload {
+  room: string;
+}
+
 /**
  * Ответ на sfu-token (ack): короткоживущий пропуск в медиасервер и его адрес.
- * Комнату и peerId сервер берёт из состояния сокета, поэтому запрос без полей.
+ * `peerId` внутри токена сервер берёт из сокета, подделать его нельзя.
  */
 export type SfuTokenResult =
   | { ok: true; token: string; exp: number; url: string }
@@ -362,7 +367,7 @@ export interface ClientToServerEvents {
   'channel-delete': (payload: ChannelDeletePayload) => void;
   'channel-mode': (payload: ChannelModePayload) => void;
   'invite-create': (payload: InviteCreatePayload, cb: (res: InviteCreateResult) => void) => void;
-  'sfu-token': (cb: (res: SfuTokenResult) => void) => void;
+  'sfu-token': (payload: SfuTokenPayload, cb: (res: SfuTokenResult) => void) => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────

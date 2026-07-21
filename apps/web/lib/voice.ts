@@ -13,7 +13,7 @@ import { useUiStore, myName } from '@/stores/ui';
 import { loadClientId } from '@/lib/identity';
 import { useVoiceStore, type ScreenMode, type TileNet, type VoiceTile } from '@/stores/voice';
 import { createMeshTransport } from '@/lib/voice/mesh';
-import type { TransportHost, VoiceTransport } from '@/lib/voice/types';
+import type { TransportHost, VoiceTicket, VoiceTransport } from '@/lib/voice/types';
 
 const sfx = () => getSfx();
 
@@ -122,14 +122,40 @@ let pingTimer: ReturnType<typeof setInterval> | null = null;
 
 const socket = () => getSocket();
 
-// Транспорт медиа. Создаётся лениво (host ссылается на функции ниже по файлу),
-// живёт всё время работы приложения. Здесь появится выбор mesh/SFU по режиму
-// канала — шаг B плана.
+// Транспорты медиа. Оба создаются лениво (host ссылается на функции ниже по
+// файлу) и живут всё время работы приложения; активен всегда ровно один — его
+// выбирает `pickTransport` при входе в канал, по режиму самого канала.
+//
+// Mesh при этом подписан на сигналинг всегда, но реагирует, только пока в нём
+// есть комната: войдя в SFU-канал, мы ему `join` не даём, и приходящие
+// `peers`/`offer` он игнорирует.
+let meshTransport: VoiceTransport | null = null;
+let sfuTransport: VoiceTransport | null = null;
 let transport: VoiceTransport | null = null;
 
+function mesh(): VoiceTransport {
+  if (!meshTransport) {
+    meshTransport = createMeshTransport(host);
+    meshTransport.init();
+  }
+  return meshTransport;
+}
+
+// Грузим по требованию: `mediasoup-client` весит заметно, а self-host без
+// медиасервера живёт целиком на p2p — незачем возить его в общем бандле тем,
+// кто ни разу не зайдёт в SFU-канал.
+async function sfu(): Promise<VoiceTransport> {
+  if (!sfuTransport) {
+    const { createSfuTransport } = await import('@/lib/voice/sfu');
+    sfuTransport = createSfuTransport(host);
+    sfuTransport.init();
+  }
+  return sfuTransport;
+}
+
+/** Активный транспорт. Вне звонка — mesh: он и по умолчанию, и на фолбэк. */
 function tx(): VoiceTransport {
-  if (!transport) transport = createMeshTransport(host);
-  return transport;
+  return transport ?? mesh();
 }
 
 /**
@@ -151,6 +177,7 @@ const host: TransportHost = {
   setTileNet,
   cleanupPeerAudio,
   attachRemoteAudio,
+  detachRemoteAudio,
   setStatus,
   setPing: (ping) => useVoiceStore.getState().setPing(ping),
   setUplink: (status) => useVoiceStore.getState().setUplink(status),
@@ -479,6 +506,22 @@ function attachRemoteAudio(
   track.addEventListener('mute', refreshIcon);
   track.addEventListener('unmute', refreshIcon);
 
+  reassignAudioRoles(peerId);
+}
+
+/**
+ * Снять узлы микшера у одной дорожки собеседника (SFU закрывает producer'ы
+ * поштучно, и `ended` при этом не приходит). Плитка и остальные дорожки живут.
+ */
+function detachRemoteAudio(peerId: string, track: MediaStreamTrack) {
+  const pa = peerAudio.get(peerId);
+  if (!pa) return;
+  for (const [key, entry] of pa.entries) {
+    if (entry.track !== track) continue;
+    entry.source.disconnect();
+    entry.gain.disconnect();
+    pa.entries.delete(key);
+  }
   reassignAudioRoles(peerId);
 }
 
@@ -994,6 +1037,30 @@ export function setScreenMode(mode: ScreenMode) {
 // Вступление в голосовой канал
 // ─────────────────────────────────────────────────────────────────────────
 
+/**
+ * Спрашиваем у api пропуск в медиасервер для канала. Ответ и есть выбор
+ * транспорта: пропуск дали — канал в режиме SFU и сервер поднят; отказали
+ * (`not-sfu`, `unavailable`) — идём в mesh, это штатный путь, а не ошибка.
+ *
+ * Таймаут короткий и намеренный: канал в SFU-режиме, но api молчит — звонок не
+ * должен из-за этого ждать. Молчание = mesh.
+ */
+async function requestSfuTicket(targetRoom: string): Promise<VoiceTicket | null> {
+  try {
+    const res = await socket().timeout(3000).emitWithAck('sfu-token', { room: targetRoom });
+    if (!res.ok) {
+      // 'not-sfu'/'unavailable' — обычное дело; остальное стоит увидеть в логе.
+      if (res.error !== 'not-sfu' && res.error !== 'unavailable') {
+        console.warn('[voice] пропуск в медиасервер не выдан:', res.error);
+      }
+      return null;
+    }
+    return { url: res.url, token: res.token };
+  } catch {
+    return null; // api не ответил вовремя — звоним напрямую
+  }
+}
+
 export async function joinVoice(newRoom: string, label: string) {
   // Уже на связи в этой комнате — значит, мы просто смотрели текст: показываем сетку
   if (newRoom === room) {
@@ -1037,7 +1104,15 @@ export async function joinVoice(newRoom: string, label: string) {
   addTile('local', myName() + ' (вы)', localStream, true);
   applyMicState();
   syncMediaState();
-  tx().join(room); // транспорт готов принимать сигналинг ДО того, как сервер пришлёт состав
+
+  // Транспорт выбираем ДО `join`: сразу за ним сервер пришлёт состав комнаты, и
+  // к этому моменту должно быть решено, кто его слушает. Спрашиваем у api — не
+  // у своего реестра каналов: гость по инвайту реестра не получает вовсе, а
+  // разъехавшись с остальными в транспорте, он останется без звука.
+  const ticket = await requestSfuTicket(room);
+  if (room !== newRoom) return; // пока спрашивали, успели уйти в другой канал
+  transport = ticket ? await sfu() : mesh();
+  tx().join(room, ticket ?? undefined);
   socket().emit('join', { room, name: myName(), clientId: loadClientId() });
   // Сразу за join — своё медиасостояние: сервер только что сбросил его, а мут/
   // глушилка могли остаться с прошлого канала.
@@ -1058,6 +1133,7 @@ export function leaveVoice(hard = true) {
   if (hard && room) sfx().play('leave'); // покидаем звонок (не при смене канала)
   if (room) socket().emit('leave');
   tx().leave();
+  transport = null; // следующий вход выберет транспорт заново
   teardownPeerAudio();
   clearFocus();
   tiles.clear();
@@ -1361,12 +1437,14 @@ export function setFocus(id: string) {
   if (!tiles.has(id)) return;
   focusedTileId = id;
   useVoiceStore.getState().setFocus(id);
+  tx().focusChanged?.(id); // SFU: крупной плитке — верхний слой simulcast
 }
 
 export function clearFocus() {
   if (!focusedTileId) return;
   focusedTileId = null;
   useVoiceStore.getState().setFocus(null);
+  tx().focusChanged?.(null);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1516,7 +1594,7 @@ export function initVoice() {
 
   const s = socket();
 
-  tx().init(); // транспорт подписывается на свой сигналинг
+  mesh().init(); // mesh слушает сигналинг всегда — он же и транспорт по умолчанию
 
   s.on('peer-joined', ({ name }) => {
     setStatus('Подключился: ' + (name || 'Участник'));

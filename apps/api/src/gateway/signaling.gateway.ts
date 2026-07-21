@@ -102,6 +102,10 @@ interface InviteCreatePayload {
 type InviteCreateResult =
   | { ok: true; token: string; exp: number }
   | { ok: false; error: 'not-found' | 'forbidden' };
+interface SfuTokenPayload {
+  room?: unknown;
+}
+
 // Ответ sfu-token (ack) — формат совпадает с SfuTokenResult из shared.
 type SfuTokenResult =
   | { ok: true; token: string; exp: number; url: string }
@@ -603,12 +607,24 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // напроситься в чужой канал или назваться чужим id так нельзя. Гость проходит
   // на общих основаниях: он уже «пришит» к своей комнате.
   @SubscribeMessage('sfu-token')
-  handleSfuToken(@ConnectedSocket() client: Socket): SfuTokenResult {
+  handleSfuToken(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: SfuTokenPayload,
+  ): SfuTokenResult {
     if (!this.allow(client)) return { ok: false, error: 'forbidden' };
     const url = (process.env.SFU_URL ?? '').trim();
     if (!url || !sfuSecret()) return { ok: false, error: 'unavailable' };
-    const room = typeof client.data.room === 'string' ? client.data.room : '';
+    // Комната приходит в запросе: клиенту нужно знать транспорт ДО `join`,
+    // иначе он пропустит ответный `peers`. Секрета в ней нет — войти в любой
+    // голосовой канал он и так вправе, а `peerId` по-прежнему берётся из
+    // сокета, так что назваться чужим id нельзя.
+    const asked = typeof payload?.room === 'string' ? payload.room.trim().slice(0, 32) : '';
+    const room = asked || (typeof client.data.room === 'string' ? client.data.room : '');
     if (!room) return { ok: false, error: 'not-in-room' };
+    // Гость «пришит» к своему каналу — чужую комнату не спросит.
+    if (this.isGuest(client) && room !== client.data.guestRoom) {
+      return { ok: false, error: 'forbidden' };
+    }
     // Режим канала — не декорация: пропуск выдаём только тем каналам, что
     // помечены sfu. Дефолтные (всегда p2p) отсюда уходят ни с чем.
     const channel = this.channels.find((c) => c.type === 'voice' && c.slug === room);

@@ -37,25 +37,48 @@ export interface TransportHost {
   setTileNet(id: string, net: TileNet): void;
   /** Снять узлы микшера, оставив плитку (пересборка соединения с тем же пиром). */
   cleanupPeerAudio(peerId: string): void;
-  /** Входящая аудиодорожка → в микшер (громкость, VAD, роль голос/демонстрация). */
+  /**
+   * Входящая аудиодорожка → в микшер (громкость, VAD, роль голос/демонстрация).
+   *
+   * `slot` — ключ порядка дорожек внутри собеседника: первый по нему считается
+   * голосом, остальные звуком демонстрации. Mesh кладёт туда `mid` transceiver'а
+   * (роль иначе не узнать), SFU — фиксированный номер по роли producer'а,
+   * которую сервер называет прямо.
+   */
   attachRemoteAudio(
     peerId: string,
     track: MediaStreamTrack,
-    mid: string | null,
+    slot: string | null,
     stream: MediaStream | null,
   ): void;
+  /**
+   * Снять узлы микшера у одной дорожки. Mesh это не нужно: там дорожка умирает
+   * вместе с соединением и приходит `ended`. В SFU producer закрывают поштучно
+   * (перестали шарить экран — умолк только его звук), а закрытие consumer'а
+   * `ended` не порождает — сообщаем явно.
+   */
+  detachRemoteAudio(peerId: string, track: MediaStreamTrack): void;
   setStatus(text: string): void;
   setPing(ping: VoicePing): void;
   setUplink(status: UplinkStatus): void;
   playSfx(name: SfxName): void;
 }
 
-/** Транспорт медиа: mesh сегодня, SFU — следующим. */
+/**
+ * Пропуск в медиасервер: короткоживущий токен от api и адрес самого сервера.
+ * Есть только у SFU-транспорта — mesh про него ничего не знает.
+ */
+export interface VoiceTicket {
+  url: string;
+  token: string;
+}
+
+/** Транспорт медиа: mesh и SFU, выбор по режиму канала. */
 export interface VoiceTransport {
   /** Подписка на сигналинг. Зовётся один раз на приложение (`initVoice`). */
   init(): void;
   /** Дирижёр вошёл в комнату (сам `join` на сокете шлёт он же). */
-  join(room: string): void;
+  join(room: string, ticket?: VoiceTicket): void;
   /** Выход из комнаты: закрыть соединения и очистить своё состояние. */
   leave(): void;
 
@@ -76,6 +99,12 @@ export interface VoiceTransport {
   pollStats(): void;
   /** Собеседник сменил тег. */
   renamePeer(id: string, name: string): void;
+  /**
+   * Сменилась плитка «на весь экран». Для SFU это команда пересобрать
+   * подписки: крупной плитке верхний слой simulcast, остальным нижний.
+   * Mesh шлёт всем одно и то же и метод не реализует.
+   */
+  focusChanged?(id: string | null): void;
   /** Сокет переподключился с НОВЫМ id — прежние соединения мертвы. */
   reset(): void;
 }
