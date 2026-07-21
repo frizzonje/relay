@@ -1,4 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
+import { sfuConfigured } from './sfu/sfu-token';
 
 interface IceServer {
   urls: string[];
@@ -59,9 +60,9 @@ export class ConfigController {
 
     // Медиасервер поднимается отдельным профилем compose (`--profile sfu`) и
     // есть далеко не у всех: self-host без него обязан работать полностью на
-    // p2p. Признак — заданный SFU_URL: его же потом возьмёт клиент для
-    // подключения к namespace /sfu.
-    const sfu = { available: !!(process.env.SFU_URL ?? '').trim() };
+    // p2p. Признак — заданные SFU_URL (куда идти клиенту) и SFU_SECRET (чем
+    // подписан пропуск): без второго медиасервер никого не пустит.
+    const sfu = { available: sfuConfigured() };
 
     return { iceServers, sfu };
   }

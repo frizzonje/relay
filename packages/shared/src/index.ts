@@ -334,6 +334,14 @@ export type InviteCreateResult =
   | { ok: true; token: string; exp: number }
   | { ok: false; error: 'not-found' | 'forbidden' };
 
+/**
+ * Ответ на sfu-token (ack): короткоживущий пропуск в медиасервер и его адрес.
+ * Комнату и peerId сервер берёт из состояния сокета, поэтому запрос без полей.
+ */
+export type SfuTokenResult =
+  | { ok: true; token: string; exp: number; url: string }
+  | { ok: false; error: 'forbidden' | 'unavailable' | 'not-in-room' | 'not-sfu' };
+
 /** Карта событий, отправляемых клиентом серверу. */
 export interface ClientToServerEvents {
   join: (payload: JoinPayload) => void;
@@ -354,6 +362,7 @@ export interface ClientToServerEvents {
   'channel-delete': (payload: ChannelDeletePayload) => void;
   'channel-mode': (payload: ChannelModePayload) => void;
   'invite-create': (payload: InviteCreatePayload, cb: (res: InviteCreateResult) => void) => void;
+  'sfu-token': (cb: (res: SfuTokenResult) => void) => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────

@@ -12,6 +12,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Server, Socket } from 'socket.io';
 import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
+import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
 import { Attachment, UploadsService } from '../uploads';
 
 interface JoinPayload {
@@ -101,6 +102,10 @@ interface InviteCreatePayload {
 type InviteCreateResult =
   | { ok: true; token: string; exp: number }
   | { ok: false; error: 'not-found' | 'forbidden' };
+// Ответ sfu-token (ack) — формат совпадает с SfuTokenResult из shared.
+type SfuTokenResult =
+  | { ok: true; token: string; exp: number; url: string }
+  | { ok: false; error: 'forbidden' | 'unavailable' | 'not-in-room' | 'not-sfu' };
 
 // Пароль сервера храним как `salt:hash` hex (scrypt) — не обратимо, соль на
 // каждый сервер своя. Проверка за постоянное время (timingSafeEqual).
@@ -589,6 +594,28 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!channel) return { ok: false, error: 'not-found' };
     const { token, exp } = issueGuestToken(slug);
     return { ok: true, token, exp };
+  }
+
+  // ===== Пропуск в медиасервер =====
+
+  // Пропуск на namespace /sfu: короткоживущий подписанный токен + адрес
+  // медиасервера. Комнату и peerId берём из состояния сокета, а не из запроса —
+  // напроситься в чужой канал или назваться чужим id так нельзя. Гость проходит
+  // на общих основаниях: он уже «пришит» к своей комнате.
+  @SubscribeMessage('sfu-token')
+  handleSfuToken(@ConnectedSocket() client: Socket): SfuTokenResult {
+    if (!this.allow(client)) return { ok: false, error: 'forbidden' };
+    const url = (process.env.SFU_URL ?? '').trim();
+    if (!url || !sfuSecret()) return { ok: false, error: 'unavailable' };
+    const room = typeof client.data.room === 'string' ? client.data.room : '';
+    if (!room) return { ok: false, error: 'not-in-room' };
+    // Режим канала — не декорация: пропуск выдаём только тем каналам, что
+    // помечены sfu. Дефолтные (всегда p2p) отсюда уходят ни с чем.
+    const channel = this.channels.find((c) => c.type === 'voice' && c.slug === room);
+    if (!channel || channel.mode !== 'sfu') return { ok: false, error: 'not-sfu' };
+    const name = typeof client.data.name === 'string' ? client.data.name : '';
+    const { token, exp } = issueSfuToken({ room, peerId: client.id, name });
+    return { ok: true, token, exp, url };
   }
 
   @SubscribeMessage('join')

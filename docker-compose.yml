@@ -38,6 +38,12 @@ services:
       - TURN_URLS=${TURN_URLS:-}
       - TURN_USERNAME=${TURN_USERNAME:-webrtc}
       - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
+      # Медиасервер: включается заданием SFU_SECRET (тот же ключ, что у сервиса
+      # sfu) — без него api не выдаст ни одного пропуска и режим SFU в интерфейсе
+      # останется выключенным. SFU_URL по умолчанию «тот же origin»: сигналинг
+      # медиасервера ходит через Caddy на /sfu/.
+      - SFU_URL=${SFU_URL:-/}
+      - SFU_SECRET=${SFU_SECRET:-}
     volumes:
       - uploads:/app/uploads
     expose:
@@ -54,6 +60,36 @@ services:
       - SITE_PASSWORD=${SITE_PASSWORD:-}
     expose:
       - "3001"
+
+  # Медиасервер (SFU): звонки на 4+ человек с видео. Без него всё работает на
+  # p2p (mesh) — поэтому профиль опциональный, как у coturn.
+  #
+  #   docker compose --profile sfu up --build
+  #
+  # На фаерволе нужно открыть диапазон RTC-портов (по умолчанию 40000-40100,
+  # UDP и TCP) и задать SFU_SECRET — общий с api ключ подписи пропусков.
+  sfu:
+    build:
+      context: .
+      dockerfile: apps/sfu/Dockerfile
+    profiles: ["sfu"]
+    restart: unless-stopped
+    environment:
+      - PORT=3100
+      - SFU_SECRET=${SFU_SECRET:-}
+      - SERVER_HOST=${SERVER_HOST:-localhost}
+      # Адрес в ICE-кандидатах. На облачной VM за 1:1 NAT обязателен публичный
+      # IP — иначе клиент получит адрес контейнера и медиа не пойдёт.
+      - SFU_ANNOUNCED_IP=${SFU_ANNOUNCED_IP:-${TURN_EXTERNAL_IP:-}}
+      - SFU_RTC_MIN_PORT=${SFU_RTC_MIN_PORT:-40000}
+      - SFU_RTC_MAX_PORT=${SFU_RTC_MAX_PORT:-40100}
+    # Медиа идёт мимо Caddy напрямую в контейнер: пробрасываем диапазон как есть.
+    # Сигналинг (WS) — наоборот, через Caddy на /sfu/, наружу порт 3100 не нужен.
+    ports:
+      - "${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}:${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}/udp"
+      - "${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}:${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}/tcp"
+    expose:
+      - "3100"
 
   caddy:
     image: caddy:2-alpine
