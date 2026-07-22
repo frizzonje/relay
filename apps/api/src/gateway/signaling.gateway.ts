@@ -675,6 +675,11 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const name =
       askedName || (typeof client.data.name === 'string' ? client.data.name : '');
     const { token, exp } = issueSfuToken({ room, peerId: client.id, name });
+    // Запоминаем выдачу: клиент, не умеющий сообщать транспорт в `join` (бандл
+    // прошлой версии), иначе сошёл бы за p2p — и остальные съехали бы в прямые
+    // звонки, разъехавшись с ним по-настоящему. Пропуск — лучшее, что о таком
+    // клиенте известно: за ним идут в медиасервер.
+    client.data.sfuPassRoom = room;
     this.logger.log(`sfu-token issued to ${name || '?'} (${client.id}) room "${room}"`);
     return { ok: true, token, exp, url };
   }
@@ -709,9 +714,16 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       typeof payload?.clientId === 'string' ? payload.clientId.trim().slice(0, 64) : '';
     // Транспорт называет сам клиент: сервер знает лишь режим канала, а решение
     // принимает клиент — и оно может разойтись с режимом (медиасервер не
-    // поднялся у него одного, старый клиент про SFU вовсе не знает). Не назвал —
-    // значит p2p: именно так ведут себя клиенты, не знающие про это поле.
-    const transport = payload?.transport === 'sfu' ? 'sfu' : 'p2p';
+    // поднялся у него одного, нативный iOS про SFU вовсе не знает). Клиент
+    // прошлой версии поля не пришлёт — за него отвечает выданный пропуск:
+    // считать такого p2p нельзя, остальные съехали бы в прямые звонки и
+    // разъехались бы с ним уже по-настоящему.
+    const transport =
+      payload?.transport === 'sfu' || payload?.transport === 'p2p'
+        ? payload.transport
+        : client.data.sfuPassRoom === room
+          ? 'sfu'
+          : 'p2p';
 
     // Повторный join без leave (например, после обрыва) — сначала выходим из старой комнаты
     this.leaveRoom(client);
