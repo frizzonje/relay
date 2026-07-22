@@ -198,3 +198,63 @@ describe('фолбэк на p2p при недоступном медиасерв
     expect(FakePC.instances).toHaveLength(0);
   });
 });
+
+/**
+ * Расщепление комнаты по транспортам. Так выглядит клиент, который медиасервер
+ * не умеет вовсе (нативный iOS — mesh-only) или у которого он не поднялся: в
+ * канале он есть, а слышать его не может никто. Проверяем, что дирижёр это
+ * замечает и уводит малую комнату туда, где сойдутся все.
+ */
+describe('расщепление комнаты по транспортам', () => {
+  const peer = (id: string, transport: 'p2p' | 'sfu') => ({
+    id,
+    name: id.toUpperCase(),
+    micOn: true,
+    deafened: false,
+    transport,
+  });
+
+  it('малая комната: кто-то напрямую → съезжаем в p2p все вместе', async () => {
+    await voice.joinVoice('room-sfu', 'SFU-канал');
+    expect(sfuCalls).toEqual(['join']);
+
+    // Мы через медиасервер, телефон — напрямую: друг друга не слышим.
+    handlers['voice-presence']({
+      'room-sfu': [peer('self', 'sfu'), peer('phone', 'p2p')],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sfuCalls).toEqual(['join', 'leave']);
+    expect(joins()).toHaveLength(2);
+    // И это mesh: последний join объявил именно его.
+    expect(joins()[1][1]).toMatchObject({ transport: 'p2p' });
+  });
+
+  it('большая комната: остаёмся на медиасервере, а не душим всех mesh', async () => {
+    await voice.joinVoice('room-sfu', 'SFU-канал');
+
+    handlers['voice-presence']({
+      'room-sfu': [
+        peer('self', 'sfu'),
+        ...['a', 'b', 'c', 'd'].map((id) => peer(id, 'sfu')),
+        peer('phone', 'p2p'),
+      ],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sfuCalls).toEqual(['join']);
+    expect(joins()).toHaveLength(1);
+  });
+
+  it('все на одном транспорте → никаких переездов', async () => {
+    await voice.joinVoice('room-sfu', 'SFU-канал');
+
+    handlers['voice-presence']({
+      'room-sfu': [peer('self', 'sfu'), peer('a', 'sfu'), peer('b', 'sfu')],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sfuCalls).toEqual(['join']);
+    expect(joins()).toHaveLength(1);
+  });
+});
