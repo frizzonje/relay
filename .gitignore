@@ -23,5 +23,5 @@ e2e/.last-run.json
 apps/api/data/
 
 # Внутренние рабочие заметки и референсы (вне репозитория)
-docs/plan.md
+docs/history/
 reference/
