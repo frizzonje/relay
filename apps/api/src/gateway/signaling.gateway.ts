@@ -104,6 +104,7 @@ type InviteCreateResult =
   | { ok: false; error: 'not-found' | 'forbidden' };
 interface SfuTokenPayload {
   room?: unknown;
+  name?: unknown;
 }
 
 // Ответ sfu-token (ack) — формат совпадает с SfuTokenResult из shared.
@@ -633,7 +634,12 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // помечены sfu. Дефолтные (всегда p2p) отсюда уходят ни с чем.
     const channel = this.channels.find((c) => c.type === 'voice' && c.slug === room);
     if (!channel || channel.mode !== 'sfu') return { ok: false, error: 'not-sfu' };
-    const name = typeof client.data.name === 'string' ? client.data.name : '';
+    // Имя берём из запроса: пропуск спрашивают ДО `join`, и client.data.name в
+    // этот момент ещё пуст (заполнен он только при пере-выдаче во время звонка).
+    // Лимит — тот же, что у `join`.
+    const askedName = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 20) : '';
+    const name =
+      askedName || (typeof client.data.name === 'string' ? client.data.name : '');
     const { token, exp } = issueSfuToken({ room, peerId: client.id, name });
     return { ok: true, token, exp, url };
   }

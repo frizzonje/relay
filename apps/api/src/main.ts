@@ -4,7 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { Request, Response, NextFunction } from 'express';
 import { AppModule } from './app.module';
-import { authEnabled, isAuthorized } from './auth/auth';
+import { authEnabled, hasValidGuestBearer, isAuthorized } from './auth/auth';
 import { UPLOAD_DIR } from './uploads';
 
 // Гейт перед /uploads и API: без пропуска отдаём только POST /api/login
@@ -14,6 +14,9 @@ function authGate(req: Request, res: Response, next: NextFunction) {
   if (!authEnabled()) return next();
   if (req.path === '/api/login') return next();
   if (isAuthorized(req)) return next();
+  // Гость по инвайту: без ICE-конфига (TURN) его звонок не соберётся за строгим
+  // NAT. Только этот путь — остальное API гостю не положено.
+  if (req.path === '/api/config' && hasValidGuestBearer(req)) return next();
   res.status(401).json({ error: 'unauthorized' });
 }
 

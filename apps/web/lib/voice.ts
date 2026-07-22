@@ -1048,7 +1048,10 @@ export function setScreenMode(mode: ScreenMode) {
  */
 async function requestSfuTicket(targetRoom: string): Promise<VoiceTicket | null> {
   try {
-    const res = await socket().timeout(3000).emitWithAck('sfu-token', { room: targetRoom });
+    // Имя — в запросе: `join` ещё не случился, серверу его больше взять неоткуда.
+    const res = await socket()
+      .timeout(3000)
+      .emitWithAck('sfu-token', { room: targetRoom, name: myName() });
     if (!res.ok) {
       // 'not-sfu'/'unavailable' — обычное дело; остальное стоит увидеть в логе.
       if (res.error !== 'not-sfu' && res.error !== 'unavailable') {

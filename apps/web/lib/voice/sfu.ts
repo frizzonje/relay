@@ -123,6 +123,27 @@ const AUDIO_SLOT: Record<string, string> = { mic: '0', 'screen-audio': '1' };
 
 // ─────────────────────────────────────────────────────────────────────────
 
+/**
+ * WebView-обёртки прячутся из UA: WKWebView (десктоп на macOS) не пишет туда ни
+ * `Safari`, ни `Chrome`, и автоопределение mediasoup-client честно отвечает
+ * «device not supported» — мгновенный отвал в p2p, хотя движок — тот же WebKit
+ * с полноценным WebRTC. Ловим ровно этот случай и явно просим handler Safari.
+ * Остальные ошибки не наши — пробрасываем.
+ */
+function createDevice(): Device {
+  try {
+    return new Device();
+  } catch (err) {
+    const webkit =
+      /AppleWebKit\//.test(navigator.userAgent) && typeof RTCRtpTransceiver !== 'undefined';
+    if ((err as Error)?.name === 'UnsupportedError' && webkit) {
+      console.warn('[sfu] UA не распознан, но движок WebKit — берём handler Safari12');
+      return new Device({ handlerName: 'Safari12' });
+    }
+    throw err;
+  }
+}
+
 export function createSfuTransport(host: TransportHost): VoiceTransport {
   let sock: Socket | null = null;
   let device: Device | null = null;
@@ -406,7 +427,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
 
   async function onWelcome(payload: WelcomePayload) {
     try {
-      device = new Device();
+      device = createDevice();
       await device.load({ routerRtpCapabilities: payload.routerRtpCapabilities });
       sendTransport = await openTransport('send');
       recvTransport = await openTransport('recv');

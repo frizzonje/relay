@@ -134,3 +134,12 @@ export function extractToken(req: AuthRequest): string | undefined {
 export function isAuthorized(req: AuthRequest): boolean {
   return verifyToken(extractToken(req));
 }
+
+/**
+ * Гостевой Bearer: инвайт-токен вместо relay_pass. Полноценным пропуском не
+ * является — authGate пускает с ним ровно на то, без чего звонок не собрать
+ * (ICE-конфиг). Без этого гость за строгим NAT остаётся без TURN и без звука.
+ */
+export function hasValidGuestBearer(req: AuthRequest): boolean {
+  return verifyGuestToken(bearerToken(req.headers.authorization)) !== null;
+}

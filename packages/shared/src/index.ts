@@ -334,9 +334,14 @@ export type InviteCreateResult =
   | { ok: true; token: string; exp: number }
   | { ok: false; error: 'not-found' | 'forbidden' };
 
-/** Запрос пропуска. Комнату спрашивают ДО `join` — иначе транспорт не выбрать. */
+/**
+ * Запрос пропуска. Комнату спрашивают ДО `join` — иначе транспорт не выбрать.
+ * Имя тоже едет здесь: `join` в этот момент ещё не случился, и без него сервер
+ * вписал бы в пропуск пустое имя — плитки у остальных звались бы «Участник».
+ */
 export interface SfuTokenPayload {
   room: string;
+  name?: string;
 }
 
 /**
