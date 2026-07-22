@@ -562,6 +562,10 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (next) channel.mode = next;
     else delete channel.mode;
     this.broadcastChannels();
+    // Отдельно — тем, кто прямо сейчас в этом канале: им нужно переехать на
+    // другой транспорт. Реестра каналов для этого мало — гость по инвайту его
+    // не получает, а переезжать обязан вместе со всеми.
+    this.server.to(channel.slug).emit('voice-mode', { room: channel.slug, mode });
     this.persist();
   }
 

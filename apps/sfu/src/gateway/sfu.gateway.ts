@@ -41,6 +41,9 @@ interface ProducePayload {
 interface ProducerPayload {
   producerId?: unknown;
 }
+interface RestartIcePayload {
+  transportId?: unknown;
+}
 interface ConsumePayload {
   transportId?: unknown;
   producerId?: unknown;
@@ -157,6 +160,50 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  /**
+   * Первая ступень восстановления связи: сетевой путь сменился (wifi → LTE,
+   * NAT перевыдал порт) — ICE переизбирается на том же транспорте, дорожки и
+   * consumer'ы остаются жить. Дороже этого только пересборка транспорта, её
+   * клиент делает сам, уже без нашей помощи.
+   */
+  @SubscribeMessage('restart-ice')
+  async handleRestartIce(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: RestartIcePayload,
+  ): Promise<Ack<{ iceParameters: types.IceParameters }>> {
+    const peer = this.peers.get(client.id);
+    if (!peer) return fail('no-peer');
+    const transport = this.transportOf(peer, payload?.transportId);
+    if (!transport) return fail('no-transport');
+    try {
+      const iceParameters = await transport.restartIce();
+      return { ok: true, iceParameters };
+    } catch (err) {
+      this.logger.warn(`restart-ice failed for ${peer.id}: ${String(err)}`);
+      return fail('restart-failed');
+    }
+  }
+
+  /**
+   * Вторая ступень восстановления: клиент выбрасывает транспорт целиком и
+   * строит новый. Старый надо закрыть и на нашей стороне — иначе он висит до
+   * дисконнекта, а остальные продолжают слушать мёртвые дорожки. Закрытие
+   * транспорта само уносит его producer'ов, а чужие consumer'ы получают
+   * `producerclose` и штатное `producer-closed`.
+   */
+  @SubscribeMessage('close-transport')
+  handleCloseTransport(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: RestartIcePayload,
+  ): Ack {
+    const peer = this.peers.get(client.id);
+    if (!peer) return fail('no-peer');
+    const transport = this.transportOf(peer, payload?.transportId);
+    if (!transport) return fail('no-transport');
+    transport.close();
+    return { ok: true };
+  }
+
   @SubscribeMessage('produce')
   async handleProduce(
     @ConnectedSocket() client: Socket,
@@ -238,6 +285,16 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
       });
       peer.consumers.set(consumer.id, consumer);
       consumer.on('transportclose', () => peer.consumers.delete(consumer.id));
+      // Какой слой simulcast реально доехал. Клиент просит слой сам
+      // (`preferred-layers`), но получает то, что решил сервер по битрейту —
+      // в тултипе качества честнее показывать факт, а не заявку.
+      consumer.on('layerschange', (layers) => {
+        client.emit('consumer-layers', {
+          consumerId: consumer.id,
+          spatialLayer: layers?.spatialLayer ?? null,
+          temporalLayer: layers?.temporalLayer ?? null,
+        });
+      });
       consumer.on('producerclose', () => {
         peer.consumers.delete(consumer.id);
         client.emit('producer-closed', { peerId: owner.id, producerId });

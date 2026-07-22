@@ -58,6 +58,15 @@ export interface TransportHost {
    * `ended` не порождает — сообщаем явно.
    */
   detachRemoteAudio(peerId: string, track: MediaStreamTrack): void;
+  /**
+   * Транспорт исчерпал свою лестницу восстановления и дальше сам не встанет.
+   * Решение — куда ехать (в p2p или ждать сервер) — принимает дирижёр: только
+   * он знает состав канала и держит комнату. Mesh это не зовёт: у него своя
+   * лестница кончается снятием конкретного пира, а не звонка целиком.
+   *
+   * `reason`: 'setup' — не поднялись при входе; 'lost' — развалилось в звонке.
+   */
+  transportLost(reason: 'setup' | 'lost'): void;
   setStatus(text: string): void;
   setPing(ping: VoicePing): void;
   setUplink(status: UplinkStatus): void;

@@ -178,6 +178,7 @@ const host: TransportHost = {
   cleanupPeerAudio,
   attachRemoteAudio,
   detachRemoteAudio,
+  transportLost: onTransportLost,
   setStatus,
   setPing: (ping) => useVoiceStore.getState().setPing(ping),
   setUplink: (status) => useVoiceStore.getState().setUplink(status),
@@ -1061,6 +1062,103 @@ async function requestSfuTicket(targetRoom: string): Promise<VoiceTicket | null>
   }
 }
 
+// Порог мягкого переезда в p2p, когда медиасервер умер посреди звонка. Двое-
+// трое собеседников mesh переживёт; на 4+ с видео он даёт ровно ту боль, ради
+// которой SFU и затевался, — там честнее ждать сервер, чем задушить всех
+// аплинком. Считаем собеседников, себя не учитываем.
+const MESH_FALLBACK_MAX_PEERS = 3;
+const SFU_RETRY_MS = 5000;
+let sfuRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function remoteCount(): number {
+  return tiles.size - (tiles.has('local') ? 1 : 0);
+}
+
+/** Снять плитки собеседников (при переезде их соберёт заново новый транспорт). */
+function dropRemoteTiles() {
+  for (const id of [...tiles.keys()]) if (id !== 'local') removeTile(id);
+}
+
+/**
+ * Подключить транспорт к комнате и объявиться на сигналинге. Пропуск = выбор
+ * транспорта: он есть — идём в SFU, нет — в mesh.
+ */
+async function enterRoom(target: string, ticket: VoiceTicket | null) {
+  const next = ticket ? await sfu() : mesh();
+  if (room !== target) return; // пока грузился чанк, успели уйти в другой канал
+  transport = next;
+  next.join(target, ticket ?? undefined);
+  socket().emit('join', { room: target, name: myName(), clientId: loadClientId() });
+  // Сразу за join — своё медиасостояние: сервер только что сбросил его, а мут/
+  // глушилка могли остаться с прошлого канала.
+  broadcastMediaState();
+  setStatus('На связи: ' + target);
+}
+
+/**
+ * Переезд на другой транспорт, не выходя из канала: сюда сходятся фолбэк на
+ * p2p, возвращение медиасервера и смена режима канала владельцем. Звук пропадёт
+ * на пару секунд — это дешевле, чем мост между транспортами.
+ */
+async function remigrate(force?: 'mesh') {
+  const target = room;
+  if (!target) return;
+  cancelSfuRetry();
+  tx().leave();
+  transport = null;
+  dropRemoteTiles();
+  const ticket = force === 'mesh' ? null : await requestSfuTicket(target);
+  if (room !== target) return;
+  await enterRoom(target, ticket);
+}
+
+function cancelSfuRetry() {
+  if (sfuRetryTimer) clearTimeout(sfuRetryTimer);
+  sfuRetryTimer = null;
+}
+
+/** Ждём возвращения медиасервера, пока канал слишком велик для прямых звонков. */
+function scheduleSfuRetry() {
+  cancelSfuRetry();
+  sfuRetryTimer = setTimeout(() => {
+    sfuRetryTimer = null;
+    void (async () => {
+      const target = room;
+      if (!target) return;
+      const ticket = await requestSfuTicket(target);
+      if (room !== target) return;
+      if (!ticket) {
+        scheduleSfuRetry(); // всё ещё лежит — заходим на следующий круг
+        return;
+      }
+      tx().leave();
+      transport = null;
+      dropRemoteTiles();
+      await enterRoom(target, ticket);
+      toast.success('Медиасервер вернулся.');
+    })();
+  }, SFU_RETRY_MS);
+}
+
+/**
+ * SFU-транспорт исчерпал свою лестницу восстановления. Решение принимаем здесь:
+ * только дирижёр знает состав канала и владеет комнатой.
+ */
+function onTransportLost(reason: 'setup' | 'lost') {
+  if (!room || transport !== sfuTransport) return;
+  // На входе — всегда в p2p: человек ещё никого не слышал, ждать ему нечего.
+  if (reason === 'setup' || remoteCount() <= MESH_FALLBACK_MAX_PEERS) {
+    toast.error('Медиасервер недоступен — звоним напрямую.');
+    sfx().play('error');
+    void remigrate('mesh');
+    return;
+  }
+  toast.error('Медиасервер недоступен. Ждём его: участников слишком много для прямых звонков.');
+  sfx().play('error');
+  setStatus('Медиасервер недоступен, ждём…');
+  scheduleSfuRetry();
+}
+
 export async function joinVoice(newRoom: string, label: string) {
   // Уже на связи в этой комнате — значит, мы просто смотрели текст: показываем сетку
   if (newRoom === room) {
@@ -1111,13 +1209,8 @@ export async function joinVoice(newRoom: string, label: string) {
   // разъехавшись с остальными в транспорте, он останется без звука.
   const ticket = await requestSfuTicket(room);
   if (room !== newRoom) return; // пока спрашивали, успели уйти в другой канал
-  transport = ticket ? await sfu() : mesh();
-  tx().join(room, ticket ?? undefined);
-  socket().emit('join', { room, name: myName(), clientId: loadClientId() });
-  // Сразу за join — своё медиасостояние: сервер только что сбросил его, а мут/
-  // глушилка могли остаться с прошлого канала.
-  broadcastMediaState();
-  setStatus('На связи: ' + room);
+  await enterRoom(room, ticket);
+  if (room !== newRoom) return;
   sfx().play('join'); // вышли на связь
 
   // Подсказка про смену микрофона — один раз, чтобы знали, где переключить
@@ -1131,6 +1224,7 @@ export async function joinVoice(newRoom: string, label: string) {
 // hard=false — мягкий выход при переключении голосовых: поток и вид оставит вызывающий.
 export function leaveVoice(hard = true) {
   if (hard && room) sfx().play('leave'); // покидаем звонок (не при смене канала)
+  cancelSfuRetry();
   if (room) socket().emit('leave');
   tx().leave();
   transport = null; // следующий вход выберет транспорт заново
@@ -1623,6 +1717,15 @@ export function initVoice() {
     }
   });
 
+  // Владелец сменил транспорт канала прямо во время звонка — переезжаем все
+  // вместе. Событие летит в комнату (а не только с реестром каналов) как раз
+  // ради гостей: реестра у них нет, а разъехаться в транспортах нельзя.
+  s.on('voice-mode', ({ room: changed, mode }) => {
+    if (!room || changed !== room) return;
+    toast('Канал переключён на ' + (mode === 'sfu' ? 'медиасервер' : 'прямые звонки') + '…');
+    void remigrate();
+  });
+
   s.on('voice-presence', (p: VoicePresence) => {
     useVoiceStore.getState().setPresence(p && typeof p === 'object' ? p : {});
   });
@@ -1642,10 +1745,16 @@ export function initVoice() {
     // Полноценный реконнект: у сокета новый id — все старые соединения мертвы,
     // собираем заново.
     tx().reset();
-    s.emit('join', { room, name: myName(), clientId: loadClientId() });
-    setStatus('На связи: ' + room);
     toast('Связь с сервером восстановлена.');
     sfx().play('reconnect'); // связь восстановлена
+    if (transport === sfuTransport) {
+      // Пропуск в медиасервер выписан на прежний socket.id и вместе с ним умер —
+      // нужен новый, а значит полный переезд, а не просто повторный join.
+      void remigrate();
+      return;
+    }
+    s.emit('join', { room, name: myName(), clientId: loadClientId() });
+    setStatus('На связи: ' + room);
   });
 
   s.on('disconnect', () => {

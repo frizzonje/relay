@@ -423,6 +423,19 @@ export interface ServerToClientEvents {
   'server-unlock-result': (result: ServerUnlockResult) => void;
   /** Полный реестр каналов — на подключении и при каждом изменении. */
   channels: (channels: Channel[]) => void;
+  /**
+   * Голосовому каналу сменили транспорт прямо во время звонка — тем, кто в нём
+   * сидит, пора переехать. Летит В КОМНАТУ, а не только владельцам реестра:
+   * гость по инвайту `channels` не получает вовсе, а переезжать ему нужно
+   * вместе со всеми, иначе он останется на другом транспорте и без звука.
+   */
+  'voice-mode': (payload: VoiceModeRelay) => void;
+}
+
+/** Голосовому каналу сменили режим; `room` — его slug. */
+export interface VoiceModeRelay {
+  room: string;
+  mode: VoiceMode;
 }
 
 /** Обновлённый набор реакций конкретного сообщения — рассылается всем в канале. */

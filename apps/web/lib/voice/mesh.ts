@@ -5,8 +5,9 @@ import type { IceServer, SdpPayload } from '@relay/shared';
 import { getSocket } from '@/lib/socket';
 import { getIceServers } from '@/lib/config';
 import { boostVideoBitrate, boostAudioBitrate } from '@/lib/sdp';
-import type { TileNet, UplinkStatus } from '@/stores/voice';
+import type { UplinkStatus } from '@/stores/voice';
 import type { TransportHost, VoiceTransport } from './types';
+import { gradeQuality, kbps, limitReason, pingGrade, type NetSnapshot } from './quality';
 
 /**
  * Mesh-транспорт: каждый шлёт своё медиа каждому напрямую (perfect negotiation,
@@ -79,38 +80,8 @@ function combinedConnState(pc: RTCPeerConnection): PeerConnState {
 // накопленным итогом с начала звонка. Результат кладём в tile.net — рисует
 // SignalBars в VideoTile.
 
-// Снимок счётчиков с прошлого тика: потери/приём — для % потерь за интервал;
-// байты + метка времени — для мгновенного битрейта (дельта/дельта_времени).
-interface NetSnapshot {
-  lost: number;
-  recv: number;
-  bytesSent: number;
-  bytesRecv: number;
-  ts: number;
-}
-
-// Класс качества по потерям (главный враг звука) и RTT. Пороги в духе Discord:
-// сперва смотрим на потери — они рвут голос сильнее задержки.
-function gradeQuality(rtt: number | null, lossPct: number): TileNet['grade'] {
-  if (lossPct >= 8 || (rtt != null && rtt >= 400)) return 'bad';
-  if (lossPct >= 3 || (rtt != null && rtt >= 250)) return 'weak';
-  if (lossPct >= 0.8 || (rtt != null && rtt >= 130)) return 'good';
-  return 'strong';
-}
-
-// qualityLimitationReason → наш UplinkStatus. 'none'/'other'/пусто = всё ок.
-function limitReason(r: string | undefined): UplinkStatus {
-  if (r === 'bandwidth') return 'bandwidth';
-  if (r === 'cpu') return 'cpu';
-  return 'ok';
-}
-
-// Байты→кбит/с за интервал ts_prev→ts_now (мс). Отрицательную дельту (сброс
-// счётчика при ренеготиации) гасим в 0.
-function kbps(bytesNow: number, bytesPrev: number, dtMs: number): number | null {
-  if (dtMs <= 0) return null;
-  return Math.max(0, Math.round(((bytesNow - bytesPrev) * 8) / dtMs)); // *8/1000/(ms/1000)=*8/ms
-}
+// Пороги, проценты и битрейт — в lib/voice/quality.ts: те же цифры считает
+// SFU-транспорт, и расходиться им нельзя (палочки должны значить одно и то же).
 
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -477,8 +448,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       return;
     }
 
-    const grade = rttMs < 80 ? 'good' : rttMs < 200 ? 'mid' : 'bad';
-    host.setPing({ waiting: false, ms: rttMs, grade, label: '' });
+    host.setPing({ waiting: false, ms: rttMs, grade: pingGrade(rttMs), label: '' });
   }
 
   async function updatePeerQuality() {

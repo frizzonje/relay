@@ -1,9 +1,9 @@
 'use client';
 
-import { toast } from 'sonner';
 import { Device } from 'mediasoup-client';
 import type {
   Consumer,
+  IceParameters,
   Producer,
   RtpCapabilities,
   RtpParameters,
@@ -11,7 +11,16 @@ import type {
   TransportOptions,
 } from 'mediasoup-client/types';
 import { io, type Socket } from 'socket.io-client';
+import type { UplinkStatus } from '@/stores/voice';
 import type { TransportHost, VoiceTransport } from './types';
+import {
+  gradeQuality,
+  kbps,
+  limitReason,
+  pingGrade,
+  rttFromStats,
+  type NetSnapshot,
+} from './quality';
 
 /**
  * SFU-транспорт: своё медиа уходит на медиасервер ОДИН раз, он раздаёт его
@@ -61,6 +70,13 @@ interface ConsumerPayload {
   source: Source;
 }
 
+/** Слой simulcast, который сервер реально отдаёт по этому consumer'у. */
+interface ConsumerLayers {
+  consumerId: string;
+  spatialLayer: number | null;
+  temporalLayer: number | null;
+}
+
 type Ack<T> = ({ ok: true } & T) | { ok: false; error: string };
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -92,6 +108,14 @@ const SCREEN_AUDIO_CODEC_OPTIONS = {
 // Верхний слой simulcast (индекс), он же «дай максимум».
 const TOP_SPATIAL_LAYER = 2;
 
+// Окно на каждую ступень лестницы восстановления: не поднялись за него — идём
+// дальше. Столько же ждёт mesh на своём ICE-restart.
+const RECOVER_WINDOW_MS = 8_000;
+
+// Сколько ждём медиасервер на входе: welcome + оба транспорта. Не поднялись —
+// это отказ, а не «ещё чуть-чуть»: дирижёр уведёт звонок в p2p.
+const SETUP_TIMEOUT_MS = 12_000;
+
 // Слот аудио-дорожки для микшера. Дирижёр различает голос и звук демонстрации
 // по порядку этого ключа (в mesh туда идёт `mid`) — здесь мы роль ЗНАЕМ точно,
 // она приходит в `source`, поэтому просто отдаём фиксированный порядок.
@@ -112,7 +136,24 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
   // По одному MediaStream на собеседника: в него кладём его видео, плитка
   // держит ссылку и переживает смену дорожки (камера → экран) без пересоздания.
   const streams = new Map<string, MediaStream>();
+  // Счётчики прошлого тика по собеседникам — из них считаются потери за
+  // интервал и мгновенный битрейт (см. quality.ts).
+  const netHistory = new Map<string, NetSnapshot>();
+  // Реально доехавший слой simulcast по consumerId — сервер сообщает его сам
+  // (`consumer-layers`), это факт, а не наша заявка в `preferred-layers`.
+  const gotLayer = new Map<string, number | null>();
   let focusedId: string | null = null;
+
+  // Лестница восстановления: 0 — всё в порядке, 1 — сделан ICE-restart,
+  // 2 — транспорты пересобраны. Дальше идти некуда, решает дирижёр.
+  let recoverStage = 0;
+  let failTimer: ReturnType<typeof setTimeout> | null = null;
+  let setupTimer: ReturnType<typeof setTimeout> | null = null;
+  let socketTimer: ReturnType<typeof setTimeout> | null = null;
+  // ready — мы хоть раз встали (лестница до этого момента бессмысленна);
+  // lost — уже сдались и позвали дирижёра, второй раз звать не надо.
+  let ready = false;
+  let lost = false;
 
   /** Запрос с ack. Ошибку не глотаем — возвращаем `null` и пишем в консоль. */
   function ask<T>(event: string, payload: unknown): Promise<({ ok: true } & T) | null> {
@@ -191,9 +232,28 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     const existing = producers.get(wanted);
     if (existing) {
       await existing.replaceTrack({ track }).catch(() => {});
-      return;
+    } else {
+      await produce(wanted, track);
     }
-    await produce(wanted, track);
+    if (wanted === 'screen') await retuneScreen();
+  }
+
+  /**
+   * Тумблер «качество/ФПС» демонстрации. Слои тут ни при чём: mediasoup рулит
+   * producer'ом, но под ним остаётся обычный `RTCRtpSender`, и предпочтение
+   * кодировщика ставится ровно так же, как в mesh — иначе один и тот же тумблер
+   * в двух режимах делал бы разное.
+   */
+  async function retuneScreen() {
+    const sender = producers.get('screen')?.rtpSender;
+    if (!sender) return;
+    try {
+      const params = sender.getParameters();
+      params.degradationPreference = host.screenDegradation();
+      await sender.setParameters(params);
+    } catch (err) {
+      console.warn('[sfu] setParameters failed:', err);
+    }
   }
 
   // ── Приём чужих дорожек ───────────────────────────────────────────────
@@ -257,6 +317,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     const entry = consumers.get(producerId);
     if (!entry) return;
     consumers.delete(producerId);
+    gotLayer.delete(entry.consumer.id);
     entry.consumer.close();
     streams.get(entry.peerId)?.removeTrack(entry.consumer.track);
     // `close()` дорожку останавливает, но `ended` не шлёт — узел микшера
@@ -317,11 +378,17 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     }
 
     transport.on('connectionstatechange', (state) => {
-      if (state === 'failed') {
-        // Лестница восстановления (restartIce + пересборка) — шаг E плана.
-        // Пока честно говорим, что связь с сервером развалилась.
-        host.setStatus('Медиасервер: связь потеряна');
+      if (state === 'connected') {
+        // Встали (сами или после ступени лестницы) — сбрасываем её.
+        if (failTimer) clearTimeout(failTimer);
+        failTimer = null;
+        recoverStage = 0;
+        return;
       }
+      // 'disconnected' часто сам проходит за секунду-другую (перескок сети),
+      // поэтому даём ему фору; 'failed' — окончательно, лечим сразу.
+      if (state === 'failed') scheduleRecovery(0);
+      else if (state === 'disconnected') scheduleRecovery(4_000);
     });
 
     return transport;
@@ -351,12 +418,261 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         host.setTileState(peer.peerId, 'соединение…');
         for (const producer of peer.producers) await consume(peer.peerId, producer);
       }
+      ready = true;
+      if (setupTimer) clearTimeout(setupTimer);
+      setupTimer = null;
     } catch (err) {
       console.error('[sfu] setup failed:', err);
-      host.setStatus('Медиасервер недоступен');
-      toast.error('Не удалось подключиться к медиасерверу.');
-      host.playSfx('error');
+      giveUp('setup');
     }
+  }
+
+  // ── Лестница восстановления ───────────────────────────────────────────
+  //
+  // В mesh лестница чинила связь с КАЖДЫМ собеседником отдельно (ICE-restart →
+  // пересборка relay-only). Здесь собеседник ровно один — сервер, — поэтому и
+  // лестница одна на звонок, зато её обрыв уносит сразу всех: последняя ступень
+  // не «снять пира», а позвать дирижёра (он решит, ехать ли в p2p).
+
+  function mediaBroken(): boolean {
+    return [sendTransport, recvTransport].some(
+      (t) => t && (t.connectionState === 'failed' || t.connectionState === 'disconnected'),
+    );
+  }
+
+  function scheduleRecovery(delayMs: number) {
+    if (failTimer || !ready) return; // лестница уже идёт (или мы ещё не вставали)
+    failTimer = setTimeout(() => {
+      failTimer = null;
+      void recover();
+    }, delayMs);
+  }
+
+  async function recover() {
+    if (!sock || !mediaBroken()) {
+      recoverStage = 0; // отпустило само, пока ждали
+      return;
+    }
+    if (recoverStage === 0) {
+      recoverStage = 1;
+      host.setStatus('Медиасервер: восстанавливаем связь…');
+      await restartIce();
+      scheduleRecovery(RECOVER_WINDOW_MS); // сторож: не помогло — следующая ступень
+      return;
+    }
+    if (recoverStage === 1) {
+      recoverStage = 2;
+      host.setStatus('Медиасервер: пересобираем соединение…');
+      await rebuildTransports();
+      scheduleRecovery(RECOVER_WINDOW_MS);
+      return;
+    }
+    giveUp('lost');
+  }
+
+  /** Ступень 1: переизбрать ICE, не трогая дорожки. Лечит смену сетевого пути. */
+  async function restartIce() {
+    for (const transport of [sendTransport, recvTransport]) {
+      if (!transport) continue;
+      const res = await ask<{ iceParameters: IceParameters }>('restart-ice', {
+        transportId: transport.id,
+      });
+      if (!res) continue;
+      await transport.restartIce({ iceParameters: res.iceParameters }).catch((err) => {
+        console.warn('[sfu] restartIce failed:', err);
+      });
+    }
+  }
+
+  /**
+   * Ступень 2: выбросить транспорты и построить заново поверх того же сокета.
+   * Свои дорожки и подписки поднимаем сами; чужие плитки при этом не трогаем —
+   * с точки зрения витрины никто никуда не уходил.
+   */
+  async function rebuildTransports() {
+    const wanted = [...consumers].map(([producerId, entry]) => ({
+      peerId: entry.peerId,
+      info: { id: producerId, kind: entry.consumer.kind, source: entry.source } as ProducerInfo,
+    }));
+    for (const producerId of [...consumers.keys()]) dropConsumer(producerId);
+    for (const source of [...producers.keys()]) closeProducer(source);
+    for (const transport of [sendTransport, recvTransport]) {
+      if (!transport) continue;
+      // Сервер о закрытии транспорта иначе не узнает: он висел бы до дисконнекта,
+      // а остальные продолжали бы слушать наши мёртвые дорожки.
+      void ask('close-transport', { transportId: transport.id });
+      transport.close();
+    }
+    sendTransport = await openTransport('send');
+    recvTransport = await openTransport('recv');
+    if (!sendTransport || !recvTransport) return; // не вышло — дожмёт сторож
+    await publishLocal();
+    for (const { peerId, info } of wanted) await consume(peerId, info);
+  }
+
+  /** Лестница кончилась. Куда ехать дальше — не наше решение, а дирижёра. */
+  function giveUp(reason: 'setup' | 'lost') {
+    if (lost) return; // дирижёр уже позван — второй раз незачем
+    lost = true;
+    clearTimers();
+    host.setStatus('Медиасервер недоступен');
+    host.transportLost(reason);
+  }
+
+  function clearTimers() {
+    for (const timer of [failTimer, setupTimer, socketTimer]) {
+      if (timer) clearTimeout(timer);
+    }
+    failTimer = null;
+    setupTimer = null;
+    socketTimer = null;
+  }
+
+  // ── Палочки качества ──────────────────────────────────────────────────
+  //
+  // Семантика здесь другая, чем в mesh, и подменять одно другим нельзя: RTT и
+  // потери — это НАШ канал до сервера, а не до собеседника; его половину пути
+  // мы не видим в принципе. Поэтому «↑ кбит/с к нему» и «через реле» на плитке
+  // молчат (их больше нет), зато появляется то, чего в mesh не бывает: какой
+  // слой simulcast реально доехал. Тултип помечен `via: 'sfu'`.
+
+  /** RTT до медиасервера — общий для всех плиток: путь-то один. */
+  async function serverRtt(): Promise<number | null> {
+    for (const transport of [recvTransport, sendTransport]) {
+      if (!transport || transport.closed) continue;
+      try {
+        const rtt = rttFromStats(await transport.getStats());
+        if (rtt != null) return rtt;
+      } catch {
+        /* транспорт мог закрыться под руками — просто пробуем второй */
+      }
+    }
+    return null;
+  }
+
+  function updatePing(rtt: number | null) {
+    if (names.size === 0) {
+      host.setPing({ waiting: true, ms: null, grade: null, label: 'один в канале' });
+      return;
+    }
+    if (rtt == null) {
+      host.setPing({
+        waiting: true,
+        ms: null,
+        grade: null,
+        label: ready ? 'замеряем задержку' : 'устанавливаем связь',
+      });
+      return;
+    }
+    host.setPing({ waiting: false, ms: rtt, grade: pingGrade(rtt), label: '' });
+  }
+
+  async function updatePeerQuality(rtt: number | null) {
+    for (const peerId of names.keys()) {
+      const mine = [...consumers.values()].filter((e) => e.peerId === peerId);
+      if (mine.length === 0) {
+        netHistory.delete(peerId); // ещё ничего не слушаем — мерить нечего
+        continue;
+      }
+
+      let lost = 0;
+      let recv = 0;
+      let bytesRecv = 0;
+      let jitterMs: number | null = null;
+      let width = 0;
+      let height = 0;
+      let fps: number | null = null;
+      let codec: string | null = null;
+
+      for (const entry of mine) {
+        let stats: RTCStatsReport;
+        try {
+          stats = await entry.consumer.getStats();
+        } catch {
+          continue;
+        }
+        stats.forEach((r) => {
+          if (r.type !== 'inbound-rtp') return;
+          const kind = (r as { kind?: string; mediaType?: string }).kind ?? r.mediaType;
+          lost += (r as { packetsLost?: number }).packetsLost ?? 0;
+          recv += (r as { packetsReceived?: number }).packetsReceived ?? 0;
+          bytesRecv += (r as { bytesReceived?: number }).bytesReceived ?? 0;
+          const j = (r as { jitter?: number }).jitter;
+          if (kind === 'audio' && j != null) jitterMs = Math.round(j * 1000);
+          if (kind !== 'video') return;
+          const rv = r as {
+            frameWidth?: number;
+            frameHeight?: number;
+            framesPerSecond?: number;
+            codecId?: string;
+          };
+          if (rv.frameWidth && rv.frameHeight) {
+            width = rv.frameWidth;
+            height = rv.frameHeight;
+          }
+          if (rv.framesPerSecond != null) fps = Math.round(rv.framesPerSecond);
+          const mime = rv.codecId
+            ? (stats.get(rv.codecId) as { mimeType?: string } | undefined)?.mimeType
+            : undefined;
+          if (mime) codec = mime.split('/')[1]?.toUpperCase() ?? null;
+        });
+      }
+
+      // Потери и битрейт — за интервал, а не накопленным итогом с начала звонка.
+      const prev = netHistory.get(peerId);
+      const now = Date.now();
+      netHistory.set(peerId, { lost, recv, bytesSent: 0, bytesRecv, ts: now });
+      let lossPct: number | null = null;
+      let recvKbps: number | null = null;
+      if (prev) {
+        const dLost = Math.max(0, lost - prev.lost);
+        const dRecv = Math.max(0, recv - prev.recv);
+        const total = dLost + dRecv;
+        lossPct = total > 0 ? Math.round((dLost / total) * 1000) / 10 : 0;
+        recvKbps = kbps(bytesRecv, prev.bytesRecv, now - prev.ts);
+      }
+
+      // Слой берём с камеры: у демонстрации он один, показывать нечего.
+      const cam = mine.find((e) => e.source === 'cam');
+      const layer = cam ? (gotLayer.get(cam.consumer.id) ?? null) : null;
+
+      host.setTileNet(peerId, {
+        grade: gradeQuality(rtt, lossPct ?? 0),
+        rttMs: rtt,
+        lossPct,
+        jitterMs,
+        relay: null, // TURN в этом режиме не участвует — путь всегда через сервер
+        sendKbps: null, // исходящий у нас общий на всех, «к нему» не существует
+        recvKbps,
+        videoRes: width && height ? `${width}×${height}` : null,
+        fps,
+        codec,
+        via: 'sfu',
+        layer,
+      });
+    }
+  }
+
+  /** Здоровье своего аплинка — там же, где в mesh: qualityLimitationReason. */
+  async function updateUplink() {
+    let worst: UplinkStatus = 'ok';
+    for (const producer of producers.values()) {
+      if (producer.kind !== 'video' || producer.closed) continue;
+      try {
+        const stats = await producer.getStats();
+        stats.forEach((r) => {
+          if (r.type !== 'outbound-rtp') return;
+          const reason = limitReason(
+            (r as { qualityLimitationReason?: string }).qualityLimitationReason,
+          );
+          if (reason === 'bandwidth') worst = 'bandwidth';
+          else if (reason === 'cpu' && worst === 'ok') worst = 'cpu';
+        });
+      } catch {
+        /* producer мог закрыться между тиками */
+      }
+    }
+    host.setUplink(worst);
   }
 
   // ── Реализация интерфейса ─────────────────────────────────────────────
@@ -376,7 +692,13 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     // но своё состояние обнуляем сами.
     streams.clear();
     names.clear();
+    netHistory.clear();
+    gotLayer.clear();
     focusedId = null;
+    clearTimers();
+    recoverStage = 0;
+    ready = false;
+    lost = false;
     sock?.removeAllListeners();
     sock?.disconnect();
     sock = null;
@@ -401,6 +723,21 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       });
       sock = s;
 
+      // Сторож входа: медиасервер не поднял нас за отведённое время — это отказ,
+      // а не «ещё чуть-чуть». Дирижёр уведёт звонок в p2p, вместо того чтобы
+      // держать человека в тишине с крутилкой.
+      setupTimer = setTimeout(() => {
+        setupTimer = null;
+        if (!ready) giveUp('setup');
+      }, SETUP_TIMEOUT_MS);
+
+      // Сокет не открылся вовсе (сервер лежит, прокси не пускает) — ждать сторож
+      // незачем, ответ уже известен.
+      s.on('connect_error', (err) => {
+        console.warn('[sfu] connect_error:', err.message);
+        if (!ready) giveUp('setup');
+      });
+
       s.on('welcome', (payload: WelcomePayload) => void onWelcome(payload));
       s.on('peer-joined', ({ peerId, name }: { peerId: string; name: string }) => {
         names.set(peerId, name || 'Участник');
@@ -418,9 +755,24 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         dropPeer(peerId);
         host.playSfx('peerLeave');
       });
+      s.on('consumer-layers', ({ consumerId, spatialLayer }: ConsumerLayers) => {
+        gotLayer.set(consumerId, spatialLayer);
+      });
+      // Сигналинг оборвался посреди звонка. Само по себе медиа ещё может идти —
+      // ICE живёт отдельно от WS, — но переподключиться сокет не сможет: пропуск
+      // одноразовый и уже протух. Новый умеет выписать только дирижёр.
+      s.on('disconnect', () => {
+        if (!ready || lost) return;
+        host.setStatus('Медиасервер: связь с сигналингом потеряна');
+        if (socketTimer) clearTimeout(socketTimer);
+        socketTimer = setTimeout(() => {
+          socketTimer = null;
+          if (!sock?.connected) giveUp('lost');
+        }, RECOVER_WINDOW_MS);
+      });
       s.on('sfu-error', ({ error }: { error: string }) => {
         console.error('[sfu] rejected:', error);
-        host.setStatus('Медиасервер отказал в доступе');
+        giveUp(ready ? 'lost' : 'setup');
       });
     },
 
@@ -455,14 +807,16 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     },
 
     retuneVideo() {
-      // Тумблер «качество/ФПС» в SFU-режиме упирается в слои, а не в
-      // degradationPreference — семантика палочек и слоёв переезжает в шаг E.
+      void retuneScreen();
     },
 
     pollStats() {
-      // Пинг и палочки качества до собеседника в SFU не имеют смысла: связь
-      // теперь до сервера. Новая семантика — шаг E плана, здесь сознательно
-      // пусто, чтобы не показывать mesh-цифры, которых уже нет.
+      void (async () => {
+        const rtt = await serverRtt();
+        updatePing(rtt);
+        await updatePeerQuality(rtt);
+        await updateUplink();
+      })();
     },
 
     renamePeer(id, name) {
