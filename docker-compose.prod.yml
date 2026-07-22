@@ -7,12 +7,13 @@
 #
 #   docker compose -f docker-compose.prod.yml up -d
 #   docker compose -f docker-compose.prod.yml --profile turn up -d   # with TURN
+#   docker compose -f docker-compose.prod.yml --profile sfu up -d    # + media server
 #
 # Pin a release by exporting RELAY_VERSION (defaults to :latest):
 #   RELAY_VERSION=0.4.0 docker compose -f docker-compose.prod.yml up -d
 #
 # Config comes from .env in the same directory (SITE_PASSWORD, DOMAIN,
-# SERVER_HOST, TURN_CREDENTIAL, TURN_EXTERNAL_IP). See .env.example.
+# SERVER_HOST, TURN_CREDENTIAL, TURN_EXTERNAL_IP, SFU_SECRET). See .env.example.
 
 name: relay
 
@@ -31,6 +32,10 @@ services:
       - TURN_URLS=${TURN_URLS:-}
       - TURN_USERNAME=${TURN_USERNAME:-webrtc}
       - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
+      # Media server: enabled by SFU_SECRET alone (same key as the sfu service).
+      # Empty => api mints no passes and the SFU mode stays disabled in the UI.
+      - SFU_URL=${SFU_URL:-/}
+      - SFU_SECRET=${SFU_SECRET:-}
     volumes:
       - uploads:/app/uploads
     expose:
@@ -44,6 +49,32 @@ services:
       - SITE_PASSWORD=${SITE_PASSWORD:-}
     expose:
       - "3001"
+
+  # Media server (profile: sfu) — calls of 4+ with video: everyone uploads their
+  # video once to the server instead of once per peer. Without it everything
+  # still works over p2p (mesh), just with a ceiling of 2-3 videos.
+  # Firewall: open the RTC range 40000-40100, both UDP and TCP.
+  sfu:
+    image: ghcr.io/frizzonje/relay-sfu:${RELAY_VERSION:-latest}
+    profiles: ["sfu"]
+    pull_policy: always
+    restart: unless-stopped
+    environment:
+      - PORT=3100
+      - SFU_SECRET=${SFU_SECRET:-}
+      - SERVER_HOST=${SERVER_HOST:-localhost}
+      # ICE candidate address. On a cloud VM behind 1:1 NAT the public IP is
+      # mandatory, otherwise clients get the container address and media dies.
+      - SFU_ANNOUNCED_IP=${SFU_ANNOUNCED_IP:-${TURN_EXTERNAL_IP:-}}
+      - SFU_RTC_MIN_PORT=${SFU_RTC_MIN_PORT:-40000}
+      - SFU_RTC_MAX_PORT=${SFU_RTC_MAX_PORT:-40100}
+    # Media goes straight into the container, bypassing Caddy — publish the range
+    # as is. Signalling (WS) rides through Caddy on /sfu/, so 3100 stays internal.
+    ports:
+      - "${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}:${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}/udp"
+      - "${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}:${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}/tcp"
+    expose:
+      - "3100"
 
   caddy:
     image: caddy:2-alpine

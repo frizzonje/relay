@@ -1,14 +1,26 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 
 /**
- * Юнит-тест mesh-логики PeerManager (lib/voice.ts): perfect-negotiation
+ * Юнит-тест mesh-транспорта (lib/voice/mesh.ts) через публичный API дирижёра
+ * lib/voice.ts — проверяем связку целиком: perfect-negotiation
  * (offer/answer, glare-подавление у «невежливой» стороны) и очередь ICE-
  * кандидатов с дренажём после setRemoteDescription. RTCPeerConnection,
  * getUserMedia и socket замоканы — реальной сети/медиа не требуется.
  */
 
 // ─── Моки внешних зависимостей voice.ts ──────────────────────────────────
-const sockets = { id: 'self', connected: true, emit: vi.fn(), on: vi.fn(), off: vi.fn() };
+// `timeout().emitWithAck()` — так дирижёр спрашивает пропуск в медиасервер при
+// входе. Здесь он всегда отказ: тест про mesh, и транспорт должен выбраться он.
+const sockets = {
+  id: 'self',
+  connected: true,
+  emit: vi.fn(),
+  on: vi.fn(),
+  off: vi.fn(),
+  timeout: () => ({
+    emitWithAck: () => Promise.resolve({ ok: false, error: 'not-sfu' }),
+  }),
+};
 const handlers: Record<string, (...a: unknown[]) => unknown> = {};
 sockets.on = vi.fn((event: string, h: (...a: unknown[]) => unknown) => {
   handlers[event] = h;

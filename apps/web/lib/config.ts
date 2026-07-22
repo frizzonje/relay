@@ -1,26 +1,42 @@
 import type { ConfigResponse, IceServer } from '@relay/shared';
 
 /**
- * ICE-серверы для WebRTC берём с бэка (`GET /api/config`) — туда подставляются
- * STUN/TURN из окружения. Тянем один раз и кэшируем на сессию.
+ * Конфиг с бэка (`GET /api/config`): ICE-серверы (туда подставляются STUN/TURN
+ * из окружения) и признак поднятого медиасервера. Тянем один раз и кэшируем на
+ * сессию — обе половины нужны разным местам, но запрос один.
  */
 const FALLBACK: IceServer[] = [
   { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
 ];
 
-let cache: IceServer[] | null = null;
+let cache: Promise<ConfigResponse> | null = null;
+
+function fetchConfig(): Promise<ConfigResponse> {
+  const base = process.env.NEXT_PUBLIC_API_URL || '';
+  return fetch(`${base}/api/config`, { credentials: 'include' })
+    .then((res) => {
+      if (!res.ok) throw new Error(`config ${res.status}`);
+      return res.json() as Promise<ConfigResponse>;
+    })
+    .catch((err) => {
+      // Бэк недоступен — звонок всё равно должен собраться на публичном STUN,
+      // а медиасервер считаем отсутствующим (фолбэк на p2p — рабочий путь).
+      console.error('config fetch failed, using fallback STUN', err);
+      return { iceServers: FALLBACK, sfu: { available: false } };
+    });
+}
+
+function getConfig(): Promise<ConfigResponse> {
+  if (!cache) cache = fetchConfig();
+  return cache;
+}
 
 export async function getIceServers(): Promise<IceServer[]> {
-  if (cache) return cache;
-  try {
-    const base = process.env.NEXT_PUBLIC_API_URL || '';
-    const res = await fetch(`${base}/api/config`, { credentials: 'include' });
-    if (!res.ok) throw new Error(`config ${res.status}`);
-    const data = (await res.json()) as ConfigResponse;
-    cache = data.iceServers?.length ? data.iceServers : FALLBACK;
-  } catch (err) {
-    console.error('getIceServers failed, using fallback STUN', err);
-    cache = FALLBACK;
-  }
-  return cache;
+  const data = await getConfig();
+  return data.iceServers?.length ? data.iceServers : FALLBACK;
+}
+
+/** Поднят ли медиасервер (профиль `sfu`) — от этого зависит доступность режима. */
+export async function isSfuAvailable(): Promise<boolean> {
+  return (await getConfig()).sfu?.available === true;
 }

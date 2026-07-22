@@ -12,6 +12,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Server, Socket } from 'socket.io';
 import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
+import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
 import { Attachment, UploadsService } from '../uploads';
 
 interface JoinPayload {
@@ -43,6 +44,9 @@ type ReactionMap = Record<string, string[]>;
 // Реестр направлений (api намеренно не тянет @relay/shared — типы дублируем, как и
 // прочие константы здесь; формат совпадает с Channel/Server из packages/shared).
 type ChannelType = 'text' | 'voice';
+// Транспорт голосового канала: p2p (mesh, каждый каждому) или sfu (через
+// медиасервер). Отсутствие поля = p2p — старые registry.json читаются как есть.
+type VoiceMode = 'p2p' | 'sfu';
 // Реестровый сервер (гильдия). Имя ServerEntry, чтобы не столкнуться с socket.io
 // `Server` (WebSocketServer) выше. Формат совпадает с Server из packages/shared.
 interface ServerEntry {
@@ -61,6 +65,9 @@ interface Channel {
   name: string;
   slug: string;
   removable: boolean;
+  // Только для type: 'voice'. Меняется через channel-mode, права — как у
+  // channel-delete: дефолтные каналы (removable: false) остаются на p2p.
+  mode?: VoiceMode;
 }
 interface ServerCreatePayload {
   id?: unknown;
@@ -75,6 +82,11 @@ interface ChannelCreatePayload {
   serverId?: unknown;
   type?: unknown;
   name?: unknown;
+  mode?: unknown;
+}
+interface ChannelModePayload {
+  id?: unknown;
+  mode?: unknown;
 }
 interface ChannelDeletePayload {
   id?: unknown;
@@ -90,6 +102,14 @@ interface InviteCreatePayload {
 type InviteCreateResult =
   | { ok: true; token: string; exp: number }
   | { ok: false; error: 'not-found' | 'forbidden' };
+interface SfuTokenPayload {
+  room?: unknown;
+}
+
+// Ответ sfu-token (ack) — формат совпадает с SfuTokenResult из shared.
+type SfuTokenResult =
+  | { ok: true; token: string; exp: number; url: string }
+  | { ok: false; error: 'forbidden' | 'unavailable' | 'not-in-room' | 'not-sfu' };
 
 // Пароль сервера храним как `salt:hash` hex (scrypt) — не обратимо, соль на
 // каждый сервер своя. Проверка за постоянное время (timingSafeEqual).
@@ -132,9 +152,7 @@ const MAIN_SERVER_ID = 'relay-main';
 
 // Серверы по умолчанию — только главный. Участники добавляют свои через «+» в
 // рейке. Клиент держит такой же сид (lib/constants).
-const DEFAULT_SERVERS: ServerEntry[] = [
-  { id: MAIN_SERVER_ID, name: 'relay', removable: false },
-];
+const DEFAULT_SERVERS: ServerEntry[] = [{ id: MAIN_SERVER_ID, name: 'relay', removable: false }];
 
 // Каналы по умолчанию главного сервера. Их нельзя удалить; участники лишь
 // добавляют свои. Клиент держит такой же сид (lib/constants) — id/slug совпадают.
@@ -511,9 +529,43 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // на тип по всем серверам, повторное создание не плодит дубликаты.
     if (this.channels.some((c) => c.type === type && c.slug === slug)) return;
 
-    const channel: Channel = { id: randomUUID(), serverId, type, name: rawName, slug, removable: true };
+    const channel: Channel = {
+      id: randomUUID(),
+      serverId,
+      type,
+      name: rawName,
+      slug,
+      removable: true,
+      // Режим — только у голосовых; p2p по умолчанию не пишем, отсутствие поля
+      // и есть p2p (реестр не распухает, старые записи читаются одинаково).
+      ...(type === 'voice' && payload?.mode === 'sfu' ? { mode: 'sfu' as const } : {}),
+    };
     this.channels.push(channel);
     this.broadcastChannels();
+    this.persist();
+  }
+
+  // Смена транспорта голосового канала. Права те же, что у channel-delete:
+  // трогать можно только созданные участниками каналы (removable), дефолтные
+  // остаются на p2p — они обязаны работать и без поднятого медиасервера.
+  @SubscribeMessage('channel-mode')
+  handleChannelMode(@ConnectedSocket() client: Socket, @MessageBody() payload: ChannelModePayload) {
+    if (!this.allow(client) || this.isGuest(client)) return;
+    const id = typeof payload?.id === 'string' ? payload.id : '';
+    const mode: VoiceMode | null =
+      payload?.mode === 'sfu' ? 'sfu' : payload?.mode === 'p2p' ? 'p2p' : null;
+    if (!id || !mode) return;
+    const channel = this.channels.find((c) => c.id === id && c.removable && c.type === 'voice');
+    if (!channel) return;
+    const next = mode === 'sfu' ? 'sfu' : undefined;
+    if (channel.mode === next) return;
+    if (next) channel.mode = next;
+    else delete channel.mode;
+    this.broadcastChannels();
+    // Отдельно — тем, кто прямо сейчас в этом канале: им нужно переехать на
+    // другой транспорт. Реестра каналов для этого мало — гость по инвайту его
+    // не получает, а переезжать обязан вместе со всеми.
+    this.server.to(channel.slug).emit('voice-mode', { room: channel.slug, mode });
     this.persist();
   }
 
@@ -550,6 +602,40 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!channel) return { ok: false, error: 'not-found' };
     const { token, exp } = issueGuestToken(slug);
     return { ok: true, token, exp };
+  }
+
+  // ===== Пропуск в медиасервер =====
+
+  // Пропуск на namespace /sfu: короткоживущий подписанный токен + адрес
+  // медиасервера. Комнату и peerId берём из состояния сокета, а не из запроса —
+  // напроситься в чужой канал или назваться чужим id так нельзя. Гость проходит
+  // на общих основаниях: он уже «пришит» к своей комнате.
+  @SubscribeMessage('sfu-token')
+  handleSfuToken(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: SfuTokenPayload,
+  ): SfuTokenResult {
+    if (!this.allow(client)) return { ok: false, error: 'forbidden' };
+    const url = (process.env.SFU_URL ?? '').trim();
+    if (!url || !sfuSecret()) return { ok: false, error: 'unavailable' };
+    // Комната приходит в запросе: клиенту нужно знать транспорт ДО `join`,
+    // иначе он пропустит ответный `peers`. Секрета в ней нет — войти в любой
+    // голосовой канал он и так вправе, а `peerId` по-прежнему берётся из
+    // сокета, так что назваться чужим id нельзя.
+    const asked = typeof payload?.room === 'string' ? payload.room.trim().slice(0, 32) : '';
+    const room = asked || (typeof client.data.room === 'string' ? client.data.room : '');
+    if (!room) return { ok: false, error: 'not-in-room' };
+    // Гость «пришит» к своему каналу — чужую комнату не спросит.
+    if (this.isGuest(client) && room !== client.data.guestRoom) {
+      return { ok: false, error: 'forbidden' };
+    }
+    // Режим канала — не декорация: пропуск выдаём только тем каналам, что
+    // помечены sfu. Дефолтные (всегда p2p) отсюда уходят ни с чем.
+    const channel = this.channels.find((c) => c.type === 'voice' && c.slug === room);
+    if (!channel || channel.mode !== 'sfu') return { ok: false, error: 'not-sfu' };
+    const name = typeof client.data.name === 'string' ? client.data.name : '';
+    const { token, exp } = issueSfuToken({ room, peerId: client.id, name });
+    return { ok: true, token, exp, url };
   }
 
   @SubscribeMessage('join')

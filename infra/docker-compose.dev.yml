@@ -47,6 +47,8 @@ services:
       - TURN_URLS=${TURN_URLS:-}
       - TURN_USERNAME=${TURN_USERNAME:-webrtc}
       - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
+      - SFU_URL=${SFU_URL:-/}
+      - SFU_SECRET=${SFU_SECRET:-}
     expose:
       - "3000"
 
@@ -66,6 +68,27 @@ services:
       - SITE_PASSWORD=${SITE_PASSWORD:-}
     expose:
       - "3001"
+
+  # Медиасервер: docker compose -f infra/docker-compose.dev.yml --profile sfu up
+  # Собирается из своего Dockerfile (bookworm, mediasoup — нативный воркер), а не
+  # из общего node:20-alpine: на musl он бы компилировался из исходников минутами.
+  # Hot-reload здесь не нужен — клиентская часть живёт в web.
+  sfu:
+    build:
+      context: ..
+      dockerfile: apps/sfu/Dockerfile
+    profiles: ["sfu"]
+    environment:
+      - PORT=3100
+      - SFU_SECRET=${SFU_SECRET:-}
+      - SFU_ANNOUNCED_IP=${SFU_ANNOUNCED_IP:-}
+      - SFU_RTC_MIN_PORT=${SFU_RTC_MIN_PORT:-40000}
+      - SFU_RTC_MAX_PORT=${SFU_RTC_MAX_PORT:-40100}
+    ports:
+      - "${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}:${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}/udp"
+      - "${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}:${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}/tcp"
+    expose:
+      - "3100"
 
   caddy:
     image: caddy:2-alpine

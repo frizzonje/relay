@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
+import type { VoiceMode } from '@relay/shared';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Icon } from '@/components/ui/icon';
 import { Logo } from '@/components/ui/Logo';
@@ -21,7 +22,8 @@ import {
   toggleMic,
   toggleSpeakers,
 } from '@/lib/voice';
-import { deleteChannel } from '@/lib/channels';
+import { deleteChannel, setChannelMode } from '@/lib/channels';
+import { useSfuAvailable } from '@/lib/use-sfu';
 import { deleteServer } from '@/lib/servers';
 import { useVoiceStore } from '@/stores/voice';
 import { VoiceMembers } from '@/components/layout/VoiceMembers';
@@ -64,6 +66,9 @@ function ChannelRow({
   onInvite,
   onDelete,
   deleteLabel,
+  mode,
+  onToggleMode,
+  sfuAvailable,
   children,
 }: {
   active?: boolean;
@@ -73,8 +78,15 @@ function ChannelRow({
   onInvite?: () => void;
   onDelete?: () => void;
   deleteLabel?: string;
+  /** Транспорт голосового канала. Задан только там, где его разрешено менять. */
+  mode?: VoiceMode;
+  onToggleMode?: () => void;
+  sfuAvailable?: boolean;
   children: ReactNode;
 }) {
+  // Переключить на «через сервер» нельзя, пока медиасервер не поднят. Обратно
+  // (на p2p) — можно всегда: p2p работает без всякой инфраструктуры.
+  const modeLocked = mode === 'p2p' && !sfuAvailable;
   return (
     <div
       role="button"
@@ -104,8 +116,33 @@ function ChannelRow({
         />
       )}
       <span className="relative z-[1] flex min-w-0 items-center gap-1.5">{children}</span>
-      {(onInvite || onDelete) && (
+      {(onInvite || onDelete || onToggleMode) && (
         <span className="relative z-[1] ml-auto flex shrink-0 items-center gap-0.5">
+          {onToggleMode && mode && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!modeLocked) onToggleMode();
+              }}
+              disabled={modeLocked}
+              title={
+                modeLocked
+                  ? 'Медиасервер не запущен — доступна только прямая связь'
+                  : mode === 'sfu'
+                    ? 'Через медиасервер. Нажмите, чтобы звонить напрямую'
+                    : 'Напрямую между участниками. Нажмите, чтобы пустить через медиасервер'
+              }
+              className={cn(
+                'shrink-0 rounded px-1 text-[9px] font-bold uppercase leading-[15px] tracking-[0.3px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent',
+                modeLocked && 'cursor-not-allowed opacity-40',
+                mode === 'sfu'
+                  ? 'bg-accent/20 text-accent'
+                  : 'text-text-muted/60 hover:text-text-header',
+              )}
+            >
+              {mode === 'sfu' ? 'SFU' : 'P2P'}
+            </button>
+          )}
           {onInvite && (
             <button
               onClick={(e) => {
@@ -139,7 +176,7 @@ function ChannelRow({
 }
 
 /**
- * Сайдбар каналов. Служебные секции (только-чтение / «Око») статичны; текстовые
+ * Сайдбар каналов. Текстовые
  * и голосовые направления берём из общего реестра сервера (stores/channels) —
  * создание/удаление видят все сразу. Кнопка «+» у заголовка секции открывает
  * модалку создания. Ниже — панель «голос подключён» и панель пользователя с @-тегом.
@@ -161,6 +198,8 @@ export function Sidebar() {
   const serverChannels = channels.filter((c) => c.serverId === activeServerId);
   const textChannels = serverChannels.filter((c) => c.type === 'text');
   const voiceChannels = serverChannels.filter((c) => c.type === 'voice');
+
+  const sfuAvailable = useSfuAvailable();
 
   const micOn = useVoiceStore((s) => s.micOn);
   const speakersOn = useVoiceStore((s) => s.speakersOn);
@@ -318,6 +357,15 @@ export function Sidebar() {
                 onInvite={() => setInviteTarget({ slug: c.slug, label: c.name })}
                 onDelete={c.removable ? () => deleteChannel(c.id) : undefined}
                 deleteLabel="Удалить канал"
+                // Режим правим только у созданных участниками каналов — у
+                // дефолтных он всегда p2p (см. handleChannelMode на бэке).
+                mode={c.removable ? (c.mode ?? 'p2p') : undefined}
+                onToggleMode={
+                  c.removable
+                    ? () => setChannelMode(c.id, c.mode === 'sfu' ? 'p2p' : 'sfu')
+                    : undefined
+                }
+                sfuAvailable={sfuAvailable}
               >
                 <Icon name="volume-2" className="text-[18px]" />
                 <span>{c.name}</span>

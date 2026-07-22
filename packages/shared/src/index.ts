@@ -144,8 +144,19 @@ export interface ServerUnlockResult {
   ok: boolean;
 }
 
-/** Тип канала: текстовый (лента сообщений) или голосовой (mesh-эфир). */
+/** Тип канала: текстовый (лента сообщений) или голосовой (эфир). */
 export type ChannelType = 'text' | 'voice';
+
+/**
+ * Транспорт голосового канала:
+ * - `p2p` — mesh, все шлют медиа друг другу напрямую. Ниже задержка, ноль
+ *   нагрузки на сервер, но аплинк растёт линейно — потолок ~3 человека с видео;
+ * - `sfu` — через медиасервер: каждый отдаёт свой поток один раз. Требует
+ *   поднятого сервиса `sfu` (см. `ConfigResponse.sfu.available`).
+ *
+ * Отсутствие поля = `p2p`: старые записи реестра читаются без миграции.
+ */
+export type VoiceMode = 'p2p' | 'sfu';
 
 /**
  * Направление в реестре сервера. Сервер держит список в памяти, раздаёт его
@@ -164,16 +175,29 @@ export interface Channel {
   slug: string;
   /** Каналы по умолчанию удалять нельзя; созданные участниками — можно. */
   removable: boolean;
+  /**
+   * Транспорт голосового канала. Только для `type: 'voice'`; отсутствует = p2p.
+   * Менять можно лишь у `removable`-каналов — там же, где разрешено удаление.
+   */
+  mode?: VoiceMode;
 }
 
 export interface ChannelCreatePayload {
   serverId: string;
   type: ChannelType;
   name: string;
+  /** Режим для голосового канала; у текстовых игнорируется. */
+  mode?: VoiceMode;
 }
 
 export interface ChannelDeletePayload {
   id: string;
+}
+
+/** Смена транспорта голосового канала (только `removable`). */
+export interface ChannelModePayload {
+  id: string;
+  mode: VoiceMode;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -188,6 +212,12 @@ export interface IceServer {
 
 export interface ConfigResponse {
   iceServers: IceServer[];
+  /**
+   * Медиасервер (профиль `sfu` в compose). Поднят не у всех: self-host без него
+   * обязан работать полностью на p2p, поэтому фронт спрашивает заранее — чтобы
+   * не предлагать режим, которого нет, и знать, что делать при фолбэке.
+   */
+  sfu?: { available: boolean };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -304,6 +334,19 @@ export type InviteCreateResult =
   | { ok: true; token: string; exp: number }
   | { ok: false; error: 'not-found' | 'forbidden' };
 
+/** Запрос пропуска. Комнату спрашивают ДО `join` — иначе транспорт не выбрать. */
+export interface SfuTokenPayload {
+  room: string;
+}
+
+/**
+ * Ответ на sfu-token (ack): короткоживущий пропуск в медиасервер и его адрес.
+ * `peerId` внутри токена сервер берёт из сокета, подделать его нельзя.
+ */
+export type SfuTokenResult =
+  | { ok: true; token: string; exp: number; url: string }
+  | { ok: false; error: 'forbidden' | 'unavailable' | 'not-in-room' | 'not-sfu' };
+
 /** Карта событий, отправляемых клиентом серверу. */
 export interface ClientToServerEvents {
   join: (payload: JoinPayload) => void;
@@ -322,7 +365,9 @@ export interface ClientToServerEvents {
   'server-unlock': (payload: ServerUnlockPayload) => void;
   'channel-create': (payload: ChannelCreatePayload) => void;
   'channel-delete': (payload: ChannelDeletePayload) => void;
+  'channel-mode': (payload: ChannelModePayload) => void;
   'invite-create': (payload: InviteCreatePayload, cb: (res: InviteCreateResult) => void) => void;
+  'sfu-token': (payload: SfuTokenPayload, cb: (res: SfuTokenResult) => void) => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -378,6 +423,19 @@ export interface ServerToClientEvents {
   'server-unlock-result': (result: ServerUnlockResult) => void;
   /** Полный реестр каналов — на подключении и при каждом изменении. */
   channels: (channels: Channel[]) => void;
+  /**
+   * Голосовому каналу сменили транспорт прямо во время звонка — тем, кто в нём
+   * сидит, пора переехать. Летит В КОМНАТУ, а не только владельцам реестра:
+   * гость по инвайту `channels` не получает вовсе, а переезжать ему нужно
+   * вместе со всеми, иначе он останется на другом транспорте и без звука.
+   */
+  'voice-mode': (payload: VoiceModeRelay) => void;
+}
+
+/** Голосовому каналу сменили режим; `room` — его slug. */
+export interface VoiceModeRelay {
+  room: string;
+  mode: VoiceMode;
 }
 
 /** Обновлённый набор реакций конкретного сообщения — рассылается всем в канале. */

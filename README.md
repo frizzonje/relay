@@ -12,7 +12,7 @@ Spin up your own relay on a fresh **Debian/Ubuntu** server in one command:
 curl -fsSL https://raw.githubusercontent.com/frizzonje/relay/main/install.sh | bash
 ```
 
-It installs Docker, asks for your domain, login password, and TURN, pulls prebuilt images, opens the firewall, and starts everything — then hands you a `relay` CLI (`relay update`, `relay logs`, `relay config`, `relay backup`). The stack lives in `/opt/relay`.
+It installs Docker, asks for your domain, login password, TURN and the media server, pulls prebuilt images, opens the firewall, and starts everything — then hands you a `relay` CLI (`relay update`, `relay logs`, `relay config`, `relay backup`). The stack lives in `/opt/relay`.
 
 > [!TIP]
 > Prefer to read before you pipe into a shell? Download it first:
@@ -25,7 +25,8 @@ Want to run it locally or build from source instead? See [Quick start](#quick-st
 
 ## Features
 
-- **Voice and video** — mesh WebRTC (P2P, up to ~6–7 participants), camera, screen sharing, mute/deafen indicators
+- **Voice and video** — WebRTC: P2P mesh by default, camera, screen sharing, mute/deafen indicators
+- **SFU profile** — mediasoup media server for calls of 4+ with video, switched on per channel; falls back to P2P if it's down
 - **Text channels** — message history, attachments up to 25 MB, reactions
 - **Servers and channels** — create/delete on the fly, optional per-server password, shared registry for all members
 - **Closed perimeter** — single login password (HMAC cookie), one origin behind Caddy, automatic TLS
@@ -37,6 +38,7 @@ Want to run it locally or build from source instead? See [Quick start](#quick-st
 apps/
   web/        Next.js 15 (App Router, React 19, Tailwind, Zustand)
   api/        NestJS 10 + Socket.io (signaling, chat, registry, uploads)
+  sfu/        NestJS + mediasoup (optional media server for large calls)
 packages/
   shared/     @relay/shared — shared contract: types, socket events, HMAC auth
 clients/
@@ -67,13 +69,16 @@ docker compose up --build
 
 # with a TURN relay (strict NAT / mobile networks):
 docker compose --profile turn up --build
+
+# with the media server (calls of 4+ with video); needs SFU_SECRET in .env:
+docker compose --profile sfu up --build
 ```
 
 To deploy without building — pull prebuilt images from GHCR (what the installer
 uses under the hood):
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d          # add --profile turn for TURN
+docker compose -f docker-compose.prod.yml up -d          # add --profile turn / --profile sfu
 ```
 
 ## Configuration (`.env`)
@@ -86,6 +91,9 @@ docker compose -f docker-compose.prod.yml up -d          # add --profile turn fo
 | `TURN_CREDENTIAL` | _(empty)_ | TURN server password. Required with `--profile turn` |
 | `TURN_EXTERNAL_IP` | _(empty)_ | Public IP behind 1:1 NAT (cloud VMs) |
 | `STUN_URLS` / `TURN_URLS` / `TURN_USERNAME` | — | Override ICE servers |
+| `SFU_SECRET` | _(empty)_ | Pass-signing key shared by api and sfu. Empty → the SFU mode stays off |
+| `SFU_ANNOUNCED_IP` | `TURN_EXTERNAL_IP` | Public IP in the media server's ICE candidates (1:1 NAT) |
+| `SFU_RTC_MIN_PORT` / `SFU_RTC_MAX_PORT` | `40000` / `40100` | Media port range. Open it in the firewall (UDP **and** TCP) |
 
 ## Tests
 
@@ -103,7 +111,7 @@ CI (`.github/workflows/ci.yml`): typecheck → unit → docker build → e2e (Pl
 - [Frontend](docs/frontend.md) — components, stores, WebRTC client
 - [Backend](docs/backend.md) — NestJS, Socket.io gateway, REST
 - [Protocol](docs/protocol.md) — client API spec (web / iOS / desktop)
-- [SFU plan](docs/sfu-plan.md) — scaling video via LiveKit
+- [SFU plan](docs/sfu-plan.md) — scaling video via a mediasoup media server
 
 ## Contributing
 

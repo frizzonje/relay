@@ -85,19 +85,29 @@ const NET_LABEL: Record<TileNet['grade'], string> = {
 const UPLINK_PILL: Record<'cpu' | 'bandwidth', { short: string; title: string }> = {
   bandwidth: {
     short: 'слабый аплинк',
-    title: 'Не хватает исходящего канала — качество вашего видео режется. Помогает выключить видео/демонстрацию или снизить их разрешение.',
+    title:
+      'Не хватает исходящего канала — качество вашего видео режется. Помогает выключить видео/демонстрацию или снизить их разрешение.',
   },
   cpu: {
     short: 'перегрузка ЦП',
-    title: 'Машина не тянет кодирование — качество вашего видео режется. Помогает закрыть тяжёлые вкладки/приложения или выключить видео.',
+    title:
+      'Машина не тянет кодирование — качество вашего видео режется. Помогает закрыть тяжёлые вкладки/приложения или выключить видео.',
   },
+};
+
+// Слой simulcast, который реально доехал (только режим медиасервера): мелкой
+// плитке отдают экономный, крупной — исходный. См. lib/voice/sfu.ts.
+const LAYER_LABEL: Record<number, string> = {
+  0: 'экономный',
+  1: 'средний',
+  2: 'исходный',
 };
 
 /**
  * Индикатор качества связи с собеседником — четыре нарастающие «палочки» в чипе
  * имени (как в Discord). Горящих палочек — по grade, цвет — зелёный/янтарь/красный.
  * Наведение раскрывает тултип с сырыми метриками (пинг, потери, джиттер), которые
- * собирает lib/voice.updatePeerQuality через getStats.
+ * снимает активный транспорт: mesh — до собеседника, SFU — до медиасервера.
  */
 function SignalBars({ net }: { net: TileNet }) {
   const active = NET_ACTIVE[net.grade];
@@ -152,14 +162,32 @@ function SignalBars({ net }: { net: TileNet }) {
           </span>
           <span>Соединение</span>
           <span className="text-right text-white">
-            {net.relay == null ? '—' : net.relay ? 'через реле' : 'напрямую'}
+            {net.via === 'sfu'
+              ? 'через сервер'
+              : net.relay == null
+                ? '—'
+                : net.relay
+                  ? 'через реле'
+                  : 'напрямую'}
           </span>
           <span>Битрейт</span>
           <span className="text-right text-white">
-            {net.recvKbps != null || net.sendKbps != null
-              ? `↓${net.recvKbps ?? '—'} ↑${net.sendKbps ?? '—'} кбит/с`
-              : '—'}
+            {/* В режиме медиасервера исходящий «к нему» не существует: своё
+                медиа уходит один раз на сервер, общее на всех. */}
+            {net.via === 'sfu'
+              ? net.recvKbps != null
+                ? `↓${net.recvKbps} кбит/с`
+                : '—'
+              : net.recvKbps != null || net.sendKbps != null
+                ? `↓${net.recvKbps ?? '—'} ↑${net.sendKbps ?? '—'} кбит/с`
+                : '—'}
           </span>
+          {net.via === 'sfu' && net.layer != null && (
+            <>
+              <span>Слой</span>
+              <span className="text-right text-white">{LAYER_LABEL[net.layer] ?? net.layer}</span>
+            </>
+          )}
           {net.videoRes && (
             <>
               <span>Видео</span>
@@ -506,11 +534,7 @@ export function VideoTile({
           ref={menuRef}
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.preventDefault()}
-          style={
-            menu === 'voice'
-              ? { left: menuPos.x, top: menuPos.y }
-              : { right: 8, bottom: 44 }
-          }
+          style={menu === 'voice' ? { left: menuPos.x, top: menuPos.y } : { right: 8, bottom: 44 }}
           className="absolute z-[6] w-56 rounded-lg border border-white/10 bg-[#1e1f22]/95 p-3 shadow-[0_12px_40px_rgba(0,0,0,0.6)] backdrop-blur"
         >
           {menu === 'voice' ? (

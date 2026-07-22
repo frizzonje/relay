@@ -1,4 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
+import { sfuConfigured } from './sfu/sfu-token';
 
 interface IceServer {
   urls: string[];
@@ -16,7 +17,7 @@ function splitUrls(value: string | undefined): string[] {
 @Controller('api')
 export class ConfigController {
   @Get('config')
-  getConfig(): { iceServers: IceServer[] } {
+  getConfig(): { iceServers: IceServer[]; sfu: { available: boolean } } {
     const iceServers: IceServer[] = [];
 
     // Без TURN звонок не соберётся между «строгими» NAT (мобильные сети и т.п.)
@@ -57,6 +58,12 @@ export class ConfigController {
       iceServers.push({ urls: turnUrls, username, credential });
     }
 
-    return { iceServers };
+    // Медиасервер поднимается отдельным профилем compose (`--profile sfu`) и
+    // есть далеко не у всех: self-host без него обязан работать полностью на
+    // p2p. Признак — заданные SFU_URL (куда идти клиенту) и SFU_SECRET (чем
+    // подписан пропуск): без второго медиасервер никого не пустит.
+    const sfu = { available: sfuConfigured() };
+
+    return { iceServers, sfu };
   }
 }
