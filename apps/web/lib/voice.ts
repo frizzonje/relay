@@ -1107,7 +1107,14 @@ async function enterRoom(target: string, ticket: VoiceTicket | null) {
   if (room !== target) return; // пока грузился чанк, успели уйти в другой канал
   transport = next;
   next.join(target, ticket ?? undefined);
-  socket().emit('join', { room: target, name: myName(), clientId: loadClientId() });
+  socket().emit('join', {
+    room: target,
+    name: myName(),
+    clientId: loadClientId(),
+    // Транспорт — в join: сервер раздаст его остальным в presence. Иначе
+    // разъехавшиеся участники видят друг друга в канале и молча не слышат.
+    transport: ticket ? 'sfu' : 'p2p',
+  });
   // После join: сервер уже знает имя и впишет его в строку лога.
   diag('transport', `${ticket ? 'sfu' : 'mesh'} room="${target}"`);
   // Сразу за join — своё медиасостояние: сервер только что сбросил его, а мут/
@@ -1160,6 +1167,48 @@ function scheduleSfuRetry() {
       toast.success('Медиасервер вернулся.');
     })();
   }, SFU_RETRY_MS);
+}
+
+// Комната разъехалась в транспортах: часть через медиасервер, часть напрямую.
+// Слышать друг друга такие участники не могут в принципе — это не деградация
+// качества, а полная тишина, причём выглядящая как «он в канале, но молчит».
+// Съезжаем в p2p всей комнатой: он собирает всех, тогда как медиасервер собрать
+// не всех может (старый клиент про него не знает, у кого-то он не поднялся).
+// Но только пока комната мала: тащить туда 4+ — ровно та боль, ради которой SFU
+// и заводился, там честнее сказать правду и оставить как есть.
+let splitHandled = false;
+
+function onPresence(presence: VoicePresence) {
+  useVoiceStore.getState().setPresence(presence);
+  if (!room) {
+    splitHandled = false;
+    return;
+  }
+  const myId = socket().id;
+  const others = (presence[room] ?? []).filter((p) => p.id !== myId);
+  const mine = transport === sfuTransport ? 'sfu' : 'p2p';
+  const apart = others.filter((p) => (p.transport ?? 'p2p') !== mine);
+  if (apart.length === 0) {
+    splitHandled = false;
+    return;
+  }
+  if (splitHandled) return; // уже отреагировали на это расщепление
+  splitHandled = true;
+  const names = apart.map((p) => p.name || 'Участник').join(', ');
+  diag('transport split', `me=${mine} apart=${apart.length} (${names})`);
+  if (mine === 'sfu' && others.length <= MESH_FALLBACK_MAX_PEERS) {
+    toast(`${names} не может через медиасервер — звоним напрямую.`);
+    void remigrate('mesh');
+    return;
+  }
+  // Съезжать некуда: либо нас слишком много для прямых звонков, либо напрямую
+  // звоним как раз мы. Молчать нельзя — человек должен понимать, почему тишина.
+  toast.error(
+    mine === 'sfu'
+      ? `${names} вас не слышит: у него звонок идёт напрямую, а не через медиасервер.`
+      : 'Вы звоните напрямую, остальные — через медиасервер. Вас не слышно: переподключитесь к каналу.',
+  );
+  sfx().play('error');
 }
 
 /**
@@ -1249,6 +1298,7 @@ export async function joinVoice(newRoom: string, label: string) {
 export function leaveVoice(hard = true) {
   if (hard && room) sfx().play('leave'); // покидаем звонок (не при смене канала)
   cancelSfuRetry();
+  splitHandled = false;
   if (room) socket().emit('leave');
   tx().leave();
   transport = null; // следующий вход выберет транспорт заново
@@ -1751,7 +1801,7 @@ export function initVoice() {
   });
 
   s.on('voice-presence', (p: VoicePresence) => {
-    useVoiceStore.getState().setPresence(p && typeof p === 'object' ? p : {});
+    onPresence(p && typeof p === 'object' ? p : {});
   });
 
   s.on('connect', () => {

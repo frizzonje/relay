@@ -21,6 +21,7 @@ interface JoinPayload {
   room?: unknown;
   name?: unknown;
   clientId?: unknown;
+  transport?: unknown;
 }
 
 interface SignalPayload {
@@ -113,6 +114,17 @@ interface SfuTokenPayload {
 interface VoiceDiagPayload {
   event?: unknown;
   detail?: unknown;
+}
+// Участник голосового канала в presence (совпадает с VoicePeer из shared).
+// `transport` называет сам клиент в `join`: разъехавшись в транспортах, люди
+// друг друга не слышат вовсе, и знать об этом должны все.
+interface VoicePresenceEntry {
+  id: string;
+  name: string;
+  micOn: boolean;
+  deafened: boolean;
+  transport: 'p2p' | 'sfu';
+  guest?: boolean;
 }
 
 // Строка для лога: без переводов строк (чтобы клиент не подделал чужие записи)
@@ -695,6 +707,11 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 20) : undefined;
     const clientId =
       typeof payload?.clientId === 'string' ? payload.clientId.trim().slice(0, 64) : '';
+    // Транспорт называет сам клиент: сервер знает лишь режим канала, а решение
+    // принимает клиент — и оно может разойтись с режимом (медиасервер не
+    // поднялся у него одного, старый клиент про SFU вовсе не знает). Не назвал —
+    // значит p2p: именно так ведут себя клиенты, не знающие про это поле.
+    const transport = payload?.transport === 'sfu' ? 'sfu' : 'p2p';
 
     // Повторный join без leave (например, после обрыва) — сначала выходим из старой комнаты
     this.leaveRoom(client);
@@ -722,6 +739,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     client.join(room);
     client.data.room = room;
     client.data.name = name;
+    client.data.transport = transport;
     if (clientId) this.voiceMembers.set(clientId, { id: client.id, room });
     // Медиасостояние прошлого захода не тащим: клиент пришлёт своё сразу после join.
     client.data.micOn = undefined;
@@ -740,8 +758,16 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // за клиент был (мобильный Safari? нативное приложение? старый бандл?).
     const ua = oneLine(String(client.handshake.headers['user-agent'] ?? '')).slice(0, 120);
     this.logger.log(
-      `voice: ${name || '?'} (${client.id}${this.isGuest(client) ? ', guest' : ''}) joined "${room}" ua="${ua}"`,
+      `voice: ${name || '?'} (${client.id}${this.isGuest(client) ? ', guest' : ''}) joined "${room}" via ${transport} ua="${ua}"`,
     );
+    // Разъехались в транспортах — участники друг друга не слышат вообще.
+    // Клиенты разберутся сами (мелкая комната съедет в p2p целиком), но в логе
+    // это должно быть видно сразу: снаружи такое выглядит как «он в канале, но
+    // молчит», и без строчки в логе разбирается только гаданием.
+    const split = this.transportsInRoom(room);
+    if (split.size > 1) {
+      this.logger.warn(`voice: room "${room}" is split across transports: ${[...split].join(' + ')}`);
+    }
   }
 
   @SubscribeMessage('leave')
@@ -963,6 +989,16 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     }
   }
 
+  /** Какими транспортами сейчас звонят в комнате. Больше одного = расщепление. */
+  private transportsInRoom(room: string): Set<string> {
+    const kinds = new Set<string>();
+    for (const id of this.server.sockets.adapter.rooms.get(room) ?? []) {
+      const sock = this.server.sockets.sockets.get(id);
+      if (sock) kinds.add(sock.data.transport === 'sfu' ? 'sfu' : 'p2p');
+    }
+    return kinds;
+  }
+
   private leaveRoom(client: Socket) {
     const room = client.data.room as string | undefined;
     if (room) {
@@ -972,6 +1008,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       client.to(room).emit('peer-left', { id: client.id });
       client.leave(room);
       client.data.room = undefined;
+      client.data.transport = undefined;
       const clientId = client.data.clientId as string | undefined;
       if (clientId && this.voiceMembers.get(clientId)?.id === client.id) {
         this.voiceMembers.delete(clientId);
@@ -980,15 +1017,14 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     }
   }
 
-  // Кто сейчас в каких голосовых каналах —
-  // { имя_канала: [{ id, name, micOn, deafened, guest? }] }
+  // Кто сейчас в каких голосовых каналах (формат совпадает с VoicePeer из shared)
   private buildVoicePresence(): Record<
     string,
-    { id: string; name: string; micOn: boolean; deafened: boolean; guest?: boolean }[]
+    VoicePresenceEntry[]
   > {
     const presence: Record<
       string,
-      { id: string; name: string; micOn: boolean; deafened: boolean; guest?: boolean }[]
+      VoicePresenceEntry[]
     > = {};
     for (const [id, sock] of this.server.sockets.sockets) {
       const room = sock.data.room as string | undefined;
@@ -998,6 +1034,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
         name: (sock.data.name as string) || 'Аноним',
         micOn: sock.data.micOn !== false,
         deafened: sock.data.deafened === true,
+        transport: sock.data.transport === 'sfu' ? 'sfu' : 'p2p',
         ...(sock.data.guest === true ? { guest: true } : {}),
       });
     }
