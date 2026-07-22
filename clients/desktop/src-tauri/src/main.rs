@@ -59,6 +59,24 @@ struct VoiceStatus {
     muted: bool,
 }
 
+/// NOTE: Специальная инициализация окружения для Linux
+/// NOTE: с установкой корректных переменных окружения с приоритетом.
+#[ctor::ctor]
+fn init_linux_settings() {
+    #[cfg(target_os = "linux")]
+    {
+        let session_type = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
+        if session_type == "wayland" {
+            std::env::set_var("GDK_BACKEND", "wayland,x11");
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1"); // Для WebKit 2.46+
+            std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1");     // Для NVIDIA
+        } else {
+            std::env::set_var("GDK_BACKEND", "x11");
+        }
+    }
+}
+
 fn main() {
     // DMABUF-рендер WebKitGTK ломался на проприетарном NVIDIA до 2.46 (белое/
     // чёрное окно) — там его надо гасить. С 2.46 upstream сам отключает DMABUF
