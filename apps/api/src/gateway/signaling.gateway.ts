@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
@@ -12,6 +13,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Server, Socket } from 'socket.io';
 import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
+import { sfuHealthy } from '../sfu/sfu-health';
 import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
 import { Attachment, UploadsService } from '../uploads';
 
@@ -105,6 +107,18 @@ type InviteCreateResult =
 interface SfuTokenPayload {
   room?: unknown;
   name?: unknown;
+}
+// Диагностическая веха звонка от клиента — уходит в серверный лог как есть
+// (формат совпадает с VoiceDiagPayload из shared).
+interface VoiceDiagPayload {
+  event?: unknown;
+  detail?: unknown;
+}
+
+// Строка для лога: без переводов строк (чтобы клиент не подделал чужие записи)
+// и лишних пробелов.
+function oneLine(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
 }
 
 // Ответ sfu-token (ack) — формат совпадает с SfuTokenResult из shared.
@@ -327,6 +341,8 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   private presenceTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Списываем токен; false → бакет пуст (флуд), обработчик молча выходит.
+  private readonly logger = new Logger(SignalingGateway.name);
+
   private allow(client: Socket): boolean {
     const now = Date.now();
     const bucket = (client.data.rl as { tokens: number; ts: number } | undefined) ?? {
@@ -612,13 +628,19 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // напроситься в чужой канал или назваться чужим id так нельзя. Гость проходит
   // на общих основаниях: он уже «пришит» к своей комнате.
   @SubscribeMessage('sfu-token')
-  handleSfuToken(
+  async handleSfuToken(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: SfuTokenPayload,
-  ): SfuTokenResult {
+  ): Promise<SfuTokenResult> {
     if (!this.allow(client)) return { ok: false, error: 'forbidden' };
     const url = (process.env.SFU_URL ?? '').trim();
     if (!url || !sfuSecret()) return { ok: false, error: 'unavailable' };
+    // Настроен — не значит жив: пропуск в лежащий медиасервер собирает комнату
+    // в расщеплённое «вижу, но не слышу». Пинг с коротким кэшем, sfu-health.ts.
+    if (!(await sfuHealthy())) {
+      this.logger.warn(`sfu-token denied (sfu down) for ${client.id}`);
+      return { ok: false, error: 'unavailable' };
+    }
     // Комната приходит в запросе: клиенту нужно знать транспорт ДО `join`,
     // иначе он пропустит ответный `peers`. Секрета в ней нет — войти в любой
     // голосовой канал он и так вправе, а `peerId` по-прежнему берётся из
@@ -641,7 +663,26 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const name =
       askedName || (typeof client.data.name === 'string' ? client.data.name : '');
     const { token, exp } = issueSfuToken({ room, peerId: client.id, name });
+    this.logger.log(`sfu-token issued to ${name || '?'} (${client.id}) room "${room}"`);
     return { ok: true, token, exp, url };
+  }
+
+  // ===== Диагностика звонков =====
+
+  // Клиентские вехи звонка (выбор транспорта, фолбэк в p2p, обрывы) — в лог
+  // сервера. Все эти решения клиент принимает молча у себя, сервер видит лишь
+  // их отсутствие — а «телефон в канале, но не слышно» разбирают назавтра по
+  // серверному логу, клиентская консоль к тому моменту мертва. Только лог,
+  // никакой логики: верить содержимому на слово нельзя.
+  @SubscribeMessage('voice-diag')
+  handleVoiceDiag(@ConnectedSocket() client: Socket, @MessageBody() payload: VoiceDiagPayload) {
+    if (!this.allow(client)) return;
+    const event = typeof payload?.event === 'string' ? oneLine(payload.event).slice(0, 48) : '';
+    if (!event) return;
+    const detail =
+      typeof payload?.detail === 'string' ? ` ${oneLine(payload.detail).slice(0, 200)}` : '';
+    const name = (client.data.name as string) || '?';
+    this.logger.log(`diag ${name} (${client.id}): ${event}${detail}`);
   }
 
   @SubscribeMessage('join')
@@ -695,6 +736,12 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       ...(this.isGuest(client) ? { guest: true } : {}),
     });
     this.broadcastVoicePresence();
+    // UA — в лог: «телефон не слышит» первым делом упирается в вопрос, ЧТО это
+    // за клиент был (мобильный Safari? нативное приложение? старый бандл?).
+    const ua = oneLine(String(client.handshake.headers['user-agent'] ?? '')).slice(0, 120);
+    this.logger.log(
+      `voice: ${name || '?'} (${client.id}${this.isGuest(client) ? ', guest' : ''}) joined "${room}" ua="${ua}"`,
+    );
   }
 
   @SubscribeMessage('leave')
@@ -919,6 +966,9 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   private leaveRoom(client: Socket) {
     const room = client.data.room as string | undefined;
     if (room) {
+      this.logger.log(
+        `voice: ${(client.data.name as string) || '?'} (${client.id}) left "${room}"`,
+      );
       client.to(room).emit('peer-left', { id: client.id });
       client.leave(room);
       client.data.room = undefined;

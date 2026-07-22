@@ -44,6 +44,11 @@ services:
       # медиасервера ходит через Caddy на /sfu/.
       - SFU_URL=${SFU_URL:-/}
       - SFU_SECRET=${SFU_SECRET:-}
+      # Внутренний адрес медиасервера для health-пинга: sfu живёт в host-сети
+      # (см. ниже), доменное имя compose-сети на него больше не указывает.
+      - SFU_INTERNAL_URL=${SFU_INTERNAL_URL:-http://host.docker.internal:3100}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - uploads:/app/uploads
     expose:
@@ -73,23 +78,24 @@ services:
       context: .
       dockerfile: apps/sfu/Dockerfile
     profiles: ["sfu"]
+    # Host-сеть вместо проброса диапазона: на сотню RTC-портов docker поднимал
+    # сотни userland-прокси (процесс на порт×протокол×семейство) и гнал каждый
+    # RTP-пакет через DNAT — на слабой VM это заметный CPU и лишняя точка отказа
+    # посреди звонка. Как у coturn ниже — медиасерверу место в host-сети.
+    # Сигналинг при этом слушает 3100 прямо на хосте: наружу его открывать НЕ
+    # нужно (Caddy ходит к нему изнутри, см. SFU_UPSTREAM), в фаерволе достаточно
+    # RTC-диапазона 40000-40100 (UDP и TCP).
+    network_mode: host
     restart: unless-stopped
     environment:
       - PORT=3100
       - SFU_SECRET=${SFU_SECRET:-}
       - SERVER_HOST=${SERVER_HOST:-localhost}
       # Адрес в ICE-кандидатах. На облачной VM за 1:1 NAT обязателен публичный
-      # IP — иначе клиент получит адрес контейнера и медиа не пойдёт.
+      # IP — иначе клиент получит внутренний адрес и медиа не пойдёт.
       - SFU_ANNOUNCED_IP=${SFU_ANNOUNCED_IP:-${TURN_EXTERNAL_IP:-}}
       - SFU_RTC_MIN_PORT=${SFU_RTC_MIN_PORT:-40000}
       - SFU_RTC_MAX_PORT=${SFU_RTC_MAX_PORT:-40100}
-    # Медиа идёт мимо Caddy напрямую в контейнер: пробрасываем диапазон как есть.
-    # Сигналинг (WS) — наоборот, через Caddy на /sfu/, наружу порт 3100 не нужен.
-    ports:
-      - "${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}:${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}/udp"
-      - "${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}:${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}/tcp"
-    expose:
-      - "3100"
 
   caddy:
     image: caddy:2-alpine
@@ -104,6 +110,11 @@ services:
       # DOMAIN пуст → Caddy слушает localhost и выдаёт self-signed (internal CA).
       # Реальный домен → сертификат от Let's Encrypt берётся автоматически.
       - DOMAIN=${DOMAIN:-localhost}
+      # Апстрим сигналинга медиасервера: sfu в host-сети (см. сервис sfu),
+      # из compose-сети до него — только через шлюз хоста.
+      - SFU_UPSTREAM=host.docker.internal:3100
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

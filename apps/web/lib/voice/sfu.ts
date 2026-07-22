@@ -408,6 +408,9 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       }
       // 'disconnected' часто сам проходит за секунду-другую (перескок сети),
       // поэтому даём ему фору; 'failed' — окончательно, лечим сразу.
+      if (state === 'failed' || state === 'disconnected') {
+        host.diag('sfu transport', `${direction} ${state}`);
+      }
       if (state === 'failed') scheduleRecovery(0);
       else if (state === 'disconnected') scheduleRecovery(4_000);
     });
@@ -442,8 +445,10 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       ready = true;
       if (setupTimer) clearTimeout(setupTimer);
       setupTimer = null;
+      host.diag('sfu up', `peers=${payload.peers.length}`);
     } catch (err) {
       console.error('[sfu] setup failed:', err);
+      host.diag('sfu setup failed', String((err as Error)?.message ?? err));
       giveUp('setup');
     }
   }
@@ -477,6 +482,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     if (recoverStage === 0) {
       recoverStage = 1;
       host.setStatus('Медиасервер: восстанавливаем связь…');
+      host.diag('sfu recover', 'stage 1: restart-ice');
       await restartIce();
       scheduleRecovery(RECOVER_WINDOW_MS); // сторож: не помогло — следующая ступень
       return;
@@ -484,6 +490,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     if (recoverStage === 1) {
       recoverStage = 2;
       host.setStatus('Медиасервер: пересобираем соединение…');
+      host.diag('sfu recover', 'stage 2: rebuild transports');
       await rebuildTransports();
       scheduleRecovery(RECOVER_WINDOW_MS);
       return;
@@ -756,6 +763,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       // незачем, ответ уже известен.
       s.on('connect_error', (err) => {
         console.warn('[sfu] connect_error:', err.message);
+        host.diag('sfu connect_error', err.message);
         if (!ready) giveUp('setup');
       });
 
@@ -784,6 +792,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       // одноразовый и уже протух. Новый умеет выписать только дирижёр.
       s.on('disconnect', () => {
         if (!ready || lost) return;
+        host.diag('sfu signaling lost');
         host.setStatus('Медиасервер: связь с сигналингом потеряна');
         if (socketTimer) clearTimeout(socketTimer);
         socketTimer = setTimeout(() => {
@@ -793,6 +802,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       });
       s.on('sfu-error', ({ error }: { error: string }) => {
         console.error('[sfu] rejected:', error);
+        host.diag('sfu rejected', error);
         giveUp(ready ? 'lost' : 'setup');
       });
     },

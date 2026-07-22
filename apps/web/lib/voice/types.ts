@@ -67,6 +67,12 @@ export interface TransportHost {
    * `reason`: 'setup' — не поднялись при входе; 'lost' — развалилось в звонке.
    */
   transportLost(reason: 'setup' | 'lost'): void;
+  /**
+   * Диагностическая веха (setup упал, лестница пошла, сокет оборвался) — в
+   * консоль и на сервер. Консоль умирает вместе с вкладкой; «не слышно было
+   * вчера с телефона» разбирается только по серверному логу.
+   */
+  diag(event: string, detail?: string): void;
   setStatus(text: string): void;
   setPing(ping: VoicePing): void;
   setUplink(status: UplinkStatus): void;

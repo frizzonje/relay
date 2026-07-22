@@ -345,6 +345,16 @@ export interface SfuTokenPayload {
 }
 
 /**
+ * Диагностическая веха звонка (выбор транспорта, фолбэк в p2p, обрыв) — сервер
+ * пишет её в свой лог. Клиентская консоль умирает вместе с вкладкой, а «телефон
+ * в канале, но не слышно» разбирают назавтра — по серверному логу.
+ */
+export interface VoiceDiagPayload {
+  event: string;
+  detail?: string;
+}
+
+/**
  * Ответ на sfu-token (ack): короткоживущий пропуск в медиасервер и его адрес.
  * `peerId` внутри токена сервер берёт из сокета, подделать его нельзя.
  */
@@ -373,6 +383,7 @@ export interface ClientToServerEvents {
   'channel-mode': (payload: ChannelModePayload) => void;
   'invite-create': (payload: InviteCreatePayload, cb: (res: InviteCreateResult) => void) => void;
   'sfu-token': (payload: SfuTokenPayload, cb: (res: SfuTokenResult) => void) => void;
+  'voice-diag': (payload: VoiceDiagPayload) => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────

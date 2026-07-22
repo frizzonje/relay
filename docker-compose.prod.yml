@@ -36,6 +36,11 @@ services:
       # Empty => api mints no passes and the SFU mode stays disabled in the UI.
       - SFU_URL=${SFU_URL:-/}
       - SFU_SECRET=${SFU_SECRET:-}
+      # Internal address for the sfu health ping: sfu runs on the host network
+      # (see below), so the compose DNS name no longer points at it.
+      - SFU_INTERNAL_URL=${SFU_INTERNAL_URL:-http://host.docker.internal:3100}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - uploads:/app/uploads
     expose:
@@ -58,23 +63,23 @@ services:
     image: ghcr.io/frizzonje/relay-sfu:${RELAY_VERSION:-latest}
     profiles: ["sfu"]
     pull_policy: always
+    # Host network instead of publishing the port range: for ~100 RTC ports
+    # docker would spawn hundreds of userland proxies and push every RTP packet
+    # through DNAT — real CPU cost on a small VM and one more way for media to
+    # die mid-call. Same reasoning as coturn below. Signalling now listens on
+    # host port 3100 — do NOT open it on the firewall (Caddy reaches it via the
+    # host gateway); the RTC range 40000-40100 (UDP+TCP) is all you expose.
+    network_mode: host
     restart: unless-stopped
     environment:
       - PORT=3100
       - SFU_SECRET=${SFU_SECRET:-}
       - SERVER_HOST=${SERVER_HOST:-localhost}
       # ICE candidate address. On a cloud VM behind 1:1 NAT the public IP is
-      # mandatory, otherwise clients get the container address and media dies.
+      # mandatory, otherwise clients get an internal address and media dies.
       - SFU_ANNOUNCED_IP=${SFU_ANNOUNCED_IP:-${TURN_EXTERNAL_IP:-}}
       - SFU_RTC_MIN_PORT=${SFU_RTC_MIN_PORT:-40000}
       - SFU_RTC_MAX_PORT=${SFU_RTC_MAX_PORT:-40100}
-    # Media goes straight into the container, bypassing Caddy — publish the range
-    # as is. Signalling (WS) rides through Caddy on /sfu/, so 3100 stays internal.
-    ports:
-      - "${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}:${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}/udp"
-      - "${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}:${SFU_RTC_MIN_PORT:-40000}-${SFU_RTC_MAX_PORT:-40100}/tcp"
-    expose:
-      - "3100"
 
   caddy:
     image: caddy:2-alpine
@@ -87,6 +92,11 @@ services:
       - "443:443"
     environment:
       - DOMAIN=${DOMAIN:-localhost}
+      # Media-server signalling upstream: sfu lives on the host network (see
+      # above), reachable from the compose network only via the host gateway.
+      - SFU_UPSTREAM=host.docker.internal:3100
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

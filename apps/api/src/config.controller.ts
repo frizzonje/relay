@@ -1,5 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
-import { sfuConfigured } from './sfu/sfu-token';
+import { sfuHealthy } from './sfu/sfu-health';
 
 interface IceServer {
   urls: string[];
@@ -17,7 +17,7 @@ function splitUrls(value: string | undefined): string[] {
 @Controller('api')
 export class ConfigController {
   @Get('config')
-  getConfig(): { iceServers: IceServer[]; sfu: { available: boolean } } {
+  async getConfig(): Promise<{ iceServers: IceServer[]; sfu: { available: boolean } }> {
     const iceServers: IceServer[] = [];
 
     // Без TURN звонок не соберётся между «строгими» NAT (мобильные сети и т.п.)
@@ -60,9 +60,9 @@ export class ConfigController {
 
     // Медиасервер поднимается отдельным профилем compose (`--profile sfu`) и
     // есть далеко не у всех: self-host без него обязан работать полностью на
-    // p2p. Признак — заданные SFU_URL (куда идти клиенту) и SFU_SECRET (чем
-    // подписан пропуск): без второго медиасервер никого не пустит.
-    const sfu = { available: sfuConfigured() };
+    // p2p. Признак — не только env (SFU_URL + SFU_SECRET), но и живой ответ на
+    // health-пинг: лежащий контейнер не должен собирать звонки на себя.
+    const sfu = { available: await sfuHealthy() };
 
     return { iceServers, sfu };
   }

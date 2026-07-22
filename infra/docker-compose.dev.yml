@@ -49,6 +49,9 @@ services:
       - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
       - SFU_URL=${SFU_URL:-/}
       - SFU_SECRET=${SFU_SECRET:-}
+      # В dev sfu остаётся в bridge-сети (host-сеть в Docker Desktop не работает),
+      # так что health-пинг ходит по compose-имени — это и есть дефолт в коде.
+      - SFU_INTERNAL_URL=${SFU_INTERNAL_URL:-http://sfu:3100}
     expose:
       - "3000"
 

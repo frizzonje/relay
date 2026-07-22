@@ -93,6 +93,9 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async handleConnection(client: Socket): Promise<void> {
     const claims = verifySfuToken(client.handshake.auth?.token);
     if (!claims) {
+      // Отказ обязан попасть в лог: клиент после него молча уедет в p2p, и
+      // «телефон видно, но не слышно» иначе разбирается только гаданием.
+      this.logger.warn(`connection rejected: bad or expired token (ua="${shortUa(client)}")`);
       client.emit('sfu-error', { error: 'unauthorized' });
       client.disconnect(true);
       return;
@@ -113,7 +116,7 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
       peers: this.rooms.producersFor(peer),
     });
     client.to(roomKey(peer.room)).emit('peer-joined', { peerId: peer.id, name: peer.name });
-    this.logger.log(`peer ${peer.id} joined "${peer.room}"`);
+    this.logger.log(`peer ${peer.id} (${peer.name || '?'}) joined "${peer.room}" ua="${shortUa(client)}"`);
   }
 
   handleDisconnect(client: Socket): void {
@@ -362,4 +365,11 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
 /** Комната socket.io под медиа — с префиксом, чтобы не пересечься с чем-либо ещё. */
 function roomKey(room: string): string {
   return `sfu:${room}`;
+}
+
+/** UA для лога: без переводов строк (лог не подделать) и без хвоста в километр. */
+function shortUa(client: Socket): string {
+  return String(client.handshake.headers['user-agent'] ?? '')
+    .replace(/\s+/g, ' ')
+    .slice(0, 120);
 }

@@ -122,6 +122,21 @@ let pingTimer: ReturnType<typeof setInterval> | null = null;
 
 const socket = () => getSocket();
 
+/**
+ * Веха звонка — в консоль и в серверный лог (`voice-diag`). Ключевые решения
+ * (выбор транспорта, фолбэк в p2p, обрыв) клиент принимает молча у себя, и
+ * сервер видит лишь их отсутствие; консоль же умирает вместе с вкладкой.
+ * «Телефон в канале, но не слышно» назавтра разбирается ровно по этим строчкам.
+ */
+function diag(event: string, detail?: string) {
+  console.info(`[voice] ${event}${detail ? ` — ${detail}` : ''}`);
+  try {
+    socket().emit('voice-diag', { event, ...(detail ? { detail } : {}) });
+  } catch {
+    /* сокета ещё нет — веха останется хотя бы в консоли */
+  }
+}
+
 // Транспорты медиа. Оба создаются лениво (host ссылается на функции ниже по
 // файлу) и живут всё время работы приложения; активен всегда ровно один — его
 // выбирает `pickTransport` при входе в канал, по режиму самого канала.
@@ -179,6 +194,7 @@ const host: TransportHost = {
   attachRemoteAudio,
   detachRemoteAudio,
   transportLost: onTransportLost,
+  diag,
   setStatus,
   setPing: (ping) => useVoiceStore.getState().setPing(ping),
   setUplink: (status) => useVoiceStore.getState().setUplink(status),
@@ -1053,15 +1069,15 @@ async function requestSfuTicket(targetRoom: string): Promise<VoiceTicket | null>
       .timeout(3000)
       .emitWithAck('sfu-token', { room: targetRoom, name: myName() });
     if (!res.ok) {
-      // 'not-sfu'/'unavailable' — обычное дело; остальное стоит увидеть в логе.
-      if (res.error !== 'not-sfu' && res.error !== 'unavailable') {
-        console.warn('[voice] пропуск в медиасервер не выдан:', res.error);
-      }
+      // 'not-sfu' — штатный p2p-канал; остальные отказы означают, что канал
+      // ЖДАЛ медиасервер, а мы уезжаем в p2p — веху обязан увидеть сервер.
+      if (res.error !== 'not-sfu') diag('sfu-ticket denied', res.error);
       return null;
     }
     return { url: res.url, token: res.token };
   } catch {
-    return null; // api не ответил вовремя — звоним напрямую
+    diag('sfu-ticket timeout'); // api не ответил вовремя — звоним напрямую
+    return null;
   }
 }
 
@@ -1092,6 +1108,8 @@ async function enterRoom(target: string, ticket: VoiceTicket | null) {
   transport = next;
   next.join(target, ticket ?? undefined);
   socket().emit('join', { room: target, name: myName(), clientId: loadClientId() });
+  // После join: сервер уже знает имя и впишет его в строку лога.
+  diag('transport', `${ticket ? 'sfu' : 'mesh'} room="${target}"`);
   // Сразу за join — своё медиасостояние: сервер только что сбросил его, а мут/
   // глушилка могли остаться с прошлого канала.
   broadcastMediaState();
@@ -1134,6 +1152,7 @@ function scheduleSfuRetry() {
         scheduleSfuRetry(); // всё ещё лежит — заходим на следующий круг
         return;
       }
+      diag('sfu-retry', 'ok — moving back to sfu');
       tx().leave();
       transport = null;
       dropRemoteTiles();
@@ -1151,11 +1170,13 @@ function onTransportLost(reason: 'setup' | 'lost') {
   if (!room || transport !== sfuTransport) return;
   // На входе — всегда в p2p: человек ещё никого не слышал, ждать ему нечего.
   if (reason === 'setup' || remoteCount() <= MESH_FALLBACK_MAX_PEERS) {
+    diag('sfu-lost', `${reason} → mesh fallback`);
     toast.error('Медиасервер недоступен — звоним напрямую.');
     sfx().play('error');
     void remigrate('mesh');
     return;
   }
+  diag('sfu-lost', `${reason} → waiting for sfu (${remoteCount()} peers)`);
   toast.error('Медиасервер недоступен. Ждём его: участников слишком много для прямых звонков.');
   sfx().play('error');
   setStatus('Медиасервер недоступен, ждём…');

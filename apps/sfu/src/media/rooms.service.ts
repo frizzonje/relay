@@ -107,8 +107,21 @@ export class RoomsService {
     const router = this.router(peer.room);
     if (!router) throw new Error('room is gone');
     const transport = await router.createWebRtcTransport(webRtcTransportOptions());
+    // Судьба медиапути видна только отсюда: клиентские логи умирают вместе со
+    // вкладкой, а «отвалились на второй минуте» назавтра разбирается ровно по
+    // этим строчкам. dtls connected — медиа реально пошло; ice disconnected —
+    // пакеты перестали доходить (сеть/фаервол), ещё ДО того, как клиент сдался.
+    const tag = `peer ${peer.id} transport ${transport.id.slice(0, 8)}`;
+    transport.on('icestatechange', (state) => {
+      if (state === 'connected') this.logger.log(`${tag} ice connected`);
+      else if (state === 'disconnected') this.logger.warn(`${tag} ice disconnected`);
+    });
     transport.on('dtlsstatechange', (state) => {
-      if (state === 'closed' || state === 'failed') transport.close();
+      if (state === 'connected') this.logger.log(`${tag} dtls connected`);
+      if (state === 'closed' || state === 'failed') {
+        this.logger.warn(`${tag} dtls ${state}`);
+        transport.close();
+      }
     });
     transport.on('@close', () => peer.transports.delete(transport.id));
     peer.transports.set(transport.id, transport);
