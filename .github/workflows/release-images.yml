@@ -1,4 +1,4 @@
-# Publish production api/web images to GHCR.
+# Publish production api/web/sfu images to GHCR.
 #
 # Trigger: pushing a version tag (v0.4.0, v1.2.3) or a manual dispatch. The
 # installer (install.sh) and docker-compose.prod.yml pull these images, so the
@@ -7,6 +7,7 @@
 # Images:
 #   ghcr.io/frizzonje/relay-api
 #   ghcr.io/frizzonje/relay-web
+#   ghcr.io/frizzonje/relay-sfu   (медиасервер, опциональный профиль)
 #
 # Tags applied: the git tag without leading "v" (0.4.0) + "latest".
 name: release-images
@@ -36,6 +37,8 @@ jobs:
             image: ghcr.io/frizzonje/relay-api
           - app: web
             image: ghcr.io/frizzonje/relay-web
+          - app: sfu
+            image: ghcr.io/frizzonje/relay-sfu
     steps:
       - uses: actions/checkout@v4
 
@@ -63,6 +66,10 @@ jobs:
         with:
           context: .
           file: apps/${{ matrix.app }}/Dockerfile
+          # arm64 собирается под QEMU. Для sfu это терпимо ровно потому, что
+          # mediasoup выкладывает готовый бинарник воркера и под arm64-glibc —
+          # если он когда-нибудь перестанет находиться, сборка уйдёт в C++ из
+          # исходников под эмуляцией (часы), и arm64 придётся отцепить.
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |

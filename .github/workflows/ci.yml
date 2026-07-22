@@ -27,7 +27,7 @@ jobs:
       - run: pnpm turbo run typecheck test build
 
   docker:
-    name: docker build (api + web)
+    name: docker build (api + web + sfu)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +35,10 @@ jobs:
         run: docker build -f apps/api/Dockerfile -t relay-api:ci .
       - name: Build web image
         run: docker build -f apps/web/Dockerfile -t relay-web:ci .
+      # Built on every push, not only on release: the media server is optional at
+      # runtime, but a broken image would only surface at `v*` tag time otherwise.
+      - name: Build sfu image
+        run: docker build -f apps/sfu/Dockerfile -t relay-sfu:ci .
 
   e2e:
     name: e2e (Playwright)

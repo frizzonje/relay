@@ -148,6 +148,21 @@ if ask_yn "Enable TURN relay? (recommended — fixes calls on mobile/CGNAT/stric
   ok "  TURN enabled (credential generated)."
 fi
 
+# ── 6b. Media server (SFU) ───────────────────────────────────────────────────
+# Optional, like TURN: without it calls still work over p2p, they just get heavy
+# past 3 people with video (everyone uploads their camera to everyone else).
+hr
+USE_SFU=0; SFU_SECRET=""
+printf '%s  Media server (SFU): needed for calls of 4+ with video.%s\n' "$DIM" "$N"
+printf '%s  It adds ~200 MB of image and needs UDP+TCP 40000-40100 open.%s\n' "$DIM" "$N"
+if ask_yn "Enable the media server?" "Y"; then
+  USE_SFU=1
+  # Shared signing key: api mints the pass, sfu verifies it. Empty on either
+  # side means no pass is ever accepted, so it must be generated exactly once.
+  SFU_SECRET="$(gen_secret)$(gen_secret)"
+  ok "  Media server enabled (signing key generated)."
+fi
+
 # ── 7. Fetch stack files ─────────────────────────────────────────────────────
 hr
 info "Installing to $INSTALL_DIR…"
@@ -174,6 +189,13 @@ fi
   if [ "$USE_TURN" = 1 ] && [ -n "$PUBIP" ]; then
     echo "TURN_EXTERNAL_IP=${PUBIP}"
   fi
+  # SFU_SECRET alone switches the media server on for api; the sfu container
+  # itself only runs under the profile. SFU_ANNOUNCED_IP for the same 1:1 NAT
+  # reason as TURN_EXTERNAL_IP — a container address in ICE means no media.
+  if [ "$USE_SFU" = 1 ]; then
+    echo "SFU_SECRET=${SFU_SECRET}"
+    if [ -n "$PUBIP" ]; then echo "SFU_ANNOUNCED_IP=${PUBIP}"; fi
+  fi
 } >"$ENV_FILE"
 chmod 600 "$ENV_FILE"
 ok ".env written (chmod 600)"
@@ -190,15 +212,29 @@ if command -v ufw >/dev/null 2>&1; then
     ufw allow 5349/tcp >/dev/null 2>&1 || true
     ufw allow 49160:49200/udp >/dev/null 2>&1 || true
   fi
+  if [ "$USE_SFU" = 1 ]; then
+    ufw allow 40000:40100/udp >/dev/null 2>&1 || true
+    ufw allow 40000:40100/tcp >/dev/null 2>&1 || true
+  fi
   ok "Firewall rules added (ufw)"
 else
   warn "ufw not found — open these ports in your cloud firewall manually:"
-  warn "  80/tcp, 443/tcp$([ "$USE_TURN" = 1 ] && echo ', 3478/tcp+udp, 5349/tcp, 49160-49200/udp')"
+  warn "  80/tcp, 443/tcp$([ "$USE_TURN" = 1 ] && echo ', 3478/tcp+udp, 5349/tcp, 49160-49200/udp')$([ "$USE_SFU" = 1 ] && echo ', 40000-40100/udp+tcp')"
+fi
+# ufw only guards the host; a cloud security group is a second, invisible wall —
+# and a media server that silently gets no packets is the classic way to lose an
+# evening. Say it out loud whichever firewall we just touched.
+if [ "$USE_SFU" = 1 ]; then
+  warn "If your provider has its own firewall (AWS/GCP/Hetzner/Yandex), open 40000-40100 UDP+TCP there too — the media server needs it."
 fi
 
 # ── 10. Launch ───────────────────────────────────────────────────────────────
 hr
-PROFILE_ARGS=""; [ "$USE_TURN" = 1 ] && PROFILE_ARGS="--profile turn"
+# `[ ... ] && VAR=…` as the last command of a line would exit the script under
+# `set -e` when the test is false, so profiles are assembled with plain ifs.
+PROFILE_ARGS=""
+if [ "$USE_TURN" = 1 ]; then PROFILE_ARGS="--profile turn"; fi
+if [ "$USE_SFU" = 1 ]; then PROFILE_ARGS="${PROFILE_ARGS:+$PROFILE_ARGS }--profile sfu"; fi
 info "Pulling images and starting the stack…"
 ( cd "$INSTALL_DIR" && docker compose -f "$COMPOSE_FILE" $PROFILE_ARGS pull ) || die "docker compose pull failed."
 ( cd "$INSTALL_DIR" && docker compose -f "$COMPOSE_FILE" $PROFILE_ARGS up -d ) || die "docker compose up failed."
@@ -254,8 +290,16 @@ if [ "$UP" = 1 ]; then ok "relay is running 🎉"; else warn "Server not answeri
 hr
 printf '  %sURL:%s      https://%s\n' "$B" "$N" "$URL_HOST"
 printf '  %sPassword:%s %s\n' "$B" "$N" "$SITE_PASSWORD"
-[ "$USING_DOMAIN" = 0 ] && printf '  %s(self-signed cert — your browser will warn on first visit)%s\n' "$DIM" "$N"
-[ "$USING_DOMAIN" = 1 ] && printf '  %s(first load may take ~30s while Let'\''s Encrypt issues the cert)%s\n' "$DIM" "$N"
+# Plain ifs: a false `[ ... ] && printf` is a failing last command and `set -e`
+# would end the installer right here, swallowing the rest of the summary.
+if [ "$USING_DOMAIN" = 0 ]; then
+  printf '  %s(self-signed cert — your browser will warn on first visit)%s\n' "$DIM" "$N"
+else
+  printf '  %s(first load may take ~30s while Let'\''s Encrypt issues the cert)%s\n' "$DIM" "$N"
+fi
+if [ "$USE_SFU" = 1 ]; then
+  printf '  %sMedia server: on%s %s(calls of 4+ with video; per-channel switch in the UI)%s\n' "$B" "$N" "$DIM" "$N"
+fi
 hr
 printf '  Manage it:  %srelay logs%s · %srelay update%s · %srelay config%s\n' "$B" "$N" "$B" "$N" "$B" "$N"
 printf '  Files in:   %s\n' "$INSTALL_DIR"
