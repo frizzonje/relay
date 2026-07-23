@@ -28,6 +28,11 @@ services:
   install:
     <<: *node
     command: sh -c "corepack enable && pnpm install --frozen-lockfile"
+    environment:
+      # web/api mediasoup-воркер не нужен (sfu собирается своим Dockerfile),
+      # а на alpine его postinstall падает (пребилд не под musl, python нет).
+      # Заданный MEDIASOUP_WORKER_BIN заставляет postinstall пропустить сборку.
+      - MEDIASOUP_WORKER_BIN=/bin/true
 
   api:
     <<: *node
