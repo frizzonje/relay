@@ -61,11 +61,24 @@ export interface Attachment {
   size: number;
   mime: string;
   kind: AttachmentKind;
+  /** Спойлер: клиент рисует вложение заблюренным до клика («показать»). */
+  spoiler?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
 // Чат
 // ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Снимок сообщения, на которое отвечают (reply). Храним копией, а не ссылкой:
+ * исходное могут отредактировать или удалить, а цитата в ответе должна остаться
+ * той, что видел автор в момент ответа. `text` — уже усечённая выжимка.
+ */
+export interface ReplyRef {
+  id: string;
+  name: string;
+  text: string;
+}
 
 export interface ChatMessage {
   /** Стабильный id сообщения — нужен для реакций. Системные могут быть без него. */
@@ -79,6 +92,10 @@ export interface ChatMessage {
   system?: boolean;
   /** Реакции на сообщение: эмодзи → теги тех, кто его поставил. */
   reactions?: ReactionMap;
+  /** Цитата сообщения, на которое это — ответ (снимок на момент ответа). */
+  replyTo?: ReplyRef;
+  /** Метка последнего редактирования (проставляется на сервере при chat-edit). */
+  editedTs?: number;
 }
 
 /** Реакции сообщения: эмодзи → список тегов. Пустые ключи сервер удаляет. */
@@ -306,6 +323,21 @@ export interface ChatJoinPayload {
 export interface ChatMessagePayload {
   text?: string;
   uploadId?: string;
+  /** id сообщения, на которое отвечаем — сервер вложит его снимок в replyTo. */
+  replyTo?: string;
+  /** Пометить вложение спойлером (сервер выставит attachment.spoiler). */
+  spoiler?: boolean;
+}
+
+/** Правка своего сообщения — по id, новый текст. Автор проверяется по тегу. */
+export interface ChatEditPayload {
+  id: string;
+  text: string;
+}
+
+/** Удаление своего сообщения — по id. Автор проверяется по тегу. */
+export interface ChatDeletePayload {
+  id: string;
 }
 
 /** Тогл реакции: повторная отправка того же эмодзи снимает её. */
@@ -390,6 +422,10 @@ export interface ClientToServerEvents {
   'chat-join': (payload: ChatJoinPayload) => void;
   'chat-leave': () => void;
   'chat-message': (payload: ChatMessagePayload) => void;
+  'chat-edit': (payload: ChatEditPayload) => void;
+  'chat-delete': (payload: ChatDeletePayload) => void;
+  /** «Печатает…» — клиент шлёт с троттлингом, серверу тело не нужно. */
+  'chat-typing': () => void;
   'chat-react': (payload: ChatReactPayload) => void;
   'media-update': (payload: MediaUpdatePayload) => void;
   rename: (payload: RenamePayload) => void;
@@ -448,6 +484,18 @@ export interface ServerToClientEvents {
   'chat-history': (messages: ChatMessage[]) => void;
   'chat-roster': (names: string[]) => void;
   'chat-reaction': (payload: ChatReactionRelay) => void;
+  /** Сообщение отредактировали — обновить текст и показать пометку «изменено». */
+  'chat-edited': (payload: ChatEditRelay) => void;
+  /** Сообщение удалили — убрать из ленты по id. */
+  'chat-deleted': (payload: ChatDeleteRelay) => void;
+  /** Кто-то печатает в открытом канале (кроме тебя) — показать индикатор. */
+  'chat-typing': (payload: ChatTypingRelay) => void;
+  /**
+   * Лёгкий пинг активности любого текстового канала (только слаг и время, без
+   * содержимого) — всем клиентам. По нему сайдбар зажигает «непрочитано» на
+   * каналах, которые сейчас не открыты. Контент за это не утекает.
+   */
+  'chat-activity': (payload: ChatActivityRelay) => void;
   'media-update': (payload: MediaUpdateRelay) => void;
   /** Участник голосовой комнаты сменил тег (обновить подпись плитки). */
   'peer-renamed': (payload: PeerRenamedRelay) => void;
@@ -476,6 +524,29 @@ export interface VoiceModeRelay {
 export interface ChatReactionRelay {
   id: string;
   reactions: ReactionMap;
+}
+
+/** Правка сообщения — новый текст и время правки, всем в канале. */
+export interface ChatEditRelay {
+  id: string;
+  text: string;
+  editedTs: number;
+}
+
+/** Удаление сообщения — id, всем в канале. */
+export interface ChatDeleteRelay {
+  id: string;
+}
+
+/** «Печатает…»: тег того, кто печатает (себе сервер это событие не шлёт). */
+export interface ChatTypingRelay {
+  name: string;
+}
+
+/** Пинг активности текстового канала: слаг и время последнего сообщения. */
+export interface ChatActivityRelay {
+  slug: string;
+  ts: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────

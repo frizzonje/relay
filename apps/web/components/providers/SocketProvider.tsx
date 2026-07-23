@@ -3,9 +3,11 @@
 import { useEffect, type ReactNode } from 'react';
 import { getSocket } from '@/lib/socket';
 import { initVoice } from '@/lib/voice';
+import { initHotkeys } from '@/lib/hotkeys';
 import { initDesktopBridge } from '@/lib/desktop';
 import { useUiStore, myName } from '@/stores/ui';
 import { useChatStore } from '@/stores/chat';
+import { useUnreadStore } from '@/stores/unread';
 import { useChannelsStore } from '@/stores/channels';
 import { useServersStore } from '@/stores/servers';
 import { forgetServerPassword, storedServerPasswords, unlockServer } from '@/lib/servers';
@@ -24,29 +26,91 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     const socket = getSocket();
     const chat = useChatStore.getState;
     const ui = useUiStore.getState;
+    const unread = useUnreadStore.getState;
+
+    // «Печатает…»: держим по тегу таймер угасания. Каждый пинг chat-typing его
+    // продлевает; истёк — убираем имя из списка. Отдельная функция сброса нужна
+    // при смене канала/реконнекте, чтобы чужой индикатор не «прилип».
+    const typingTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    const TYPING_TTL_MS = 4500;
+    function pushTyping() {
+      chat().setTyping([...typingTimers.keys()]);
+    }
+    function noteTyping(name: string) {
+      const prev = typingTimers.get(name);
+      if (prev) clearTimeout(prev);
+      typingTimers.set(
+        name,
+        setTimeout(() => {
+          typingTimers.delete(name);
+          pushTyping();
+        }, TYPING_TTL_MS),
+      );
+      pushTyping();
+    }
+    function stopTyping(name: string) {
+      const t = typingTimers.get(name);
+      if (!t) return;
+      clearTimeout(t);
+      typingTimers.delete(name);
+      pushTyping();
+    }
+    function clearTyping() {
+      typingTimers.forEach((t) => clearTimeout(t));
+      typingTimers.clear();
+      chat().setTyping([]);
+    }
+    /** Слаг открытого сейчас текстового канала (для отметок «прочитано»). */
+    const openSlug = () => ui().textRoom;
 
     // Навешиваем mesh-WebRTC обработчики (peers/offer/answer/ice/voice-presence,
     // reconnect, замер пинга) — один раз на приложение, до connect().
     initVoice();
+    // Глобальные горячие клавиши канала (по умолчанию пусто — всё выключено).
+    initHotkeys();
     // Десктоп-оболочка (Tauri): глобальный PTT-хоткей ↔ микрофон, статус в трее.
     // Вне Tauri — no-op. Асинхронный (ждёт навешивания слушателей), не блокируем.
     void initDesktopBridge();
 
     socket.on('chat', (msg) => {
-      if (!ui().textRoom) return;
+      const slug = openSlug();
+      if (!slug) return;
       chat().addMessage(msg);
+      // Автор прислал сообщение — печатать он закончил.
+      if (msg.name) stopTyping(msg.name);
+      // Подписанный канал считаем прочитанным по мере поступления.
+      unread().markRead(slug, msg.ts);
     });
     socket.on('chat-history', (list) => {
-      if (!ui().textRoom || !Array.isArray(list)) return;
+      if (!openSlug() || !Array.isArray(list)) return;
       chat().setHistory(list);
     });
     socket.on('chat-roster', (names) => {
-      if (!ui().textRoom || !Array.isArray(names)) return;
+      if (!openSlug() || !Array.isArray(names)) return;
       chat().setRoster(names);
     });
     socket.on('chat-reaction', ({ id, reactions }) => {
-      if (!ui().textRoom || !id) return;
+      if (!openSlug() || !id) return;
       chat().applyReaction(id, reactions ?? {});
+    });
+    socket.on('chat-edited', ({ id, text, editedTs }) => {
+      if (!openSlug() || !id) return;
+      chat().applyEdit(id, text, editedTs);
+    });
+    socket.on('chat-deleted', ({ id }) => {
+      if (!openSlug() || !id) return;
+      chat().applyDelete(id);
+    });
+    socket.on('chat-typing', ({ name }) => {
+      if (!openSlug() || !name || name === myName()) return;
+      noteTyping(name);
+    });
+    // Лёгкий пинг активности любого канала: открытый — сразу «прочитан», прочие
+    // копят непрочитанное для точки в сайдбаре.
+    socket.on('chat-activity', ({ slug, ts }) => {
+      if (!slug || typeof ts !== 'number') return;
+      if (slug === openSlug()) unread().markRead(slug, ts);
+      else unread().noteActivity(slug, ts);
     });
 
     // Реестр серверов — сервер шлёт полный список на connect и при изменениях.
@@ -91,6 +155,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       const room = ui().textRoom;
       if (room) {
         // У сокета новый id, история придёт заново — чистим ленту перед подпиской.
+        clearTyping();
         chat().reset();
         socket.emit('chat-join', { room, name: myName() });
       }
@@ -99,6 +164,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // Смена открытого текстового канала: подписка/отписка на сервере.
     const unsub = useUiStore.subscribe((state, prev) => {
       if (state.textRoom === prev.textRoom) return;
+      clearTyping();
       if (state.textRoom) {
         chat().reset();
         socket.emit('chat-join', { room: state.textRoom, name: myName() });
@@ -112,10 +178,15 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
     return () => {
       unsub();
+      clearTyping();
       socket.off('chat');
       socket.off('chat-history');
       socket.off('chat-roster');
       socket.off('chat-reaction');
+      socket.off('chat-edited');
+      socket.off('chat-deleted');
+      socket.off('chat-typing');
+      socket.off('chat-activity');
       socket.off('servers');
       socket.off('server-unlock-result');
       socket.off('channels');

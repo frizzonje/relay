@@ -10,6 +10,7 @@ import { listItem, springLayout } from '@/lib/motion';
 import { useUiStore } from '@/stores/ui';
 import { useChannelsStore } from '@/stores/channels';
 import { useServersStore } from '@/stores/servers';
+import { useUnreadStore, isChannelUnread } from '@/stores/unread';
 import { DEFAULT_STATUS, MAIN_SERVER_ID } from '@/lib/constants';
 import { avatarStyle } from '@/lib/avatar';
 import { serverGradient, serverInitials } from '@/lib/server-visual';
@@ -29,6 +30,28 @@ import { useVoiceStore } from '@/stores/voice';
 import { VoiceMembers } from '@/components/layout/VoiceMembers';
 import { CreateChannelDialog } from '@/components/layout/CreateChannelDialog';
 import { InviteDialog, LinkIcon } from '@/components/layout/InviteDialog';
+
+/**
+ * Подпись текстового канала с точкой «непрочитано». Открытый канал считается
+ * прочитанным (точка гаснет); в остальных она загорается на входящих, пока ты
+ * туда не заглянул (см. stores/unread). Непрочитанный канал чуть ярче и жирнее.
+ */
+function TextChannelLabel({ slug, name, active }: { slug: string; name: string; active: boolean }) {
+  const unread = useUnreadStore((s) => !active && isChannelUnread(s, slug));
+  return (
+    <>
+      <span
+        aria-hidden
+        className={cn(
+          'h-1.5 w-1.5 shrink-0 rounded-full bg-accent-strong transition-opacity',
+          unread ? 'opacity-100' : 'opacity-0',
+        )}
+      />
+      <span className={cn('text-text-muted/70', unread && 'text-text/80')}>#</span>
+      <span className={cn('truncate', unread && 'font-medium text-text-header')}>{name}</span>
+    </>
+  );
+}
 
 /** Заголовок секции с необязательной кнопкой «+» (появляется на ховере, как в Discord). */
 function Category({
@@ -329,8 +352,11 @@ export function Sidebar() {
                 onDelete={c.removable ? () => deleteChannel(c.id) : undefined}
                 deleteLabel="Удалить канал"
               >
-                <span className="text-text-muted/70">#</span>
-                <span>{c.name}</span>
+                <TextChannelLabel
+                  slug={c.slug}
+                  name={c.name}
+                  active={view === 'text' && textRoom === c.slug}
+                />
               </ChannelRow>
             </motion.div>
           ))}

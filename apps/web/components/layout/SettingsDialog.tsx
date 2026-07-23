@@ -5,8 +5,10 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { checkForUpdates, installUpdate, switchServer } from '@/lib/desktop';
 import { getTheme, setTheme, type Theme } from '@/lib/theme';
+import { comboLabel, eventToCombo } from '@/lib/hotkeys';
 import { useDesktopStore } from '@/stores/desktop';
 import { useVoiceStore } from '@/stores/voice';
+import { useHotkeysStore, HOTKEY_ACTIONS, type HotkeyAction } from '@/stores/hotkeys';
 import {
   loadMediaPrefs,
   refreshMics,
@@ -20,11 +22,12 @@ import {
   getMicLevel,
 } from '@/lib/voice';
 
-type Tab = 'av' | 'appearance' | 'notifications' | 'account';
+type Tab = 'av' | 'appearance' | 'hotkeys' | 'notifications' | 'account';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'av', label: 'Аудио и видео' },
   { id: 'appearance', label: 'Внешний вид' },
+  { id: 'hotkeys', label: 'Горячие клавиши' },
   { id: 'notifications', label: 'Уведомления' },
   { id: 'account', label: 'Аккаунт' },
 ];
@@ -158,6 +161,80 @@ function Toggle({
           )}
         />
       </button>
+    </div>
+  );
+}
+
+/**
+ * Строка назначения горячей клавиши. По кнопке «Назначить» ловим следующее
+ * нажатие (перехват в фазе capture, чтобы не сработали чужие обработчики) и
+ * пишем его как привязку; Esc — отмена. Крестик снимает привязку (действие
+ * выключается). Без привязки действие не работает — это и есть «по умолчанию выкл».
+ */
+function KeybindRow({
+  action,
+  label,
+  hint,
+}: {
+  action: HotkeyAction;
+  label: string;
+  hint: string;
+}) {
+  const combo = useHotkeysStore((s) => s.binds[action]);
+  const setBind = useHotkeysStore((s) => s.setBind);
+  const [recording, setRecording] = useState(false);
+
+  useEffect(() => {
+    if (!recording) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Escape') {
+        setRecording(false);
+        return;
+      }
+      const c = eventToCombo(e);
+      if (!c) return; // нажат один модификатор — ждём основную клавишу
+      setBind(action, c);
+      setRecording(false);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [recording, action, setBind]);
+
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-[10px] border border-line bg-bg-elev/60 px-3.5 py-3">
+      <div className="min-w-0">
+        <div className="text-[14px] font-medium text-text">{label}</div>
+        <div className="text-[12px] text-text-muted">{hint}</div>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setRecording((r) => !r)}
+          className={cn(
+            'min-w-[120px] rounded-[8px] border px-3 py-1.5 text-center font-mono text-[12px] outline-none transition-colors',
+            recording
+              ? 'border-accent-strong/60 bg-accent-strong/10 text-text-header'
+              : combo
+                ? 'border-line-strong bg-bg-active text-text hover:border-line-strong hover:bg-line-strong'
+                : 'border-dashed border-line-strong text-text-muted hover:text-text',
+          )}
+        >
+          {recording ? 'Нажмите клавиши…' : combo ? comboLabel(combo) : 'Назначить'}
+        </button>
+        {combo && !recording && (
+          <button
+            type="button"
+            onClick={() => setBind(action, null)}
+            aria-label={`Сбросить: ${label}`}
+            title="Сбросить"
+            className="grid h-7 w-7 place-items-center rounded-[7px] text-lg leading-none text-text-muted outline-none transition-colors hover:bg-danger/10 hover:text-danger"
+          >
+            ×
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -395,6 +472,17 @@ export function SettingsDialog({
                   title="Светлая тема"
                   hint="Переключить оформление между тёмным и светлым."
                 />
+              </div>
+            ) : tab === 'hotkeys' ? (
+              <div className="flex flex-col gap-2.5">
+                <p className="text-[12.5px] leading-relaxed text-text-muted">
+                  По умолчанию всё выключено. Назначь клавиши нужным действиям — они
+                  работают глобально, пока ты в голосовом канале. Клавиши игнорируются,
+                  когда пишешь в чат.
+                </p>
+                {HOTKEY_ACTIONS.map((a) => (
+                  <KeybindRow key={a.id} action={a.id} label={a.label} hint={a.hint} />
+                ))}
               </div>
             ) : (
               <Placeholder>раздел появится позже</Placeholder>

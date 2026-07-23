@@ -426,6 +426,101 @@
     transform: scale(1);
   }
 }
+
+/* — relay: доп. варианты анимации знака (variant="pulse|onair|orbit|handshake"),
+   чтобы логотип не проигрывал одну и ту же анимацию каждый раз — */
+
+/* pulse: пульс присутствия */
+@keyframes logoHbPulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  12% {
+    transform: scale(1.16);
+  }
+  26% {
+    transform: scale(1);
+  }
+}
+@keyframes logoHbRing {
+  0% {
+    transform: scale(0.7);
+    opacity: 0.5;
+  }
+  70% {
+    opacity: 0;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+/* onair: в эфире */
+@keyframes logoPing {
+  0% {
+    transform: scale(0.55);
+    opacity: 0.6;
+  }
+  75% {
+    opacity: 0;
+  }
+  100% {
+    transform: scale(3);
+    opacity: 0;
+  }
+}
+@keyframes logoTopGlow {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 1px rgba(231, 233, 236, 0.3));
+  }
+  50% {
+    filter: drop-shadow(0 0 5px rgba(231, 233, 236, 0.9));
+  }
+}
+
+/* handshake: рукопожатие */
+@keyframes logoHsEdge {
+  0% {
+    stroke-dashoffset: var(--len);
+    opacity: 0;
+  }
+  6% {
+    opacity: 1;
+  }
+  20% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.9;
+  }
+  55% {
+    opacity: 0;
+    stroke-dashoffset: 0;
+  }
+  100% {
+    opacity: 0;
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes logoHsNode {
+  0%,
+  100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 0 rgba(242, 243, 245, 0));
+  }
+  12% {
+    transform: scale(1.22);
+    filter: drop-shadow(0 0 4px rgba(242, 243, 245, 0.8));
+  }
+  24% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 0 rgba(242, 243, 245, 0));
+  }
+}
 /* — relay: атмосфера фона (дрейф пятен) — */
 @keyframes bbDrift1 {
   0%,
@@ -503,6 +598,85 @@
 }
 .dialog-content[data-state='closed'] {
   animation: dialogContentOut 0.15s ease forwards;
+}
+
+/* — Просмотрщик картинок (ImageLightbox): затемнение + всплытие панелей — */
+@keyframes lbxOverlayIn {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes lbxOverlayOut {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes lbxImgIn {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes lbxChrome {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+/* Подсказка внизу: показать и мягко погасить через пару секунд. */
+@keyframes lbxHint {
+  0% {
+    opacity: 0;
+  }
+  10%,
+  72% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.lbx-overlay[data-state='open'] {
+  animation: lbxOverlayIn 0.2s ease;
+}
+.lbx-overlay[data-state='closed'] {
+  animation: lbxOverlayOut 0.16s ease forwards;
+}
+.lbx-img-in {
+  animation: lbxImgIn 0.28s ease both;
+}
+.lbx-chrome {
+  animation: lbxChrome 0.26s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.lbx-hint {
+  animation: lbxHint 4.5s ease forwards;
+}
+
+/* ============================================================================
+   Чат: точки индикатора «печатает…» и вспышка при переходе к цитате.
+   ========================================================================== */
+@keyframes typingDot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+@keyframes msgFlash {
+  0% {
+    background-color: rgba(120, 166, 255, 0.22);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.msg-flash {
+  animation: msgFlash 1.2s ease-out;
+  border-radius: 8px;
 }
 
 /* ============================================================================

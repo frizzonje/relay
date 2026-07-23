@@ -35,6 +35,17 @@ interface ChatPayload {
   name?: unknown;
   text?: unknown;
   uploadId?: unknown;
+  replyTo?: unknown;
+  spoiler?: unknown;
+}
+
+interface ChatEditPayload {
+  id?: unknown;
+  text?: unknown;
+}
+
+interface ChatDeletePayload {
+  id?: unknown;
 }
 
 interface ChatReactPayload {
@@ -159,6 +170,14 @@ function verifyServerPassword(password: string, stored: string): boolean {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
+// Снимок цитируемого сообщения (reply) — копией, а не ссылкой: исходное могут
+// отредактировать/удалить, цитата остаётся прежней. Совпадает с ReplyRef из shared.
+interface ReplyRef {
+  id: string;
+  name: string;
+  text: string;
+}
+
 interface ChatMessage {
   id?: string;
   name: string;
@@ -167,6 +186,8 @@ interface ChatMessage {
   attachment?: Attachment;
   system?: boolean;
   reactions?: ReactionMap;
+  replyTo?: ReplyRef;
+  editedTs?: number;
 }
 
 const CHAT_PREFIX = 'chat:';
@@ -890,12 +911,25 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!room) return;
     const text = typeof payload?.text === 'string' ? payload.text.trim().slice(0, 500) : '';
 
-    // Вложение берём из доверенного реестра по id (клиент не задаёт url/mime сам)
+    // Вложение берём из доверенного реестра по id (клиент не задаёт url/mime сам).
+    // Спойлер — метка сообщения: копируем вложение, чтобы не мутировать общий реестр.
     const uploadId = typeof payload?.uploadId === 'string' ? payload.uploadId : undefined;
-    const attachment = this.uploads.get(uploadId);
+    const stored = this.uploads.get(uploadId);
+    const attachment =
+      stored && payload?.spoiler === true ? { ...stored, spoiler: true } : stored;
 
     // Пустое сообщение без вложения — игнорируем
     if (!text && !attachment) return;
+
+    const history = this.chatHistory.get(room) ?? [];
+
+    // Ответ: снимок цитируемого сообщения того же канала (усечённый текст). Само
+    // сообщение могут потом отредактировать/удалить — цитата останется прежней.
+    const replyToId = typeof payload?.replyTo === 'string' ? payload.replyTo : '';
+    const src = replyToId ? history.find((m) => m.id === replyToId && !m.system) : undefined;
+    const replyTo: ReplyRef | undefined = src
+      ? { id: src.id!, name: src.name, text: src.text.slice(0, 140) }
+      : undefined;
 
     const msg: ChatMessage = {
       id: randomUUID(),
@@ -903,14 +937,72 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       text,
       ts: Date.now(),
       ...(attachment ? { attachment } : {}),
+      ...(replyTo ? { replyTo } : {}),
     };
 
-    const history = this.chatHistory.get(room) ?? [];
     history.push(msg);
     if (history.length > HISTORY_LIMIT) history.shift();
     this.rememberHistory(room, history);
 
     this.server.to(room).emit('chat', msg);
+    // Лёгкий пинг активности — всем: сайдбар зажигает «непрочитано» на закрытых
+    // сейчас каналах. Только слаг и время, без содержимого (контент не утекает).
+    this.server.emit('chat-activity', { slug: room.slice(CHAT_PREFIX.length), ts: msg.ts });
+  }
+
+  // Правка своего сообщения. Автора сверяем по тегу (chatName) — та же модель
+  // доверия, что у реакций: имя самоназначаемое, но менять чужие реплики нельзя.
+  // Системные и сообщения-вложения без текста не редактируем.
+  @SubscribeMessage('chat-edit')
+  handleChatEdit(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatEditPayload) {
+    if (!this.allow(client) || this.isGuest(client)) return;
+    const room = client.data.chatRoom as string | undefined;
+    if (!room) return;
+    const id = typeof payload?.id === 'string' ? payload.id : '';
+    const text = typeof payload?.text === 'string' ? payload.text.trim().slice(0, 500) : '';
+    if (!id || !text) return;
+
+    const msg = this.chatHistory.get(room)?.find((m) => m.id === id && !m.system);
+    if (!msg) return;
+    const name = (client.data.chatName as string) || 'Аноним';
+    if (msg.name !== name) return;
+
+    msg.text = text;
+    msg.editedTs = Date.now();
+    this.server.to(room).emit('chat-edited', { id, text, editedTs: msg.editedTs });
+  }
+
+  // Удаление своего сообщения (автор — по тегу, как в chat-edit). Убираем из
+  // истории и просим всех снять из ленты. Цитаты в чужих ответах не трогаем —
+  // они хранят собственный снимок.
+  @SubscribeMessage('chat-delete')
+  handleChatDelete(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatDeletePayload) {
+    if (!this.allow(client) || this.isGuest(client)) return;
+    const room = client.data.chatRoom as string | undefined;
+    if (!room) return;
+    const id = typeof payload?.id === 'string' ? payload.id : '';
+    if (!id) return;
+
+    const history = this.chatHistory.get(room);
+    const idx = history?.findIndex((m) => m.id === id && !m.system) ?? -1;
+    if (!history || idx === -1) return;
+    const name = (client.data.chatName as string) || 'Аноним';
+    if (history[idx].name !== name) return;
+
+    history.splice(idx, 1);
+    this.rememberHistory(room, history);
+    this.server.to(room).emit('chat-deleted', { id });
+  }
+
+  // «Печатает…»: клиент шлёт с троттлингом, релеим остальным в канале (себе — нет).
+  // Тег берём с сокета, тело клиента не нужно. allow() гасит перебор.
+  @SubscribeMessage('chat-typing')
+  handleChatTyping(@ConnectedSocket() client: Socket) {
+    if (!this.allow(client) || this.isGuest(client)) return;
+    const room = client.data.chatRoom as string | undefined;
+    if (!room) return;
+    const name = (client.data.chatName as string) || 'Аноним';
+    client.to(room).emit('chat-typing', { name });
   }
 
   // Тогл реакции на сообщение: тег добавляется/снимается из набора по эмодзи.
