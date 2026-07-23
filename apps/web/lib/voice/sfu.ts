@@ -196,7 +196,15 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
 
   async function produce(source: Source, track: MediaStreamTrack): Promise<void> {
     if (!sendTransport || !device) return;
-    if (track.kind === 'video' && !device.canProduce('video')) return;
+    if (track.kind === 'video' && !device.canProduce('video')) {
+      // Тихий отказ здесь — это и есть «звук есть, видео нет»: движок не нашёл
+      // ни одного видеокодека роутера в своих send-возможностях (WebKit шлёт
+      // почти только H264 нужного профиля). Раньше молчали — теперь кричим, и в
+      // консоль, и на сервер: иначе диагностируется только гаданием.
+      console.error('[sfu] device cannot produce video — нет совпадающего кодека');
+      host.diag('sfu no video codec', source);
+      return;
+    }
     // Дорожка этой роли уже течёт (повторный вызов publishScreen и т.п.) —
     // подменяем её в существующем producer'е, а не заводим второй.
     const live = producers.get(source);
@@ -222,6 +230,10 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
           : {}),
       });
       producers.set(source, producer);
+      // Какой кодек реально согласовали — виден в консоли обеих сторон и на
+      // сервере. По нему сразу ясно, что ушло (video/VP8, video/H264…), а не
+      // «producer вроде создан». Дёшево и снимает половину догадок при разборе.
+      host.diag('sfu produce', `${source} ${producer.rtpParameters.codecs[0]?.mimeType ?? '?'}`);
     } catch (err) {
       console.error(`[sfu] produce ${source} failed:`, err);
     }

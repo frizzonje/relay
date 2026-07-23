@@ -45,7 +45,15 @@ export const MEDIA_CODECS: types.RouterRtpCodecCapability[] = [
     clockRate: 90000,
     parameters: {
       'packetization-mode': 1,
-      'profile-level-id': '4d0032',
+      // Constrained Baseline 3.1 — единственный H264-профиль, который в WebRTC
+      // предлагают ВСЕ (Chrome, Firefox, Safari/WKWebView, WebView2). Прежний
+      // Main 5.0 (`4d0032`) браузеры для WebRTC не отдают, поэтому H264 с ним не
+      // матчился ни с кем: WebKit (десктоп-оболочка на macOS) шлёт видео почти
+      // только H264 — с несовместимым профилем `canProduce('video')` у него
+      // становился false, и видео молча не уходило, а звук (Opus) шёл. Ровно
+      // «собеседник слышит, но не видит». Держим и `level-asymmetry-allowed`,
+      // чтобы стороны могли объявлять разные уровни.
+      'profile-level-id': '42e01f',
       'level-asymmetry-allowed': 1,
       'x-google-start-bitrate': 1000,
     },
