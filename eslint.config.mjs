@@ -16,6 +16,9 @@ export default tseslint.config(
       '**/dist/**',
       '**/.turbo/**',
       '**/coverage/**',
+      // Сборочный каталог Rust-клиента: у того, кто собирал десктоп локально,
+      // сюда падают сгенерированные Tauri скрипты, и линт тонет в их ошибках.
+      'clients/desktop/src-tauri/target/**',
       '**/*.tsbuildinfo',
       '**/next-env.d.ts',
       'e2e/**',
@@ -44,6 +47,22 @@ export default tseslint.config(
   {
     files: ['apps/api/**/*.ts', 'packages/**/*.ts'],
     languageOptions: { globals: { ...globals.node } },
+  },
+
+  // Экран выбора сервера десктоп-клиента: обычная браузерная страница внутри
+  // webview (без сборки и без Next), поэтому браузерные глобалы ей нужны так же,
+  // как фронту — иначе весь файл тонет в no-undef.
+  {
+    files: ['clients/desktop/src/**/*.js'],
+    languageOptions: { globals: { ...globals.browser } },
+  },
+
+  // AudioWorklet демо-звука: исполняется в отдельном worklet-скоупе, где нет ни
+  // window, ни модульной сборки, зато есть свои глобалы (globals.browser их не
+  // знает) — без этого файл падает на no-undef.
+  {
+    files: ['apps/web/public/*-worklet.js'],
+    languageOptions: { globals: { ...globals.browser, ...globals.audioworklet } },
   },
 
   // CommonJS-скрипты сборки (Node, require разрешён).
