@@ -92,6 +92,34 @@ function IconArrowDown() {
   );
 }
 
+// ── Капсула действий сообщения ─────────────────────────────────────────────
+// Одна геометрия на тулбар и на его выпадающие меню: «⋯» и пикер реакций
+// раскрываются в панель ровно того же размера и формы, что и сама капсула,
+// и выравниваются по её правому краю — не «второе окошко другой породы».
+/** Геометрия капсулы: скругление, рамка, внутренний отступ, шаг кнопок. */
+const CAPSULE = 'flex items-center gap-px rounded-full border border-white/[0.08] p-[2px] backdrop-blur-md';
+/**
+ * Выпадающая капсула: та же геометрия, но плотный фон и тень — она лежит
+ * поверх ленты. Позиционируется от тулбара (у него `relative`), поэтому оба
+ * меню падают на одну высоту и по одной вертикали.
+ */
+const CAPSULE_POPOVER = cn(
+  CAPSULE,
+  'absolute -right-px top-[calc(100%+6px)] z-30 bg-bg-deep/95 shadow-[0_12px_32px_rgba(0,0,0,0.55)]',
+);
+/** Ячейка капсулы — общий размер для кнопок и эмодзи. */
+const CAPSULE_CELL = 'grid h-6 w-6 place-items-center rounded-full';
+/** Кнопка капсулы: ячейка плюс монохромный ховер. */
+const CAPSULE_BTN = cn(CAPSULE_CELL, 'text-text-muted transition-colors hover:bg-white/[0.08] hover:text-text-header');
+/** Общая анимация раскрытия меню — одинаковая у пикера и у «⋯». */
+const popoverAnim = {
+  initial: { opacity: 0, y: -4, scale: 0.94 },
+  animate: { opacity: 1, y: 0, scale: 1 },
+  exit: { opacity: 0, y: -4, scale: 0.94 },
+  transition: { duration: 0.14, ease: [0.16, 1, 0.3, 1] as const },
+  style: { transformOrigin: 'top right' },
+};
+
 /** Полоса предпросмотра ещё не отправленных вложений — над композером. */
 function PendingAttachments({
   items,
@@ -336,30 +364,21 @@ function AddReaction({ id, closeSignal }: { id: string; closeSignal: number }) {
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
 
+  // Обёртка без `relative`: меню якорится к капсуле тулбара (см. CAPSULE_POPOVER).
   return (
-    <div ref={wrapRef} className="relative">
+    <div ref={wrapRef}>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         title="Поставить реакцию"
         aria-label="Поставить реакцию"
-        className={cn(
-          'grid h-6 w-6 place-items-center rounded-full text-text-muted transition-colors hover:bg-white/[0.08] hover:text-text-header',
-          open && 'bg-white/[0.08] text-text-header',
-        )}
+        className={cn(CAPSULE_BTN, open && 'bg-white/[0.08] text-text-header')}
       >
         <IconSmile />
       </button>
       <AnimatePresence>
         {open && (
-          <motion.div
-            initial={{ opacity: 0, y: -4, scale: 0.94 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -4, scale: 0.94 }}
-            transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
-            style={{ transformOrigin: 'top right' }}
-            className="absolute right-0 top-9 z-30 flex gap-0.5 rounded-full border border-white/10 bg-bg-deep/85 p-1 shadow-[0_12px_32px_rgba(0,0,0,0.55)] backdrop-blur-md"
-          >
+          <motion.div {...popoverAnim} className={CAPSULE_POPOVER}>
             {/* Эмодзи обесцвечены до наведения — не выбиваются из монохрома. */}
             {REACTION_EMOJIS.map((emoji) => (
               <button
@@ -369,7 +388,10 @@ function AddReaction({ id, closeSignal }: { id: string; closeSignal: number }) {
                   react(id, emoji);
                   setOpen(false);
                 }}
-                className="grid h-8 w-8 place-items-center rounded-full text-[17px] grayscale transition-[transform,filter,background-color] duration-100 hover:scale-110 hover:bg-white/[0.06] hover:grayscale-0"
+                className={cn(
+                  CAPSULE_CELL,
+                  'text-[15px] leading-none grayscale transition-[transform,filter,background-color] duration-100 hover:scale-110 hover:bg-white/[0.08] hover:grayscale-0',
+                )}
               >
                 {emoji}
               </button>
@@ -418,40 +440,28 @@ function MoreMenu({
           setOpen(false);
           action();
         }}
-        className={cn(
-          'grid h-7 w-7 place-items-center rounded-full text-text-muted transition-colors hover:bg-white/[0.08] hover:text-text-header',
-          danger && 'hover:!bg-danger/15 hover:!text-danger',
-        )}
+        className={cn(CAPSULE_BTN, danger && 'hover:!bg-danger/15 hover:!text-danger')}
       >
         {icon}
       </button>
     );
   }
 
+  // Обёртка без `relative`: меню якорится к капсуле тулбара (см. CAPSULE_POPOVER).
   return (
-    <div ref={wrapRef} className="relative">
+    <div ref={wrapRef}>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         title="Ещё"
         aria-label="Ещё действия"
-        className={cn(
-          'grid h-6 w-6 place-items-center rounded-full text-text-muted transition-colors hover:bg-white/[0.08] hover:text-text-header',
-          open && 'bg-white/[0.08] text-text-header',
-        )}
+        className={cn(CAPSULE_BTN, open && 'bg-white/[0.08] text-text-header')}
       >
         <IconDots />
       </button>
       <AnimatePresence>
         {open && (
-          <motion.div
-            initial={{ opacity: 0, y: -4, scale: 0.94 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -4, scale: 0.94 }}
-            transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
-            style={{ transformOrigin: 'top right' }}
-            className="absolute right-0 top-8 z-30 flex gap-0.5 rounded-full border border-white/10 bg-bg-deep/90 p-1 shadow-[0_12px_32px_rgba(0,0,0,0.55)] backdrop-blur-md"
-          >
+          <motion.div {...popoverAnim} className={CAPSULE_POPOVER}>
             {item('Редактировать', <IconEdit />, false, onEdit)}
             {item('Удалить', <IconTrash />, true, onDelete)}
           </motion.div>
@@ -479,10 +489,7 @@ function ActionBtn({
       title={title}
       aria-label={title}
       onClick={onClick}
-      className={cn(
-        'grid h-6 w-6 place-items-center rounded-full text-text-muted transition-colors hover:bg-white/[0.08] hover:text-text-header',
-        danger && 'hover:!bg-danger/15 hover:!text-danger',
-      )}
+      className={cn(CAPSULE_BTN, danger && 'hover:!bg-danger/15 hover:!text-danger')}
     >
       {children}
     </button>
@@ -578,26 +585,34 @@ function Message({
       {editing && (
         // Крестик отмены — снаружи карточки, в том же слоте, что и панель
         // действий: не влияет на ширину сообщения, поэтому рамка не растёт.
-        <button
-          type="button"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={onCancelEdit}
-          title="Отменить правку"
-          aria-label="Отменить правку"
-          className="ml-1.5 mt-1.5 grid h-6 w-6 shrink-0 place-items-center rounded-full border border-white/[0.08] bg-white/[0.03] text-text-faint backdrop-blur-md transition-colors hover:bg-white/[0.08] hover:text-text"
-        >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
+        <div className={cn(CAPSULE, 'ml-1.5 mt-1.5 shrink-0 bg-white/[0.03]')}>
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onCancelEdit}
+            title="Отменить правку"
+            aria-label="Отменить правку"
+            className={CAPSULE_BTN}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
       )}
       {msg.id && !editing && (
         // Стеклянная капсула действий сразу справа от карточки — максимум три
         // кружка: ответить, реакция и «⋯» (правка/удаление своего сообщения
         // спрятаны в меню). Появляется на ховере лёгким выездом; при открытом
-        // пикере/меню держится focus-within.
-        <div className="pointer-events-none ml-1.5 mt-1.5 flex shrink-0 translate-x-1 items-center gap-px rounded-full border border-white/[0.08] bg-white/[0.03] p-[2px] opacity-0 backdrop-blur-md transition-all duration-150 focus-within:pointer-events-auto focus-within:translate-x-0 focus-within:opacity-100 group-hover:pointer-events-auto group-hover:translate-x-0 group-hover:opacity-100">
+        // пикере/меню держится focus-within. `relative` — якорь выпадающих
+        // капсул, чтобы они падали ровно под неё и по её правому краю.
+        <div
+          className={cn(
+            CAPSULE,
+            'pointer-events-none relative ml-1.5 mt-1.5 shrink-0 translate-x-1 bg-white/[0.03] opacity-0 transition-all duration-150 focus-within:pointer-events-auto focus-within:translate-x-0 focus-within:opacity-100 group-hover:pointer-events-auto group-hover:translate-x-0 group-hover:opacity-100',
+          )}
+        >
           <ActionBtn title="Ответить" onClick={() => onReply(msg)}>
             <IconReply />
           </ActionBtn>
