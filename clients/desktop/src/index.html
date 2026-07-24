@@ -49,7 +49,7 @@
         outline: none;
       }
       input:focus { border-color: rgba(255, 255, 255, 0.24); }
-      button {
+      .primary {
         margin-top: 16px;
         width: 100%;
         padding: 11px 12px;
@@ -61,27 +61,107 @@
         font-size: 14px;
         cursor: pointer;
       }
-      button:disabled { opacity: 0.5; cursor: default; }
+      .primary:disabled { opacity: 0.5; cursor: default; }
       .err { color: var(--danger); font-size: 12px; min-height: 16px; margin-top: 10px; }
       /* :not([hidden]) — иначе display перебил бы UA-стиль атрибута hidden. */
       .skip:not([hidden]) { display: inline-block; color: var(--muted); font-size: 12px; margin-top: 4px; }
       .skip:hover { color: var(--text); }
+
+      /* Автоподключение к последнему серверу: пока идёт проверка, показываем
+         куда именно идём и даём отменить — иначе автопереход выглядел бы как
+         «клиент сам куда-то ушёл». */
+      .auto-origin {
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+        font-size: 14px;
+        margin: 0 0 6px;
+        overflow-wrap: anywhere;
+      }
+      .auto-note { color: var(--muted); font-size: 12px; margin: 0; }
+      .ghost {
+        margin-top: 16px;
+        width: 100%;
+        padding: 10px 12px;
+        background: transparent;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .ghost:hover { color: var(--text); border-color: rgba(255, 255, 255, 0.24); }
+
+      /* Недавние серверы: чаще всего нужен один из уже знакомых адресов, а не
+         набор с нуля. */
+      .recent-title {
+        margin: 20px 0 8px;
+        font-size: 11px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .recent { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+      .recent li { display: flex; align-items: center; gap: 4px; }
+      .recent-go {
+        flex: 1;
+        min-width: 0;
+        padding: 8px 10px;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        color: var(--text);
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+        font-size: 12.5px;
+        text-align: left;
+        cursor: pointer;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .recent-go:hover { border-color: var(--line); background: rgba(255, 255, 255, 0.04); }
+      .recent-del {
+        flex: none;
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        background: transparent;
+        border: 0;
+        border-radius: 8px;
+        color: var(--muted);
+        font-size: 17px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      .recent-del:hover { color: var(--danger); background: rgba(229, 87, 63, 0.1); }
     </style>
   </head>
   <body>
     <main class="card">
       <p class="brand">relay</p>
-      <p class="hint">Адрес вашей инсталляции relay</p>
+      <p class="hint" id="hint">Адрес вашей инсталляции relay</p>
+
+      <!-- Автоподключение к последнему серверу. Показывается вместо формы,
+           пока идёт проверка доступности; «Отмена» возвращает к выбору. -->
+      <section id="auto" hidden>
+        <p class="auto-origin" id="auto-origin"></p>
+        <p class="auto-note">Проверяю доступность…</p>
+        <button class="ghost" id="auto-cancel" type="button">Отмена</button>
+      </section>
+
       <form id="form">
         <label for="url">Сервер</label>
         <input id="url" name="url" type="url" inputmode="url"
                placeholder="https://relay.example.com" autocomplete="off" spellcheck="false" />
-        <button id="go" type="submit">Подключиться</button>
+        <button class="primary" id="go" type="submit">Подключиться</button>
         <p class="err" id="err"></p>
         <!-- Показывается только когда probe сервера упал: обход на случай,
              если проверка ошибается, а навигация прошла бы. -->
         <a class="skip" id="skip" href="#" hidden>Перейти всё равно</a>
       </form>
+
+      <section id="recent-wrap" hidden>
+        <p class="recent-title">Недавние</p>
+        <ul class="recent" id="recent"></ul>
+      </section>
     </main>
     <script src="main.js"></script>
   </body>
