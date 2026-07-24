@@ -4,12 +4,15 @@
 // Собирается на Tauri 2.11 (`cargo tauri build` → .app/.dmg проверено на macOS
 // arm64). Нативные фичи поверх web-UI, обмен — через события Tauri (капабилити
 // удалённого UI даёт только `core:event`, без кастомных команд):
-//   • Rust → webview: событие `ptt` (bool) от глобального хоткея (см. lib/desktop.ts);
+//   • Rust → webview: событие `ptt` (bool) от глобального хоткея (см. lib/desktop.ts),
+//     `desktop-settings` — текущее состояние настроек оболочки;
 //   • webview → Rust: `voice-status` ({in_call, muted}) обновляет трей,
-//     `set-ptt-shortcut` (строка-акселератор) переназначает хоткей,
-//     `switch-server` возвращает окно на локальный экран выбора сервера.
+//     `desktop-settings-get` запрашивает настройки, `set-ptt-shortcut`
+//     (комбинация или null) переназначает хоткей, `set-autostart` (bool) —
+//     автозапуск, `switch-server` возвращает окно на экран выбора сервера.
 
 mod screen_audio;
+mod settings;
 
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,16 +25,19 @@ use tauri::{
     AppHandle, Emitter, Listener, Manager, Wry,
 };
 use serde_json::json;
-use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_updater::UpdaterExt;
 
-/// Дефолтный PTT-хоткей. Глобальный (ловится вне фокуса окна), поэтому берём
-/// клавишу, которую редко занимают глобально; фронт может сменить событием
-/// `set-ptt-shortcut`. Формат — акселератор Tauri (`F8`, `CommandOrControl+Shift+K`).
-const DEFAULT_PTT: &str = "F8";
+use settings::{to_accelerator, Settings, DEFAULT_PTT};
+
+/// Аргумент, с которым оболочку запускает автозапуск: окно при входе в систему
+/// не показываем, приложение просто садится в трей. Попадает в запись
+/// автозагрузки при инициализации плагина autostart; обычный запуск (двойной
+/// клик) окно открывает как всегда.
+const HIDDEN_ARG: &str = "--hidden";
 
 /// Разделяемое состояние: текущий зарегистрированный PTT-хоткей (чтобы отличать
 /// его в общем хендлере и уметь переназначить) и последний статус звонка.
@@ -50,6 +56,13 @@ struct AppState {
     /// на macOS/Linux, `http://tauri.localhost` на Windows, dev-URL в отладке),
     /// так что хардкодить её нельзя — берём то, с чего окно фактически началось.
     picker_url: Mutex<Option<tauri::Url>>,
+    /// Настройки оболочки (PTT-хоткей, автозапуск) — см. `settings.rs`.
+    settings: Mutex<Settings>,
+    /// Почему не удалось применить хоткей/автозапуск. Держим до следующей
+    /// попытки: web-UI загружается позже старта и должен узнать про осечку
+    /// (например «F8 занят другой программой»), а не гадать, почему молчит PTT.
+    ptt_error: Mutex<Option<String>>,
+    autostart_error: Mutex<Option<String>>,
 }
 
 /// Статус звонка, приходящий из web-UI событием `voice-status`.
@@ -129,9 +142,14 @@ fn main() {
         // Ничего не ставится само: находим апдейт → нативный диалог «Обновить?».
         // Не Microsoft — решение и момент установки за пользователем.
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Автозапуск при входе в систему. По умолчанию ВЫКЛЮЧЕН и включается
+        // только тумблером в настройках — плагин сам ничего не регистрирует,
+        // здесь лишь готовится менеджер. Аргумент `--hidden` попадает в запись
+        // автозапуска: при входе в систему окно не лезет в лицо, relay садится
+        // в трей (открыть — пункт «Открыть relay»).
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
-            None,
+            Some(vec![HIDDEN_ARG]),
         ))
         // Глобальный push-to-talk. Хоткей регистрируется в `.setup()` (дефолт) и
         // может быть переназначен фронтом. Общий хендлер отсеивает чужие
@@ -161,6 +179,32 @@ fn main() {
                     *handle.state::<AppState>().picker_url.lock().unwrap() = Some(url);
                 }
             }
+
+            // Запуск из автозапуска (`--hidden`) — прячем окно, relay садится в
+            // трей. Обычный запуск НИЧЕГО не трогает: окно остаётся видимым по
+            // конфигу, как и до появления автозапуска.
+            //
+            // Обратный вариант (`visible: false` в конфиге + показывать окно
+            // отсюда) убрал бы кратковременную вспышку окна при входе в систему,
+            // но ценой того, что ЛЮБОЙ запуск начинает зависеть от этой строчки:
+            // не сработала — клиент без интерфейса, достать только из трея.
+            // Цена ошибки несимметрична, а живьём проверить на всех трёх ОС пока
+            // нечем, поэтому осознанно оставляем вспышку.
+            let hidden_start = std::env::args().any(|a| a == HIDDEN_ARG);
+            if hidden_start {
+                if let Some(win) = handle.get_webview_window("main") {
+                    let _ = win.hide();
+                }
+            }
+            ulog(&format!("start (hidden={hidden_start})"));
+
+            // Настройки оболочки: хоткей и автозапуск переживают перезапуск и
+            // смену сервера, поэтому читаются из своего файла, а не из web-UI.
+            let (loaded, err) = Settings::load(&handle);
+            if let Some(e) = err {
+                ulog(&format!("settings load: {e} (беру значения по умолчанию)"));
+            }
+            *handle.state::<AppState>().settings.lock().unwrap() = loaded;
 
             build_tray(&handle)?;
 
@@ -206,13 +250,29 @@ fn main() {
                 });
             }
 
-            // Дефолтный PTT-хоткей. Если система его уже держит — молча пропускаем:
-            // фронт сможет задать свой событием `set-ptt-shortcut`.
-            if let Ok(sc) = Shortcut::from_str(DEFAULT_PTT) {
-                if handle.global_shortcut().register(sc).is_ok() {
-                    *handle.state::<AppState>().ptt.lock().unwrap() = Some(sc);
+            // PTT-хоткей из настроек (по умолчанию F8; `null` — пользователь его
+            // выключил). Осечку не глушим: запоминаем причину и показываем её в
+            // настройках, когда web-UI дойдёт до `desktop-settings-get`.
+            let saved_ptt = handle
+                .state::<AppState>()
+                .settings
+                .lock()
+                .unwrap()
+                .ptt
+                .clone();
+            match apply_ptt(&handle, saved_ptt.as_deref()) {
+                // В логе видно, какая клавиша реально встала — первый вопрос
+                // при жалобе «push-to-talk молчит».
+                Ok(()) => ulog(&format!("ptt registered: {:?}", saved_ptt)),
+                Err(e) => {
+                    ulog(&format!("ptt {saved_ptt:?}: {e}"));
+                    *handle.state::<AppState>().ptt_error.lock().unwrap() = Some(e);
                 }
             }
+
+            // Автозапуск: включённая запись могла устареть (приложение переехало,
+            // AppImage перенесли) — тогда перерегистрируем её на текущий путь.
+            reconcile_autostart(&handle);
 
             // web-UI сообщает состояние звонка → перерисовываем трей.
             let h = handle.clone();
@@ -222,12 +282,33 @@ fn main() {
                 }
             });
 
-            // web-UI переназначает PTT-хоткей (payload — JSON-строка акселератора).
+            // web-UI спрашивает текущие настройки оболочки. Отвечаем событием
+            // `desktop-settings` — оно же служит признаком «оболочка умеет в
+            // настройки»: старая версия не ответит, и UI их просто не покажет.
+            let h = handle.clone();
+            handle.listen("desktop-settings-get", move |_event| emit_settings(&h));
+
+            // web-UI переназначает PTT-хоткей. Payload — комбинация в формате
+            // веб-хоткеев (`Ctrl+Shift+KeyT`) или `null`, если хоткей выключают.
             let h = handle.clone();
             handle.listen("set-ptt-shortcut", move |event| {
-                if let Ok(acc) = serde_json::from_str::<String>(event.payload()) {
-                    let _ = reassign_ptt(&h, &acc);
-                }
+                // Старые сборки web-UI слали голую строку — `Option<String>`
+                // разбирает и её, так что мост остаётся совместимым.
+                let Ok(combo) = serde_json::from_str::<Option<String>>(event.payload()) else {
+                    return;
+                };
+                set_ptt(&h, combo);
+                emit_settings(&h);
+            });
+
+            // web-UI переключает автозапуск (payload — bool).
+            let h = handle.clone();
+            handle.listen("set-autostart", move |event| {
+                let Ok(on) = serde_json::from_str::<bool>(event.payload()) else {
+                    return;
+                };
+                set_autostart(&h, on);
+                emit_settings(&h);
             });
 
             // web-UI просит вернуть на экран выбора сервера (кнопка в настройках).
@@ -464,6 +545,28 @@ async fn native_update_flow(app: AppHandle, announce: bool) {
     match run_check(&app, 30).await {
         Ok(Some(update)) => {
             let version = update.version.clone();
+            // Тихая стартовая проверка при спрятанном окне — это запуск из
+            // автозапуска: модалка поверх всего при входе в систему грубее
+            // некуда. Ограничиваемся системной подсказкой, поставить обновление
+            // человек сможет из настроек или пункта трея, когда сам захочет.
+            let visible = app
+                .get_webview_window("main")
+                .and_then(|w| w.is_visible().ok())
+                .unwrap_or(true);
+            if !announce && !visible {
+                ulog(&format!(
+                    "native flow: {version} available, window hidden → notify only"
+                ));
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("Доступно обновление relay")
+                    .body(format!(
+                        "Версия {version} — откройте Настройки, чтобы установить."
+                    ))
+                    .show();
+                return;
+            }
             ulog(&format!("native flow: {version} available, asking user"));
             let confirmed = app
                 .dialog()
@@ -515,10 +618,17 @@ async fn native_update_flow(app: AppHandle, announce: bool) {
 /// Rust и не зависит от того, что творится в webview).
 fn show_picker(app: &AppHandle) {
     let url = app.state::<AppState>().picker_url.lock().unwrap().clone();
-    let (Some(url), Some(win)) = (url, app.get_webview_window("main")) else {
+    let (Some(mut url), Some(win)) = (url, app.get_webview_window("main")) else {
         ulog("switch-server: picker url or window missing");
         return;
     };
+    // `#pick` запрещает пикеру автоматически уйти на последний сервер — иначе
+    // «Сменить сервер» замкнулось бы в петлю: экран открылся и тут же ушёл
+    // обратно, и адрес было бы не поменять. Именно фрагмент, а не query: он
+    // гарантированно не участвует в разборе пути кастомным протоколом.
+    // Если окно уже на пикере, смена одного фрагмента страницу не перезагрузит —
+    // за это отвечает слушатель hashchange в src/main.js.
+    url.set_fragment(Some("pick"));
     ulog(&format!("switch-server -> {url}"));
     if let Err(e) = win.navigate(url) {
         ulog(&format!("switch-server navigate failed: {e}"));
@@ -526,25 +636,182 @@ fn show_picker(app: &AppHandle) {
     }
     // Пункт трея могли нажать при спрятанном/фоновом окне — показываем, иначе
     // пикер откроется невидимо и «ничего не произошло».
-    let _ = win.show();
-    let _ = win.set_focus();
+    show_main(app);
     // Звонок (если был) рвётся вместе с уходом со страницы — трей об этом уже не
     // услышит, обнуляем статус сами.
     update_tray(app, false, false);
 }
 
-/// Снять прежний PTT-хоткей и зарегистрировать новый (по акселератору из UI).
-fn reassign_ptt(app: &AppHandle, accelerator: &str) -> Result<(), String> {
-    let sc = Shortcut::from_str(accelerator).map_err(|e| e.to_string())?;
+/// Снять прежний PTT-хоткей и зарегистрировать новый. `None` — хоткей выключен
+/// (снимаем и ничего не ставим). Ошибка регистрации ОТКАТЫВАЕТСЯ: возвращаем
+/// прежнюю комбинацию, иначе неудачная попытка оставила бы пользователя вообще
+/// без push-to-talk — худший исход, чем «новая клавиша не подошла».
+fn apply_ptt(app: &AppHandle, combo: Option<&str>) -> Result<(), String> {
     let gs = app.global_shortcut();
     let state = app.state::<AppState>();
     let mut cur = state.ptt.lock().unwrap();
-    if let Some(prev) = cur.take() {
+    let prev = cur.take();
+    if let Some(prev) = prev {
         let _ = gs.unregister(prev);
     }
-    gs.register(sc).map_err(|e| e.to_string())?;
+    let Some(combo) = combo else {
+        return Ok(()); // хоткей выключен — так и оставляем
+    };
+    let restore = |cur: &mut Option<Shortcut>| {
+        if let Some(prev) = prev {
+            if gs.register(prev).is_ok() {
+                *cur = Some(prev);
+            }
+        }
+    };
+    let sc = match Shortcut::from_str(&to_accelerator(combo)) {
+        Ok(sc) => sc,
+        Err(e) => {
+            restore(&mut cur);
+            return Err(format!("клавиша не поддерживается ({e})"));
+        }
+    };
+    if let Err(e) = gs.register(sc) {
+        restore(&mut cur);
+        // Самая частая причина — комбинацию уже держит другая программа или
+        // сама ОС; текст плагина для этого невнятный, поясняем сами.
+        return Err(format!(
+            "не удалось назначить — возможно, занята другой программой ({e})"
+        ));
+    }
     *cur = Some(sc);
     Ok(())
+}
+
+/// Применить и запомнить новый PTT-хоткей (событие `set-ptt-shortcut`).
+/// В настройки пишем только удачную регистрацию: сохранить заведомо нерабочую
+/// комбинацию значило бы получить сломанный PTT и после перезапуска.
+fn set_ptt(app: &AppHandle, combo: Option<String>) {
+    let state = app.state::<AppState>();
+    match apply_ptt(app, combo.as_deref()) {
+        Ok(()) => {
+            *state.ptt_error.lock().unwrap() = None;
+            let updated = {
+                let mut s = state.settings.lock().unwrap();
+                s.ptt = combo;
+                s.clone()
+            };
+            ulog(&format!("ptt set to {:?}", updated.ptt));
+            if let Err(e) = updated.save(app) {
+                ulog(&format!("settings save: {e}"));
+            }
+        }
+        Err(e) => {
+            ulog(&format!("ptt {:?} rejected: {e}", combo));
+            *state.ptt_error.lock().unwrap() = Some(e);
+        }
+    }
+}
+
+/// Путь, под которым регистрируется автозапуск. Для AppImage это сам образ
+/// (плагин берёт его же), для остальных — текущий исполняемый файл. Сверяем с
+/// сохранённым, чтобы поймать переезд приложения.
+fn autostart_target(app: &AppHandle) -> String {
+    #[cfg(target_os = "linux")]
+    if let Some(appimage) = app
+        .env()
+        .appimage
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+    {
+        return appimage;
+    }
+    let _ = app;
+    std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default()
+}
+
+/// Включить/выключить автозапуск и запомнить решение.
+///
+/// В dev-сборке регистрацию не делаем: в автозапуск попал бы бинарь из
+/// `target/debug`, который переживёт и `cargo clean`, и удаление репозитория —
+/// мусор в списке автозагрузки разработчика, который потом ищи-свищи.
+fn set_autostart(app: &AppHandle, on: bool) {
+    let state = app.state::<AppState>();
+    if cfg!(debug_assertions) {
+        *state.autostart_error.lock().unwrap() =
+            Some("в dev-сборке автозапуск не регистрируется".into());
+        return;
+    }
+    let mgr = app.autolaunch();
+    let res = if on { mgr.enable() } else { mgr.disable() };
+    match res {
+        Ok(()) => {
+            ulog(&format!(
+                "autostart {}",
+                if on { "enabled" } else { "disabled" }
+            ));
+            *state.autostart_error.lock().unwrap() = None;
+            let updated = {
+                let mut s = state.settings.lock().unwrap();
+                s.autostart = on;
+                s.autostart_path = on.then(|| autostart_target(app));
+                s.clone()
+            };
+            if let Err(e) = updated.save(app) {
+                ulog(&format!("settings save: {e}"));
+            }
+        }
+        Err(e) => {
+            ulog(&format!("autostart {on} failed: {e}"));
+            *state.autostart_error.lock().unwrap() = Some(e.to_string());
+        }
+    }
+}
+
+/// Починить автозапуск, если он включён, но запись устарела: приложение
+/// переехало (AppImage перенесли, .app перетащили из Downloads в Applications)
+/// или запись пропала. Выключенный автозапуск не трогаем НИКОГДА — включить его
+/// может только пользователь тумблером.
+fn reconcile_autostart(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let (want, path) = {
+        let s = state.settings.lock().unwrap();
+        (s.autostart, s.autostart_path.clone())
+    };
+    if !want || cfg!(debug_assertions) {
+        return;
+    }
+    let target = autostart_target(app);
+    let enabled = app.autolaunch().is_enabled().unwrap_or(false);
+    if enabled && path.as_deref() == Some(target.as_str()) {
+        return;
+    }
+    ulog(&format!(
+        "autostart stale (enabled={enabled}, path={path:?}, now={target}) → re-register"
+    ));
+    let _ = app.autolaunch().disable();
+    set_autostart(app, true);
+}
+
+/// Доложить web-UI текущее состояние настроек оболочки. Это же событие —
+/// признак поддержки: не ответили, значит оболочка старая и блок настроек в
+/// web-UI показывать нечего (см. lib/desktop.ts).
+fn emit_settings(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let (ptt, autostart_saved) = {
+        let s = state.settings.lock().unwrap();
+        (s.ptt.clone(), s.autostart)
+    };
+    // Автозапуск показываем ФАКТИЧЕСКИЙ: пользователь мог убрать relay из
+    // автозагрузки средствами системы, и тумблер обязан это отражать.
+    let autostart = app.autolaunch().is_enabled().unwrap_or(autostart_saved);
+    let _ = app.emit(
+        "desktop-settings",
+        json!({
+            "ptt": ptt,
+            "pttDefault": DEFAULT_PTT,
+            "pttError": state.ptt_error.lock().unwrap().clone(),
+            "autostart": autostart,
+            "autostartError": state.autostart_error.lock().unwrap().clone(),
+            "version": env!("CARGO_PKG_VERSION"),
+        }),
+    );
 }
 
 /// Человекочитаемый статус для трея.
@@ -575,6 +842,9 @@ fn build_menu(app: &AppHandle, in_call: bool, muted: bool) -> tauri::Result<Menu
         false,
         None::<&str>,
     )?;
+    // Единственный способ достать окно, когда relay стартовал из автозапуска
+    // (свёрнутым) или его спрятали — поэтому пункт идёт первым.
+    let open = MenuItem::with_id(app, "open", "Открыть relay", true, None::<&str>)?;
     let switch = MenuItem::with_id(app, "switch-server", "Сменить сервер…", true, None::<&str>)?;
     let check = MenuItem::with_id(app, "check-updates", "Проверить обновления", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Выйти из relay", true, None::<&str>)?;
@@ -584,11 +854,25 @@ fn build_menu(app: &AppHandle, in_call: bool, muted: bool) -> tauri::Result<Menu
             &version,
             &status,
             &PredefinedMenuItem::separator(app)?,
+            &open,
             &switch,
             &check,
             &quit,
         ],
     )
+}
+
+/// Показать и сфокусировать главное окно (пункт трея «Открыть relay»).
+fn show_main(app: &AppHandle) {
+    // macOS: приложение могло быть скрыто целиком (запуск из автозапуска) —
+    // одного show() на окне тогда мало.
+    #[cfg(target_os = "macos")]
+    let _ = app.show();
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
 }
 
 /// Монохромный силуэт-триада для menu bar (template image). В отличие от
@@ -607,6 +891,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "quit" => app.exit(0),
+            "open" => show_main(app),
             "switch-server" => show_picker(app),
             "check-updates" => {
                 // Ручная проверка из трея — нативный путь, всегда рабочий.

@@ -3,7 +3,14 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { checkForUpdates, installUpdate, switchServer } from '@/lib/desktop';
+import {
+  checkForUpdates,
+  installUpdate,
+  requestShellSettings,
+  setAutostart,
+  setPttShortcut,
+  switchServer,
+} from '@/lib/desktop';
 import { getTheme, setTheme, type Theme } from '@/lib/theme';
 import { comboLabel, eventToCombo } from '@/lib/hotkeys';
 import { useDesktopStore } from '@/stores/desktop';
@@ -22,12 +29,14 @@ import {
   getMicLevel,
 } from '@/lib/voice';
 
-type Tab = 'av' | 'appearance' | 'hotkeys' | 'notifications' | 'account';
+type Tab = 'av' | 'appearance' | 'hotkeys' | 'app' | 'notifications' | 'account';
 
-const TABS: { id: Tab; label: string }[] = [
+const TABS: { id: Tab; label: string; desktopOnly?: boolean }[] = [
   { id: 'av', label: 'Аудио и видео' },
   { id: 'appearance', label: 'Внешний вид' },
   { id: 'hotkeys', label: 'Горячие клавиши' },
+  // Настройки самой оболочки (автозапуск): в браузере показывать нечего.
+  { id: 'app', label: 'Приложение', desktopOnly: true },
   { id: 'notifications', label: 'Уведомления' },
   { id: 'account', label: 'Аккаунт' },
 ];
@@ -166,23 +175,17 @@ function Toggle({
 }
 
 /**
- * Строка назначения горячей клавиши. По кнопке «Назначить» ловим следующее
- * нажатие (перехват в фазе capture, чтобы не сработали чужие обработчики) и
- * пишем его как привязку; Esc — отмена. Крестик снимает привязку (действие
- * выключается). Без привязки действие не работает — это и есть «по умолчанию выкл».
+ * Захват следующего нажатия как комбинации. Перехватываем в фазе capture, чтобы
+ * не сработали чужие обработчики; Esc — отмена. Один голый модификатор
+ * пропускаем и ждём основную клавишу.
  */
-function KeybindRow({
-  action,
-  label,
-  hint,
-}: {
-  action: HotkeyAction;
-  label: string;
-  hint: string;
-}) {
-  const combo = useHotkeysStore((s) => s.binds[action]);
-  const setBind = useHotkeysStore((s) => s.setBind);
+function useComboRecorder(onCombo: (combo: string) => void) {
   const [recording, setRecording] = useState(false);
+  // Через ref, чтобы смена колбэка не переподписывала слушателя посреди записи.
+  const handler = useRef(onCombo);
+  useEffect(() => {
+    handler.current = onCombo;
+  });
 
   useEffect(() => {
     if (!recording) return;
@@ -194,47 +197,190 @@ function KeybindRow({
         return;
       }
       const c = eventToCombo(e);
-      if (!c) return; // нажат один модификатор — ждём основную клавишу
-      setBind(action, c);
+      if (!c) return;
+      handler.current(c);
       setRecording(false);
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [recording, action, setBind]);
+  }, [recording]);
+
+  return { recording, setRecording };
+}
+
+/**
+ * Строка назначения горячей клавиши. По кнопке «Назначить» ловим следующее
+ * нажатие и отдаём его наверх; крестик снимает привязку (действие выключается).
+ * Без привязки действие не работает — это и есть «по умолчанию выкл».
+ * `note` — пояснение под строкой (ошибка назначения или предупреждение).
+ */
+function KeybindRow({
+  label,
+  hint,
+  combo,
+  onCombo,
+  onClear,
+  note,
+}: {
+  label: string;
+  hint: string;
+  combo: string | null | undefined;
+  onCombo: (combo: string) => void;
+  onClear: () => void;
+  note?: { text: string; tone: 'muted' | 'danger' };
+}) {
+  const { recording, setRecording } = useComboRecorder(onCombo);
 
   return (
-    <div className="flex items-center justify-between gap-4 rounded-[10px] border border-line bg-bg-elev/60 px-3.5 py-3">
-      <div className="min-w-0">
-        <div className="text-[14px] font-medium text-text">{label}</div>
-        <div className="text-[12px] text-text-muted">{hint}</div>
-      </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <button
-          type="button"
-          onClick={() => setRecording((r) => !r)}
-          className={cn(
-            'min-w-[120px] rounded-[8px] border px-3 py-1.5 text-center font-mono text-[12px] outline-none transition-colors',
-            recording
-              ? 'border-accent-strong/60 bg-accent-strong/10 text-text-header'
-              : combo
-                ? 'border-line-strong bg-bg-active text-text hover:border-line-strong hover:bg-line-strong'
-                : 'border-dashed border-line-strong text-text-muted hover:text-text',
-          )}
-        >
-          {recording ? 'Нажмите клавиши…' : combo ? comboLabel(combo) : 'Назначить'}
-        </button>
-        {combo && !recording && (
+    <div className="rounded-[10px] border border-line bg-bg-elev/60 px-3.5 py-3">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <div className="text-[14px] font-medium text-text">{label}</div>
+          <div className="text-[12px] text-text-muted">{hint}</div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
-            onClick={() => setBind(action, null)}
-            aria-label={`Сбросить: ${label}`}
-            title="Сбросить"
-            className="grid h-7 w-7 place-items-center rounded-[7px] text-lg leading-none text-text-muted outline-none transition-colors hover:bg-danger/10 hover:text-danger"
+            onClick={() => setRecording((r) => !r)}
+            className={cn(
+              'min-w-[120px] rounded-[8px] border px-3 py-1.5 text-center font-mono text-[12px] outline-none transition-colors',
+              recording
+                ? 'border-accent-strong/60 bg-accent-strong/10 text-text-header'
+                : combo
+                  ? 'border-line-strong bg-bg-active text-text hover:border-line-strong hover:bg-line-strong'
+                  : 'border-dashed border-line-strong text-text-muted hover:text-text',
+            )}
           >
-            ×
+            {recording ? 'Нажмите клавиши…' : combo ? comboLabel(combo) : 'Назначить'}
           </button>
-        )}
+          {combo && !recording && (
+            <button
+              type="button"
+              onClick={onClear}
+              aria-label={`Сбросить: ${label}`}
+              title="Сбросить"
+              className="grid h-7 w-7 place-items-center rounded-[7px] text-lg leading-none text-text-muted outline-none transition-colors hover:bg-danger/10 hover:text-danger"
+            >
+              ×
+            </button>
+          )}
+        </div>
       </div>
+      {note && (
+        <p
+          className={cn(
+            'mt-2 text-[12px] leading-relaxed',
+            note.tone === 'danger' ? 'text-danger' : 'text-text-muted',
+          )}
+        >
+          {note.text}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Горячая клавиша действия в голосовом канале (работает внутри окна relay). */
+function VoiceKeybindRow({
+  action,
+  label,
+  hint,
+}: {
+  action: HotkeyAction;
+  label: string;
+  hint: string;
+}) {
+  const combo = useHotkeysStore((s) => s.binds[action]);
+  const setBind = useHotkeysStore((s) => s.setBind);
+  return (
+    <KeybindRow
+      label={label}
+      hint={hint}
+      combo={combo}
+      onCombo={(c) => setBind(action, c)}
+      onClear={() => setBind(action, null)}
+    />
+  );
+}
+
+/**
+ * Клавиша без модификаторов перехватывается системой ГЛОБАЛЬНО: пока relay
+ * запущен, в других программах она работать перестанет. Для функциональных и
+ * медиа-клавиш это ожидаемо (их для того и держат), для остальных — сюрприз,
+ * о котором честнее предупредить, чем молча запретить.
+ */
+function globalKeyWarning(combo: string): string | null {
+  const parts = combo.split('+');
+  if (parts.length > 1) return null;
+  const key = parts[0];
+  if (/^F\d{1,2}$/.test(key) || key.startsWith('Media') || key.startsWith('Audio')) return null;
+  return 'Клавиша занята глобально: пока relay запущен, в других программах она работать не будет. Добавьте модификатор (Ctrl / Alt / Shift), если это мешает.';
+}
+
+/**
+ * Глобальный push-to-talk десктоп-клиента. В отличие от строк выше, хоткей
+ * регистрирует оболочка (Rust) — она же единственная знает, удалось ли занять
+ * клавишу в системе. Поэтому значение и ошибку берём из её ответа, а не из
+ * локального состояния: показываем ровно то, что реально применилось.
+ */
+function PttKeybindRow() {
+  const shell = useDesktopStore((s) => s.shell);
+  if (!shell) return null;
+
+  const warning = shell.ptt ? globalKeyWarning(shell.ptt) : null;
+  const note = shell.pttError
+    ? { text: `Не удалось назначить: ${shell.pttError}`, tone: 'danger' as const }
+    : warning
+      ? { text: warning, tone: 'muted' as const }
+      : undefined;
+
+  return (
+    <KeybindRow
+      label="Push-to-talk (глобально)"
+      hint="Срабатывает даже когда окно relay свёрнуто. Нужен режим Push-to-talk."
+      combo={shell.ptt}
+      onCombo={setPttShortcut}
+      onClear={() => setPttShortcut(null)}
+      note={note}
+    />
+  );
+}
+
+/**
+ * Вкладка «Приложение» — всё про сам десктоп-клиент. Показывается в любой
+ * оболочке (isDesktop), а не только в той, что умеет в настройки: обновления
+ * нужны в первую очередь как раз старым клиентам (до 0.4.0), которые на
+ * `desktop-settings-get` не отвечают. Поэтому блок обновлений безусловный, а
+ * настройки оболочки рендерим, лишь когда она о них рассказала.
+ */
+function AppTab() {
+  const isDesktop = useDesktopStore((s) => s.isDesktop);
+  const shell = useDesktopStore((s) => s.shell);
+  if (!isDesktop) return null;
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      {shell && (
+        <>
+          <Toggle
+            checked={shell.autostart}
+            onChange={setAutostart}
+            title="Запускать при входе в систему"
+            hint="relay стартует свёрнутым в трей — окно не открывается."
+          />
+          {shell.autostartError && (
+            <p className="px-1 text-[12px] leading-relaxed text-danger">
+              Не удалось изменить автозапуск: {shell.autostartError}
+            </p>
+          )}
+        </>
+      )}
+      <UpdateRow />
+      {shell && (
+        <p className="px-1 pt-1 font-mono text-[11px] uppercase tracking-[0.16em] text-text-faint">
+          Оболочка relay {shell.version}
+        </p>
+      )}
     </div>
   );
 }
@@ -248,15 +394,13 @@ function Placeholder({ children }: { children: ReactNode }) {
 }
 
 /**
- * Обновления десктоп-клиента. Рендерится только в Tauri-оболочке (isDesktop).
- * Приложение само ничего не ставит — здесь ручная проверка и установка по клику
- * (событие в Rust, см. lib/desktop.ts). Когда апдейт найден — кнопка меняется на
- * «Установить и перезапустить».
+ * Обновления десктоп-клиента — строка вкладки «Приложение», одной формы с
+ * тумблерами и хоткеями. Приложение само ничего не ставит: здесь ручная
+ * проверка и установка по клику (событие в Rust, см. lib/desktop.ts). Когда
+ * апдейт найден — кнопка меняется на «Установить и перезапустить».
  */
-function UpdateBlock() {
-  const isDesktop = useDesktopStore((s) => s.isDesktop);
+function UpdateRow() {
   const update = useDesktopStore((s) => s.update);
-  if (!isDesktop) return null;
 
   const busy = update.kind === 'checking' || update.kind === 'installing';
   const status =
@@ -270,15 +414,21 @@ function UpdateBlock() {
             ? `Устанавливаю ${update.version}…`
             : update.kind === 'error'
               ? 'Не удалось проверить обновления'
-              : null;
+              : 'relay проверяет их сам при запуске.';
 
   return (
-    <div className="mb-1 border-t border-line pt-2">
+    <div className="flex items-center justify-between gap-4 rounded-[10px] border border-line bg-bg-elev/60 px-3.5 py-3">
+      <div className="min-w-0">
+        <div className="text-[14px] font-medium text-text">Обновления</div>
+        <div className={cn('text-[12px]', update.kind === 'error' ? 'text-danger' : 'text-text-muted')}>
+          {status}
+        </div>
+      </div>
       {update.kind === 'available' ? (
         <button
           type="button"
           onClick={installUpdate}
-          className="w-full rounded-[8px] bg-ok/15 px-3 py-2 text-left text-[13px] font-medium text-ok outline-none transition-colors hover:bg-ok/25"
+          className="shrink-0 rounded-[8px] bg-ok/15 px-3 py-1.5 text-[13px] font-medium text-ok outline-none transition-colors hover:bg-ok/25"
         >
           Установить и перезапустить
         </button>
@@ -287,12 +437,11 @@ function UpdateBlock() {
           type="button"
           onClick={checkForUpdates}
           disabled={busy}
-          className="w-full rounded-[8px] px-3 py-2 text-left text-[14px] text-text-muted outline-none transition-colors hover:bg-bg-hover hover:text-text disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent"
+          className="shrink-0 rounded-[8px] border border-line-strong bg-bg-active px-3 py-1.5 text-[13px] text-text outline-none transition-colors hover:bg-line-strong disabled:cursor-default disabled:opacity-60 disabled:hover:bg-bg-active"
         >
-          Проверить обновления
+          Проверить
         </button>
       )}
-      {status && <p className="px-3 pt-1 text-[11px] text-text-faint">{status}</p>}
     </div>
   );
 }
@@ -340,6 +489,10 @@ export function SettingsDialog({
   const noiseSuppression = useVoiceStore((s) => s.noiseSuppression);
   const pushToTalk = useVoiceStore((s) => s.pushToTalk);
   const [theme, setThemeVal] = useState<Theme>('dark');
+  const isDesktop = useDesktopStore((s) => s.isDesktop);
+  // Вкладка оболочки — в любом десктоп-клиенте: даже у старого там есть
+  // обновления (настройки оболочки внутри гейтятся отдельно, см. AppTab).
+  const tabs = TABS.filter((t) => !t.desktopOnly || isDesktop);
 
   // Отражаем реально применённую тему (её ставит скрипт в <head> до отрисовки).
   useEffect(() => setThemeVal(getTheme()), []);
@@ -351,12 +504,15 @@ export function SettingsDialog({
   }
 
   // При открытии подтягиваем актуальные списки устройств и тогглы из хранилища.
+  // Заодно переспрашиваем оболочку: автозапуск могли снять средствами системы,
+  // и тумблер обязан показывать факт, а не то, что мы включили когда-то.
   useEffect(() => {
     if (!open) return;
     loadMediaPrefs();
     refreshMics();
     refreshSpeakers();
     refreshCameras();
+    requestShellSettings();
   }, [open]);
 
   async function logout() {
@@ -379,7 +535,7 @@ export function SettingsDialog({
           <div className="px-2 pb-2 pt-1 font-mono text-[11px] uppercase tracking-[0.2em] text-text-faint">
             Настройки
           </div>
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <button
               key={t.id}
               type="button"
@@ -396,7 +552,6 @@ export function SettingsDialog({
             </button>
           ))}
           <div className="mt-auto pt-2">
-            <UpdateBlock />
             <SwitchServerButton />
             <button
               type="button"
@@ -412,7 +567,7 @@ export function SettingsDialog({
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex h-[52px] shrink-0 items-center justify-between border-b border-line px-5">
             <h2 className="text-[15px] font-semibold text-text-header">
-              {TABS.find((t) => t.id === tab)?.label}
+              {tabs.find((t) => t.id === tab)?.label}
             </h2>
             <button
               type="button"
@@ -481,9 +636,12 @@ export function SettingsDialog({
                   когда пишешь в чат.
                 </p>
                 {HOTKEY_ACTIONS.map((a) => (
-                  <KeybindRow key={a.id} action={a.id} label={a.label} hint={a.hint} />
+                  <VoiceKeybindRow key={a.id} action={a.id} label={a.label} hint={a.hint} />
                 ))}
+                <PttKeybindRow />
               </div>
+            ) : tab === 'app' ? (
+              <AppTab />
             ) : (
               <Placeholder>раздел появится позже</Placeholder>
             )}
