@@ -233,7 +233,8 @@ function KeybindRow({
 
   return (
     <div className="rounded-[10px] border border-line bg-bg-elev/60 px-3.5 py-3">
-      <div className="flex items-center justify-between gap-4">
+      {/* На узком экране метка и кнопка назначения не уживаются в строку — стопкой. */}
+      <div className="flex items-center justify-between gap-4 max-md:flex-col max-md:items-start max-md:gap-2">
         <div className="min-w-0">
           <div className="text-[14px] font-medium text-text">{label}</div>
           <div className="text-[12px] text-text-muted">{hint}</div>
@@ -527,12 +528,28 @@ export function SettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[600px] max-h-[92vh] w-[860px] max-w-[94vw] gap-0 overflow-hidden !p-0">
+      <DialogContent
+        className={cn(
+          'flex h-[600px] max-h-[92vh] w-[860px] max-w-[94vw] gap-0 overflow-hidden !p-0',
+          // Мобайл: лист во весь экран и колонкой — на 375px колонка навигации в
+          // 220px съедала бы две трети ширины, оставляя контенту ~90px.
+          'max-md:h-[100dvh] max-md:max-h-none max-md:w-screen max-md:max-w-none',
+          'max-md:flex-col max-md:rounded-none max-md:border-0',
+        )}
+      >
         <DialogTitle className="sr-only">Настройки</DialogTitle>
 
-        {/* Левая колонка — навигация */}
-        <nav className="flex w-[220px] shrink-0 flex-col border-r border-line bg-bg-deep/60 p-3">
-          <div className="px-2 pb-2 pt-1 font-mono text-[11px] uppercase tracking-[0.2em] text-text-faint">
+        {/* Левая колонка — навигация; на мобиле это горизонтальная лента вкладок
+            сверху (полосу прокрутки прячем — листается пальцем). */}
+        <nav
+          className={cn(
+            'flex w-[220px] shrink-0 flex-col border-r border-line bg-bg-deep/60 p-3',
+            'max-md:w-full max-md:flex-row max-md:gap-1 max-md:overflow-x-auto',
+            'max-md:border-r-0 max-md:border-b max-md:p-2',
+            'max-md:[scrollbar-width:none] max-md:[&::-webkit-scrollbar]:hidden',
+          )}
+        >
+          <div className="px-2 pb-2 pt-1 font-mono text-[11px] uppercase tracking-[0.2em] text-text-faint max-md:hidden">
             Настройки
           </div>
           {tabs.map((t) => (
@@ -543,6 +560,7 @@ export function SettingsDialog({
               aria-current={tab === t.id}
               className={cn(
                 'rounded-[8px] px-3 py-2 text-left text-[14px] outline-none transition-colors',
+                'max-md:shrink-0 max-md:whitespace-nowrap',
                 tab === t.id
                   ? 'bg-bg-active text-text-header'
                   : 'text-text-muted hover:bg-bg-hover hover:text-text',
@@ -551,7 +569,8 @@ export function SettingsDialog({
               {t.label}
             </button>
           ))}
-          <div className="mt-auto pt-2">
+          {/* В ленте вкладок подвалу места нет — на мобиле он отдельной строкой внизу. */}
+          <div className="mt-auto pt-2 max-md:hidden">
             <SwitchServerButton />
             <button
               type="button"
@@ -565,7 +584,7 @@ export function SettingsDialog({
 
         {/* Правая колонка — контент вкладки */}
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex h-[52px] shrink-0 items-center justify-between border-b border-line px-5">
+          <div className="flex h-[52px] shrink-0 items-center justify-between border-b border-line px-5 max-md:px-4">
             <h2 className="text-[15px] font-semibold text-text-header">
               {tabs.find((t) => t.id === tab)?.label}
             </h2>
@@ -579,7 +598,7 @@ export function SettingsDialog({
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-5">
+          <div className="flex-1 overflow-y-auto p-5 max-md:p-4">
             {tab === 'av' ? (
               <div className="flex flex-col gap-5">
                 <DeviceSelect
@@ -646,6 +665,19 @@ export function SettingsDialog({
               <Placeholder>раздел появится позже</Placeholder>
             )}
           </div>
+        </div>
+
+        {/* Подвал только для мобилы: на десктопе эти кнопки живут внизу колонки
+            навигации. Нижний отступ учитывает домашнюю полоску iPhone. */}
+        <div className="hidden shrink-0 border-t border-line bg-bg-deep/60 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] max-md:block">
+          <SwitchServerButton />
+          <button
+            type="button"
+            onClick={logout}
+            className="w-full rounded-[8px] px-3 py-2 text-left text-[14px] text-danger outline-none transition-colors hover:bg-danger/10"
+          >
+            Выйти из аккаунта
+          </button>
         </div>
       </DialogContent>
     </Dialog>
