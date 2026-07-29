@@ -107,6 +107,12 @@ const CAPSULE_POPOVER = cn(
   CAPSULE,
   'absolute -right-px top-[calc(100%+6px)] z-30 bg-bg-deep/95 shadow-[0_12px_32px_rgba(0,0,0,0.55)]',
 );
+/** Та же капсула, но раскрывается вверх — для тулбара у нижнего края ленты
+ * (иначе меню обрежется краем скролл-контейнера у последних сообщений). */
+const CAPSULE_POPOVER_UP = cn(
+  CAPSULE,
+  'absolute -right-px bottom-[calc(100%+6px)] z-30 bg-bg-deep/95 shadow-[0_12px_32px_rgba(0,0,0,0.55)]',
+);
 /** Ячейка капсулы — общий размер для кнопок и эмодзи. */
 const CAPSULE_CELL = 'grid h-6 w-6 place-items-center rounded-full';
 /** Кнопка капсулы: ячейка плюс монохромный ховер. */
@@ -119,6 +125,21 @@ const popoverAnim = {
   transition: { duration: 0.14, ease: [0.16, 1, 0.3, 1] as const },
   style: { transformOrigin: 'top right' },
 };
+/** Та же анимация, но зеркальная по вертикали — для капсулы, раскрытой вверх. */
+const popoverAnimUp = {
+  initial: { opacity: 0, y: 4, scale: 0.94 },
+  animate: { opacity: 1, y: 0, scale: 1 },
+  exit: { opacity: 0, y: 4, scale: 0.94 },
+  transition: { duration: 0.14, ease: [0.16, 1, 0.3, 1] as const },
+  style: { transformOrigin: 'bottom right' },
+};
+/** Хватает ли места под тулбаром до низа скролл-ленты — иначе меню раскрываем вверх. */
+function fitsBelow(trigger: HTMLElement | null): boolean {
+  if (!trigger) return true;
+  const scrollEl = trigger.closest('.overflow-y-auto');
+  const bottom = (scrollEl ?? document.documentElement).getBoundingClientRect().bottom;
+  return bottom - trigger.getBoundingClientRect().bottom >= 48;
+}
 
 /** Полоса предпросмотра ещё не отправленных вложений — над композером. */
 function PendingAttachments({
@@ -347,6 +368,7 @@ function ReactionBar({
 /** Кнопка-«смайлик» (в тулбаре сообщения) с попапом выбора реакции. */
 function AddReaction({ id, closeSignal }: { id: string; closeSignal: number }) {
   const [open, setOpen] = useState(false);
+  const [openUp, setOpenUp] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   // Мышь ушла с сообщения (родитель дёрнул счётчик) — пикер закрываем, чтобы
@@ -369,7 +391,10 @@ function AddReaction({ id, closeSignal }: { id: string; closeSignal: number }) {
     <div ref={wrapRef}>
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          setOpenUp(!fitsBelow(wrapRef.current));
+          setOpen((o) => !o);
+        }}
         title="Поставить реакцию"
         aria-label="Поставить реакцию"
         className={cn(CAPSULE_BTN, open && 'bg-white/[0.08] text-text-header')}
@@ -378,7 +403,10 @@ function AddReaction({ id, closeSignal }: { id: string; closeSignal: number }) {
       </button>
       <AnimatePresence>
         {open && (
-          <motion.div {...popoverAnim} className={CAPSULE_POPOVER}>
+          <motion.div
+            {...(openUp ? popoverAnimUp : popoverAnim)}
+            className={openUp ? CAPSULE_POPOVER_UP : CAPSULE_POPOVER}
+          >
             {/* Эмодзи обесцвечены до наведения — не выбиваются из монохрома. */}
             {REACTION_EMOJIS.map((emoji) => (
               <button
@@ -414,6 +442,7 @@ function MoreMenu({
   closeSignal: number;
 }) {
   const [open, setOpen] = useState(false);
+  const [openUp, setOpenUp] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   // Мышь ушла с сообщения — меню закрываем (см. AddReaction).
@@ -452,7 +481,10 @@ function MoreMenu({
     <div ref={wrapRef}>
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          setOpenUp(!fitsBelow(wrapRef.current));
+          setOpen((o) => !o);
+        }}
         title="Ещё"
         aria-label="Ещё действия"
         className={cn(CAPSULE_BTN, open && 'bg-white/[0.08] text-text-header')}
@@ -461,7 +493,10 @@ function MoreMenu({
       </button>
       <AnimatePresence>
         {open && (
-          <motion.div {...popoverAnim} className={CAPSULE_POPOVER}>
+          <motion.div
+            {...(openUp ? popoverAnimUp : popoverAnim)}
+            className={openUp ? CAPSULE_POPOVER_UP : CAPSULE_POPOVER}
+          >
             {item('Редактировать', <IconEdit />, false, onEdit)}
             {item('Удалить', <IconTrash />, true, onDelete)}
           </motion.div>
