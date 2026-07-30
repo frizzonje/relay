@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { Attachment } from '@relay/shared';
 import { fmtBytes } from '@/lib/format';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
+import { useT } from '@/lib/i18n';
 
 /** Глазок-иконка для плашки спойлера (Feather eye). */
 function EyeIcon() {
@@ -35,6 +36,7 @@ function EyeIcon() {
  * но замазана до раскрытия.
  */
 export function MessageAttachment({ att }: { att: Attachment }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [revealed, setRevealed] = useState(!att.spoiler);
 
@@ -47,7 +49,7 @@ export function MessageAttachment({ att }: { att: Attachment }) {
         <button
           type="button"
           onClick={() => setRevealed(true)}
-          aria-label={`Показать спойлер: ${att.name}`}
+          aria-label={t('chat.spoiler.reveal', { name: att.name })}
           className="group/spoiler relative block overflow-hidden rounded-[10px] border border-line outline-none focus-visible:ring-2 focus-visible:ring-white/40"
         >
           {isImg ? (
@@ -66,7 +68,7 @@ export function MessageAttachment({ att }: { att: Attachment }) {
           <span className="absolute inset-0 grid place-items-center">
             <span className="flex items-center gap-1.5 whitespace-nowrap rounded-full border border-line-strong bg-bg-app/80 px-3.5 py-1.5 font-mono text-[11px] uppercase tracking-[0.16em] text-text-header backdrop-blur-sm transition-colors group-hover/spoiler:bg-bg-app">
               <EyeIcon />
-              спойлер
+              {t('chat.spoiler.badge')}
             </span>
           </span>
         </button>
@@ -80,7 +82,7 @@ export function MessageAttachment({ att }: { att: Attachment }) {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          aria-label={`Открыть изображение: ${att.name}`}
+          aria-label={t('chat.image.open', { name: att.name })}
           className="block cursor-zoom-in rounded-[10px] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}

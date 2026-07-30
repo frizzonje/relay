@@ -139,6 +139,11 @@ export function readLocaleCookie(): Locale | null {
   return isLocale(value) ? value : null;
 }
 
+/** Current locale for non-React call sites (Intl formatters). Client-only — see currentLocale. */
+export function getClientLocale(): Locale {
+  return currentLocale;
+}
+
 /** `t` for non-React call sites (toasts, store actions). Client-only — see currentLocale. */
 export function tx(key: MessageKey, vars?: Vars): string {
   return translate(currentLocale, key, vars);

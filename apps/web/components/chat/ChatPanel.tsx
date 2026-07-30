@@ -21,6 +21,7 @@ import { useUiStore } from '@/stores/ui';
 import { useChatStore } from '@/stores/chat';
 import { useUnreadStore } from '@/stores/unread';
 import { MessageAttachment } from '@/components/chat/MessageAttachment';
+import { tx, useRichT, useT } from '@/lib/i18n';
 
 interface PendingFile {
   id: string;
@@ -152,6 +153,7 @@ function PendingAttachments({
   onRemove: (id: string) => void;
   onToggleSpoiler: (id: string) => void;
 }) {
+  const t = useT();
   if (!items.length) return null;
   return (
     <div className="mb-2 flex flex-wrap gap-2 px-1">
@@ -177,7 +179,7 @@ function PendingAttachments({
           <button
             type="button"
             onClick={() => onToggleSpoiler(p.id)}
-            title={p.spoiler ? 'Спойлер включён' : 'Пометить спойлером'}
+            title={t(p.spoiler ? 'chat.spoiler.on' : 'chat.spoiler.mark')}
             aria-pressed={p.spoiler}
             className={cn(
               'absolute -left-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full shadow ring-1 transition-colors',
@@ -191,7 +193,7 @@ function PendingAttachments({
           <button
             type="button"
             onClick={() => onRemove(p.id)}
-            title="Убрать из отправки"
+            title={t('chat.attachment.remove')}
             className="absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full bg-bg-deep text-[11px] leading-none text-text-muted shadow ring-1 ring-white/10 transition-colors hover:bg-danger hover:text-white"
           >
             ✕
@@ -213,6 +215,7 @@ function MessageText({ text }: { text: string }) {
 
 /** Цитата сообщения-адресата над ответом; клик прокручивает к оригиналу. */
 function ReplyQuote({ reply, onJump }: { reply: ReplyRef; onJump: () => void }) {
+  const t = useT();
   return (
     <button
       type="button"
@@ -221,7 +224,7 @@ function ReplyQuote({ reply, onJump }: { reply: ReplyRef; onJump: () => void }) 
     >
       <span className="h-3.5 w-[2px] shrink-0 rounded-full bg-white/25 transition-colors group-hover/quote:bg-white/50" />
       <span className="shrink-0 font-semibold text-text/90">{reply.name}</span>
-      <span className="truncate text-text-faint">{reply.text || 'вложение'}</span>
+      <span className="truncate text-text-faint">{reply.text || t('chat.attachment')}</span>
     </button>
   );
 }
@@ -241,6 +244,7 @@ function EditBox({
   onSubmit: (text: string) => void;
   onCancel: () => void;
 }) {
+  const t = useT();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = ref.current;
@@ -290,7 +294,7 @@ function EditBox({
       ref={ref}
       contentEditable
       role="textbox"
-      aria-label="Редактирование сообщения"
+      aria-label={t('chat.edit.aria')}
       aria-multiline="true"
       suppressContentEditableWarning
       onKeyDown={onKey}
@@ -368,6 +372,7 @@ function ReactionBar({
 
 /** Кнопка-«смайлик» (в тулбаре сообщения) с попапом выбора реакции. */
 function AddReaction({ id, closeSignal }: { id: string; closeSignal: number }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [openUp, setOpenUp] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -396,8 +401,8 @@ function AddReaction({ id, closeSignal }: { id: string; closeSignal: number }) {
           setOpenUp(!fitsBelow(wrapRef.current));
           setOpen((o) => !o);
         }}
-        title="Поставить реакцию"
-        aria-label="Поставить реакцию"
+        title={t('chat.react')}
+        aria-label={t('chat.react')}
         className={cn(CAPSULE_BTN, open && 'bg-white/[0.08] text-text-header')}
       >
         <IconSmile />
@@ -442,6 +447,7 @@ function MoreMenu({
   onDelete: () => void;
   closeSignal: number;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [openUp, setOpenUp] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -486,8 +492,8 @@ function MoreMenu({
           setOpenUp(!fitsBelow(wrapRef.current));
           setOpen((o) => !o);
         }}
-        title="Ещё"
-        aria-label="Ещё действия"
+        title={t('chat.more')}
+        aria-label={t('chat.more.aria')}
         className={cn(CAPSULE_BTN, open && 'bg-white/[0.08] text-text-header')}
       >
         <IconDots />
@@ -498,8 +504,8 @@ function MoreMenu({
             {...(openUp ? popoverAnimUp : popoverAnim)}
             className={openUp ? CAPSULE_POPOVER_UP : CAPSULE_POPOVER}
           >
-            {item('Редактировать', <IconEdit />, false, onEdit)}
-            {item('Удалить', <IconTrash />, true, onDelete)}
+            {item(t('chat.action.edit'), <IconEdit />, false, onEdit)}
+            {item(t('chat.action.delete'), <IconTrash />, true, onDelete)}
           </motion.div>
         )}
       </AnimatePresence>
@@ -558,6 +564,7 @@ function Message({
   onDelete: (m: ChatMessage) => void;
   onJumpTo: (id: string) => void;
 }) {
+  const t = useT();
   // Счётчик «мышь ушла с сообщения» — по нему AddReaction закрывает свой пикер.
   const [leaveTick, setLeaveTick] = useState(0);
   const anim = {
@@ -583,11 +590,11 @@ function Message({
     openContextMenu(
       e,
       [
-        { id: 'msg-reply', label: 'Ответить', icon: 'reply' as const, run: () => onReply(msg) },
+        { id: 'msg-reply', label: t('chat.action.reply'), icon: 'reply' as const, run: () => onReply(msg) },
         msg.text
           ? {
               id: 'msg-copy',
-              label: 'Копировать текст',
+              label: t('chat.action.copyText'),
               icon: 'copy' as const,
               run: () => void copyText(msg.text),
             }
@@ -595,7 +602,7 @@ function Message({
         mine
           ? {
               id: 'msg-edit',
-              label: 'Редактировать',
+              label: t('chat.action.edit'),
               icon: 'edit' as const,
               run: () => onStartEdit(msg),
             }
@@ -603,7 +610,7 @@ function Message({
         mine
           ? {
               id: 'msg-delete',
-              label: 'Удалить сообщение',
+              label: t('chat.action.deleteMessage'),
               icon: 'trash' as const,
               danger: true,
               run: () => onDelete(msg),
@@ -641,7 +648,9 @@ function Message({
               {msg.name}
             </span>
             <span className="text-[11px] text-text-muted">{fmtClock(msg.ts)}</span>
-            {msg.editedTs && <span className="text-[10px] text-text-faint">(изменено)</span>}
+            {msg.editedTs && (
+              <span className="text-[10px] text-text-faint">{t('chat.edited')}</span>
+            )}
           </div>
           {editing && msg.id ? (
             <EditBox
@@ -666,8 +675,8 @@ function Message({
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={onCancelEdit}
-            title="Отменить правку"
-            aria-label="Отменить правку"
+            title={t('chat.edit.cancel')}
+            aria-label={t('chat.edit.cancel')}
             className={CAPSULE_BTN}
           >
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
@@ -689,7 +698,7 @@ function Message({
             'pointer-events-none relative ml-1.5 mt-1.5 shrink-0 translate-x-1 bg-white/[0.03] opacity-0 transition-all duration-150 focus-within:pointer-events-auto focus-within:translate-x-0 focus-within:opacity-100 group-hover:pointer-events-auto group-hover:translate-x-0 group-hover:opacity-100',
           )}
         >
-          <ActionBtn title="Ответить" onClick={() => onReply(msg)}>
+          <ActionBtn title={t('chat.action.reply')} onClick={() => onReply(msg)}>
             <IconReply />
           </ActionBtn>
           <AddReaction id={msg.id} closeSignal={leaveTick} />
@@ -708,11 +717,12 @@ function Message({
 
 /** Разделитель «новые сообщения» перед первой непрочитанной репликой. */
 function UnreadDivider() {
+  const t = useT();
   return (
     <div className="my-1 flex items-center gap-2 px-2">
       <div className="h-px flex-1 bg-danger/35" />
       <span className="rounded-full bg-danger/15 px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.16em] text-danger">
-        новые
+        {t('chat.unread.divider')}
       </span>
       <div className="h-px flex-1 bg-danger/35" />
     </div>
@@ -722,9 +732,9 @@ function UnreadDivider() {
 /** Текст индикатора «печатает…» по списку тегов. */
 function typingText(names: string[]): string {
   if (names.length === 0) return '';
-  if (names.length === 1) return `${names[0]} печатает…`;
-  if (names.length === 2) return `${names[0]} и ${names[1]} печатают…`;
-  return 'несколько человек печатают…';
+  if (names.length === 1) return tx('chat.typing.one', { name: names[0] });
+  if (names.length === 2) return tx('chat.typing.two', { first: names[0], second: names[1] });
+  return tx('chat.typing.many');
 }
 
 /**
@@ -733,6 +743,8 @@ function typingText(names: string[]): string {
  * drag-and-drop файлов, индикатор «печатает…», разделитель «новые» и «вниз».
  */
 export function ChatPanel() {
+  const t = useT();
+  const rt = useRichT();
   const textLabel = useUiStore((s) => s.textLabel);
   const textRoom = useUiStore((s) => s.textRoom);
   const callsign = useUiStore((s) => s.callsign);
@@ -760,7 +772,7 @@ export function ChatPanel() {
   const dragDepth = useRef(0);
   const lastTypingSent = useRef(0);
 
-  const me = callsign.trim() || 'Аноним';
+  const me = callsign.trim() || t('common.anonymous');
 
   // Анимируем вход сообщений только после прогрузки истории. Отметку «прочитано
   // до» на смену канала ставит SocketProvider (openChannel) — до того, как сюда
@@ -837,7 +849,7 @@ export function ChatPanel() {
 
   function deleteMessage(m: ChatMessage) {
     if (!m.id) return;
-    if (!window.confirm('Удалить это сообщение?')) return;
+    if (!window.confirm(t('chat.delete.confirm'))) return;
     getSocket().emit('chat-delete', { id: m.id });
   }
 
@@ -884,7 +896,7 @@ export function ChatPanel() {
       });
     } catch (err) {
       console.error(err);
-      toast.error(`Не удалось отправить файл «${p.file.name}».`);
+      toast.error(t('chat.upload.failed', { name: p.file.name }));
     } finally {
       setUploading(false);
     }
@@ -895,7 +907,7 @@ export function ChatPanel() {
     const accepted: PendingFile[] = [];
     for (const file of files) {
       if (file.size > MAX_UPLOAD_BYTES) {
-        toast.error(`Файл «${file.name}» больше ${fmtBytes(MAX_UPLOAD_BYTES)} — не добавлен.`);
+        toast.error(t('chat.upload.tooBig', { name: file.name, limit: fmtBytes(MAX_UPLOAD_BYTES) }));
         continue;
       }
       accepted.push({
@@ -988,7 +1000,9 @@ export function ChatPanel() {
         className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-4 pb-2 pt-4"
       >
         <div className="px-4 pb-3 pt-7 text-center text-[13px] leading-[1.5] text-text-muted">
-          Это начало канала <b className="text-text-header">#{textLabel}</b>. Поздоровайтесь.
+          {rt('chat.start', {
+            channel: <b className="text-text-header">#{textLabel}</b>,
+          })}
         </div>
         {messages.map((m, i) => (
           <div key={m.id ?? i}>
@@ -1025,7 +1039,7 @@ export function ChatPanel() {
                 <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
               </svg>
               <span className="font-mono text-[12px] uppercase tracking-[0.16em]">
-                Отпустите файлы, чтобы прикрепить
+                {t('chat.drop')}
               </span>
             </div>
           </motion.div>
@@ -1050,7 +1064,7 @@ export function ChatPanel() {
             )}
             style={{ bottom: pending.length || reply ? 132 : 84 }}
           >
-            {hasNew ? 'Новые сообщения' : 'Вниз'}
+            {t(hasNew ? 'chat.jump.new' : 'chat.jump.bottom')}
             <IconArrowDown />
           </motion.button>
         )}
@@ -1087,13 +1101,13 @@ export function ChatPanel() {
             >
               <div className="mb-2 flex items-center gap-2 rounded-[10px] border border-line bg-bg-active/60 px-3 py-1.5 text-[12.5px]">
                 <IconReply className="shrink-0 text-text-muted" />
-                <span className="text-text-muted">Ответ</span>
+                <span className="text-text-muted">{t('chat.reply.label')}</span>
                 <span className="shrink-0 font-medium text-text-header">{reply.name}</span>
-                <span className="truncate text-text-muted">{reply.text || 'вложение'}</span>
+                <span className="truncate text-text-muted">{reply.text || t('chat.attachment')}</span>
                 <button
                   type="button"
                   onClick={() => setReply(null)}
-                  aria-label="Отменить ответ"
+                  aria-label={t('chat.reply.cancel')}
                   className="ml-auto grid h-5 w-5 shrink-0 place-items-center rounded-full text-text-muted transition-colors hover:bg-bg-hover hover:text-text"
                 >
                   ✕
@@ -1113,7 +1127,7 @@ export function ChatPanel() {
             type="button"
             onClick={() => fileRef.current?.click()}
             disabled={uploading}
-            title="Приложить файл"
+            title={t('chat.attach')}
             className={cn(
               'grid h-9 w-9 shrink-0 place-items-center rounded-full text-text-muted transition-colors hover:bg-white/10 hover:text-text',
               uploading && 'cursor-progress opacity-60',
@@ -1140,13 +1154,13 @@ export function ChatPanel() {
             onPaste={onPaste}
             maxLength={500}
             autoComplete="off"
-            placeholder={`написать в #${textLabel}`}
+            placeholder={t('chat.composer.placeholder', { channel: textLabel })}
             className="min-w-0 flex-1 bg-transparent px-1 py-1.5 text-[15px] text-text outline-none placeholder:text-text-muted/70"
           />
           <button
             type="submit"
             disabled={uploading || (!text.trim() && pending.length === 0)}
-            title="Отправить"
+            title={t('chat.send')}
             className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-accent-strong text-base font-bold text-bg-app transition-all hover:brightness-95 disabled:scale-90 disabled:opacity-40"
           >
             ➤

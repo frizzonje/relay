@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { cn } from '@/lib/utils';
+import { useT } from '@/lib/i18n';
 
 const MIN_SCALE = 1;
 const MAX_SCALE = 6;
@@ -63,6 +64,7 @@ export function ImageLightbox({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const t = useT();
   const [scale, setScale] = useState(1);
   const [tx, setTx] = useState(0);
   const [ty, setTy] = useState(0);
@@ -156,7 +158,7 @@ export function ImageLightbox({
           style={{ background: 'rgba(6,7,9,0.94)', backdropFilter: 'blur(6px)' }}
         />
         <DialogPrimitive.Content
-          aria-label={alt || 'Просмотр изображения'}
+          aria-label={alt || t('lightbox.aria')}
           aria-describedby={undefined}
           className="fixed inset-0 z-[70] focus:outline-none"
           onOpenAutoFocus={(e) => e.preventDefault()}
@@ -196,7 +198,7 @@ export function ImageLightbox({
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-text-faint" aria-hidden="true">
               <rect x="3" y="3" width="18" height="18" rx="2.5" /><circle cx="8.5" cy="8.5" r="1.6" /><path d="m21 15-5-5L5 21" />
             </svg>
-            <span className="truncate font-mono text-[12px] text-text">{alt || 'изображение'}</span>
+            <span className="truncate font-mono text-[12px] text-text">{alt || t('lightbox.image')}</span>
             {(dims || sizeLabel) && (
               <span className="shrink-0 font-mono text-[11px] text-text-faint">
                 {dims ? `${dims.w}×${dims.h}` : ''}
@@ -208,18 +210,18 @@ export function ImageLightbox({
 
           {/* Тулбар справа сверху: зум ± со счётчиком, сброс | скачать · закрыть. */}
           <div className="lbx-chrome absolute right-4 top-4 flex items-center gap-0.5 rounded-[12px] border border-line bg-bg-panel/90 p-1 shadow-[0_16px_50px_rgba(0,0,0,0.6)] backdrop-blur">
-            <ToolBtn label="Отдалить" onClick={() => centerZoom(-STEP)} disabled={!zoomed}>
+            <ToolBtn label={t('lightbox.zoomOut')} onClick={() => centerZoom(-STEP)} disabled={!zoomed}>
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5M8 11h6" />
               </svg>
             </ToolBtn>
             <span className="min-w-[3.4rem] select-none text-center font-mono text-[11px] tabular-nums text-text-muted">{pct}%</span>
-            <ToolBtn label="Приблизить" onClick={() => centerZoom(STEP)} disabled={scale >= MAX_SCALE}>
+            <ToolBtn label={t('lightbox.zoomIn')} onClick={() => centerZoom(STEP)} disabled={scale >= MAX_SCALE}>
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5M11 8v6M8 11h6" />
               </svg>
             </ToolBtn>
-            <ToolBtn label="Сбросить масштаб" onClick={reset} disabled={!zoomed}>
+            <ToolBtn label={t('lightbox.zoomReset')} onClick={reset} disabled={!zoomed}>
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" />
               </svg>
@@ -230,15 +232,15 @@ export function ImageLightbox({
               download={downloadName || alt || true}
               target="_blank"
               rel="noopener noreferrer"
-              aria-label="Скачать"
-              title="Скачать"
+              aria-label={t('lightbox.download')}
+              title={t('lightbox.download')}
               className="grid h-9 w-9 place-items-center rounded-[10px] text-text-muted outline-none transition-colors hover:bg-bg-active hover:text-text focus-visible:ring-2 focus-visible:ring-line-strong"
             >
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
               </svg>
             </a>
-            <ToolBtn label="Закрыть" onClick={() => onOpenChange(false)} danger>
+            <ToolBtn label={t('common.close')} onClick={() => onOpenChange(false)} danger>
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M18 6 6 18M6 6l12 12" />
               </svg>
@@ -248,11 +250,11 @@ export function ImageLightbox({
           {/* Подсказка снизу — гаснет через пару секунд (lbx-hint). */}
           <div className="lbx-hint pointer-events-none absolute inset-x-0 bottom-5 flex justify-center">
             <span className="rounded-full border border-line bg-bg-panel/80 px-3 py-1 font-mono text-[11px] text-text-faint backdrop-blur">
-              колесо — зум · двойной клик · тянуть — двигать · Esc — закрыть
+              {t('lightbox.hint')}
             </span>
           </div>
 
-          <DialogPrimitive.Title className="sr-only">{alt || 'Изображение'}</DialogPrimitive.Title>
+          <DialogPrimitive.Title className="sr-only">{alt || t('lightbox.title')}</DialogPrimitive.Title>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
