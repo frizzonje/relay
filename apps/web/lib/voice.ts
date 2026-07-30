@@ -13,6 +13,7 @@ import { useUiStore, myName } from '@/stores/ui';
 import { loadClientId } from '@/lib/identity';
 import { useVoiceStore, type ScreenMode, type TileNet, type VoiceTile } from '@/stores/voice';
 import { createMeshTransport } from '@/lib/voice/mesh';
+import { voiceSupport } from '@/lib/voice-support';
 import type { TransportHost, VoiceTicket, VoiceTransport } from '@/lib/voice/types';
 
 const sfx = () => getSfx();
@@ -1239,9 +1240,14 @@ export async function joinVoice(newRoom: string, label: string) {
     return;
   }
 
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    toast.error('Видеозвонки недоступны: откройте сайт по HTTPS или обновите браузер.');
+  // Возможности движка проверяем ДО микрофона: в WebKitGTK без WebRTC
+  // getUserMedia отработает, а RTCPeerConnection нет — раньше это давало вход в
+  // канал с зажжённым микрофоном и полной тишиной без единой ошибки.
+  const support = voiceSupport();
+  if (!support.ok) {
+    toast.error('Не удалось выйти на связь: ' + support.message + '.');
     setStatus('Связь невозможна');
+    sfx().play('error');
     return;
   }
 

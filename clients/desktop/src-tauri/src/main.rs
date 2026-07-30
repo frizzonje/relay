@@ -274,6 +274,16 @@ fn main() {
             // AppImage перенесли) — тогда перерегистрируем её на текущий путь.
             reconcile_autostart(&handle);
 
+            // Экран выбора сервера доложил, что в движке нет WebRTC (см.
+            // checkWebrtc в src/main.js). Пишем в лог: по файлу с машины
+            // пользователя сразу видно, почему «голоса нет», без переписки.
+            handle.listen("webrtc-missing", move |event| {
+                ulog(&format!(
+                    "WEBRTC MISSING: движок собран без WebRTC, звонки невозможны. ua={}",
+                    event.payload()
+                ));
+            });
+
             // web-UI сообщает состояние звонка → перерисовываем трей.
             let h = handle.clone();
             handle.listen("voice-status", move |event| {

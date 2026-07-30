@@ -1,9 +1,9 @@
 # relay desktop (Windows / Linux / macOS) — Tauri v2
 
 Нативная оболочка над существующим web-клиентом: Rust-ядро + системный webview
-(WebView2 на Windows, WebKitGTK на Linux, WKWebView на macOS). WebRTC и весь UI
-приходят из webview бесплатно — десктоп-клиент не реализует протокол сам,
-а добавляет то, чего нет у браузера:
+(WebView2 на Windows, WebKitGTK на Linux, WKWebView на macOS). Весь UI приходит
+из webview бесплатно — десктоп-клиент не реализует протокол сам, а добавляет то,
+чего нет у браузера:
 
 - окно/трей, автозапуск при входе в систему, назначаемый глобальный хоткей
   push-to-talk;
@@ -11,6 +11,34 @@
 - автообновление (tauri-plugin-updater), установщики: MSI/NSIS (Windows),
   AppImage/deb/rpm (Linux), dmg (macOS); Arch Linux — через AUR
   ([packaging/arch](packaging/arch)).
+
+## ⚠️ Linux: звонков в этой оболочке НЕТ
+
+**Системный WebKitGTK собран без WebRTC — на Linux голос не работает и не может
+заработать никакими правками нашего кода.** Проверено на Arch (`webkit2gtk-4.1`
+2.52.5, x86_64 и aarch64) и Ubuntu 22.04 (2.50.4): `getUserMedia` на месте,
+а `RTCPeerConnection` в движке `undefined`, символов `createOffer` /
+`addIceCandidate` в `libwebkit2gtk-4.1.so.0` нет вовсе.
+
+Причина внешняя: upstream WebKitGTK держит `-DENABLE_WEB_RTC=OFF` по умолчанию и
+не кладёт WebRTC в тарболы, поэтому **ни один** мейнстрим-дистрибутив не собирает
+его с поддержкой звонков. Включается только самосбором WebKit, и по отзывам он
+там работает лишь под X11 (на Wayland — ошибки GBM).
+
+Из этого следуют две вещи, которые важно не забыть:
+
+1. **Правки GStreamer-плагинов, `permission-request`, DMABUF и прочего звонков не
+   чинят.** Всё это необходимо, но недостаточно: без `RTCPeerConnection` соединение
+   не начинается вообще. Такие попытки уже были — `e3c5f28`, `f69c725`, `06c7095`.
+2. **Пока движок не заменён, оболочка обязана говорить об этом вслух.** Экран
+   выбора сервера проверяет `RTCPeerConnection` (`checkWebrtc` в
+   [`src/main.js`](src/main.js)) и показывает баннер; факт уходит в
+   `~/relay-update.log` строкой `WEBRTC MISSING`. В web-UI то же самое
+   гейтит вход в канал (`apps/web/lib/voice-support.ts`) — раньше клиент
+   заходил в голосовой канал, зажигал микрофон и молчал без единой ошибки.
+
+Настоящее решение — движок с WebRTC на Linux (Chromium-оболочка). Пока его нет,
+Linux-пользователям для голоса нужен браузер.
 
 ## Архитектура
 

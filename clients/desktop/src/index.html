@@ -133,6 +133,20 @@
       }
       .recent-del:hover { color: var(--danger); background: rgba(229, 87, 63, 0.1); }
 
+      /* Движок без WebRTC (системный WebKitGTK) — звонков в этой сборке не будет
+         вовсе, и узнать об этом надо ДО входа в канал, а не по тишине в нём. */
+      .warn {
+        border: 1px solid rgba(229, 87, 63, 0.45);
+        background: rgba(229, 87, 63, 0.08);
+        border-radius: 10px;
+        padding: 12px 14px;
+        margin: 0 0 18px;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+      .warn b { display: block; margin-bottom: 4px; }
+      .warn span { color: var(--muted); }
+
       /* Контекстное меню оболочки. Меню движка отсюда выключено (см. main.js):
          «Назад / Обновить / Просмотреть код» в нативном клиенте — чужой
          интерфейс. Вид тот же, что у меню web-UI (components/ui/ContextMenu). */
@@ -181,6 +195,9 @@
     <main class="card">
       <p class="brand">relay</p>
       <p class="hint" id="hint">Адрес вашей инсталляции relay</p>
+
+      <!-- Заполняется из main.js только если движок не умеет WebRTC. -->
+      <section class="warn" id="no-webrtc" hidden></section>
 
       <!-- Автоподключение к последнему серверу. Показывается вместо формы,
            пока идёт проверка доступности; «Отмена» возвращает к выбору. -->

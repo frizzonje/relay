@@ -399,6 +399,42 @@ document.addEventListener("contextmenu", (e) => {
   closeCtx(); // по пустому месту карточки — просто тишина вместо меню движка
 });
 
+// ── Проверка движка ─────────────────────────────────────────────────────────
+
+// Системный WebKitGTK (Arch, Debian/Ubuntu — весь Linux, кто ставит пакет из
+// репозитория) собран БЕЗ WebRTC: upstream держит `-DENABLE_WEB_RTC=OFF` по
+// умолчанию и не кладёт его в тарболы. В таком движке getUserMedia на месте, а
+// RTCPeerConnection нет вовсе — клиент заходил в канал, зажигал микрофон и
+// молчал без единой ошибки. Проверяем ЗДЕСЬ, в том самом webview, который будет
+// крутить web-UI, и говорим прямо — до того, как человек потратит вечер на
+// «почему меня не слышно».
+function checkWebrtc() {
+  const PC = window.RTCPeerConnection || window.webkitRTCPeerConnection;
+  // Мало имени в window: в урезанных сборках класс бывает объявлен, но без
+  // методов согласования — звонок развалился бы уже после входа в канал.
+  if (typeof PC === "function" && typeof PC.prototype?.createOffer === "function") return;
+
+  const box = document.getElementById("no-webrtc");
+  if (box) {
+    box.hidden = false;
+    box.innerHTML =
+      "<b>Звонки в этой сборке работать не будут</b>" +
+      "<span>Системный движок WebKitGTK собран без поддержки WebRTC — это " +
+      "ограничение движка, а не relay. Чат и всё остальное работают. " +
+      "Для голоса откройте relay в Chromium, Firefox или Chrome.</span>";
+  }
+
+  // Тот же факт — в relay-update.log, чтобы он был виден в логе с машины
+  // пользователя, а не только на экране, который никто не сфотографировал.
+  try {
+    window.__TAURI__?.event?.emit("webrtc-missing", navigator.userAgent);
+  } catch {
+    /* мост не поднялся — баннера на экране достаточно */
+  }
+}
+
+checkWebrtc();
+
 // ── Старт ───────────────────────────────────────────────────────────────────
 
 // Прошлый адрес (или тестовый дефолт) — заранее в поле, чтобы «Подключиться»
