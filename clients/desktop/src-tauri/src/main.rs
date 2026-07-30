@@ -72,32 +72,70 @@ struct VoiceStatus {
     muted: bool,
 }
 
-/// NOTE: Специальная инициализация окружения для Linux
-/// NOTE: с установкой корректных переменных окружения с приоритетом.
+/// Что решила `init_linux_env` — печатаем это из main(), когда `ulog` уже можно
+/// звать без риска (ctor выполняется до всей инициализации процесса).
+#[cfg(target_os = "linux")]
+static LINUX_ENV_NOTE: Mutex<String> = Mutex::new(String::new());
+
+/// Окружение WebKitGTK. ОБЯЗАТЕЛЬНО в ctor, а не в `setup()`: GTK/WebKit читают
+/// эти переменные при инициализации, которая происходит раньше, чем Tauri отдаст
+/// нам управление — правки из `setup()` движок уже не увидит.
+///
+/// Железное правило: переменную, которую пользователь задал сам, НЕ трогаем.
+/// Иначе человек, обходящий баг своего драйвера через `WEBKIT_DISABLE_*`,
+/// получает наш перебивающий default и не может ничего сделать.
+#[cfg(target_os = "linux")]
 #[ctor::ctor]
-fn init_linux_settings() {
-    #[cfg(target_os = "linux")]
-    {
-        let session_type = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
-        if session_type == "wayland" {
-            std::env::set_var("GDK_BACKEND", "wayland,x11");
-            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1"); // Для WebKit 2.46+
-            std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1");     // Для NVIDIA
+fn init_linux_env() {
+    // Ставим только то, чего пользователь не задавал.
+    fn set_default(notes: &mut Vec<String>, key: &str, val: &str, why: &str) {
+        if std::env::var_os(key).is_some() {
+            notes.push(format!("{key}=<user>"));
         } else {
-            std::env::set_var("GDK_BACKEND", "x11");
+            std::env::set_var(key, val);
+            notes.push(format!("{key}={val}({why})"));
         }
     }
-}
 
-fn main() {
+    let mut notes: Vec<String> = Vec::new();
+
     // DMABUF-рендер WebKitGTK ломался на проприетарном NVIDIA до 2.46 (белое/
     // чёрное окно) — там его надо гасить. С 2.46 upstream сам отключает DMABUF
     // на проблемных драйверах, а принудительный запрет на свежих версиях (Arch
-    // и прочие rolling с 2.48+) сам по себе даёт глюки софтверного пути. Поэтому
-    // флаг ставим только на старом webkit и только если пользователь не задал
-    // переменную сам. Версию берём из libwebkit2gtk ДО инициализации GTK —
-    // webkit_get_*_version() это простые геттеры, init не требуют.
+    // и прочие rolling с 2.48+) сам по себе даёт глюки софтверного пути.
+    // Поэтому смотрим на версию: геттеры webkit_get_*_version() — простые
+    // функции без побочных эффектов, инициализации GTK не требуют.
+    let (maj, min) = unsafe {
+        (
+            webkit2gtk_sys::webkit_get_major_version(),
+            webkit2gtk_sys::webkit_get_minor_version(),
+        )
+    };
+    if (maj, min) < (2, 46) {
+        set_default(&mut notes, "WEBKIT_DISABLE_DMABUF_RENDERER", "1", "webkit<2.46");
+        // Композитинг гасим ТОЛЬКО заодно со старым webkit: на 2.46+ это
+        // выключает аппаратный путь целиком и само по себе рисует артефакты.
+        set_default(&mut notes, "WEBKIT_DISABLE_COMPOSITING_MODE", "1", "webkit<2.46");
+    } else {
+        notes.push(format!("webkit {maj}.{min} → рендер не трогаем"));
+    }
+
+    // GDK_BACKEND НЕ навязываем. Раньше здесь стояло `wayland,x11` под Wayland и
+    // жёсткий `x11` иначе — но на Wayland-сессии GTK и так выберет wayland, а
+    // насильный `x11` ломал запуск там, где Xwayland не поднят.
+    if std::env::var("XDG_SESSION_TYPE").unwrap_or_default() == "wayland" {
+        // Explicit sync в проприетарном NVIDIA до 555 подвешивал композитор;
+        // переменная безобидна на остальных драйверах.
+        set_default(&mut notes, "__NV_DISABLE_EXPLICIT_SYNC", "1", "nvidia/wayland");
+    }
+
+    *LINUX_ENV_NOTE.lock().unwrap() = notes.join(", ");
+}
+
+fn main() {
+    // Слепок окружения в лог: по нему видно, какой graphics-путь у машины
+    // пользователя, когда «не работает» без единой ошибки на экране. Сами
+    // переменные выставлены раньше, в `init_linux_env` (ctor).
     #[cfg(target_os = "linux")]
     {
         let (maj, min) = unsafe {
@@ -106,22 +144,13 @@ fn main() {
                 webkit2gtk_sys::webkit_get_minor_version(),
             )
         };
-        let forced = if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some() {
-            "user"
-        } else if (maj, min) < (2, 46) {
-            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-            "yes(old webkit)"
-        } else {
-            "no"
-        };
-        // Слепок окружения в лог: по нему видно, какой graphics-путь у машины
-        // пользователя, когда «не работает» без единой ошибки на экране.
         let env = |k: &str| std::env::var(k).unwrap_or_else(|_| "-".into());
         ulog(&format!(
-            "linux env: webkit {maj}.{min}, dmabuf-disable={forced}, session={}, wayland={}, gdk-backend={}",
+            "linux env: webkit {maj}.{min}, session={}, wayland={}, gdk-backend={}, applied: {}",
             env("XDG_SESSION_TYPE"),
             env("WAYLAND_DISPLAY"),
             env("GDK_BACKEND"),
+            LINUX_ENV_NOTE.lock().unwrap(),
         ));
     }
 
