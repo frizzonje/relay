@@ -11,6 +11,7 @@ import type {
   TransportOptions,
 } from 'mediasoup-client/types';
 import { io, type Socket } from 'socket.io-client';
+import { tx } from '@/lib/i18n';
 import type { UplinkStatus } from '@/stores/voice';
 import type { TransportHost, VoiceTransport } from './types';
 import {
@@ -493,7 +494,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     }
     if (recoverStage === 0) {
       recoverStage = 1;
-      host.setStatus('Медиасервер: восстанавливаем связь…');
+      host.setStatus('voice.status.sfuReconnecting');
       host.diag('sfu recover', 'stage 1: restart-ice');
       await restartIce();
       scheduleRecovery(RECOVER_WINDOW_MS); // сторож: не помогло — следующая ступень
@@ -501,7 +502,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     }
     if (recoverStage === 1) {
       recoverStage = 2;
-      host.setStatus('Медиасервер: пересобираем соединение…');
+      host.setStatus('voice.status.sfuRebuilding');
       host.diag('sfu recover', 'stage 2: rebuild transports');
       await rebuildTransports();
       scheduleRecovery(RECOVER_WINDOW_MS);
@@ -555,7 +556,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     if (lost) return; // дирижёр уже позван — второй раз незачем
     lost = true;
     clearTimers();
-    host.setStatus('Медиасервер недоступен');
+    host.setStatus('voice.status.sfuUnavailable');
     host.transportLost(reason);
   }
 
@@ -792,7 +793,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         dropConsumer(producerId);
       });
       s.on('peer-left', ({ peerId }: { peerId: string }) => {
-        host.setStatus((names.get(peerId) || 'Участник') + ' вышел');
+        host.setStatus('voice.status.peerLeft', { name: names.get(peerId) || tx('voice.peer.fallback') });
         dropPeer(peerId);
         host.playSfx('peerLeave');
       });
@@ -805,7 +806,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       s.on('disconnect', () => {
         if (!ready || lost) return;
         host.diag('sfu signaling lost');
-        host.setStatus('Медиасервер: связь с сигналингом потеряна');
+        host.setStatus('voice.status.sfuSignalingLost');
         if (socketTimer) clearTimeout(socketTimer);
         socketTimer = setTimeout(() => {
           socketTimer = null;

@@ -2,6 +2,7 @@
 
 import { useAudioUnlockStore } from '@/stores/audio-unlock';
 import { resumeVoiceAudio } from '@/lib/voice';
+import { useT } from '@/lib/i18n';
 
 /**
  * Кнопка разблокировки звука. Браузер мог заблокировать автоплей до первого
@@ -10,6 +11,7 @@ import { resumeVoiceAudio } from '@/lib/voice';
  * в тишине, даже когда видео уже играет. Показ включает VideoTile (show()).
  */
 export function AudioUnlock() {
+  const t = useT();
   const shown = useAudioUnlockStore((s) => s.shown);
   const dismiss = useAudioUnlockStore((s) => s.dismiss);
   if (!shown) return null;
@@ -25,7 +27,7 @@ export function AudioUnlock() {
         dismiss();
       }}
     >
-      🔇 Браузер заглушил звук — нажмите, чтобы включить
+      🔇 {t('audio.unlock')}
     </button>
   );
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import type { SfxName } from '@/lib/sfx';
+import type { MessageKey, Vars } from '@/lib/i18n/translate';
 import type { TileNet, UplinkStatus, VoicePing } from '@/stores/voice';
 
 /**
@@ -73,7 +74,7 @@ export interface TransportHost {
    * вчера с телефона» разбирается только по серверному логу.
    */
   diag(event: string, detail?: string): void;
-  setStatus(text: string): void;
+  setStatus(key: MessageKey, vars?: Vars): void;
   setPing(ping: VoicePing): void;
   setUplink(status: UplinkStatus): void;
   playSfx(name: SfxName): void;

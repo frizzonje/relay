@@ -3,6 +3,7 @@
 import { useRef, useState, type FormEvent } from 'react';
 import { motion, useAnimationControls } from 'framer-motion';
 import { Logo } from '@/components/ui/Logo';
+import { useT } from '@/lib/i18n';
 
 /**
  * Экран входа. POST /api/login: 200 → на главную; 401 — отказ; 429 — перебор
@@ -10,6 +11,7 @@ import { Logo } from '@/components/ui/Logo';
  * @relay/shared).
  */
 export default function LoginPage() {
+  const t = useT();
   const [pwd, setPwd] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -32,15 +34,11 @@ export default function LoginPage() {
         window.location.replace('/');
         return;
       }
-      setErr(
-        r.status === 429
-          ? 'Слишком много попыток. Подождите 10 минут.'
-          : 'Неверный пароль.',
-      );
+      setErr(t(r.status === 429 ? 'login.error.rateLimited' : 'login.error.wrongPassword'));
       void shake.start({ x: [0, -8, 8, -8, 8, 0], transition: { duration: 0.4 } });
       inputRef.current?.select();
     } catch {
-      setErr('Сервер не отвечает.');
+      setErr(t('login.error.serverSilent'));
     } finally {
       setBusy(false);
     }
@@ -65,7 +63,7 @@ export default function LoginPage() {
                 type="password"
                 value={pwd}
                 onChange={(e) => setPwd(e.target.value)}
-                placeholder="Пароль"
+                placeholder={t('login.password.placeholder')}
                 autoComplete="current-password"
                 autoFocus
                 required
@@ -76,7 +74,7 @@ export default function LoginPage() {
                 disabled={busy}
                 className="rounded-[10px] bg-accent-strong px-3 py-3 text-[15px] font-semibold tracking-wide text-bg-app transition hover:brightness-95 active:translate-y-0.5 disabled:cursor-wait disabled:opacity-60"
               >
-                Войти
+                {t('login.submit')}
               </button>
             </form>
 

@@ -13,6 +13,7 @@ import { loadTag, sanitizeTag, saveTag, suggestTag } from '@/lib/identity';
 import { joinVoice } from '@/lib/voice';
 import { useUiStore } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
+import { useT } from '@/lib/i18n';
 
 /**
  * Гостевая сцена инвайт-ссылки: ввод имени → сразу в эфир конкретного
@@ -21,6 +22,7 @@ import { useVoiceStore } from '@/stores/voice';
  * у гостя и на сервере нет (гейтвей режет всё, кроме его комнаты).
  */
 export function GuestStage({ slug, label, exp }: { slug: string; label: string; exp: number }) {
+  const t = useT();
   const voiceRoom = useUiStore((s) => s.voiceRoom);
   const status = useVoiceStore((s) => s.status);
 
@@ -48,8 +50,8 @@ export function GuestStage({ slug, label, exp }: { slug: string; label: string; 
       setExpired(true);
       return;
     }
-    const t = setTimeout(() => setExpired(true), Math.min(ms, 2 ** 31 - 1));
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setExpired(true), Math.min(ms, 2 ** 31 - 1));
+    return () => clearTimeout(timer);
   }, [exp]);
 
   const clean = sanitizeTag(draft);
@@ -78,7 +80,7 @@ export function GuestStage({ slug, label, exp }: { slug: string; label: string; 
           <Icon name="volume-2" className="text-[18px] text-text-muted" />
           <span className="truncate font-bold text-text-header">{label}</span>
           <span className="rounded-full border border-line bg-bg-elev px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-text-muted">
-            гостевой доступ
+            {t('guest.badge')}
           </span>
         </header>
         <VideoGrid />
@@ -102,12 +104,10 @@ export function GuestStage({ slug, label, exp }: { slug: string; label: string; 
 
         {wasInCall ? (
           <>
-            <h1 className="text-xl font-bold text-text-header">Звонок завершён</h1>
+            <h1 className="text-xl font-bold text-text-header">{t('guest.ended.title')}</h1>
             <p className="mt-1 max-w-[300px] text-[13px] leading-relaxed text-text-muted">
-              Вы вышли из канала «{label}».
-              {expired
-                ? ' Срок приглашения истёк — для возвращения попросите новую ссылку.'
-                : ' По этой же ссылке можно вернуться, пока приглашение действует.'}
+              {t('guest.ended.body', { channel: label })}{' '}
+              {t(expired ? 'guest.ended.expired' : 'guest.ended.canReturn')}
             </p>
             {!expired && (
               <Button
@@ -117,22 +117,21 @@ export function GuestStage({ slug, label, exp }: { slug: string; label: string; 
                 disabled={joining}
                 onClick={() => void join()}
               >
-                <Icon name="volume-2" /> Вернуться в звонок
+                <Icon name="volume-2" /> {t('guest.rejoin')}
               </Button>
             )}
           </>
         ) : (
           <>
             <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-text-muted">
-              Приглашение в голосовой канал
+              {t('guest.invite.kicker')}
             </p>
             <h1 className="mt-0.5 flex items-center gap-2 text-xl font-bold text-text-header">
               <Icon name="volume-2" className="text-[20px] text-text-muted" />
               {label}
             </h1>
             <p className="mt-1 max-w-[300px] text-[13px] leading-relaxed text-text-muted">
-              Представьтесь — и вы сразу в эфире. Гостевой доступ действует только для этого
-              канала.
+              {t('guest.invite.body')}
             </p>
 
             {/* Живой предпросмотр аватара по тегу (как в IdentityGate) */}
@@ -151,7 +150,7 @@ export function GuestStage({ slug, label, exp }: { slug: string; label: string; 
                 <input
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
-                  placeholder="ваше имя"
+                  placeholder={t('guest.name.placeholder')}
                   maxLength={24}
                   autoFocus
                   spellCheck={false}
@@ -161,8 +160,8 @@ export function GuestStage({ slug, label, exp }: { slug: string; label: string; 
                 <button
                   type="button"
                   onClick={() => setDraft(suggestTag())}
-                  title="Другой вариант"
-                  aria-label="Сгенерировать другое имя"
+                  title={t('identity.reroll')}
+                  aria-label={t('guest.reroll.name')}
                   className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-base text-text-muted outline-none transition-colors hover:bg-bg-hover hover:text-text focus-visible:ring-2 focus-visible:ring-accent"
                 >
                   🎲
@@ -170,24 +169,22 @@ export function GuestStage({ slug, label, exp }: { slug: string; label: string; 
               </div>
 
               <Button type="submit" variant="primary" size="lg" disabled={!clean || joining || expired}>
-                {joining ? 'Подключаем…' : 'Присоединиться к звонку'}
+                {t(joining ? 'guest.join.busy' : 'guest.join')}
               </Button>
             </form>
 
             {/* Отказ в микрофоне / прочие сбои joinVoice — его статус + повтор */}
-            {!joining && status.startsWith('Нет доступа') && (
-              <p className="mt-2 text-[12px] leading-snug text-danger">
-                {status}. Разрешите доступ к микрофону в браузере и попробуйте снова.
-              </p>
+            {!joining && status?.key === 'voice.status.micDenied' && (
+              <p className="mt-2 text-[12px] leading-snug text-danger">{t('guest.mic.denied')}</p>
             )}
             {expired && (
               <p className="mt-2 text-[12px] leading-snug text-danger">
-                Срок приглашения истёк — попросите новую ссылку.
+                {t('guest.expired')}
               </p>
             )}
 
             <p className="mt-3 text-[10px] leading-snug text-text-muted opacity-70">
-              Браузер спросит доступ к микрофону — без него в эфир не попасть.
+              {t('guest.mic.note')}
             </p>
           </>
         )}

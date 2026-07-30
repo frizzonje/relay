@@ -4,6 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { Logo } from '@/components/ui/Logo';
 import { joinVoice } from '@/lib/voice';
 import { codeToSlug } from '@/lib/join-code';
+import { useT } from '@/lib/i18n';
 
 /**
  * Лобби (раздел 03 референса): компактная форма быстрого входа по коду. Знак,
@@ -12,6 +13,7 @@ import { codeToSlug } from '@/lib/join-code';
  * заходишь сразу, не разыскивая его в сайдбаре.
  */
 export function Lobby() {
+  const t = useT();
   const [code, setCode] = useState('');
 
   function onSubmit(e: FormEvent) {
@@ -29,12 +31,12 @@ export function Lobby() {
       >
         <Logo size={60} animate nodeBg="#0d0f12" />
         <div className="mt-4 font-mono text-[11px] uppercase tracking-[0.24em] text-text-faint">
-          быстрый вход
+          {t('lobby.kicker')}
         </div>
         <input
           value={code}
           onChange={(e) => setCode(e.target.value)}
-          placeholder="ссылка или код канала"
+          placeholder={t('lobby.code.placeholder')}
           autoComplete="off"
           spellCheck={false}
           className="mt-5 w-full rounded-[10px] border border-line bg-bg-elev px-3.5 py-3 text-center font-mono text-[14px] text-text outline-none transition placeholder:text-text-faint focus:border-line-strong focus:ring-1 focus:ring-line-strong"
@@ -44,7 +46,7 @@ export function Lobby() {
           disabled={!code.trim()}
           className="mt-2.5 w-full rounded-[10px] bg-accent-strong px-3 py-3 text-[14px] font-semibold text-bg-app transition hover:brightness-95 active:translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Присоединиться
+          {t('lobby.join')}
         </button>
       </form>
     </div>

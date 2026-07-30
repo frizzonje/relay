@@ -1,5 +1,13 @@
 import { create } from 'zustand';
 import type { VoicePresence } from '@relay/shared';
+import type { MessageKey, Vars } from '@/lib/i18n/translate';
+
+/**
+ * Статус подключения хранится ключом словаря, а не готовой фразой: текст
+ * собирает тот, кто рисует, — на языке, который выбран сейчас. Заодно статус
+ * снова можно сравнивать (`status?.key === '…'`), не угадывая по подстроке.
+ */
+export type VoiceStatus = { key: MessageKey; vars?: Vars } | null;
 
 /**
  * Реактивная «витрина» голосового канала. Вся императивная механика mesh-WebRTC
@@ -122,8 +130,8 @@ interface VoiceState {
   camOn: boolean;
   screenOn: boolean;
   screenMode: ScreenMode;
-  /** Статус подключения для шапки/панели голоса. */
-  status: string;
+  /** Статус подключения для шапки/панели голоса (см. VoiceStatus). */
+  status: VoiceStatus;
   presence: VoicePresence;
   /** Свой socket-id — чтобы пометить себя «(вы)» в составе каналов. */
   myId: string | null;
@@ -163,7 +171,7 @@ interface VoiceState {
 
   setTiles: (tiles: VoiceTile[]) => void;
   setMedia: (m: Partial<Pick<VoiceState, 'micOn' | 'camOn' | 'screenOn' | 'screenMode'>>) => void;
-  setStatus: (status: string) => void;
+  setStatus: (status: VoiceStatus) => void;
   setPresence: (presence: VoicePresence) => void;
   setMyId: (id: string | null) => void;
   setPing: (ping: VoicePing) => void;
@@ -188,7 +196,7 @@ export const useVoiceStore = create<VoiceState>((set) => ({
   camOn: false,
   screenOn: false,
   screenMode: 'quality',
-  status: '',
+  status: null,
   presence: {},
   myId: null,
   ping: { waiting: true, ms: null, grade: null, label: '' },

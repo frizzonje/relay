@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, type ReactNode } from 'react';
+import { toast } from 'sonner';
 import { getSocket } from '@/lib/socket';
 import { initVoice } from '@/lib/voice';
 import { initHotkeys } from '@/lib/hotkeys';
@@ -139,6 +140,16 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       if (slug === openSlug() && watching()) unread().readNow(slug);
     });
 
+    // Канал закрылся под нами: его удалили (или он не пережил наш реконнект).
+    // Сервер уже выписал нас из комнаты — закрываем ленту и говорим почему,
+    // иначе на экране остался бы канал-призрак, в котором можно писать в пустоту.
+    socket.on('chat-closed', ({ slug }) => {
+      if (!slug || slug !== ui().textRoom) return;
+      const label = ui().textLabel || slug;
+      ui().leaveText();
+      toast(`Канал #${label} удалили.`);
+    });
+
     // Реестр серверов — сервер шлёт полный список на connect и при изменениях.
     socket.on('servers', (list) => {
       if (!Array.isArray(list)) return;
@@ -154,6 +165,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // Для закрытых серверов приходит уже отфильтрованный (свой) список.
     socket.on('channels', (list) => {
       if (!Array.isArray(list)) return;
+      // Прежний список нужен ниже: по нему узнаём, к какому серверу принадлежал
+      // открытый канал, если он из нового списка пропал.
+      const before = useChannelsStore.getState().channels;
       useChannelsStore.getState().setChannels(list);
 
       // Снимок активности текстовых каналов: сервер кладёт в реестр время
@@ -167,16 +181,25 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       const open = openSlug();
       if (open && watching()) unread().readNow(open);
 
-      // Открытый текстовый канал удалили (у нас или у кого-то ещё) — закрываем
-      // ленту, иначе человек продолжит писать в канал-призрак, которого больше
-      // нет ни у кого. Пропускаем, пока есть закрытые серверы без введённого
-      // пароля: их каналы в списке отсутствуют законно (в т.ч. в первые мгновения
-      // после реконнекта, до авто-разблокировки), и это не повод никого выгонять.
+      // Открытый текстовый канал пропал из реестра — закрываем ленту, иначе
+      // человек продолжит писать в канал-призрак, которого больше нет ни у кого.
+      // Страховка к событию `chat-closed`: оно точнее, но до старых вкладок и
+      // клиентов не долетит.
+      //
+      // Пропажа законна ровно в одном случае: канал жил на закрытом сервере,
+      // который мы ещё не разблокировали (первые мгновения после реконнекта,
+      // пока не прошла авто-разблокировка) — такой список просто неполон.
+      // Проверяем именно сервер этого канала, а не «есть ли вообще запертые
+      // серверы»: чужой замок, который мы никогда не откроем, иначе отключал бы
+      // выход насовсем — и канал-призрак жил бы на экране до перезагрузки.
       const room = ui().textRoom;
       if (!room || list.some((c) => c?.type === 'text' && c.slug === room)) return;
       const { servers, unlockedIds } = useServersStore.getState();
-      const awaitingUnlock = servers.some((s) => s.locked && !unlockedIds.includes(s.id));
-      if (!awaitingUnlock) ui().leaveText();
+      const home = before.find((c) => c.type === 'text' && c.slug === room)?.serverId;
+      const locked = servers.some(
+        (s) => s.locked && !unlockedIds.includes(s.id) && (!home || s.id === home),
+      );
+      if (!locked) ui().leaveText();
     });
 
     // Ответ на ввод пароля закрытого сервера. Успех — помечаем разблокированным;
@@ -273,6 +296,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('chat-deleted');
       socket.off('chat-typing');
       socket.off('chat-activity');
+      socket.off('chat-closed');
       socket.off('servers');
       socket.off('server-unlock-result');
       socket.off('channels');

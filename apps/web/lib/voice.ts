@@ -11,6 +11,8 @@ import {
 } from '@/lib/desktop-screen-audio';
 import { useUiStore, myName } from '@/stores/ui';
 import { loadClientId } from '@/lib/identity';
+import { tx as msg } from '@/lib/i18n';
+import type { MessageKey, Vars } from '@/lib/i18n/translate';
 import { useVoiceStore, type ScreenMode, type TileNet, type VoiceTile } from '@/stores/voice';
 import { createMeshTransport } from '@/lib/voice/mesh';
 import { voiceSupport } from '@/lib/voice-support';
@@ -593,8 +595,8 @@ function broadcastMediaState() {
   if (room) socket().emit('media-update', { camOn, screenOn, micOn, deafened: !speakersOn });
 }
 
-function setStatus(text: string) {
-  useVoiceStore.getState().setStatus(text);
+function setStatus(key: MessageKey, vars?: Vars) {
+  useVoiceStore.getState().setStatus({ key, vars });
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1121,7 +1123,7 @@ async function enterRoom(target: string, ticket: VoiceTicket | null) {
   // Сразу за join — своё медиасостояние: сервер только что сбросил его, а мут/
   // глушилка могли остаться с прошлого канала.
   broadcastMediaState();
-  setStatus('На связи: ' + target);
+  setStatus('voice.status.connected', { room: target });
 }
 
 /**
@@ -1229,7 +1231,7 @@ function onTransportLost(reason: 'setup' | 'lost') {
   diag('sfu-lost', `${reason} → waiting for sfu (${remoteCount()} peers)`);
   toast.error('Медиасервер недоступен. Ждём его: участников слишком много для прямых звонков.');
   sfx().play('error');
-  setStatus('Медиасервер недоступен, ждём…');
+  setStatus('voice.status.sfuWaiting');
   scheduleSfuRetry();
 }
 
@@ -1246,18 +1248,18 @@ export async function joinVoice(newRoom: string, label: string) {
   const support = voiceSupport();
   if (!support.ok) {
     toast.error('Не удалось выйти на связь: ' + support.message + '.');
-    setStatus('Связь невозможна');
+    setStatus('voice.status.unsupported');
     sfx().play('error');
     return;
   }
 
   if (!localStream) {
-    setStatus('Запрашиваем доступ к микрофону...');
+    setStatus('voice.status.micRequesting');
     try {
       localStream = await acquireMic();
     } catch (err) {
       console.error('getUserMedia failed:', err);
-      setStatus('Нет доступа к микрофону');
+      setStatus('voice.status.micDenied');
       toast.error('Не удалось выйти на связь: микрофон — ' + mediaErrorText(err) + '.');
       sfx().play('error'); // отказано в доступе к устройству
       return;
@@ -1361,10 +1363,10 @@ export function leaveVoice(hard = true) {
   const ui = useUiStore.getState();
   if (ui.textRoom) {
     useUiStore.setState({ view: 'text', voiceRoom: null, voiceLabel: '' });
-    setStatus('В канале ' + (ui.textLabel || '# ' + ui.textRoom));
+    setStatus('voice.status.inTextChannel', { channel: ui.textLabel || '# ' + ui.textRoom });
   } else {
     useUiStore.setState({ view: 'lobby', voiceRoom: null, voiceLabel: '' });
-    setStatus('Отключён');
+    setStatus('voice.status.disconnected');
   }
 }
 
@@ -1771,7 +1773,7 @@ export function initVoice() {
   mesh().init(); // mesh слушает сигналинг всегда — он же и транспорт по умолчанию
 
   s.on('peer-joined', ({ name }) => {
-    setStatus('Подключился: ' + (name || 'Участник'));
+    setStatus('voice.status.peerJoined', { name: name || msg('voice.peer.fallback') });
     sfx().play('peerJoin'); // звук подключения участника
     // Новичок ещё не знает, что мы показываем экран/камеру: media-update летит
     // только на переключении. Повторяем текущее состояние, чтобы его плитка
@@ -1823,7 +1825,7 @@ export function initVoice() {
     // P2P-медиа всё это время текло. Ничего не пересобираем — иначе живой звонок
     // дёргался бы на каждое моргание сети.
     if (s.recovered) {
-      setStatus('На связи: ' + room);
+      setStatus('voice.status.connected', { room });
       return;
     }
     // Полноценный реконнект: у сокета новый id — все старые соединения мертвы,
@@ -1838,12 +1840,12 @@ export function initVoice() {
       return;
     }
     s.emit('join', { room, name: myName(), clientId: loadClientId() });
-    setStatus('На связи: ' + room);
+    setStatus('voice.status.connected', { room });
   });
 
   s.on('disconnect', () => {
     if (!room) return;
-    setStatus('Связь с сервером потеряна, переподключаемся…');
+    setStatus('voice.status.serverLost');
     toast('Связь с сервером потеряна. Переподключаемся…');
     sfx().play('connLost'); // обрыв связи
   });

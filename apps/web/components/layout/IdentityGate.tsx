@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { avatarStyle } from '@/lib/avatar';
 import { loadTag, saveTag, sanitizeTag, suggestTag } from '@/lib/identity';
 import { useUiStore } from '@/stores/ui';
+import { useT } from '@/lib/i18n';
 
 /**
  * Выбор личности. Сразу после входа по паролю участник выбирает свой @-тег —
@@ -15,6 +16,7 @@ import { useUiStore } from '@/stores/ui';
  * подхватываем его и окно не показываем. Сменить можно в панели пользователя.
  */
 export function IdentityGate() {
+  const t = useT();
   const setCallsign = useUiStore((s) => s.setCallsign);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState('');
@@ -62,10 +64,9 @@ export function IdentityGate() {
             />
           </div>
 
-          <DialogTitle className="text-xl">Ваш тег</DialogTitle>
+          <DialogTitle className="text-xl">{t('identity.title')}</DialogTitle>
           <DialogDescription className="mx-auto mt-1.5 max-w-[300px] text-[13px] leading-relaxed">
-            Под этим тегом вас увидят другие участники сервера. Пароля и базы нет —
-            тег хранится только в браузере. Сменить можно в любой момент.
+            {t('identity.body')}
           </DialogDescription>
 
           <form onSubmit={confirm} className="mt-5 flex flex-col gap-2.5">
@@ -75,7 +76,7 @@ export function IdentityGate() {
                 ref={inputRef}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
-                placeholder="тег"
+                placeholder={t('identity.tag.placeholder')}
                 maxLength={24}
                 autoFocus
                 spellCheck={false}
@@ -85,8 +86,8 @@ export function IdentityGate() {
               <button
                 type="button"
                 onClick={() => setDraft(suggestTag())}
-                title="Другой вариант"
-                aria-label="Сгенерировать другой тег"
+                title={t('identity.reroll')}
+                aria-label={t('identity.reroll.tag')}
                 className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-base text-text-muted outline-none transition-colors hover:bg-bg-hover hover:text-text focus-visible:ring-2 focus-visible:ring-accent"
               >
                 🎲
@@ -94,12 +95,12 @@ export function IdentityGate() {
             </div>
 
             <Button type="submit" variant="primary" size="lg" disabled={!clean} className="mt-1">
-              Продолжить
+              {t('identity.submit')}
             </Button>
           </form>
 
           <p className="mt-3 text-[10px] leading-snug text-text-muted opacity-70">
-            Тег хранится только в этом браузере.
+            {t('identity.note')}
           </p>
         </div>
       </DialogContent>

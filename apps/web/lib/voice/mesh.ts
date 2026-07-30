@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import type { IceServer, SdpPayload } from '@relay/shared';
 import { getSocket } from '@/lib/socket';
 import { getIceServers } from '@/lib/config';
+import { tx } from '@/lib/i18n';
 import { boostVideoBitrate, boostAudioBitrate } from '@/lib/sdp';
 import type { UplinkStatus } from '@/stores/voice';
 import type { TransportHost, VoiceTransport } from './types';
@@ -733,7 +734,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
 
       s.on('peer-left', ({ id }) => {
         const peer = peers.get(id);
-        host.setStatus((peer?.name || 'Участник') + ' вышел');
+        host.setStatus('voice.status.peerLeft', { name: peer?.name || tx('voice.peer.fallback') });
         removePeer(id);
         host.playSfx('peerLeave'); // звук отключения участника
       });
