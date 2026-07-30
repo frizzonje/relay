@@ -596,9 +596,16 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     this.broadcastServers();
 
     // Каналы удалённого сервера уходят вместе с ним — иначе повиснут сиротами.
+    // Текстовые провожаем так же, как в channel-delete: стираем историю и
+    // распускаем комнату, чтобы у читателей не осталось канала-призрака.
     const before = this.channels.length;
     for (let i = this.channels.length - 1; i >= 0; i--) {
-      if (this.channels[i].serverId === id) this.channels.splice(i, 1);
+      const channel = this.channels[i];
+      if (channel.serverId !== id) continue;
+      this.channels.splice(i, 1);
+      if (channel.type !== 'text') continue;
+      this.chatHistory.delete(CHAT_PREFIX + channel.slug);
+      this.closeChatRoom(channel.slug);
     }
     if (this.channels.length !== before) this.broadcastChannels();
     this.persist();
@@ -777,7 +784,13 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     this.channels.splice(index, 1);
     // История удалённого канала больше никому не принадлежит: держать её в
     // памяти незачем, а канал с тем же слагом иначе унаследовал бы чужую ленту.
-    if (channel.type === 'text') this.chatHistory.delete(CHAT_PREFIX + channel.slug);
+    // Читателей выписываем сами: их клиент мог бы и не заметить пропажу канала
+    // в новом реестре, а остаться в комнате — значит продолжать писать в канал,
+    // которого больше нет ни у кого (и заново набивать только что стёртую ленту).
+    if (channel.type === 'text') {
+      this.chatHistory.delete(CHAT_PREFIX + channel.slug);
+      this.closeChatRoom(channel.slug);
+    }
     this.broadcastChannels();
     this.persist();
     return { ok: true };
@@ -1035,6 +1048,21 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const slug = typeof payload?.room === 'string' ? payload.room.trim().slice(0, 32) : '';
     if (!slug) return;
     const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 20) : '';
+
+    // В несуществующий канал не пускаем: комната-призрак принимала бы сообщения
+    // и заново копила историю под удалённым слагом. Случая два, и они разные.
+    // Канала нет ни у кого (удалили, пока клиент переподключался) — так и
+    // отвечаем, `chat-closed`. Канал есть, но не виден (закрытый сервер, пароль
+    // ещё не введён) — молча не пускаем: вводить пароль никто не запрещал, и
+    // выгонять из ленты тут не за что. Проверяем ДО выхода из прежней комнаты —
+    // неудачный вход не должен выбрасывать из той, где человек уже сидит.
+    const known = this.channels.some((c) => c.type === 'text' && c.slug === slug);
+    const visible =
+      known && this.channelsFor(client).some((c) => c.type === 'text' && c.slug === slug);
+    if (!visible) {
+      if (!known) client.emit('chat-closed', { slug });
+      return;
+    }
 
     // Уже сидел в другом текстовом канале — сначала выходим
     this.leaveChatRoom(client);
@@ -1307,6 +1335,27 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       }
     }, SignalingGateway.PRESENCE_DEBOUNCE_MS);
     this.presenceTimer.unref?.();
+  }
+
+  /**
+   * Канал удалили — распускаем его комнату. Каждому читателю говорим об этом
+   * прямо (`chat-closed`), а не оставляем догадываться по новому реестру:
+   * закрытые серверы делают реестр неполным, и клиент имеет право не считать
+   * пропажу канала удалением. После выписки писать в канал уже нечем —
+   * `chat-message` смотрит на `client.data.chatRoom`.
+   */
+  private closeChatRoom(slug: string) {
+    const room = CHAT_PREFIX + slug;
+    const ids = this.server.sockets.adapter.rooms.get(room);
+    if (!ids) return;
+    for (const id of [...ids]) {
+      const sock = this.server.sockets.sockets.get(id);
+      if (!sock) continue;
+      sock.leave(room);
+      sock.data.chatRoom = undefined;
+      sock.data.chatName = undefined;
+      sock.emit('chat-closed', { slug });
+    }
   }
 
   private leaveChatRoom(client: Socket) {

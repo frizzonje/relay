@@ -141,6 +141,12 @@ ICE-серверы для RTCPeerConnection. Запрашивать перед �
 | S→C | `chat` | `ChatMessage` — новое сообщение (включая системные вход/выход) |
 | S→C | `chat-roster` | `string[]` — имена присутствующих в канале |
 | S→C | `chat-reaction` | `{ id, reactions: { emoji: name[] } }` |
+| S→C | `chat-closed` | `{ slug }` — канал удалён: сервер выписал тебя из комнаты, закрой ленту |
+
+`chat-join` в несуществующий текстовый канал не пускает: в ответ прилетит
+`chat-closed`, комнаты не будет (а значит, и `chat-message` уйдёт в никуда).
+Каналы закрытого сервера доступны только после `server-unlock` — до него
+`chat-join` молча ничего не делает.
 
 **ChatMessage** `{ id?, name?, text, ts, attachment?, system?, reactions? }` —
 `ts` в мс Unix; `system: true` — сервисное сообщение, рисовать иначе.

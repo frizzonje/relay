@@ -551,6 +551,11 @@ export interface ServerToClientEvents {
    * каналах, которые сейчас не открыты. Контент за это не утекает.
    */
   'chat-activity': (payload: ChatActivityRelay) => void;
+  /**
+   * Текстовый канал закрылся под тобой (его удалили). Сервер уже выписал тебя
+   * из комнаты — клиенту остаётся закрыть ленту, чтобы не осталось канала-призрака.
+   */
+  'chat-closed': (payload: ChatClosedRelay) => void;
   'media-update': (payload: MediaUpdateRelay) => void;
   /** Участник голосовой комнаты сменил тег (обновить подпись плитки). */
   'peer-renamed': (payload: PeerRenamedRelay) => void;
@@ -602,6 +607,11 @@ export interface ChatTypingRelay {
 export interface ChatActivityRelay {
   slug: string;
   ts: number;
+}
+
+/** Канал закрылся: его слаг (проверить, что закрыли именно открытый у тебя). */
+export interface ChatClosedRelay {
+  slug: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
