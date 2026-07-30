@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { verifyGuestToken } from '@relay/shared';
 import { GuestStage } from '@/components/stage/GuestStage';
 import { InviteInvalid } from '@/components/stage/InviteInvalid';
+import { getT } from '@/lib/i18n/server';
 
 /**
  * Гостевой вход по инвайт-ссылке `/invite/<token>`. Middleware пропускает этот
@@ -10,9 +11,10 @@ import { InviteInvalid } from '@/components/stage/InviteInvalid';
  * сцена (ввод имени → сразу в эфир конкретного войс-канала); битый/протухший →
  * карточка об ошибке. Второй рубеж — socket-handshake на гейтвее.
  */
-export const metadata: Metadata = {
-  title: 'Приглашение в звонок',
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT();
+  return { title: t('invite.title') };
+}
 
 export default async function InvitePage({
   params,

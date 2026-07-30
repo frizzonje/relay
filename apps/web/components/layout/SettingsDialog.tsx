@@ -12,6 +12,8 @@ import {
   switchServer,
 } from '@/lib/desktop';
 import { getTheme, setTheme, type Theme } from '@/lib/theme';
+import { LOCALES, LOCALE_LABELS, setLocale, useLocale, useT } from '@/lib/i18n';
+import { isLocale } from '@/lib/i18n/config';
 import { comboLabel, eventToCombo } from '@/lib/hotkeys';
 import { useDesktopStore } from '@/stores/desktop';
 import { useVoiceStore } from '@/stores/voice';
@@ -60,7 +62,38 @@ function Chevron() {
   );
 }
 
-/** Селектор устройства: стилизованный native <select> с шевроном. */
+/** Стилизованный native <select> с шевроном — общая обёртка для селектов настроек. */
+function SelectField({
+  label,
+  value,
+  onChange,
+  children,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  children: ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block font-mono text-[11px] uppercase tracking-[0.16em] text-text-faint">
+        {label}
+      </span>
+      <div className="relative">
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full appearance-none rounded-[10px] border border-line bg-bg-elev py-2.5 pl-3.5 pr-10 text-[14px] text-text outline-none transition focus:border-line-strong"
+        >
+          {children}
+        </select>
+        <Chevron />
+      </div>
+    </label>
+  );
+}
+
+/** Селектор устройства: список из enumerateDevices + заглушка, пока доступа нет. */
 function DeviceSelect({
   label,
   value,
@@ -75,26 +108,40 @@ function DeviceSelect({
   onChange: (id: string) => void;
 }) {
   return (
-    <label className="block">
-      <span className="mb-1.5 block font-mono text-[11px] uppercase tracking-[0.16em] text-text-faint">
-        {label}
-      </span>
-      <div className="relative">
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="w-full appearance-none rounded-[10px] border border-line bg-bg-elev py-2.5 pl-3.5 pr-10 text-[14px] text-text outline-none transition focus:border-line-strong"
-        >
-          {devices.length === 0 && <option value="">{fallback}</option>}
-          {devices.map((d, i) => (
-            <option key={d.deviceId || i} value={d.deviceId}>
-              {d.label || `${label} ${i + 1}`}
-            </option>
-          ))}
-        </select>
-        <Chevron />
-      </div>
-    </label>
+    <SelectField label={label} value={value} onChange={onChange}>
+      {devices.length === 0 && <option value="">{fallback}</option>}
+      {devices.map((d, i) => (
+        <option key={d.deviceId || i} value={d.deviceId}>
+          {d.label || `${label} ${i + 1}`}
+        </option>
+      ))}
+    </SelectField>
+  );
+}
+
+/**
+ * Выбор языка интерфейса. Названия языков не переводятся — каждый написан
+ * на себе самом, чтобы его узнал тот, кто ищет именно его. Выбор пишется в
+ * куку (её читает сервер), поэтому setLocale перезагружает страницу.
+ */
+function LanguageSelect() {
+  const t = useT();
+  const locale = useLocale();
+  return (
+    <div>
+      <SelectField
+        label={t('settings.language')}
+        value={locale}
+        onChange={(value) => isLocale(value) && setLocale(value)}
+      >
+        {LOCALES.map((l) => (
+          <option key={l} value={l}>
+            {LOCALE_LABELS[l]}
+          </option>
+        ))}
+      </SelectField>
+      <p className="mt-1.5 text-[12px] text-text-muted">{t('settings.language.hint')}</p>
+    </div>
   );
 }
 
@@ -639,7 +686,8 @@ export function SettingsDialog({
                 </div>
               </div>
             ) : tab === 'appearance' ? (
-              <div className="flex flex-col gap-2.5">
+              <div className="flex flex-col gap-5">
+                <LanguageSelect />
                 <Toggle
                   checked={theme === 'light'}
                   onChange={toggleTheme}

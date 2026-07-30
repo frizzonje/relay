@@ -1,0 +1,12 @@
+{
+  "app.description": "A private line of communication",
+
+  "settings.tab.appearance": "Appearance",
+  "settings.language": "Language",
+  "settings.language.hint": "Interface language. Detected from your browser the first time.",
+
+  "invite.title": "Call invitation",
+  "invite.invalid.title": "Invitation is no longer valid",
+  "invite.invalid.body": "The link has expired or was damaged. Ask whoever invited you for a new one — links last 24 hours.",
+  "invite.invalid.password": "I have the server password"
+}

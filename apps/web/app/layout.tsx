@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { IBM_Plex_Sans, IBM_Plex_Mono } from 'next/font/google';
 import { APP_NAME } from '@relay/shared';
 import { Background } from '@/components/layout/Background';
+import { getLocale, getT } from '@/lib/i18n/server';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
 import { Providers } from './providers';
 
@@ -25,10 +26,10 @@ const plexMono = IBM_Plex_Mono({
   display: 'swap',
 });
 
-export const metadata: Metadata = {
-  title: APP_NAME,
-  description: 'Закрытый канал связи',
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT();
+  return { title: APP_NAME, description: t('app.description') };
+}
 
 export const viewport: Viewport = {
   themeColor: '#08090b',
@@ -39,16 +40,22 @@ export const viewport: Viewport = {
   viewportFit: 'cover',
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+/**
+ * Локаль решается здесь, на сервере (кука → Accept-Language), и уезжает вниз
+ * пропом: серверный HTML и первый клиентский рендер обязаны совпасть, иначе
+ * React ругается на гидрацию, а язык моргает при загрузке.
+ */
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  const locale = await getLocale();
   return (
-    <html lang="ru" data-theme="dark" className={`${plexSans.variable} ${plexMono.variable}`}>
+    <html lang={locale} data-theme="dark" className={`${plexSans.variable} ${plexMono.variable}`}>
       <head>
         {/* Применяем сохранённую тему до отрисовки — иначе светлая мигнёт тёмным. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
       </head>
       <body>
         <Background />
-        <Providers>{children}</Providers>
+        <Providers locale={locale}>{children}</Providers>
       </body>
     </html>
   );
