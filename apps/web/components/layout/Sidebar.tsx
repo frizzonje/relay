@@ -332,7 +332,10 @@ export function Sidebar() {
           </div>
         )}
 
-        <Category onAdd={() => openCreate('text')} addLabel="Создать текстовый канал">
+        <Category
+          onAdd={isMain ? undefined : () => openCreate('text')}
+          addLabel="Создать текстовый канал"
+        >
           — Текстовые
         </Category>
         <AnimatePresence key={`text-${activeServerId}`} initial={false}>
@@ -362,7 +365,10 @@ export function Sidebar() {
           ))}
         </AnimatePresence>
 
-        <Category onAdd={() => openCreate('voice')} addLabel="Создать голосовой канал">
+        <Category
+          onAdd={isMain ? undefined : () => openCreate('voice')}
+          addLabel="Создать голосовой канал"
+        >
           — Голосовые
         </Category>
         <AnimatePresence key={`voice-${activeServerId}`} initial={false}>

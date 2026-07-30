@@ -202,17 +202,12 @@ const MAIN_SERVER_ID = 'relay-main';
 // рейке. Клиент держит такой же сид (lib/constants).
 const DEFAULT_SERVERS: ServerEntry[] = [{ id: MAIN_SERVER_ID, name: 'relay', removable: false }];
 
-// Каналы по умолчанию главного сервера. Их нельзя удалить; участники лишь
-// добавляют свои. Клиент держит такой же сид (lib/constants) — id/slug совпадают.
+// Каналы главного сервера. Набор фиксирован: ровно два голосовых (прямой и
+// через медиасервер — чтобы разницу можно было услышать, не заводя своего
+// сервера) и один текстовый. Ни создать четвёртый, ни удалить, ни
+// переименовать эти нельзя — все запреты держит сам сервер, не интерфейс.
+// Клиент держит такой же сид (lib/constants) — id/slug совпадают.
 const DEFAULT_CHANNELS: Channel[] = [
-  {
-    id: 'text-general',
-    serverId: MAIN_SERVER_ID,
-    type: 'text',
-    name: 'general',
-    slug: 'general',
-    removable: false,
-  },
   {
     id: 'text-obshchii',
     serverId: MAIN_SERVER_ID,
@@ -225,11 +220,28 @@ const DEFAULT_CHANNELS: Channel[] = [
     id: 'voice-obshchii',
     serverId: MAIN_SERVER_ID,
     type: 'voice',
-    name: 'Общий',
+    name: 'P2P общий',
     slug: 'voice-obshchii',
     removable: false,
   },
+  {
+    id: 'voice-obshchii-sfu',
+    serverId: MAIN_SERVER_ID,
+    type: 'voice',
+    name: 'SFU общий',
+    slug: 'voice-obshchii-sfu',
+    removable: false,
+    // Медиасервер поднят не везде: если его нет, клиент не получит пропуск
+    // (`sfu-token` → not-sfu/unavailable) и штатно позвонит напрямую.
+    mode: 'sfu',
+  },
 ];
+
+// Каналы, которые были дефолтными раньше. persist() пишет на диск весь список
+// вместе с дефолтами, поэтому выпавший из DEFAULT_CHANNELS канал вернулся бы
+// из registry.json как «сохранённый пользовательский» — и главный сервер
+// навсегда остался бы с лишней строкой. Вычищаем их по id при загрузке.
+const RETIRED_CHANNEL_IDS = new Set(['text-general']);
 
 // Реестр серверов/каналов переживает рестарт: пишем его в JSON.
 // Куда: DATA_DIR из env, иначе `<cwd>/data` — в дев/превью процесс запускается с
@@ -311,8 +323,8 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const saved = loadRegistry();
     this.servers = mergeById(DEFAULT_SERVERS, saved.servers);
     const serverIds = new Set(this.servers.map((s) => s.id));
-    this.channels = mergeById(DEFAULT_CHANNELS, saved.channels).filter((c) =>
-      serverIds.has(c.serverId),
+    this.channels = mergeById(DEFAULT_CHANNELS, saved.channels).filter(
+      (c) => serverIds.has(c.serverId) && !RETIRED_CHANNEL_IDS.has(c.id),
     );
   }
 
@@ -569,6 +581,10 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const serverId = typeof payload?.serverId === 'string' ? payload.serverId : MAIN_SERVER_ID;
     const srv = this.servers.find((s) => s.id === serverId);
     if (!srv) return;
+    // Главный сервер — витрина с фиксированным набором каналов (см.
+    // DEFAULT_CHANNELS). Свои каналы заводят в своих серверах; интерфейс тут
+    // «+» и не показывает, но запрет держим на сервере, а не на кнопке.
+    if (serverId === MAIN_SERVER_ID) return;
     // В закрытый сервер канал создаёт только разблокировавший его сокет.
     if (srv.passwordHash && !(client.data.unlocked as Set<string>)?.has(serverId)) return;
     const rawName = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 32) : '';

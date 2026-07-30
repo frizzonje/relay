@@ -199,6 +199,11 @@ export interface Channel {
   mode?: VoiceMode;
 }
 
+/**
+ * Создание канала. Только в своих серверах: набор главного (`relay`) фиксирован
+ * — там ровно три канала по умолчанию, и сервер отклоняет попытку добавить
+ * четвёртый, кто бы её ни прислал.
+ */
 export interface ChannelCreatePayload {
   serverId: string;
   type: ChannelType;

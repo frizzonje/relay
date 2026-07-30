@@ -27,7 +27,9 @@ test('логин → канал → сообщение → upload', async ({ pag
   await page.getByRole('button', { name: 'Войти' }).click();
 
   // После успеха фронт делает location.replace('/') — ждём список каналов.
-  const channel = page.getByText('general', { exact: true });
+  // «общий» точным совпадением — это текстовый канал главного сервера;
+  // голосовые рядом называются «P2P общий» и «SFU общий».
+  const channel = page.getByText('общий', { exact: true });
   await expect(channel).toBeVisible({ timeout: 15_000 });
 
   // ── Вход в текстовый канал ──
