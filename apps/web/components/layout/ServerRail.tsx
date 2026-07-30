@@ -14,6 +14,7 @@ import { useChannelsStore } from '@/stores/channels';
 import { useHostsStore } from '@/stores/hosts';
 import { useUiStore } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
+import { useUnreadStore, isChannelUnread } from '@/stores/unread';
 import { AddHostDialog } from '@/components/layout/AddHostDialog';
 import { CreateServerDialog } from '@/components/layout/CreateServerDialog';
 import { UnlockServerDialog } from '@/components/layout/UnlockServerDialog';
@@ -60,13 +61,17 @@ function GlobeIcon({ size = 20 }: { size?: number }) {
   );
 }
 
-/** Белая пилюля-индикатор слева: высокая у активного, короткая на ховере. */
-function Pill({ active }: { active: boolean }) {
+/**
+ * Белая пилюля-индикатор слева: высокая у активного, короткая на ховере,
+ * сжатая в точку когда на сервере есть непрочитанные сообщения.
+ */
+function Pill({ active, unread }: { active: boolean; unread?: boolean }) {
   return (
     <span
       className={cn(
         'pointer-events-none absolute -left-2 top-1/2 w-1 -translate-y-1/2 rounded-r bg-white transition-all duration-200',
         active ? 'h-10' : 'h-0 opacity-0 group-hover/srv:h-5 group-hover/srv:opacity-100',
+        unread && !active && 'h-2 opacity-100',
       )}
     />
   );
@@ -151,6 +156,15 @@ export function ServerRail() {
   const main = servers.find((s) => s.id === MAIN_SERVER_ID);
   const others = servers.filter((s) => s.id !== MAIN_SERVER_ID);
 
+  const channels = useChannelsStore((s) => s.channels);
+  const mainId = main?.id ?? MAIN_SERVER_ID;
+  const mainUnread = useUnreadStore((s) => {
+    if (activeServerId === mainId) return false;
+    return channels.some(
+      (c) => c.serverId === mainId && c.type === 'text' && isChannelUnread(s, c.slug),
+    );
+  });
+
   // Клик по серверу: закрытый и ещё не разблокированный — просим пароль; иначе
   // просто открываем.
   function selectServer(s: Server) {
@@ -162,7 +176,7 @@ export function ServerRail() {
     <nav className="panel panel-rail relative z-10 flex w-16 shrink-0 flex-col items-center gap-2 border-r border-line py-3">
       {/* Главный сервер — relay: наш знак mesh-триады на чистой брендовой плашке */}
       <div className="group/srv relative">
-        <Pill active={activeServerId === (main?.id ?? MAIN_SERVER_ID)} />
+        <Pill active={activeServerId === mainId} unread={mainUnread} />
         <button
           onClick={() => setActiveServer(main?.id ?? MAIN_SERVER_ID)}
           aria-label={main?.name ?? 'relay'}
@@ -313,9 +327,17 @@ function ServerIcon({
   locked: boolean;
   onClick: () => void;
 }) {
+  const channels = useChannelsStore((s) => s.channels);
+  const hasUnread = useUnreadStore((s) => {
+    if (active || locked) return false;
+    return channels.some(
+      (c) => c.serverId === server.id && c.type === 'text' && isChannelUnread(s, c.slug),
+    );
+  });
+
   return (
     <div className="group/srv relative">
-      <Pill active={active} />
+      <Pill active={active} unread={hasUnread} />
       <button
         onClick={onClick}
         aria-label={locked ? `${server.name} — под паролем` : server.name}

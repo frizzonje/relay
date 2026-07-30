@@ -179,6 +179,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       clearTyping();
       if (state.textRoom) {
         chat().reset();
+        unread().markRead(state.textRoom, Date.now());
         socket.emit('chat-join', { room: state.textRoom, name: myName() });
       } else {
         socket.emit('chat-leave');
