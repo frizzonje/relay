@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { clearFocus } from '@/lib/voice';
 import { useVoiceStore } from '@/stores/voice';
 import { VideoTile } from '@/components/stage/VideoTile';
+import { useT } from '@/lib/i18n';
 
 /**
  * Сетка видеоплиток голосового канала. Авто-сетка по 300px; в театр-режиме
@@ -13,6 +14,7 @@ import { VideoTile } from '@/components/stage/VideoTile';
  * Клик по пустому месту и Esc сворачивают фокус.
  */
 export function VideoGrid() {
+  const t = useT();
   const tiles = useVoiceStore((s) => s.tiles);
   const focusedId = useVoiceStore((s) => s.focusedId);
 
@@ -27,7 +29,7 @@ export function VideoGrid() {
   // Состояния (раздел 07 референса): пустой канал (вы один) и слабое соединение
   // (у части собеседников связь переустанавливается — tile.state в lib/voice.ts).
   const peers = tiles.filter((t) => !t.isLocal);
-  const reconnecting = peers.filter((t) => t.state.includes('переподключение')).length;
+  const reconnecting = peers.filter((t) => t.state === 'tile.state.reconnecting').length;
   const alone = peers.length === 0;
 
   return (
@@ -37,7 +39,7 @@ export function VideoGrid() {
       {reconnecting > 0 && (
         <div className="z-10 flex items-center justify-center gap-2 border-b border-danger/30 bg-danger/15 px-4 py-2 text-[13px] font-medium text-danger">
           <span className="h-1.5 w-1.5 rounded-full bg-danger" />
-          переподключение · {reconnecting} из {peers.length} недоступны
+          {t('grid.reconnecting', { count: reconnecting, total: peers.length })}
         </div>
       )}
 
@@ -67,7 +69,7 @@ export function VideoGrid() {
       {alone && !focusedId && (
         <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center">
           <div className="rounded-full border border-dashed border-line bg-bg-panel/70 px-4 py-1.5 font-mono text-[11px] uppercase tracking-[0.16em] text-text-faint backdrop-blur">
-            вы один в канале — позовите остальных
+            {t('grid.alone')}
           </div>
         </div>
       )}

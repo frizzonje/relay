@@ -34,7 +34,7 @@ export interface TransportHost {
   addTile(id: string, name: string, stream: MediaStream | null, isLocal: boolean): void;
   /** Убрать плитку целиком: узлы звука, фокус, сама плитка. */
   removeTile(id: string): void;
-  setTileState(id: string, state: string): void;
+  setTileState(id: string, state: MessageKey | ''): void;
   setTileNet(id: string, net: TileNet): void;
   /** Снять узлы микшера, оставив плитку (пересборка соединения с тем же пиром). */
   cleanupPeerAudio(peerId: string): void;

@@ -452,7 +452,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       for (const peer of payload.peers) {
         names.set(peer.peerId, peer.name || 'Участник');
         host.addTile(peer.peerId, peer.name || 'Участник', null, false);
-        host.setTileState(peer.peerId, 'соединение…');
+        host.setTileState(peer.peerId, 'tile.state.connecting');
         for (const producer of peer.producers) await consume(peer.peerId, producer);
       }
       ready = true;
@@ -784,7 +784,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       s.on('peer-joined', ({ peerId, name }: { peerId: string; name: string }) => {
         names.set(peerId, name || 'Участник');
         host.addTile(peerId, name || 'Участник', null, false);
-        host.setTileState(peerId, 'соединение…');
+        host.setTileState(peerId, 'tile.state.connecting');
       });
       s.on('new-producer', ({ peerId, producer }: { peerId: string; producer: ProducerInfo }) => {
         void consume(peerId, producer);

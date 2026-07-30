@@ -23,7 +23,7 @@ export interface VoiceTile {
   /** Медиапоток (у себя — localStream, у собеседников — e.streams[0]). */
   stream: MediaStream | null;
   /** Подпись статуса: '' | 'соединение…' | 'переподключение…' | 'резервный канал…'. */
-  state: string;
+  state: MessageKey | '';
   isLocal: boolean;
   /**
    * В видеослоте плитки — демонстрация экрана, а не камера. У себя ставится при

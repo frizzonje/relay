@@ -256,7 +256,7 @@ function addTile(id: string, name: string, stream: MediaStream | null, isLocal: 
       id,
       name,
       stream,
-      state: '',
+      state: '' as const,
       isLocal,
       screen: false,
       volume: saved.voice ?? 1,
@@ -271,7 +271,7 @@ function addTile(id: string, name: string, stream: MediaStream | null, isLocal: 
   syncTiles();
 }
 
-function setTileState(id: string, state: string) {
+function setTileState(id: string, state: MessageKey | '') {
   const t = tiles.get(id);
   if (!t || t.state === state) return;
   tiles.set(id, { ...t, state });

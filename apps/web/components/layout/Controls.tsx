@@ -19,6 +19,7 @@ import {
   setSpeaker,
   refreshSpeakers,
 } from '@/lib/voice';
+import { useT } from '@/lib/i18n';
 
 function CtlBtn({
   title,
@@ -60,6 +61,7 @@ function CtlBtn({
  * собеседников (lib/voice.setMic) и запоминается в localStorage.
  */
 function MicControl({ micOn }: { micOn: boolean }) {
+  const t = useT();
   const mics = useVoiceStore((s) => s.mics);
   const currentMicId = useVoiceStore((s) => s.currentMicId);
   const currentMicLabel = useVoiceStore((s) => s.currentMicLabel);
@@ -119,15 +121,15 @@ function MicControl({ micOn }: { micOn: boolean }) {
   return (
     <div ref={wrapRef} className="relative">
       <CtlBtn
-        title={`Микрофон${currentMicLabel ? ': ' + currentMicLabel : ''}`}
+        title={currentMicLabel ? t('controls.mic.named', { device: currentMicLabel }) : t('controls.mic')}
         icon={micOn ? 'mic' : 'mic-off'}
         off={!micOn}
         onClick={toggleMic}
       />
       <button
         type="button"
-        title="Выбрать микрофон"
-        aria-label="Выбрать микрофон"
+        title={t('controls.mic.pick')}
+        aria-label={t('controls.mic.pick')}
         aria-expanded={open}
         onClick={toggleMenu}
         className="absolute -bottom-1 -right-1 grid h-[17px] w-[17px] place-items-center rounded-full bg-bg-elev text-text outline-none ring-2 ring-bg-main transition hover:bg-line-strong focus-visible:ring-2 focus-visible:ring-line-strong active:scale-90"
@@ -138,11 +140,11 @@ function MicControl({ micOn }: { micOn: boolean }) {
       {open && (
         <div className="absolute bottom-[52px] left-1/2 z-20 max-h-[50vh] w-72 -translate-x-1/2 overflow-y-auto rounded-xl border border-line bg-bg-panel/95 p-1.5 shadow-[0_16px_50px_rgba(0,0,0,0.65)] backdrop-blur">
           <div className="px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.04em] text-text-muted">
-            Микрофон
+            {t('controls.mic')}
           </div>
           {mics.length === 0 ? (
             <div className="px-2.5 py-2 text-xs text-text-muted">
-              Устройства появятся после выдачи доступа.
+              {t('controls.devices.empty')}
             </div>
           ) : (
             mics.map((m, i) => {
@@ -165,7 +167,9 @@ function MicControl({ micOn }: { micOn: boolean }) {
                     name="mic"
                     className={cn('h-4 w-4 shrink-0', active ? 'text-ok' : 'text-text-muted')}
                   />
-                  <span className="flex-1 truncate">{m.label || `Микрофон ${i + 1}`}</span>
+                  <span className="flex-1 truncate">
+                    {m.label || t('controls.mic.numbered', { n: i + 1 })}
+                  </span>
                   {active && <span className="shrink-0 text-ok">✓</span>}
                 </button>
               );
@@ -179,7 +183,7 @@ function MicControl({ micOn }: { micOn: boolean }) {
           <div className="mt-1 border-t border-white/10 px-2.5 pb-2 pt-2.5">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-[11px] font-bold uppercase tracking-[0.04em] text-text-muted">
-                Порог микрофона
+                {t('controls.threshold')}
               </span>
               <span
                 className={cn(
@@ -187,7 +191,7 @@ function MicControl({ micOn }: { micOn: boolean }) {
                   thrPct === 0 ? 'text-text-muted' : 'text-ok',
                 )}
               >
-                {thrPct === 0 ? 'выкл' : `${thrPct}%`}
+                {thrPct === 0 ? t('controls.threshold.off') : `${thrPct}%`}
               </span>
             </div>
 
@@ -210,7 +214,7 @@ function MicControl({ micOn }: { micOn: boolean }) {
                 max={100}
                 step={1}
                 value={thrPct}
-                aria-label="Порог срабатывания микрофона"
+                aria-label={t('controls.threshold.aria')}
                 onChange={(e) => setMicThreshold(Number(e.target.value) / 100)}
                 onClick={(e) => e.stopPropagation()}
                 className="absolute inset-0 z-[2] m-0 h-full w-full cursor-pointer opacity-0"
@@ -218,9 +222,7 @@ function MicControl({ micOn }: { micOn: boolean }) {
             </div>
 
             <p className="mt-1.5 text-[11px] leading-snug text-text-muted">
-              {thrPct === 0
-                ? 'Слышно всегда. Тяни метку вправо — микрофон откроется, только когда говоришь.'
-                : 'Микрофон открывается, когда полоска доходит до метки.'}
+              {t(thrPct === 0 ? 'controls.threshold.hint.off' : 'controls.threshold.hint.on')}
             </p>
           </div>
         </div>
@@ -234,6 +236,7 @@ function MicControl({ micOn }: { micOn: boolean }) {
  * для выбора устройства вывода. Аналог MicControl для входящего аудио.
  */
 function SpeakerControl({ speakersOn }: { speakersOn: boolean }) {
+  const t = useT();
   const speakers = useVoiceStore((s) => s.speakers);
   const currentSpeakerId = useVoiceStore((s) => s.currentSpeakerId);
   const currentSpeakerLabel = useVoiceStore((s) => s.currentSpeakerLabel);
@@ -267,7 +270,7 @@ function SpeakerControl({ speakersOn }: { speakersOn: boolean }) {
     <div ref={wrapRef} className="relative">
       <CtlBtn
         title={
-          (speakersOn ? 'Выключить звук (микрофон выключится тоже)' : 'Включить звук') +
+          t(speakersOn ? 'controls.speakers.off' : 'controls.speakers.on') +
           (currentSpeakerLabel ? ' · ' + currentSpeakerLabel : '')
         }
         icon={speakersOn ? 'headphones' : 'headphone-off'}
@@ -276,8 +279,8 @@ function SpeakerControl({ speakersOn }: { speakersOn: boolean }) {
       />
       <button
         type="button"
-        title="Выбрать устройство воспроизведения"
-        aria-label="Выбрать устройство воспроизведения"
+        title={t('controls.speakers.pick')}
+        aria-label={t('controls.speakers.pick')}
         aria-expanded={open}
         onClick={toggleMenu}
         className="absolute -bottom-1 -right-1 grid h-[17px] w-[17px] place-items-center rounded-full bg-bg-elev text-text outline-none ring-2 ring-bg-main transition hover:bg-line-strong focus-visible:ring-2 focus-visible:ring-line-strong active:scale-90"
@@ -288,11 +291,11 @@ function SpeakerControl({ speakersOn }: { speakersOn: boolean }) {
       {open && (
         <div className="absolute bottom-[52px] left-1/2 z-20 max-h-[50vh] w-72 -translate-x-1/2 overflow-y-auto rounded-xl border border-line bg-bg-panel/95 p-1.5 shadow-[0_16px_50px_rgba(0,0,0,0.65)] backdrop-blur">
           <div className="px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.04em] text-text-muted">
-            Устройство воспроизведения
+            {t('controls.speakers.title')}
           </div>
           {speakers.length === 0 ? (
             <div className="px-2.5 py-2 text-xs text-text-muted">
-              Устройства появятся после выдачи доступа.
+              {t('controls.devices.empty')}
             </div>
           ) : (
             speakers.map((sp, i) => {
@@ -317,7 +320,9 @@ function SpeakerControl({ speakersOn }: { speakersOn: boolean }) {
                     name="volume-2"
                     className={cn('h-4 w-4 shrink-0', active ? 'text-ok' : 'text-text-muted')}
                   />
-                  <span className="flex-1 truncate">{sp.label || `Динамики ${i + 1}`}</span>
+                  <span className="flex-1 truncate">
+                    {sp.label || t('controls.speakers.numbered', { n: i + 1 })}
+                  </span>
                   {active && <span className="shrink-0 text-ok">✓</span>}
                 </button>
               );
@@ -330,9 +335,10 @@ function SpeakerControl({ speakersOn }: { speakersOn: boolean }) {
 }
 
 function SegToggle({ children }: { children: ReactNode }) {
+  const t = useT();
   return (
     <div
-      title="Что беречь при слабом канале: чёткость картинки или плавность кадров"
+      title={t('controls.screen.mode')}
       className="flex animate-seg-pop items-center gap-0.5 self-center rounded-[27px] border border-white/[0.08] bg-black/[0.28] p-1 shadow-[inset_0_1px_2px_rgba(0,0,0,0.35)]"
     >
       {children}
@@ -346,6 +352,7 @@ function SegToggle({ children }: { children: ReactNode }) {
  * трансляции), отключение. Всё завязано на mesh-менеджер (lib/voice.ts).
  */
 export function Controls() {
+  const t = useT();
   const view = useUiStore((s) => s.view);
   const micOn = useVoiceStore((s) => s.micOn);
   const camOn = useVoiceStore((s) => s.camOn);
@@ -388,14 +395,14 @@ export function Controls() {
       <SpeakerControl speakersOn={speakersOn} />
       <CtlBtn
         title={
-          camOn ? 'Выключить камеру' : 'Включить камеру (браузер спросит разрешение только сейчас)'
+          t(camOn ? 'controls.cam.off' : 'controls.cam.on')
         }
         icon={camOn ? 'video' : 'video-off'}
         off={!camOn}
         onClick={() => void toggleCamera()}
       />
       <CtlBtn
-        title={screenOn ? 'Остановить демонстрацию экрана' : 'Демонстрация экрана'}
+        title={t(screenOn ? 'controls.screen.stop' : 'controls.screen.start')}
         icon={screenOn ? 'screen-share-off' : 'screen-share'}
         live={screenOn}
         onClick={() => void toggleScreen()}
@@ -414,13 +421,13 @@ export function Controls() {
                   '!bg-accent-strong !text-bg-app shadow-[0_1px_4px_rgba(0,0,0,0.35)]',
               )}
             >
-              {mode === 'quality' ? 'Качество' : 'ФПС'}
+              {t(mode === 'quality' ? 'controls.screen.quality' : 'controls.screen.fps')}
             </button>
           ))}
         </SegToggle>
       )}
       <span className="mx-1 h-6 w-px bg-line-strong" />
-      <CtlBtn title="Отключиться" icon="phone-off" hangup onClick={() => leaveVoice()} />
+      <CtlBtn title={t('voice.leave')} icon="phone-off" hangup onClick={() => leaveVoice()} />
     </div>
   );
 }

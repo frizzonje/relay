@@ -8,6 +8,8 @@ import { avatarGradient } from '@/lib/avatar';
 import { clearFocus, toggleFocus, setPeerVolume, setPeerScreenVolume } from '@/lib/voice';
 import { useAudioUnlockStore } from '@/stores/audio-unlock';
 import { useVoiceStore, type TileNet, type VoiceTile } from '@/stores/voice';
+import { useT } from '@/lib/i18n';
+import type { MessageKey } from '@/lib/i18n';
 
 // WebKit (Safari/WKWebView) до сих пор отдаёт Fullscreen API только под
 // webkit-префиксом — держим необязательные варианты рядом со стандартными.
@@ -83,33 +85,25 @@ const NET_TONE: Record<TileNet['grade'], string> = {
   weak: 'bg-[#e0b23a]',
   bad: 'bg-danger',
 };
-const NET_LABEL: Record<TileNet['grade'], string> = {
-  strong: 'отличная',
-  good: 'хорошая',
-  weak: 'слабая',
-  bad: 'плохая',
+const NET_LABEL: Record<TileNet['grade'], MessageKey> = {
+  strong: 'net.grade.strong',
+  good: 'net.grade.good',
+  weak: 'net.grade.weak',
+  bad: 'net.grade.bad',
 };
 
 // Короткая подпись пилюли аплинка + разъяснение в title (на своей плитке).
-const UPLINK_PILL: Record<'cpu' | 'bandwidth', { short: string; title: string }> = {
-  bandwidth: {
-    short: 'слабый аплинк',
-    title:
-      'Не хватает исходящего канала — качество вашего видео режется. Помогает выключить видео/демонстрацию или снизить их разрешение.',
-  },
-  cpu: {
-    short: 'перегрузка ЦП',
-    title:
-      'Машина не тянет кодирование — качество вашего видео режется. Помогает закрыть тяжёлые вкладки/приложения или выключить видео.',
-  },
+const UPLINK_PILL: Record<'cpu' | 'bandwidth', { short: MessageKey; title: MessageKey }> = {
+  bandwidth: { short: 'uplink.bandwidth.short', title: 'uplink.bandwidth.title' },
+  cpu: { short: 'uplink.cpu.short', title: 'uplink.cpu.title' },
 };
 
 // Слой simulcast, который реально доехал (только режим медиасервера): мелкой
 // плитке отдают экономный, крупной — исходный. См. lib/voice/sfu.ts.
-const LAYER_LABEL: Record<number, string> = {
-  0: 'экономный',
-  1: 'средний',
-  2: 'исходный',
+const LAYER_LABEL: Record<number, MessageKey> = {
+  0: 'net.layer.low',
+  1: 'net.layer.mid',
+  2: 'net.layer.high',
 };
 
 /**
@@ -119,13 +113,16 @@ const LAYER_LABEL: Record<number, string> = {
  * снимает активный транспорт: mesh — до собеседника, SFU — до медиасервера.
  */
 function SignalBars({ net }: { net: TileNet }) {
+  const t = useT();
   const active = NET_ACTIVE[net.grade];
   const tone = NET_TONE[net.grade];
   return (
     <span
       className="group/net relative -ml-0.5 inline-flex h-3.5 items-end gap-[2px]"
       role="img"
-      aria-label={`Связь: ${NET_LABEL[net.grade]}${net.relay ? ', через реле' : ''}`}
+      aria-label={t(net.relay ? 'net.aria.relayed' : 'net.aria', {
+        grade: t(NET_LABEL[net.grade]),
+      })}
     >
       {[0, 1, 2, 3].map((i) => (
         <span
@@ -154,52 +151,54 @@ function SignalBars({ net }: { net: TileNet }) {
       <span className="pointer-events-none absolute bottom-[calc(100%+8px)] left-0 z-[8] w-max origin-bottom-left scale-95 rounded-lg border border-white/10 bg-[#1e1f22]/95 px-2.5 py-2 text-left opacity-0 shadow-[0_10px_30px_rgba(0,0,0,0.6)] backdrop-blur transition-[opacity,transform] duration-150 group-hover/net:scale-100 group-hover/net:opacity-100">
         <span className="mb-1 flex items-center gap-1.5 text-[12px] font-bold text-white">
           <span className={cn('h-2 w-2 rounded-full', tone)} />
-          Связь: {NET_LABEL[net.grade]}
+          {t('net.title', { grade: t(NET_LABEL[net.grade]) })}
         </span>
         <span className="grid grid-cols-[auto_auto] gap-x-3 gap-y-0.5 text-[11px] tabular-nums text-text-muted">
-          <span>Пинг</span>
+          <span>{t('net.ping')}</span>
           <span className="text-right text-white">
-            {net.rttMs != null ? `${net.rttMs} мс` : '—'}
+            {net.rttMs != null ? t('net.ms', { ms: net.rttMs }) : '—'}
           </span>
-          <span>Потери</span>
+          <span>{t('net.loss')}</span>
           <span className="text-right text-white">
             {net.lossPct != null ? `${net.lossPct}%` : '—'}
           </span>
-          <span>Джиттер</span>
+          <span>{t('net.jitter')}</span>
           <span className="text-right text-white">
-            {net.jitterMs != null ? `${net.jitterMs} мс` : '—'}
+            {net.jitterMs != null ? t('net.ms', { ms: net.jitterMs }) : '—'}
           </span>
-          <span>Соединение</span>
+          <span>{t('net.route')}</span>
           <span className="text-right text-white">
             {net.via === 'sfu'
-              ? 'через сервер'
+              ? t('net.route.sfu')
               : net.relay == null
                 ? '—'
-                : net.relay
-                  ? 'через реле'
-                  : 'напрямую'}
+                : t(net.relay ? 'net.route.relay' : 'net.route.direct')}
           </span>
-          <span>Битрейт</span>
+          <span>{t('net.bitrate')}</span>
           <span className="text-right text-white">
             {/* В режиме медиасервера исходящий «к нему» не существует: своё
                 медиа уходит один раз на сервер, общее на всех. */}
             {net.via === 'sfu'
               ? net.recvKbps != null
-                ? `↓${net.recvKbps} кбит/с`
+                ? t('net.kbps', { value: `↓${net.recvKbps}` })
                 : '—'
               : net.recvKbps != null || net.sendKbps != null
-                ? `↓${net.recvKbps ?? '—'} ↑${net.sendKbps ?? '—'} кбит/с`
+                ? t('net.kbps', {
+                    value: `↓${net.recvKbps ?? '—'} ↑${net.sendKbps ?? '—'}`,
+                  })
                 : '—'}
           </span>
           {net.via === 'sfu' && net.layer != null && (
             <>
-              <span>Слой</span>
-              <span className="text-right text-white">{LAYER_LABEL[net.layer] ?? net.layer}</span>
+              <span>{t('net.layer')}</span>
+              <span className="text-right text-white">
+                {LAYER_LABEL[net.layer] ? t(LAYER_LABEL[net.layer]) : net.layer}
+              </span>
             </>
           )}
           {net.videoRes && (
             <>
-              <span>Видео</span>
+              <span>{t('net.video')}</span>
               <span className="text-right text-white">
                 {net.videoRes}
                 {net.fps != null ? ` · ${net.fps}fps` : ''}
@@ -208,7 +207,7 @@ function SignalBars({ net }: { net: TileNet }) {
           )}
           {net.codec && (
             <>
-              <span>Кодек</span>
+              <span>{t('net.codec')}</span>
               <span className="text-right text-white">{net.codec}</span>
             </>
           )}
@@ -297,6 +296,7 @@ export function VideoTile({
   // Шёл ли на плитке показ экрана к прошлой отрисовке — чтобы отличить его конец
   // от «камеры тут и не было».
   const wasScreen = useRef(false);
+  const t = useT();
   const micOn = useVoiceStore((s) => s.micOn);
   // Обводка «говорит сейчас»: булев селектор — плитка перерисуется только на
   // смене состояния, а не на каждый тик опроса уровня.
@@ -305,9 +305,12 @@ export function VideoTile({
   const uplink = useVoiceStore((s) => (tile.isLocal ? s.uplink : 'ok'));
 
   const [hasVideo, setHasVideo] = useState(false);
+  // Разрешение живого видео («720p») — не переводится, поэтому держим отдельно
+  // от ключа качества: подпись показывает его, если оно известно.
+  const [videoRes, setVideoRes] = useState<string | null>(null);
   // Тег качества в углу плитки: разрешение живого видео («720p»), «видео» без
   // метрики размера, либо «аудио» когда камеры/экрана нет.
-  const [quality, setQuality] = useState('аудио');
+  const [quality, setQuality] = useState<MessageKey>('tile.quality.audio');
   const [isFs, setIsFs] = useState(false);
   // Запасной «полный экран» через CSS-оверлей: WKWebView (десктоп на macOS) не
   // отдаёт Fullscreen API на произвольный <div>, и нативный вызов там молча
@@ -364,7 +367,8 @@ export function VideoTile({
         .find((t) => t.enabled && !t.muted && t.readyState === 'live');
       setHasVideo(!!vt);
       const h = vt?.getSettings().height;
-      setQuality(vt ? (h ? `${h}p` : 'видео') : 'аудио');
+      setVideoRes(vt && h ? `${h}p` : null);
+      setQuality(vt ? 'tile.quality.video' : 'tile.quality.audio');
     };
     // addEventListener вместо onX — не перебиваем обработчики voice.ts (onended и др.)
     const watchTrack = (t: MediaStreamTrack) => {
@@ -571,7 +575,7 @@ export function VideoTile({
       }}
       role="button"
       tabIndex={0}
-      aria-label={`${tile.name}: ${focused ? 'свернуть' : 'развернуть на весь экран сцены'}`}
+      aria-label={t(focused ? 'tile.collapse' : 'tile.expand', { name: tile.name })}
       className={cn(
         'group relative aspect-video cursor-zoom-in overflow-hidden rounded-[11px] border border-line bg-[#18191c] outline-none transition-[border-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-line-strong',
         // Своя плитка — чуть более светлая рамка (раздел 02 референса).
@@ -637,8 +641,8 @@ export function VideoTile({
       {/* Кнопка «во весь экран» (видна при наведении) */}
       <button
         type="button"
-        title={fullscreen ? 'Свернуть' : 'Во весь экран'}
-        aria-label={fullscreen ? 'Свернуть из полного экрана' : 'Во весь экран'}
+        title={t(fullscreen ? 'tile.fullscreen.exit' : 'tile.fullscreen.enter')}
+        aria-label={t(fullscreen ? 'tile.fullscreen.exit.aria' : 'tile.fullscreen.enter')}
         onClick={onExpand}
         className="absolute left-2.5 top-2.5 z-[4] grid h-[30px] w-[30px] place-items-center rounded-md bg-black/55 text-white opacity-0 transition group-hover:opacity-90 hover:!opacity-100 hover:!bg-black/85 active:scale-[0.88]"
       >
@@ -649,11 +653,11 @@ export function VideoTile({
           (нет камеры/экрана) не показываем — он лишний шум на голосовой плитке. */}
       {tile.state ? (
         <div className="absolute right-2.5 top-2.5 z-[2] rounded-[8px] bg-black/65 px-2.5 py-1 text-xs font-semibold text-text-dim backdrop-blur-[6px]">
-          {tile.state}
+          {t(tile.state)}
         </div>
-      ) : quality !== 'аудио' ? (
+      ) : quality !== 'tile.quality.audio' ? (
         <div className="absolute right-2.5 top-2.5 z-[2] rounded-[8px] bg-black/55 px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-text-muted backdrop-blur-[6px]">
-          {quality}
+          {videoRes ?? t(quality)}
         </div>
       ) : null}
 
@@ -668,13 +672,13 @@ export function VideoTile({
           место, а «палочки» показывают только входящее от собеседников. */}
       {tile.isLocal && uplink !== 'ok' && (
         <div
-          title={UPLINK_PILL[uplink].title}
+          title={t(UPLINK_PILL[uplink].title)}
           className="absolute bottom-2 right-2 z-[3] flex items-center gap-1 rounded-[8px] bg-[#e0b23a]/90 px-2 py-1 text-[11px] font-bold text-black backdrop-blur-[6px]"
         >
           <span className="grid h-3.5 w-3.5 place-items-center rounded-full bg-black/25 text-[10px] leading-none text-black">
             !
           </span>
-          {UPLINK_PILL[uplink].short}
+          {t(UPLINK_PILL[uplink].short)}
         </div>
       )}
 
@@ -683,8 +687,8 @@ export function VideoTile({
         <button
           type="button"
           ref={volumeBtnRef}
-          title="Громкость трансляции"
-          aria-label="Громкость звука демонстрации"
+          title={t('tile.screenAudio')}
+          aria-label={t('tile.screenAudio.aria')}
           onClick={(e) => {
             e.stopPropagation();
             setMenu((m) => (m === 'screen' ? null : 'screen'));
@@ -759,7 +763,7 @@ export function VideoTile({
             </motion.span>
 
             <div className="px-4 text-center">
-              <p className="text-[15px] font-bold text-text-header">Демонстрация завершена</p>
+              <p className="text-[15px] font-bold text-text-header">{t('tile.screenShare.ended')}</p>
               <p className="mt-0.5 text-[12px] text-text-muted">
                 {tile.isLocal
                   ? 'Возвращаемся к сетке'

@@ -292,11 +292,11 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
         case 'disconnected':
           // Может само подняться (кратковременная смена сети) — даём паузу, затем
           // запускаем лестницу восстановления.
-          host.setTileState(peerId, 'переподключение…');
+          host.setTileState(peerId, 'tile.state.reconnecting');
           peer.failTimer = setTimeout(() => recoverPeer(peerId), 8000);
           break;
         case 'failed':
-          host.setTileState(peerId, 'переподключение…');
+          host.setTileState(peerId, 'tile.state.reconnecting');
           recoverPeer(peerId);
           break;
       }
@@ -306,7 +306,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
 
     // Плитка появляется сразу, со статусом — а не в момент прихода медиа
     host.addTile(peerId, name, null, false);
-    host.setTileState(peerId, 'соединение…');
+    host.setTileState(peerId, 'tile.state.connecting');
     return pc;
   }
 
@@ -386,7 +386,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     peers.delete(peerId);
     // Стадия 2 лестницы: отдельная подпись — прямой путь не собрался, идём через
     // TURN. Отличаем от обычного «переподключение…» (стадия 1, ICE-restart).
-    host.setTileState(peerId, 'резервный канал…');
+    host.setTileState(peerId, 'tile.state.fallback');
     createPeer(peerId, name, true, true); // инициатор, relay-only
   }
 
