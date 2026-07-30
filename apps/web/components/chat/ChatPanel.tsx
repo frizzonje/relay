@@ -747,7 +747,10 @@ export function ChatPanel() {
   const [dragging, setDragging] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   const [hasNew, setHasNew] = useState(false);
-  const [dividerTs, setDividerTs] = useState(0);
+  // Отметка «дочитал до» на момент входа в канал (или момента, когда от него
+  // отвернулись) — по ней рисуем линию «новые». Держит её стор, а не локальный
+  // стейт: она двигается и без смены канала (свернул окно → вернулся).
+  const dividerTs = useUnreadStore((s) => (textRoom ? (s.divider[textRoom] ?? 0) : 0));
 
   const fileRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -759,14 +762,15 @@ export function ChatPanel() {
 
   const me = callsign.trim() || 'Аноним';
 
-  // Анимируем вход сообщений только после прогрузки истории; заодно на смену
-  // канала фиксируем отметку «прочитано до» — для разделителя «новые».
+  // Анимируем вход сообщений только после прогрузки истории. Отметку «прочитано
+  // до» на смену канала ставит SocketProvider (openChannel) — до того, как сюда
+  // доедет история, иначе линия «новые» вставала бы на моменте открытия.
   const [enterAnim, setEnterAnim] = useState(false);
   useEffect(() => {
     setEnterAnim(false);
     setReply(null);
     setEditingId(null);
-    setDividerTs(useUnreadStore.getState().readMark(textRoom || ''));
+    setAtBottom(true);
     const raf = requestAnimationFrame(() => requestAnimationFrame(() => setEnterAnim(true)));
     return () => cancelAnimationFrame(raf);
   }, [textRoom]);
@@ -798,6 +802,8 @@ export function ChatPanel() {
     if (!el) return;
     const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     setAtBottom(bottom);
+    // Отскроллен вверх — входящие не считаются прочитанными (stores/unread).
+    useUnreadStore.getState().setAtBottom(bottom);
     if (bottom) setHasNew(false);
   }
 

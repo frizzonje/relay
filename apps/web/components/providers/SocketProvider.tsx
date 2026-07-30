@@ -7,7 +7,7 @@ import { initHotkeys } from '@/lib/hotkeys';
 import { initDesktopBridge } from '@/lib/desktop';
 import { useUiStore, myName } from '@/stores/ui';
 import { useChatStore } from '@/stores/chat';
-import { useUnreadStore } from '@/stores/unread';
+import { useUnreadStore, LAST_READ_KEY } from '@/stores/unread';
 import { useChannelsStore } from '@/stores/channels';
 import { useServersStore } from '@/stores/servers';
 import { forgetServerPassword, storedServerPasswords, unlockServer } from '@/lib/servers';
@@ -63,6 +63,32 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     /** Слаг открытого сейчас текстового канала (для отметок «прочитано»). */
     const openSlug = () => ui().textRoom;
 
+    // Смотрим ли мы прямо сейчас в открытый канал. Только тогда входящие
+    // считаются прочитанными: свёрнутое окно, соседняя вкладка, сетка голоса
+    // поверх чата и отскролленная вверх лента — всё это «не смотрим», и
+    // сообщения копятся в непрочитанные, как в Discord.
+    function watching(): boolean {
+      if (!openSlug() || ui().view !== 'text') return false;
+      if (typeof document !== 'undefined') {
+        if (document.visibilityState !== 'visible' || !document.hasFocus()) return false;
+      }
+      return unread().atBottom;
+    }
+
+    // Переход «смотрю ↔ отвернулся». Отвернулись — фиксируем линию «новые» на
+    // текущей отметке; вернулись — гасим точку. Держим прошлое состояние, чтобы
+    // не дёргать стор на каждом чихе UI.
+    let watched = false;
+    function syncWatch() {
+      const slug = openSlug();
+      const now = watching();
+      if (now === watched) return;
+      watched = now;
+      if (!slug) return;
+      if (now) unread().readNow(slug);
+      else unread().pauseAt(slug);
+    }
+
     // Навешиваем mesh-WebRTC обработчики (peers/offer/answer/ice/voice-presence,
     // reconnect, замер пинга) — один раз на приложение, до connect().
     initVoice();
@@ -78,8 +104,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       chat().addMessage(msg);
       // Автор прислал сообщение — печатать он закончил.
       if (msg.name) stopTyping(msg.name);
-      // Подписанный канал считаем прочитанным по мере поступления.
-      unread().markRead(slug, msg.ts);
+      // «Прочитано» не трогаем: следом прилетит `chat-activity` про это же
+      // сообщение — там одна общая ветка для открытого канала и всех прочих.
     });
     socket.on('chat-history', (list) => {
       if (!openSlug() || !Array.isArray(list)) return;
@@ -105,12 +131,12 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       if (!openSlug() || !name || name === myName()) return;
       noteTyping(name);
     });
-    // Лёгкий пинг активности любого канала: открытый — сразу «прочитан», прочие
-    // копят непрочитанное для точки в сайдбаре.
+    // Лёгкий пинг активности любого канала. Активность отмечаем всегда, а гасим
+    // её только если в этот канал сейчас реально смотрят.
     socket.on('chat-activity', ({ slug, ts }) => {
       if (!slug || typeof ts !== 'number') return;
-      if (slug === openSlug()) unread().markRead(slug, ts);
-      else unread().noteActivity(slug, ts);
+      unread().noteActivity(slug, ts);
+      if (slug === openSlug() && watching()) unread().readNow(slug);
     });
 
     // Реестр серверов — сервер шлёт полный список на connect и при изменениях.
@@ -129,6 +155,17 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     socket.on('channels', (list) => {
       if (!Array.isArray(list)) return;
       useChannelsStore.getState().setChannels(list);
+
+      // Снимок активности текстовых каналов: сервер кладёт в реестр время
+      // последнего сообщения. Благодаря ему точки горят сразу после загрузки
+      // страницы — сравниваем с отметкой чтения, пережившей перезагрузку.
+      unread().seedActivity(
+        list
+          .filter((c) => c?.type === 'text' && typeof c.lastTs === 'number')
+          .map((c) => ({ slug: c.slug, ts: c.lastTs as number })),
+      );
+      const open = openSlug();
+      if (open && watching()) unread().readNow(open);
 
       // Открытый текстовый канал удалили (у нас или у кого-то ещё) — закрываем
       // ленту, иначе человек продолжит писать в канал-призрак, которого больше
@@ -173,24 +210,60 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    // Смена открытого текстового канала: подписка/отписка на сервере.
+    // Смена открытого текстового канала: подписка/отписка на сервере. Плюс
+    // пересчёт «смотрю ли я в канал» — он зависит ещё и от `view` (сетка голоса
+    // закрывает собой чат), поэтому слушаем стор целиком.
     const unsub = useUiStore.subscribe((state, prev) => {
-      if (state.textRoom === prev.textRoom) return;
-      clearTyping();
-      if (state.textRoom) {
-        chat().reset();
-        unread().markRead(state.textRoom, Date.now());
-        socket.emit('chat-join', { room: state.textRoom, name: myName() });
-      } else {
-        socket.emit('chat-leave');
-        chat().reset();
+      if (state.textRoom !== prev.textRoom) {
+        clearTyping();
+        if (state.textRoom) {
+          chat().reset();
+          // Вход в канал: линия «новые» встаёт на прежней отметке чтения, точка гаснет.
+          unread().openChannel(state.textRoom);
+          unread().setAtBottom(true);
+          // Честное состояние, а не оптимистичное `true`: иначе syncWatch ниже
+          // увидит переход «смотрел → отвернулся» и pauseAt тут же затрёт
+          // линию «новые», которую только что поставил openChannel.
+          watched = watching();
+          socket.emit('chat-join', { room: state.textRoom, name: myName() });
+        } else {
+          socket.emit('chat-leave');
+          chat().reset();
+          watched = false;
+        }
       }
+      syncWatch();
     });
+
+    // Прокрутка ленты меняет «смотрю ли я»: отскроллен вверх — не читаем.
+    const unsubUnread = useUnreadStore.subscribe((state, prev) => {
+      if (state.atBottom !== prev.atBottom) syncWatch();
+    });
+
+    // Свернули окно / ушли на другую вкладку — новые копятся; вернулись — читаем.
+    const onFocusChange = () => syncWatch();
+    // Соседняя вкладка что-то дочитала — подхватываем её отметки.
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === LAST_READ_KEY) unread().adoptLastRead(e.newValue);
+    };
+    if (typeof window !== 'undefined') {
+      document.addEventListener('visibilitychange', onFocusChange);
+      window.addEventListener('focus', onFocusChange);
+      window.addEventListener('blur', onFocusChange);
+      window.addEventListener('storage', onStorage);
+    }
 
     if (!socket.connected) socket.connect();
 
     return () => {
       unsub();
+      unsubUnread();
+      if (typeof window !== 'undefined') {
+        document.removeEventListener('visibilitychange', onFocusChange);
+        window.removeEventListener('focus', onFocusChange);
+        window.removeEventListener('blur', onFocusChange);
+        window.removeEventListener('storage', onStorage);
+      }
       clearTyping();
       socket.off('chat');
       socket.off('chat-history');

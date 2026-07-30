@@ -482,10 +482,30 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   // Каналы, видимые сокету: из закрытых серверов — только если он их разблокировал.
+  // Текстовым подмешиваем время последнего сообщения: по нему клиент зажигает
+  // «непрочитано» сразу после загрузки, не дожидаясь живого `chat-activity`.
   private channelsFor(client: Socket): Channel[] {
     const unlocked = (client.data.unlocked as Set<string>) ?? new Set<string>();
     const lockedIds = new Set(this.servers.filter((s) => s.passwordHash).map((s) => s.id));
-    return this.channels.filter((c) => !lockedIds.has(c.serverId) || unlocked.has(c.serverId));
+    return this.channels
+      .filter((c) => !lockedIds.has(c.serverId) || unlocked.has(c.serverId))
+      .map((c) => {
+        if (c.type !== 'text') return c;
+        const lastTs = this.lastChatTs(c.slug);
+        return lastTs ? { ...c, lastTs } : c;
+      });
+  }
+
+  // Время последней НЕсистемной реплики канала (0 — писать ещё не начинали).
+  // Системные строки активностью не считаем: точку зажигают только сообщения,
+  // ровно те же, что рассылают `chat-activity`.
+  private lastChatTs(slug: string): number {
+    const history = this.chatHistory.get(CHAT_PREFIX + slug);
+    if (!history) return 0;
+    for (let i = history.length - 1; i >= 0; i -= 1) {
+      if (!history[i].system) return history[i].ts;
+    }
+    return 0;
   }
 
   private broadcastServers() {
