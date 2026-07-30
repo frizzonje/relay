@@ -608,21 +608,21 @@ function mediaErrorText(err: unknown): string {
   switch (e?.name) {
     case 'NotAllowedError':
     case 'PermissionDeniedError':
-      return 'доступ запрещён. Разрешите камеру и микрофон для этого сайта (значок 🔒 в адресной строке), а на macOS — ещё и браузеру в «Системные настройки → Конфиденциальность», затем обновите страницу';
+      return msg('media.error.denied');
     case 'NotFoundError':
     case 'DevicesNotFoundError':
-      return 'устройство не найдено. Проверьте, что микрофон подключён';
+      return msg('media.error.notFound');
     case 'NotReadableError':
     case 'TrackStartError':
-      return 'устройство занято другим приложением (Zoom, Teams, OBS…) или заблокировано системой. Закройте его и попробуйте снова';
+      return msg('media.error.busy');
     case 'OverconstrainedError':
-      return 'устройство не поддерживает запрошенные параметры';
+      return msg('media.error.constraints');
     case 'SecurityError':
-      return 'браузер заблокировал доступ: страница должна открываться по HTTPS';
+      return msg('media.error.insecure');
     case 'AbortError':
-      return 'устройство не ответило. Попробуйте ещё раз';
+      return msg('media.error.timeout');
     default:
-      return e?.message || 'неизвестная ошибка';
+      return e?.message || msg('media.error.unknown');
   }
 }
 
@@ -833,7 +833,11 @@ export async function setSpeaker(deviceId: string) {
 
   await refreshSpeakerInfo();
   const { currentSpeakerLabel } = useVoiceStore.getState();
-  toast('Динамики: ' + (currentSpeakerLabel || 'устройство переключено'));
+  toast(
+    msg('voice.toast.speakerSwitched', {
+      device: currentSpeakerLabel || msg('voice.toast.speakerSwitched.fallback'),
+    }),
+  );
 }
 
 /**
@@ -854,7 +858,7 @@ export async function setMic(deviceId: string) {
         : audioConstraints(),
     });
   } catch (err) {
-    toast.error('Не удалось переключить микрофон: ' + mediaErrorText(err) + '.');
+    toast.error(msg('voice.toast.micSwitchFailed', { reason: mediaErrorText(err) }));
     return;
   }
 
@@ -890,7 +894,11 @@ export async function setMic(deviceId: string) {
 
   setupLocalVad(); // переподцепляем анализатор обводки к новому устройству
   await refreshMicInfo();
-  toast('Микрофон переключён: ' + (newTrack.label || 'устройство'));
+  toast(
+    msg('voice.toast.micSwitched', {
+      device: newTrack.label || msg('voice.toast.micSwitched.fallback'),
+    }),
+  );
 }
 
 /**
@@ -1167,7 +1175,7 @@ function scheduleSfuRetry() {
       transport = null;
       dropRemoteTiles();
       await enterRoom(target, ticket);
-      toast.success('Медиасервер вернулся.');
+      toast.success(msg('voice.toast.sfuBack'));
     })();
   }, SFU_RETRY_MS);
 }
@@ -1197,10 +1205,10 @@ function onPresence(presence: VoicePresence) {
   }
   if (splitHandled) return; // уже отреагировали на это расщепление
   splitHandled = true;
-  const names = apart.map((p) => p.name || 'Участник').join(', ');
+  const names = apart.map((p) => p.name || msg('voice.peer.fallback')).join(', ');
   diag('transport split', `me=${mine} apart=${apart.length} (${names})`);
   if (mine === 'sfu' && others.length <= MESH_FALLBACK_MAX_PEERS) {
-    toast(`${names} не может через медиасервер — звоним напрямую.`);
+    toast(msg('voice.toast.peersDirect', { names }));
     void remigrate('mesh');
     return;
   }
@@ -1208,8 +1216,8 @@ function onPresence(presence: VoicePresence) {
   // звоним как раз мы. Молчать нельзя — человек должен понимать, почему тишина.
   toast.error(
     mine === 'sfu'
-      ? `${names} вас не слышит: у него звонок идёт напрямую, а не через медиасервер.`
-      : 'Вы звоните напрямую, остальные — через медиасервер. Вас не слышно: переподключитесь к каналу.',
+      ? msg('voice.toast.peerCannotHear', { names })
+      : msg('voice.toast.youAreDirect'),
   );
   sfx().play('error');
 }
@@ -1223,13 +1231,13 @@ function onTransportLost(reason: 'setup' | 'lost') {
   // На входе — всегда в p2p: человек ещё никого не слышал, ждать ему нечего.
   if (reason === 'setup' || remoteCount() <= MESH_FALLBACK_MAX_PEERS) {
     diag('sfu-lost', `${reason} → mesh fallback`);
-    toast.error('Медиасервер недоступен — звоним напрямую.');
+    toast.error(msg('voice.toast.sfuDownDirect'));
     sfx().play('error');
     void remigrate('mesh');
     return;
   }
   diag('sfu-lost', `${reason} → waiting for sfu (${remoteCount()} peers)`);
-  toast.error('Медиасервер недоступен. Ждём его: участников слишком много для прямых звонков.');
+  toast.error(msg('voice.toast.sfuDownWaiting'));
   sfx().play('error');
   setStatus('voice.status.sfuWaiting');
   scheduleSfuRetry();
@@ -1247,7 +1255,7 @@ export async function joinVoice(newRoom: string, label: string) {
   // канал с зажжённым микрофоном и полной тишиной без единой ошибки.
   const support = voiceSupport();
   if (!support.ok) {
-    toast.error('Не удалось выйти на связь: ' + support.message + '.');
+    toast.error(msg('voice.toast.joinFailed', { reason: support.message }));
     setStatus('voice.status.unsupported');
     sfx().play('error');
     return;
@@ -1260,7 +1268,7 @@ export async function joinVoice(newRoom: string, label: string) {
     } catch (err) {
       console.error('getUserMedia failed:', err);
       setStatus('voice.status.micDenied');
-      toast.error('Не удалось выйти на связь: микрофон — ' + mediaErrorText(err) + '.');
+      toast.error(msg('voice.toast.joinFailedMic', { reason: mediaErrorText(err) }));
       sfx().play('error'); // отказано в доступе к устройству
       return;
     }
@@ -1280,7 +1288,7 @@ export async function joinVoice(newRoom: string, label: string) {
 
   useUiStore.setState({ view: 'voice', voiceRoom: room, voiceLabel: label });
 
-  addTile('local', myName() + ' (вы)', localStream, true);
+  addTile('local', msg('common.you', { name: myName() }), localStream, true);
   applyMicState();
   syncMediaState();
 
@@ -1297,7 +1305,7 @@ export async function joinVoice(newRoom: string, label: string) {
   // Подсказка про смену микрофона — один раз, чтобы знали, где переключить
   if (typeof localStorage !== 'undefined' && !localStorage.getItem('relay-mic-hint')) {
     localStorage.setItem('relay-mic-hint', '1');
-    toast('Не тот микрофон? Сменить можно кнопкой «▲» на значке микрофона.', { duration: 7000 });
+    toast(msg('voice.toast.micHint'), { duration: 7000 });
   }
 }
 
@@ -1390,7 +1398,7 @@ function teardownPeerAudio() {
  */
 export function renameSelf(name: string) {
   const t = tiles.get('local');
-  const label = name + ' (вы)';
+  const label = msg('common.you', { name });
   if (t && t.name !== label) {
     tiles.set('local', { ...t, name: label });
     syncTiles();
@@ -1463,7 +1471,7 @@ async function startCamera() {
     }
     camTrack = cam.getVideoTracks()[0];
   } catch (err) {
-    toast.error('Камера недоступна: ' + mediaErrorText(err) + '.');
+    toast.error(msg('voice.toast.camUnavailable', { reason: mediaErrorText(err) }));
     return;
   }
 
@@ -1473,7 +1481,7 @@ async function startCamera() {
     stopCamera();
     broadcastMediaState();
     syncMediaState();
-    toast('Камера отключилась.');
+    toast(msg('voice.toast.camStopped'));
   };
 
   localStream!.addTrack(camTrack);
@@ -1503,7 +1511,7 @@ export async function toggleScreen() {
 
 async function startScreen() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-    toast.error('Демонстрация экрана недоступна в этом браузере.');
+    toast.error(msg('voice.toast.screenUnsupported'));
     return;
   }
 
@@ -1523,7 +1531,7 @@ async function startScreen() {
     const e = err as { name?: string } | null;
     // Пользователь просто закрыл выбор источника — это не ошибка, молчим
     if (!(e && (e.name === 'NotAllowedError' || e.name === 'AbortError'))) {
-      toast.error('Не удалось начать демонстрацию: ' + mediaErrorText(err) + '.');
+      toast.error(msg('voice.toast.screenFailed', { reason: mediaErrorText(err) }));
     }
     return;
   }
@@ -1568,7 +1576,7 @@ async function startScreen() {
     stopScreen();
     broadcastMediaState();
     syncMediaState();
-    toast('Демонстрация экрана завершена.');
+    toast(msg('voice.toast.screenEnded'));
   };
 
   localStream!.addTrack(screenTrack);
@@ -1808,7 +1816,11 @@ export function initVoice() {
   // ради гостей: реестра у них нет, а разъехаться в транспортах нельзя.
   s.on('voice-mode', ({ room: changed, mode }) => {
     if (!room || changed !== room) return;
-    toast('Канал переключён на ' + (mode === 'sfu' ? 'медиасервер' : 'прямые звонки') + '…');
+    toast(
+      msg('voice.toast.modeSwitched', {
+        mode: msg(mode === 'sfu' ? 'voice.toast.mode.sfu' : 'voice.toast.mode.p2p'),
+      }),
+    );
     void remigrate();
   });
 
@@ -1831,7 +1843,7 @@ export function initVoice() {
     // Полноценный реконнект: у сокета новый id — все старые соединения мертвы,
     // собираем заново.
     tx().reset();
-    toast('Связь с сервером восстановлена.');
+    toast(msg('voice.toast.serverBack'));
     sfx().play('reconnect'); // связь восстановлена
     if (transport === sfuTransport) {
       // Пропуск в медиасервер выписан на прежний socket.id и вместе с ним умер —
@@ -1846,7 +1858,7 @@ export function initVoice() {
   s.on('disconnect', () => {
     if (!room) return;
     setStatus('voice.status.serverLost');
-    toast('Связь с сервером потеряна. Переподключаемся…');
+    toast(msg('voice.toast.serverLost'));
     sfx().play('connLost'); // обрыв связи
   });
 

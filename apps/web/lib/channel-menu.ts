@@ -1,5 +1,6 @@
 import type { Channel } from '@relay/shared';
 import type { MenuEntry } from '@/stores/context-menu';
+import { tx } from '@/lib/i18n';
 
 /**
  * Пункты меню канала — те же и по правой кнопке на строке, и по «⋯» на ховере
@@ -37,7 +38,7 @@ export function channelMenuEntries(
   if (channel.type === 'voice' && onInvite) {
     entries.push({
       id: 'channel-invite',
-      label: 'Пригласить по ссылке',
+      label: tx('channelMenu.invite'),
       icon: 'link',
       run: onInvite,
     });
@@ -49,7 +50,7 @@ export function channelMenuEntries(
 
   entries.push({
     id: 'channel-rename',
-    label: 'Переименовать…',
+    label: tx('channelMenu.rename'),
     icon: 'edit',
     run: onRename,
   });
@@ -58,13 +59,13 @@ export function channelMenuEntries(
   if (entries.length) entries.push({ id: 'channel-sep', separator: true });
   entries.push({
     id: 'channel-delete',
-    label: 'Удалить канал',
+    label: tx('channelMenu.delete'),
     icon: 'trash',
     danger: true,
     disabled: busy,
     // Подпись справа объясняет запрет на месте: отключённый пункт без причины
     // выглядит как поломка.
-    ...(busy ? { hint: `${occupants} в эфире` } : {}),
+    ...(busy ? { hint: tx('channelMenu.busy', { count: occupants }) } : {}),
     run: onDelete,
   });
 

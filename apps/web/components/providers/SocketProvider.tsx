@@ -12,6 +12,7 @@ import { useUnreadStore, LAST_READ_KEY } from '@/stores/unread';
 import { useChannelsStore } from '@/stores/channels';
 import { useServersStore } from '@/stores/servers';
 import { forgetServerPassword, storedServerPasswords, unlockServer } from '@/lib/servers';
+import { tx } from '@/lib/i18n';
 
 /**
  * Поднимает единственный socket.io-клиент и навешивает глобальную логику чата
@@ -147,7 +148,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       if (!slug || slug !== ui().textRoom) return;
       const label = ui().textLabel || slug;
       ui().leaveText();
-      toast(`Канал #${label} удалили.`);
+      toast(tx('channels.deleted', { name: label }));
     });
 
     // Реестр серверов — сервер шлёт полный список на connect и при изменениях.

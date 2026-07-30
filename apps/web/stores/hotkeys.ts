@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { MessageKey } from '@/lib/i18n/translate';
 
 /**
  * Горячие клавиши голосового канала. По умолчанию НИЧЕГО не назначено —
@@ -8,14 +9,15 @@ import { create } from 'zustand';
  */
 export type HotkeyAction = 'muteMic' | 'deafen' | 'leaveVoice';
 
-export const HOTKEY_ACTIONS: { id: HotkeyAction; label: string; hint: string }[] = [
-  { id: 'muteMic', label: 'Выключить микрофон', hint: 'Мут и анмут своего микрофона.' },
+/** Подписи — ключи словаря: текст собирает окно настроек на нужном языке. */
+export const HOTKEY_ACTIONS: { id: HotkeyAction; label: MessageKey; hint: MessageKey }[] = [
+  { id: 'muteMic', label: 'hotkey.muteMic', hint: 'hotkey.muteMic.hint' },
   {
     id: 'deafen',
-    label: 'Выключить звук',
-    hint: 'Заглушить весь звук канала (микрофон выключится тоже).',
+    label: 'hotkey.deafen',
+    hint: 'hotkey.deafen.hint',
   },
-  { id: 'leaveVoice', label: 'Выйти из канала', hint: 'Покинуть текущий голосовой канал.' },
+  { id: 'leaveVoice', label: 'hotkey.leaveVoice', hint: 'hotkey.leaveVoice.hint' },
 ];
 
 type Binds = Partial<Record<HotkeyAction, string>>;

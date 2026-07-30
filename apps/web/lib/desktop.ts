@@ -15,6 +15,7 @@ import { desktopPtt } from '@/lib/voice';
 import { useDesktopStore, type ShellSettings, type UpdateStatus } from '@/stores/desktop';
 import { useUiStore } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
+import { tx } from '@/lib/i18n';
 
 type TauriEvent<T> = { payload: T };
 type UnlistenFn = () => void;
@@ -34,7 +35,7 @@ function toUpdateStatus(p: UpdateStatusPayload): UpdateStatus {
     case 'installing':
       return { kind: 'installing', version: p.version ?? '' };
     case 'error':
-      return { kind: 'error', message: p.message ?? 'неизвестная ошибка' };
+      return { kind: 'error', message: p.message ?? tx('desktop.update.unknownError') };
     case 'up-to-date':
       return { kind: 'up-to-date' };
     default:
@@ -102,7 +103,7 @@ function armWatchdog(ms: number) {
     if (kind === 'checking' || kind === 'installing') {
       useDesktopStore
         .getState()
-        .setUpdate({ kind: 'error', message: 'нет ответа — попробуйте ещё раз' });
+        .setUpdate({ kind: 'error', message: tx('desktop.update.noAnswer') });
     }
   }, ms);
 }

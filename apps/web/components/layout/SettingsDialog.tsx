@@ -12,7 +12,7 @@ import {
   switchServer,
 } from '@/lib/desktop';
 import { getTheme, setTheme, type Theme } from '@/lib/theme';
-import { LOCALES, LOCALE_LABELS, setLocale, useLocale, useT } from '@/lib/i18n';
+import { LOCALES, LOCALE_LABELS, setLocale, tx, useLocale, useT, type MessageKey } from '@/lib/i18n';
 import { isLocale } from '@/lib/i18n/config';
 import { comboLabel, eventToCombo } from '@/lib/hotkeys';
 import { useDesktopStore } from '@/stores/desktop';
@@ -33,14 +33,14 @@ import {
 
 type Tab = 'av' | 'appearance' | 'hotkeys' | 'app' | 'notifications' | 'account';
 
-const TABS: { id: Tab; label: string; desktopOnly?: boolean }[] = [
-  { id: 'av', label: 'Аудио и видео' },
-  { id: 'appearance', label: 'Внешний вид' },
-  { id: 'hotkeys', label: 'Горячие клавиши' },
+const TABS: { id: Tab; label: MessageKey; desktopOnly?: boolean }[] = [
+  { id: 'av', label: 'settings.tab.av' },
+  { id: 'appearance', label: 'settings.tab.appearance' },
+  { id: 'hotkeys', label: 'settings.tab.hotkeys' },
   // Настройки самой оболочки (автозапуск): в браузере показывать нечего.
-  { id: 'app', label: 'Приложение', desktopOnly: true },
-  { id: 'notifications', label: 'Уведомления' },
-  { id: 'account', label: 'Аккаунт' },
+  { id: 'app', label: 'settings.tab.app', desktopOnly: true },
+  { id: 'notifications', label: 'settings.tab.notifications' },
+  { id: 'account', label: 'settings.tab.account' },
 ];
 
 function Chevron() {
@@ -147,6 +147,7 @@ function LanguageSelect() {
 
 /** Живой уровень входного сигнала микрофона — заполняющаяся полоса (rAF). */
 function InputLevel({ active }: { active: boolean }) {
+  const t = useT();
   const fillRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!active) return;
@@ -165,13 +166,13 @@ function InputLevel({ active }: { active: boolean }) {
   return (
     <div>
       <span className="mb-1.5 block font-mono text-[11px] uppercase tracking-[0.16em] text-text-faint">
-        Уровень входа
+        {t('settings.inputLevel')}
       </span>
       <div className="h-2.5 w-full overflow-hidden rounded-full bg-black/45">
         <div ref={fillRef} className="h-full w-0 rounded-full bg-ok transition-none" />
       </div>
       <p className="mt-1.5 text-[12px] text-text-muted">
-        Полоса оживает во время звонка — скажите что-нибудь.
+        {t('settings.inputLevel.hint')}
       </p>
     </div>
   );
@@ -276,6 +277,7 @@ function KeybindRow({
   onClear: () => void;
   note?: { text: string; tone: 'muted' | 'danger' };
 }) {
+  const t = useT();
   const { recording, setRecording } = useComboRecorder(onCombo);
 
   return (
@@ -299,14 +301,18 @@ function KeybindRow({
                   : 'border-dashed border-line-strong text-text-muted hover:text-text',
             )}
           >
-            {recording ? 'Нажмите клавиши…' : combo ? comboLabel(combo) : 'Назначить'}
+            {recording
+              ? t('settings.hotkeys.recording')
+              : combo
+                ? comboLabel(combo)
+                : t('settings.hotkeys.assign')}
           </button>
           {combo && !recording && (
             <button
               type="button"
               onClick={onClear}
-              aria-label={`Сбросить: ${label}`}
-              title="Сбросить"
+              aria-label={t('settings.hotkeys.clearNamed', { action: label })}
+              title={t('settings.hotkeys.clear')}
               className="grid h-7 w-7 place-items-center rounded-[7px] text-lg leading-none text-text-muted outline-none transition-colors hover:bg-danger/10 hover:text-danger"
             >
               ×
@@ -362,7 +368,7 @@ function globalKeyWarning(combo: string): string | null {
   if (parts.length > 1) return null;
   const key = parts[0];
   if (/^F\d{1,2}$/.test(key) || key.startsWith('Media') || key.startsWith('Audio')) return null;
-  return 'Клавиша занята глобально: пока relay запущен, в других программах она работать не будет. Добавьте модификатор (Ctrl / Alt / Shift), если это мешает.';
+  return tx('settings.hotkeys.globalWarning');
 }
 
 /**
@@ -372,20 +378,21 @@ function globalKeyWarning(combo: string): string | null {
  * локального состояния: показываем ровно то, что реально применилось.
  */
 function PttKeybindRow() {
+  const t = useT();
   const shell = useDesktopStore((s) => s.shell);
   if (!shell) return null;
 
   const warning = shell.ptt ? globalKeyWarning(shell.ptt) : null;
   const note = shell.pttError
-    ? { text: `Не удалось назначить: ${shell.pttError}`, tone: 'danger' as const }
+    ? { text: t('settings.hotkeys.assignFailed', { reason: shell.pttError }), tone: 'danger' as const }
     : warning
       ? { text: warning, tone: 'muted' as const }
       : undefined;
 
   return (
     <KeybindRow
-      label="Push-to-talk (глобально)"
-      hint="Срабатывает даже когда окно relay свёрнуто. Нужен режим Push-to-talk."
+      label={t('settings.hotkeys.ptt')}
+      hint={t('settings.hotkeys.ptt.hint')}
       combo={shell.ptt}
       onCombo={setPttShortcut}
       onClear={() => setPttShortcut(null)}
@@ -402,6 +409,7 @@ function PttKeybindRow() {
  * настройки оболочки рендерим, лишь когда она о них рассказала.
  */
 function AppTab() {
+  const t = useT();
   const isDesktop = useDesktopStore((s) => s.isDesktop);
   const shell = useDesktopStore((s) => s.shell);
   if (!isDesktop) return null;
@@ -413,12 +421,12 @@ function AppTab() {
           <Toggle
             checked={shell.autostart}
             onChange={setAutostart}
-            title="Запускать при входе в систему"
-            hint="relay стартует свёрнутым в трей — окно не открывается."
+            title={t('settings.autostart')}
+            hint={t('settings.autostart.hint')}
           />
           {shell.autostartError && (
             <p className="px-1 text-[12px] leading-relaxed text-danger">
-              Не удалось изменить автозапуск: {shell.autostartError}
+              {t('settings.autostart.failed', { reason: shell.autostartError })}
             </p>
           )}
         </>
@@ -426,7 +434,7 @@ function AppTab() {
       <UpdateRow />
       {shell && (
         <p className="px-1 pt-1 font-mono text-[11px] uppercase tracking-[0.16em] text-text-faint">
-          Оболочка relay {shell.version}
+          {t('settings.shellVersion', { version: shell.version })}
         </p>
       )}
     </div>
@@ -448,26 +456,27 @@ function Placeholder({ children }: { children: ReactNode }) {
  * апдейт найден — кнопка меняется на «Установить и перезапустить».
  */
 function UpdateRow() {
+  const t = useT();
   const update = useDesktopStore((s) => s.update);
 
   const busy = update.kind === 'checking' || update.kind === 'installing';
   const status =
     update.kind === 'checking'
-      ? 'Проверяю…'
+      ? t('settings.updates.checking')
       : update.kind === 'up-to-date'
-        ? 'Установлена последняя версия'
+        ? t('settings.updates.upToDate')
         : update.kind === 'available'
-          ? `Доступна версия ${update.version}`
+          ? t('settings.updates.available', { version: update.version })
           : update.kind === 'installing'
-            ? `Устанавливаю ${update.version}…`
+            ? t('settings.updates.installing', { version: update.version })
             : update.kind === 'error'
-              ? 'Не удалось проверить обновления'
-              : 'relay проверяет их сам при запуске.';
+              ? t('settings.updates.failed')
+              : t('settings.updates.idle');
 
   return (
     <div className="flex items-center justify-between gap-4 rounded-[10px] border border-line bg-bg-elev/60 px-3.5 py-3">
       <div className="min-w-0">
-        <div className="text-[14px] font-medium text-text">Обновления</div>
+        <div className="text-[14px] font-medium text-text">{t('settings.updates')}</div>
         <div className={cn('text-[12px]', update.kind === 'error' ? 'text-danger' : 'text-text-muted')}>
           {status}
         </div>
@@ -478,7 +487,7 @@ function UpdateRow() {
           onClick={installUpdate}
           className="shrink-0 rounded-[8px] bg-ok/15 px-3 py-1.5 text-[13px] font-medium text-ok outline-none transition-colors hover:bg-ok/25"
         >
-          Установить и перезапустить
+          {t('settings.updates.install')}
         </button>
       ) : (
         <button
@@ -487,7 +496,7 @@ function UpdateRow() {
           disabled={busy}
           className="shrink-0 rounded-[8px] border border-line-strong bg-bg-active px-3 py-1.5 text-[13px] text-text outline-none transition-colors hover:bg-line-strong disabled:cursor-default disabled:opacity-60 disabled:hover:bg-bg-active"
         >
-          Проверить
+          {t('settings.updates.check')}
         </button>
       )}
     </div>
@@ -501,6 +510,7 @@ function UpdateRow() {
  * окно открыто; трей остаётся запасным путём, если страница не загрузилась.
  */
 function SwitchServerButton() {
+  const t = useT();
   const isDesktop = useDesktopStore((s) => s.isDesktop);
   if (!isDesktop) return null;
   return (
@@ -509,7 +519,7 @@ function SwitchServerButton() {
       onClick={switchServer}
       className="w-full rounded-[8px] px-3 py-2 text-left text-[14px] text-text-muted outline-none transition-colors hover:bg-bg-hover hover:text-text"
     >
-      Сменить сервер
+      {t('settings.switchServer')}
     </button>
   );
 }
@@ -527,6 +537,7 @@ export function SettingsDialog({
   open: boolean;
   onOpenChange: (v: boolean) => void;
 }) {
+  const t = useT();
   const [tab, setTab] = useState<Tab>('av');
   const mics = useVoiceStore((s) => s.mics);
   const currentMicId = useVoiceStore((s) => s.currentMicId);
@@ -584,7 +595,7 @@ export function SettingsDialog({
           'max-md:flex-col max-md:rounded-none max-md:border-0',
         )}
       >
-        <DialogTitle className="sr-only">Настройки</DialogTitle>
+        <DialogTitle className="sr-only">{t('settings.title')}</DialogTitle>
 
         {/* Левая колонка — навигация; на мобиле это горизонтальная лента вкладок
             сверху (полосу прокрутки прячем — листается пальцем). */}
@@ -597,23 +608,23 @@ export function SettingsDialog({
           )}
         >
           <div className="px-2 pb-2 pt-1 font-mono text-[11px] uppercase tracking-[0.2em] text-text-faint max-md:hidden">
-            Настройки
+            {t('settings.title')}
           </div>
-          {tabs.map((t) => (
+          {tabs.map((item) => (
             <button
-              key={t.id}
+              key={item.id}
               type="button"
-              onClick={() => setTab(t.id)}
-              aria-current={tab === t.id}
+              onClick={() => setTab(item.id)}
+              aria-current={tab === item.id}
               className={cn(
                 'rounded-[8px] px-3 py-2 text-left text-[14px] outline-none transition-colors',
                 'max-md:shrink-0 max-md:whitespace-nowrap',
-                tab === t.id
+                tab === item.id
                   ? 'bg-bg-active text-text-header'
                   : 'text-text-muted hover:bg-bg-hover hover:text-text',
               )}
             >
-              {t.label}
+              {t(item.label)}
             </button>
           ))}
           {/* В ленте вкладок подвалу места нет — на мобиле он отдельной строкой внизу. */}
@@ -624,7 +635,7 @@ export function SettingsDialog({
               onClick={logout}
               className="w-full rounded-[8px] px-3 py-2 text-left text-[14px] text-danger outline-none transition-colors hover:bg-danger/10"
             >
-              Выйти из аккаунта
+              {t('settings.logout')}
             </button>
           </div>
         </nav>
@@ -633,12 +644,15 @@ export function SettingsDialog({
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex h-[52px] shrink-0 items-center justify-between border-b border-line px-5 max-md:px-4">
             <h2 className="text-[15px] font-semibold text-text-header">
-              {tabs.find((t) => t.id === tab)?.label}
+              {(() => {
+                const current = tabs.find((item) => item.id === tab);
+                return current ? t(current.label) : null;
+              })()}
             </h2>
             <button
               type="button"
               onClick={() => onOpenChange(false)}
-              aria-label="Закрыть настройки"
+              aria-label={t('settings.close')}
               className="grid h-7 w-7 place-items-center rounded-[7px] text-lg leading-none text-text-muted outline-none transition-colors hover:bg-bg-hover hover:text-text-header"
             >
               ×
@@ -649,24 +663,24 @@ export function SettingsDialog({
             {tab === 'av' ? (
               <div className="flex flex-col gap-5">
                 <DeviceSelect
-                  label="Микрофон"
+                  label={t('settings.mic')}
                   value={currentMicId ?? ''}
                   devices={mics}
-                  fallback="Дайте доступ к микрофону"
+                  fallback={t('settings.mic.noAccess')}
                   onChange={(id) => void setMic(id)}
                 />
                 <DeviceSelect
-                  label="Камера"
+                  label={t('settings.camera')}
                   value={currentCamId ?? ''}
                   devices={cameras}
-                  fallback="Дайте доступ к камере"
+                  fallback={t('settings.camera.noAccess')}
                   onChange={(id) => void setCamera(id)}
                 />
                 <DeviceSelect
-                  label="Устройство вывода"
+                  label={t('settings.output')}
                   value={currentSpeakerId ?? ''}
                   devices={speakers}
-                  fallback="Системное по умолчанию"
+                  fallback={t('settings.output.default')}
                   onChange={(id) => void setSpeaker(id)}
                 />
                 <InputLevel active={open && tab === 'av'} />
@@ -674,14 +688,14 @@ export function SettingsDialog({
                   <Toggle
                     checked={pushToTalk}
                     onChange={setPushToTalk}
-                    title="Push-to-talk"
-                    hint="Микрофон открыт, только пока удерживаете пробел."
+                    title={t('settings.pushToTalk')}
+                    hint={t('settings.pushToTalk.hint')}
                   />
                   <Toggle
                     checked={noiseSuppression}
                     onChange={(v) => void setNoiseSuppression(v)}
-                    title="Шумоподавление"
-                    hint="Убирает фоновый шум с вашего микрофона."
+                    title={t('settings.noiseSuppression')}
+                    hint={t('settings.noiseSuppression.hint')}
                   />
                 </div>
               </div>
@@ -691,26 +705,24 @@ export function SettingsDialog({
                 <Toggle
                   checked={theme === 'light'}
                   onChange={toggleTheme}
-                  title="Светлая тема"
-                  hint="Переключить оформление между тёмным и светлым."
+                  title={t('settings.lightTheme')}
+                  hint={t('settings.lightTheme.hint')}
                 />
               </div>
             ) : tab === 'hotkeys' ? (
               <div className="flex flex-col gap-2.5">
                 <p className="text-[12.5px] leading-relaxed text-text-muted">
-                  По умолчанию всё выключено. Назначь клавиши нужным действиям — они
-                  работают глобально, пока ты в голосовом канале. Клавиши игнорируются,
-                  когда пишешь в чат.
+                  {t('settings.hotkeys.intro')}
                 </p>
                 {HOTKEY_ACTIONS.map((a) => (
-                  <VoiceKeybindRow key={a.id} action={a.id} label={a.label} hint={a.hint} />
+                  <VoiceKeybindRow key={a.id} action={a.id} label={t(a.label)} hint={t(a.hint)} />
                 ))}
                 <PttKeybindRow />
               </div>
             ) : tab === 'app' ? (
               <AppTab />
             ) : (
-              <Placeholder>раздел появится позже</Placeholder>
+              <Placeholder>{t('settings.placeholder')}</Placeholder>
             )}
           </div>
         </div>
@@ -724,7 +736,7 @@ export function SettingsDialog({
             onClick={logout}
             className="w-full rounded-[8px] px-3 py-2 text-left text-[14px] text-danger outline-none transition-colors hover:bg-danger/10"
           >
-            Выйти из аккаунта
+            {t('settings.logout')}
           </button>
         </div>
       </DialogContent>

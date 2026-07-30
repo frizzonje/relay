@@ -58,7 +58,8 @@ describe('channelMenuEntries', () => {
     const entries = channelMenuEntries(target({}, 2), { ...noop, onDelete });
     const del = action(entries, 'channel-delete');
     expect(del?.disabled).toBe(true);
-    expect(del?.hint).toBe('2 в эфире');
+    // Подпись собирается словарём; в тестах активна база — английская.
+    expect(del?.hint).toBe('2 on air');
     expect(onDelete).not.toHaveBeenCalled();
   });
 

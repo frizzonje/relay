@@ -124,15 +124,16 @@ describe('targetEntries', () => {
     }
   });
 
-  it('подписи — по-русски и без многоточий у мгновенных действий', () => {
+  it('подписи из словаря, без многоточий у мгновенных действий', () => {
     const input = mount(document.createElement('input'));
     input.value = 'текст';
     input.setSelectionRange(0, 5);
+    // Язык в тестах — базовый (en); проверяем сам набор пунктов и их вид.
     expect(labels(targetEntries(input, ''))).toEqual([
-      'Вырезать',
-      'Копировать',
-      'Вставить',
-      'Выделить всё',
+      'Cut',
+      'Copy',
+      'Paste',
+      'Select all',
     ]);
   });
 });

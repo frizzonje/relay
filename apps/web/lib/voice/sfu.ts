@@ -322,7 +322,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     const stream = ensureStream(peerId);
     if (c.kind === 'video') stream.getVideoTracks().forEach((t) => stream.removeTrack(t));
     stream.addTrack(consumer.track);
-    host.addTile(peerId, names.get(peerId) ?? 'Участник', stream, false);
+    host.addTile(peerId, names.get(peerId) ?? tx('voice.peer.fallback'), stream, false);
     host.setTileState(peerId, '');
 
     if (c.kind === 'audio') {
@@ -450,8 +450,8 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       if (!sendTransport || !recvTransport) throw new Error('no transports');
       await publishLocal();
       for (const peer of payload.peers) {
-        names.set(peer.peerId, peer.name || 'Участник');
-        host.addTile(peer.peerId, peer.name || 'Участник', null, false);
+        names.set(peer.peerId, peer.name || tx('voice.peer.fallback'));
+        host.addTile(peer.peerId, peer.name || tx('voice.peer.fallback'), null, false);
         host.setTileState(peer.peerId, 'tile.state.connecting');
         for (const producer of peer.producers) await consume(peer.peerId, producer);
       }
@@ -593,7 +593,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
 
   function updatePing(rtt: number | null) {
     if (names.size === 0) {
-      host.setPing({ waiting: true, ms: null, grade: null, label: 'один в канале' });
+      host.setPing({ waiting: true, ms: null, grade: null, label: 'ping.alone' });
       return;
     }
     if (rtt == null) {
@@ -601,7 +601,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         waiting: true,
         ms: null,
         grade: null,
-        label: ready ? 'замеряем задержку' : 'устанавливаем связь',
+        label: ready ? 'ping.measuring' : 'ping.connecting',
       });
       return;
     }
@@ -782,8 +782,8 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
 
       s.on('welcome', (payload: WelcomePayload) => void onWelcome(payload));
       s.on('peer-joined', ({ peerId, name }: { peerId: string; name: string }) => {
-        names.set(peerId, name || 'Участник');
-        host.addTile(peerId, name || 'Участник', null, false);
+        names.set(peerId, name || tx('voice.peer.fallback'));
+        host.addTile(peerId, name || tx('voice.peer.fallback'), null, false);
         host.setTileState(peerId, 'tile.state.connecting');
       });
       s.on('new-producer', ({ peerId, producer }: { peerId: string; producer: ProducerInfo }) => {

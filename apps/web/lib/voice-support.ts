@@ -1,3 +1,5 @@
+import { tx } from '@/lib/i18n';
+
 /**
  * Умеет ли движок вообще звонить — проверка ДО входа в голосовой канал.
  *
@@ -42,18 +44,15 @@ function noWebrtcMessage(): string {
 
   if (isDesktopShell && isLinux) {
     return (
-      'звонки недоступны: системный движок WebKitGTK собран без поддержки WebRTC. ' +
-      'Это ограничение самого движка, а не relay. Пока откройте relay в браузере ' +
-      '(Chromium, Firefox, Chrome) — там звонки работают'
+      tx('support.webkitgtk.noWebrtc')
     );
   }
   if (isLinux) {
     return (
-      'браузер не умеет WebRTC. В GNOME Web (WebKitGTK) звонков нет вовсе — ' +
-      'откройте relay в Chromium, Firefox или Chrome'
+      tx('support.noWebrtc.gnome')
     );
   }
-  return 'браузер не поддерживает WebRTC — обновите его или откройте relay в Chrome/Firefox';
+  return tx('support.noWebrtc');
 }
 
 /**
@@ -65,7 +64,7 @@ export function voiceSupport(): VoiceSupport {
     return {
       ok: false,
       reason: 'insecure',
-      message: 'откройте сайт по HTTPS или обновите браузер',
+      message: tx('support.insecure'),
     };
   }
   if (!hasPeerConnection()) {

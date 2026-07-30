@@ -495,7 +495,7 @@ export function Sidebar() {
             </div>
             <div className={cn('text-[11px]', ping.waiting ? 'text-ok' : 'text-text-muted')}>
               {ping.waiting ? (
-                <span className="vp-dots">{ping.label}</span>
+                <span className="vp-dots">{ping.label && t(ping.label)}</span>
               ) : (
                 <>
                   {t('voice.panel.latency')}{' '}

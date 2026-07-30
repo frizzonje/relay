@@ -1,6 +1,7 @@
 import { toast } from 'sonner';
 import { useContextMenuStore, type MenuEntry } from '@/stores/context-menu';
 import { useUiStore } from '@/stores/ui';
+import { tx } from '@/lib/i18n';
 
 /**
  * Своё контекстное меню вместо меню движка.
@@ -121,8 +122,12 @@ function insertIntoField(field: Field, text: string) {
 }
 
 /** Подсказка вместо тихого «ничего не произошло», когда движок закрыл буфер. */
-function clipboardBlocked(action: 'вставить' | 'скопировать', key: string) {
-  toast(`Движок не даёт ${action} через меню — сработает с клавиатуры (${shortcut(key)}).`);
+function clipboardBlocked(action: 'paste' | 'copy', key: string) {
+  toast(
+    tx(action === 'paste' ? 'menu.clipboardBlocked.paste' : 'menu.clipboardBlocked.copy', {
+      shortcut: shortcut(key),
+    }),
+  );
 }
 
 // ── Наборы пунктов ──────────────────────────────────────────────────────────
@@ -146,34 +151,34 @@ function editableEntries(el: Field | HTMLElement, selection: string): MenuEntry[
   if (selected) {
     entries.push({
       id: 'cut',
-      label: 'Вырезать',
+      label: tx('menu.cut'),
       icon: 'cut',
       hint: shortcut('X'),
       run: async () => {
-        if (!(await copyText(selected))) return clipboardBlocked('скопировать', 'X');
+        if (!(await copyText(selected))) return clipboardBlocked('copy', 'X');
         if (field) insertIntoField(field, '');
         else document.execCommand('delete');
       },
     });
     entries.push({
       id: 'copy',
-      label: 'Копировать',
+      label: tx('menu.copy'),
       icon: 'copy',
       hint: shortcut('C'),
       run: async () => {
-        if (!(await copyText(selected))) clipboardBlocked('скопировать', 'C');
+        if (!(await copyText(selected))) clipboardBlocked('copy', 'C');
       },
     });
   }
 
   entries.push({
     id: 'paste',
-    label: 'Вставить',
+    label: tx('menu.paste'),
     icon: 'paste',
     hint: shortcut('V'),
     run: async () => {
       const text = await readClipboard();
-      if (text == null) return clipboardBlocked('вставить', 'V');
+      if (text == null) return clipboardBlocked('paste', 'V');
       if (!text) return;
       if (field) insertIntoField(field, text);
       else {
@@ -187,7 +192,7 @@ function editableEntries(el: Field | HTMLElement, selection: string): MenuEntry[
   if (hasText) {
     entries.push({
       id: 'select-all',
-      label: 'Выделить всё',
+      label: tx('menu.selectAll'),
       icon: 'select-all',
       hint: shortcut('A'),
       run: () => {
@@ -214,16 +219,16 @@ function linkEntries(a: HTMLAnchorElement): MenuEntry[] {
   return [
     {
       id: 'link-open',
-      label: 'Открыть ссылку',
+      label: tx('menu.openLink'),
       icon: 'link-open',
       run: () => a.click(),
     },
     {
       id: 'link-copy',
-      label: 'Копировать адрес',
+      label: tx('menu.copyLink'),
       icon: 'link',
       run: async () => {
-        if (!(await copyText(href))) clipboardBlocked('скопировать', 'C');
+        if (!(await copyText(href))) clipboardBlocked('copy', 'C');
       },
     },
   ];
@@ -235,7 +240,7 @@ function imageEntries(img: HTMLImageElement): MenuEntry[] {
   return [
     {
       id: 'img-save',
-      label: 'Сохранить картинку',
+      label: tx('menu.saveImage'),
       icon: 'download',
       run: () => {
         const a = document.createElement('a');
@@ -249,10 +254,10 @@ function imageEntries(img: HTMLImageElement): MenuEntry[] {
     },
     {
       id: 'img-copy-link',
-      label: 'Копировать адрес картинки',
+      label: tx('menu.copyImageLink'),
       icon: 'link',
       run: async () => {
-        if (!(await copyText(src))) clipboardBlocked('скопировать', 'C');
+        if (!(await copyText(src))) clipboardBlocked('copy', 'C');
       },
     },
   ];
@@ -263,13 +268,13 @@ function shellEntries(): MenuEntry[] {
   return [
     {
       id: 'settings',
-      label: 'Настройки…',
+      label: tx('menu.settings'),
       icon: 'settings',
       run: () => useUiStore.getState().setSettingsOpen(true),
     },
     {
       id: 'reload',
-      label: 'Перезагрузить relay',
+      label: tx('menu.reload'),
       icon: 'refresh',
       hint: shortcut('R'),
       run: () => window.location.reload(),
@@ -303,11 +308,11 @@ export function targetEntries(target: Element | null, selection = pageSelection(
     if (entries.length) entries.push(sep('sep-sel'));
     entries.push({
       id: 'copy-selection',
-      label: 'Копировать',
+      label: tx('menu.copy'),
       icon: 'copy',
       hint: shortcut('C'),
       run: async () => {
-        if (!(await copyText(selection))) clipboardBlocked('скопировать', 'C');
+        if (!(await copyText(selection))) clipboardBlocked('copy', 'C');
       },
     });
   }

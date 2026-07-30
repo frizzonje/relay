@@ -121,7 +121,7 @@ export interface VoicePing {
   /** Класс окраски пинга по порогам 80/200 мс. */
   grade: 'good' | 'mid' | 'bad' | null;
   /** Текст-подпись для режима ожидания. */
-  label: string;
+  label: MessageKey | '';
 }
 
 interface VoiceState {

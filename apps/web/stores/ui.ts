@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { ChannelType } from '@relay/shared';
+import { tx } from '@/lib/i18n';
 
 /**
  * UI-стор каркаса. Голос и текст — независимые подключения; `view` — лишь то,
@@ -78,5 +79,5 @@ export const useUiStore = create<UiState>((set, get) => ({
 
 /** Имя для сокета/чата — пустой тег превращаем в «Аноним» (как myName()). */
 export function myName(): string {
-  return useUiStore.getState().callsign.trim() || 'Аноним';
+  return useUiStore.getState().callsign.trim() || tx('common.anonymous');
 }

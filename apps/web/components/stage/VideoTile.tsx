@@ -719,13 +719,13 @@ export function VideoTile({
         >
           {menu === 'voice' ? (
             <VolumeSlider
-              label="Голос собеседника"
+              label={t('tile.volume.voice')}
               value={tile.volume ?? 1}
               onChange={(v) => setPeerVolume(tile.id, v)}
             />
           ) : (
             <VolumeSlider
-              label="Звук трансляции"
+              label={t('tile.volume.screen')}
               value={tile.screenVolume ?? 1}
               onChange={(v) => setPeerScreenVolume(tile.id, v)}
             />
@@ -766,8 +766,8 @@ export function VideoTile({
               <p className="text-[15px] font-bold text-text-header">{t('tile.screenShare.ended')}</p>
               <p className="mt-0.5 text-[12px] text-text-muted">
                 {tile.isLocal
-                  ? 'Возвращаемся к сетке'
-                  : `Показ от ${tile.name} остановлен — возвращаемся к сетке`}
+                  ? t('tile.outro.self')
+                  : t('tile.outro.peer', { name: tile.name })}
               </p>
             </div>
 

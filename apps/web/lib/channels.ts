@@ -58,7 +58,7 @@ export async function deleteChannel(id: string): Promise<boolean> {
   if (!id) return false;
   const res = await ask<ChannelDeleteResult>('channel-delete', { id });
   if (res?.ok) return true;
-  toast(res ? refusalText(res.error, res.occupants) : 'Сервер не ответил — попробуйте ещё раз.');
+  toast(res ? refusalText(res.error, res.occupants) : tx('channels.noAnswer'));
   return false;
 }
 
@@ -68,7 +68,7 @@ export async function renameChannel(id: string, name: string): Promise<boolean> 
   if (!id || !trimmed) return false;
   const res = await ask<ChannelRenameResult>('channel-rename', { id, name: trimmed });
   if (res?.ok) return true;
-  toast(res ? refusalText(res.error) : 'Сервер не ответил — попробуйте ещё раз.');
+  toast(res ? refusalText(res.error) : tx('channels.noAnswer'));
   return false;
 }
 

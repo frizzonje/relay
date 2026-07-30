@@ -363,11 +363,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
 
     // Дальше идти некуда — прямого пути сеть не даёт, а TURN либо уже пробован,
     // либо не настроен.
-    toast.error(
-      'Не удалось соединиться с «' +
-        peer.name +
-        '»: сеть блокирует подключение. Администратору стоит проверить TURN-сервер.',
-    );
+    toast.error(tx('voice.toast.peerUnreachable', { name: peer.name }));
     host.playSfx('error'); // соединиться не вышло
     removePeer(peerId);
   }
@@ -410,7 +406,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     if (!room) return;
 
     if (peers.size === 0) {
-      host.setPing({ waiting: true, ms: null, grade: null, label: 'один в канале' });
+      host.setPing({ waiting: true, ms: null, grade: null, label: 'ping.alone' });
       return;
     }
 
@@ -444,7 +440,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
         waiting: true,
         ms: null,
         grade: null,
-        label: anyConnected ? 'замеряем задержку' : 'устанавливаем связь',
+        label: anyConnected ? 'ping.measuring' : 'ping.connecting',
       });
       return;
     }
@@ -661,7 +657,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       s.on('peers', (list) => {
         if (!room || !host.localStream()) return;
         for (const { id, name } of list) {
-          if (!peers.has(id)) createPeer(id, name || 'Участник', true); // инициатор — мы
+          if (!peers.has(id)) createPeer(id, name || tx('voice.peer.fallback'), true); // инициатор — мы
         }
       });
 
@@ -677,7 +673,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
         }
         const fresh = !peer;
         if (!peer) {
-          createPeer(from, name || 'Участник', false); // мы — отвечающая сторона
+          createPeer(from, name || tx('voice.peer.fallback'), false); // мы — отвечающая сторона
           peer = peers.get(from)!;
         }
         const pc = peer.pc;
