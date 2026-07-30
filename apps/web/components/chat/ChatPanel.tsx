@@ -11,6 +11,7 @@ import {
   type UploadResponse,
 } from '@relay/shared';
 import { cn } from '@/lib/utils';
+import { copyText, openContextMenu } from '@/lib/context-menu';
 import { chatMessage, springPop } from '@/lib/motion';
 import { avatarStyle } from '@/lib/avatar';
 import { fmtBytes, fmtClock } from '@/lib/format';
@@ -574,12 +575,52 @@ function Message({
       </motion.div>
     );
   }
+  // ПКМ по сообщению — те же действия, что в капсуле на ховере, плюс копия
+  // текста. Пункты цели (адрес ссылки, «сохранить картинку», копирование
+  // выделенного) допишет openContextMenu.
+  function onContextMenu(e: React.MouseEvent) {
+    if (editing || !msg.id) return; // в правке командует поле ввода
+    openContextMenu(
+      e,
+      [
+        { id: 'msg-reply', label: 'Ответить', icon: 'reply' as const, run: () => onReply(msg) },
+        msg.text
+          ? {
+              id: 'msg-copy',
+              label: 'Копировать текст',
+              icon: 'copy' as const,
+              run: () => void copyText(msg.text),
+            }
+          : null,
+        mine
+          ? {
+              id: 'msg-edit',
+              label: 'Редактировать',
+              icon: 'edit' as const,
+              run: () => onStartEdit(msg),
+            }
+          : null,
+        mine
+          ? {
+              id: 'msg-delete',
+              label: 'Удалить сообщение',
+              icon: 'trash' as const,
+              danger: true,
+              run: () => onDelete(msg),
+            }
+          : null,
+      ],
+      { label: msg.name },
+    );
+  }
+
   return (
     <motion.div
       {...anim}
       data-mid={msg.id}
       className="group flex items-start px-1"
       onMouseLeave={() => setLeaveTick((t) => t + 1)}
+      onContextMenu={onContextMenu}
     >
       {/* Карточка обжимается по содержимому (flex-ребёнок без flex-1) — не
           растягивается на всю страницу; подсветка ховера обнимает только её.

@@ -12,6 +12,7 @@ import { hostLabel, isCurrentHost, type RemoteHost } from '@/lib/hosts';
 import { isServerUnlocked, useServersStore } from '@/stores/servers';
 import { useChannelsStore } from '@/stores/channels';
 import { useHostsStore } from '@/stores/hosts';
+import { useUiStore } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import { AddHostDialog } from '@/components/layout/AddHostDialog';
 import { CreateServerDialog } from '@/components/layout/CreateServerDialog';
@@ -136,8 +137,10 @@ export function ServerRail() {
   const setActiveServer = useServersStore((s) => s.setActiveServer);
   const openUnlock = useServersStore((s) => s.openUnlock);
   const [createOpen, setCreateOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [addHostOpen, setAddHostOpen] = useState(false);
+  // Настройки — в ui-сторе: их открывает и шестерёнка рейки, и ПКМ-меню.
+  const settingsOpen = useUiStore((s) => s.settingsOpen);
+  const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
 
   // «Другие хосты» — отдельные инсталляции relay (не гильдии этого бэкенда).
   const hosts = useHostsStore((s) => s.hosts);
