@@ -17,6 +17,9 @@ const buttonVariants = cva(
         primary: 'bg-accent-strong text-bg-app hover:brightness-95 shadow-none',
         // призрачный — второстепенное действие (отмена)
         ghost: 'text-text-muted hover:bg-bg-hover hover:text-text',
+        // необратимое действие (удалить канал/сервер) — единственная заливка
+        // цветом во всём монохроме: она обязана останавливать руку
+        danger: 'bg-danger text-white hover:brightness-110 shadow-none',
       },
       size: {
         sm: 'h-8 px-3 text-[13px]',

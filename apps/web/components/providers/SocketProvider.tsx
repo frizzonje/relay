@@ -127,7 +127,19 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // Реестр каналов — сервер шлёт полный список на connect и при изменениях.
     // Для закрытых серверов приходит уже отфильтрованный (свой) список.
     socket.on('channels', (list) => {
-      if (Array.isArray(list)) useChannelsStore.getState().setChannels(list);
+      if (!Array.isArray(list)) return;
+      useChannelsStore.getState().setChannels(list);
+
+      // Открытый текстовый канал удалили (у нас или у кого-то ещё) — закрываем
+      // ленту, иначе человек продолжит писать в канал-призрак, которого больше
+      // нет ни у кого. Пропускаем, пока есть закрытые серверы без введённого
+      // пароля: их каналы в списке отсутствуют законно (в т.ч. в первые мгновения
+      // после реконнекта, до авто-разблокировки), и это не повод никого выгонять.
+      const room = ui().textRoom;
+      if (!room || list.some((c) => c?.type === 'text' && c.slug === room)) return;
+      const { servers, unlockedIds } = useServersStore.getState();
+      const awaitingUnlock = servers.some((s) => s.locked && !unlockedIds.includes(s.id));
+      if (!awaitingUnlock) ui().leaveText();
     });
 
     // Ответ на ввод пароля закрытого сервера. Успех — помечаем разблокированным;

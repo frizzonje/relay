@@ -105,6 +105,23 @@ interface ChannelModePayload {
 interface ChannelDeletePayload {
   id?: unknown;
 }
+interface ChannelRenamePayload {
+  id?: unknown;
+  name?: unknown;
+}
+interface ChannelStatsPayload {
+  id?: unknown;
+}
+// Ответы-ack действий над каналом (формат совпадает с одноимёнными типами
+// из shared). Отказ обязан быть внятным: интерфейс объясняет, почему канал
+// остался на месте, вместо молчаливого «ничего не произошло».
+type ChannelDeleteResult =
+  | { ok: true }
+  | { ok: false; error: 'not-found' | 'forbidden' | 'occupied'; occupants?: number };
+type ChannelRenameResult =
+  | { ok: true }
+  | { ok: false; error: 'not-found' | 'forbidden' | 'bad-name' };
+type ChannelStatsResult = { ok: true; occupants: number; messages: number } | { ok: false };
 interface ServerUnlockPayload {
   id?: unknown;
   password?: unknown;
@@ -635,19 +652,115 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     this.persist();
   }
 
+  /**
+   * Сколько человек прямо сейчас в канале: для голосового — кто в эфире, для
+   * текстового — у кого он открыт (socket.io-комната `chat:<slug>`).
+   */
+  private occupantsOf(channel: Channel): number {
+    const target = channel.type === 'voice' ? channel.slug : CHAT_PREFIX + channel.slug;
+    let count = 0;
+    for (const sock of this.server.sockets.sockets.values()) {
+      const where = (channel.type === 'voice' ? sock.data.room : sock.data.chatRoom) as
+        | string
+        | undefined;
+      if (where === target) count++;
+    }
+    return count;
+  }
+
+  /**
+   * Канал, который этому сокету разрешено менять: существующий, не дефолтный
+   * и — если лежит в закрытом сервере — в разблокированном им. Пароль сервера
+   * это и есть право на его каналы (как в handleChannelCreate).
+   */
+  private editableChannel(
+    client: Socket,
+    id: string,
+  ): { channel: Channel; index: number } | { error: 'not-found' | 'forbidden' } {
+    const index = this.channels.findIndex((c) => c.id === id);
+    if (index === -1) return { error: 'not-found' };
+    const channel = this.channels[index];
+    if (!channel.removable) return { error: 'forbidden' };
+    const srv = this.servers.find((s) => s.id === channel.serverId);
+    if (srv?.passwordHash && !(client.data.unlocked as Set<string>)?.has(srv.id)) {
+      return { error: 'forbidden' };
+    }
+    return { channel, index };
+  }
+
+  // Живой срез канала для диалога подтверждения (сколько человек внутри,
+  // сколько сообщений пропадёт). Спрашивают по одному разу на открытие
+  // диалога — рассылать это всем постоянно незачем.
+  @SubscribeMessage('channel-stats')
+  handleChannelStats(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ChannelStatsPayload,
+  ): ChannelStatsResult {
+    if (!this.allow(client) || this.isGuest(client)) return { ok: false };
+    const id = typeof payload?.id === 'string' ? payload.id : '';
+    const channel = this.channelsFor(client).find((c) => c.id === id);
+    if (!channel) return { ok: false };
+    return {
+      ok: true,
+      occupants: this.occupantsOf(channel),
+      messages:
+        channel.type === 'text'
+          ? (this.chatHistory.get(CHAT_PREFIX + channel.slug)?.length ?? 0)
+          : 0,
+    };
+  }
+
+  // Переименование канала. Меняем ТОЛЬКО отображаемое имя: slug остаётся
+  // прежним, потому что по нему ключуются комната эфира, история чата и
+  // «непрочитано» — смена имени не должна ни рвать живой звонок, ни терять
+  // переписку. Права те же, что у удаления: дефолтные каналы неприкосновенны.
+  @SubscribeMessage('channel-rename')
+  handleChannelRename(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ChannelRenamePayload,
+  ): ChannelRenameResult {
+    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
+    const id = typeof payload?.id === 'string' ? payload.id : '';
+    const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 32) : '';
+    if (!id) return { ok: false, error: 'not-found' };
+    if (!name) return { ok: false, error: 'bad-name' };
+    const found = this.editableChannel(client, id);
+    if ('error' in found) return { ok: false, error: found.error };
+    if (found.channel.name === name) return { ok: true };
+    found.channel.name = name;
+    this.broadcastChannels();
+    this.persist();
+    return { ok: true };
+  }
+
   @SubscribeMessage('channel-delete')
   handleChannelDelete(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ChannelDeletePayload,
-  ) {
-    if (!this.allow(client) || this.isGuest(client)) return;
+  ): ChannelDeleteResult {
+    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
     const id = typeof payload?.id === 'string' ? payload.id : '';
-    if (!id) return;
-    const idx = this.channels.findIndex((c) => c.id === id && c.removable);
-    if (idx === -1) return;
-    this.channels.splice(idx, 1);
+    if (!id) return { ok: false, error: 'not-found' };
+    const found = this.editableChannel(client, id);
+    if ('error' in found) return { ok: false, error: found.error };
+    const { channel, index } = found;
+
+    // Голосовой канал с людьми в эфире не удаляем ни при каких условиях:
+    // удаление выбросило бы их из звонка посреди разговора. Текстовый — можно
+    // (там теряется только история), но клиент честно предупреждает, сколько
+    // человек его сейчас читают.
+    if (channel.type === 'voice') {
+      const occupants = this.occupantsOf(channel);
+      if (occupants > 0) return { ok: false, error: 'occupied', occupants };
+    }
+
+    this.channels.splice(index, 1);
+    // История удалённого канала больше никому не принадлежит: держать её в
+    // памяти незачем, а канал с тем же слагом иначе унаследовал бы чужую ленту.
+    if (channel.type === 'text') this.chatHistory.delete(CHAT_PREFIX + channel.slug);
     this.broadcastChannels();
     this.persist();
+    return { ok: true };
   }
 
   // ===== Инвайт-ссылки =====
@@ -709,8 +822,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // этот момент ещё пуст (заполнен он только при пере-выдаче во время звонка).
     // Лимит — тот же, что у `join`.
     const askedName = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 20) : '';
-    const name =
-      askedName || (typeof client.data.name === 'string' ? client.data.name : '');
+    const name = askedName || (typeof client.data.name === 'string' ? client.data.name : '');
     const { token, exp } = issueSfuToken({ room, peerId: client.id, name });
     // Запоминаем выдачу: клиент, не умеющий сообщать транспорт в `join` (бандл
     // прошлой версии), иначе сошёл бы за p2p — и остальные съехали бы в прямые
@@ -815,7 +927,9 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // молчит», и без строчки в логе разбирается только гаданием.
     const split = this.transportsInRoom(room);
     if (split.size > 1) {
-      this.logger.warn(`voice: room "${room}" is split across transports: ${[...split].join(' + ')}`);
+      this.logger.warn(
+        `voice: room "${room}" is split across transports: ${[...split].join(' + ')}`,
+      );
     }
   }
 
@@ -931,8 +1045,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // Спойлер — метка сообщения: копируем вложение, чтобы не мутировать общий реестр.
     const uploadId = typeof payload?.uploadId === 'string' ? payload.uploadId : undefined;
     const stored = this.uploads.get(uploadId);
-    const attachment =
-      stored && payload?.spoiler === true ? { ...stored, spoiler: true } : stored;
+    const attachment = stored && payload?.spoiler === true ? { ...stored, spoiler: true } : stored;
 
     // Пустое сообщение без вложения — игнорируем
     if (!text && !attachment) return;
@@ -1138,14 +1251,8 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   // Кто сейчас в каких голосовых каналах (формат совпадает с VoicePeer из shared)
-  private buildVoicePresence(): Record<
-    string,
-    VoicePresenceEntry[]
-  > {
-    const presence: Record<
-      string,
-      VoicePresenceEntry[]
-    > = {};
+  private buildVoicePresence(): Record<string, VoicePresenceEntry[]> {
+    const presence: Record<string, VoicePresenceEntry[]> = {};
     for (const [id, sock] of this.server.sockets.sockets) {
       const room = sock.data.room as string | undefined;
       if (!room) continue;

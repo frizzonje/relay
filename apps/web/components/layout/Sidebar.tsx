@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
-import type { VoiceMode } from '@relay/shared';
+import { useState, type MouseEvent, type ReactNode } from 'react';
+import type { Channel, VoiceMode } from '@relay/shared';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Icon } from '@/components/ui/icon';
 import { Logo } from '@/components/ui/Logo';
@@ -23,12 +23,23 @@ import {
   toggleMic,
   toggleSpeakers,
 } from '@/lib/voice';
-import { deleteChannel, setChannelMode } from '@/lib/channels';
+import { setChannelMode } from '@/lib/channels';
+import { channelMenuEntries } from '@/lib/channel-menu';
+import { openContextMenu } from '@/lib/context-menu';
 import { useSfuAvailable } from '@/lib/use-sfu';
 import { deleteServer } from '@/lib/servers';
 import { useVoiceStore } from '@/stores/voice';
 import { VoiceMembers } from '@/components/layout/VoiceMembers';
 import { CreateChannelDialog } from '@/components/layout/CreateChannelDialog';
+import {
+  DeleteChannelDialog,
+  type DeleteChannelTarget,
+} from '@/components/layout/DeleteChannelDialog';
+import {
+  RenameChannelDialog,
+  type RenameChannelTarget,
+} from '@/components/layout/RenameChannelDialog';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { InviteDialog, LinkIcon } from '@/components/layout/InviteDialog';
 
 /**
@@ -82,13 +93,23 @@ function Category({
   );
 }
 
+/** Три точки — вход в меню канала (тот же набор, что по правой кнопке). */
+function MoreIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.7" />
+      <circle cx="12" cy="12" r="1.7" />
+      <circle cx="19" cy="12" r="1.7" />
+    </svg>
+  );
+}
+
 function ChannelRow({
   active,
   connected,
   onClick,
   onInvite,
-  onDelete,
-  deleteLabel,
+  onMenu,
   mode,
   onToggleMode,
   sfuAvailable,
@@ -99,8 +120,13 @@ function ChannelRow({
   onClick?: () => void;
   /** Голосовые каналы: hover-кнопка «Пригласить по ссылке». */
   onInvite?: () => void;
-  onDelete?: () => void;
-  deleteLabel?: string;
+  /**
+   * Меню канала (переименовать/удалить). Одна кнопка вместо россыпи значков:
+   * в 238 пикселях сайдбара им не разойтись, а правая кнопка мыши и «⋯»
+   * открывают ровно один и тот же список. Не задано — предлагать нечего
+   * (канал по умолчанию), и кнопки нет вовсе.
+   */
+  onMenu?: (e: MouseEvent<HTMLElement>) => void;
   /** Транспорт голосового канала. Задан только там, где его разрешено менять. */
   mode?: VoiceMode;
   onToggleMode?: () => void;
@@ -116,6 +142,7 @@ function ChannelRow({
       tabIndex={0}
       aria-pressed={active}
       onClick={onClick}
+      onContextMenu={onMenu}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
@@ -139,7 +166,7 @@ function ChannelRow({
         />
       )}
       <span className="relative z-[1] flex min-w-0 items-center gap-1.5">{children}</span>
-      {(onInvite || onDelete || onToggleMode) && (
+      {(onInvite || onMenu || onToggleMode) && (
         <span className="relative z-[1] ml-auto flex shrink-0 items-center gap-0.5">
           {onToggleMode && mode && (
             <button
@@ -166,6 +193,8 @@ function ChannelRow({
               {mode === 'sfu' ? 'SFU' : 'P2P'}
             </button>
           )}
+          {/* Мышь показывает эти кнопки на ховере; на тач-экранах ховера нет —
+              там они видны всегда, иначе действие недостижимо. */}
           {onInvite && (
             <button
               onClick={(e) => {
@@ -174,22 +203,23 @@ function ChannelRow({
               }}
               title="Пригласить по ссылке"
               aria-label="Пригласить по ссылке"
-              className="grid h-5 w-5 shrink-0 place-items-center rounded text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-text-header focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100"
+              className="grid h-5 w-5 shrink-0 place-items-center rounded text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-text-header focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100 max-md:opacity-100"
             >
               <LinkIcon size={13} />
             </button>
           )}
-          {onDelete && (
+          {onMenu && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                onDelete();
+                onMenu(e);
               }}
-              title={deleteLabel}
-              aria-label={deleteLabel}
-              className="grid h-5 w-5 shrink-0 place-items-center rounded text-lg leading-none text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-danger focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100"
+              title="Действия с каналом"
+              aria-label="Действия с каналом"
+              aria-haspopup="menu"
+              className="grid h-5 w-5 shrink-0 place-items-center rounded text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-text-header focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100 max-md:opacity-100"
             >
-              ×
+              <MoreIcon />
             </button>
           )}
         </span>
@@ -237,6 +267,11 @@ export function Sidebar() {
 
   // Инвайт-ссылка на войс-канал: null — модалка закрыта.
   const [inviteTarget, setInviteTarget] = useState<{ slug: string; label: string } | null>(null);
+  // Правка канала из меню: null — соответствующая модалка закрыта.
+  const [renameTarget, setRenameTarget] = useState<RenameChannelTarget | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteChannelTarget | null>(null);
+  // Подтверждение удаления сервера (спрашиваем — уносит с собой все каналы).
+  const [confirmServerDelete, setConfirmServerDelete] = useState(false);
 
   // Занятые эфиры, которых нет ни в одном сервере реестра (напр. канал удалили,
   // пока в нём сидят) — не роняем из виду. Слаги считаем глобально (не по активному
@@ -254,6 +289,30 @@ export function Sidebar() {
       return;
     }
     useUiStore.getState().openText(slug, label);
+  }
+
+  /**
+   * Меню канала — общее для правой кнопки на строке и для «⋯». Состав считает
+   * lib/channel-menu по тем же правилам, что держит сервер; пусто (каналы
+   * главного сервера) — значит своё меню не показываем вовсе, и ПКМ отдаёт
+   * обычное меню оболочки.
+   */
+  function channelMenu(c: Channel) {
+    const entries = channelMenuEntries(
+      { channel: c, occupants: presence[c.slug]?.length ?? 0 },
+      {
+        onRename: () => setRenameTarget({ id: c.id, name: c.name, type: c.type }),
+        onDelete: () => setDeleteTarget({ id: c.id, name: c.name, type: c.type }),
+        onInvite:
+          c.type === 'voice' ? () => setInviteTarget({ slug: c.slug, label: c.name }) : undefined,
+      },
+    );
+    if (!entries.length) return undefined;
+    return (e: MouseEvent<HTMLElement>) =>
+      openContextMenu(e, entries, {
+        label: `${c.type === 'text' ? '#' : ''}${c.name}`,
+        bare: true,
+      });
   }
 
   // Тег правится в панели в любой момент (даже в эфире). Применяется на
@@ -291,15 +350,10 @@ export function Sidebar() {
         </span>
         {!isMain && activeServer?.removable && (
           <button
-            onClick={() => {
-              // Удаление необратимо и видно всем — спрашиваем, чтобы «×» мимо не снёс сервер.
-              if (
-                window.confirm(
-                  `Удалить сервер «${activeServer.name}» со всеми каналами у всех участников?`,
-                )
-              )
-                deleteServer(activeServerId);
-            }}
+            // Удаление необратимо и видно всем — спрашиваем своим диалогом,
+            // тем же, что и у каналов (window.confirm в нативной оболочке
+            // выдаёт себя системным окном браузера).
+            onClick={() => setConfirmServerDelete(true)}
             title="Удалить сервер"
             aria-label="Удалить сервер"
             className="ml-auto grid h-6 w-6 shrink-0 place-items-center rounded text-lg leading-none text-text-muted outline-none transition-colors hover:text-danger focus-visible:ring-2 focus-visible:ring-accent"
@@ -352,8 +406,7 @@ export function Sidebar() {
               <ChannelRow
                 active={view === 'text' && textRoom === c.slug}
                 onClick={() => openTextChannel(c.slug, c.name)}
-                onDelete={c.removable ? () => deleteChannel(c.id) : undefined}
-                deleteLabel="Удалить канал"
+                onMenu={channelMenu(c)}
               >
                 <TextChannelLabel
                   slug={c.slug}
@@ -387,8 +440,7 @@ export function Sidebar() {
                 connected={voiceRoom === c.slug}
                 onClick={() => void joinVoice(c.slug, c.name)}
                 onInvite={() => setInviteTarget({ slug: c.slug, label: c.name })}
-                onDelete={c.removable ? () => deleteChannel(c.id) : undefined}
-                deleteLabel="Удалить канал"
+                onMenu={channelMenu(c)}
                 // Режим правим только у созданных участниками каналов — у
                 // дефолтных он всегда p2p (см. handleChannelMode на бэке).
                 mode={c.removable ? (c.mode ?? 'p2p') : undefined}
@@ -519,6 +571,29 @@ export function Sidebar() {
         open={createOpen}
         initialType={createType}
         onOpenChange={setCreateOpen}
+      />
+      <RenameChannelDialog
+        target={renameTarget}
+        onOpenChange={(open) => {
+          if (!open) setRenameTarget(null);
+        }}
+      />
+      <DeleteChannelDialog
+        target={deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+      />
+      <ConfirmDialog
+        open={confirmServerDelete}
+        onOpenChange={setConfirmServerDelete}
+        title={<>Удалить сервер «{activeServer?.name}»?</>}
+        description="Сервер и все его каналы вместе с перепиской исчезнут у всех участников. Отменить это нельзя."
+        confirmLabel="Удалить сервер"
+        onConfirm={() => {
+          setConfirmServerDelete(false);
+          deleteServer(activeServerId);
+        }}
       />
       <InviteDialog
         target={inviteTarget}

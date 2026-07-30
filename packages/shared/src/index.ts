@@ -190,7 +190,12 @@ export interface Channel {
   name: string;
   /** Слаг комнаты: текст → chat-room, голос → voice-room. Уникален глобально. */
   slug: string;
-  /** Каналы по умолчанию удалять нельзя; созданные участниками — можно. */
+  /**
+   * Каналы по умолчанию неприкосновенны: их нельзя ни удалить, ни
+   * переименовать, ни перевести на другой транспорт. Созданные участниками —
+   * можно всё это. Набор главного сервера состоит только из первых, поэтому и
+   * создавать в нём новые каналы нельзя (см. `ChannelCreatePayload`).
+   */
   removable: boolean;
   /**
    * Транспорт голосового канала. Только для `type: 'voice'`; отсутствует = p2p.
@@ -216,11 +221,46 @@ export interface ChannelDeletePayload {
   id: string;
 }
 
+/**
+ * Итог удаления (ack). Отказ — не «ничего не произошло»: интерфейс обязан
+ * сказать, почему канал остался на месте.
+ * - `occupied` — в голосовом канале кто-то есть; `occupants` — сколько именно;
+ * - `forbidden` — канал по умолчанию (или сервер под паролем не разблокирован).
+ */
+export type ChannelDeleteResult =
+  | { ok: true }
+  | { ok: false; error: 'not-found' | 'forbidden' | 'occupied'; occupants?: number };
+
+/**
+ * Переименование канала. Меняется только отображаемое имя — `slug` остаётся
+ * прежним: по нему ключуются комната эфира, история чата и «непрочитано», так
+ * что смена имени не рвёт ни живой звонок, ни переписку.
+ */
+export interface ChannelRenamePayload {
+  id: string;
+  name: string;
+}
+
+export type ChannelRenameResult =
+  | { ok: true }
+  | { ok: false; error: 'not-found' | 'forbidden' | 'bad-name' };
+
 /** Смена транспорта голосового канала (только `removable`). */
 export interface ChannelModePayload {
   id: string;
   mode: VoiceMode;
 }
+
+export interface ChannelStatsPayload {
+  id: string;
+}
+
+/**
+ * Живой срез канала для подтверждения удаления: сколько человек в нём прямо
+ * сейчас и сколько сообщений хранит сервер. Спрашиваем в момент открытия
+ * диалога — рассылать это всем постоянно незачем.
+ */
+export type ChannelStatsResult = { ok: true; occupants: number; messages: number } | { ok: false };
 
 // ─────────────────────────────────────────────────────────────────────────
 // ICE / конфиг
@@ -438,7 +478,9 @@ export interface ClientToServerEvents {
   'server-delete': (payload: ServerDeletePayload) => void;
   'server-unlock': (payload: ServerUnlockPayload) => void;
   'channel-create': (payload: ChannelCreatePayload) => void;
-  'channel-delete': (payload: ChannelDeletePayload) => void;
+  'channel-delete': (payload: ChannelDeletePayload, cb: (res: ChannelDeleteResult) => void) => void;
+  'channel-rename': (payload: ChannelRenamePayload, cb: (res: ChannelRenameResult) => void) => void;
+  'channel-stats': (payload: ChannelStatsPayload, cb: (res: ChannelStatsResult) => void) => void;
   'channel-mode': (payload: ChannelModePayload) => void;
   'invite-create': (payload: InviteCreatePayload, cb: (res: InviteCreateResult) => void) => void;
   'sfu-token': (payload: SfuTokenPayload, cb: (res: SfuTokenResult) => void) => void;
