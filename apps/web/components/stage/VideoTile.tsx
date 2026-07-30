@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { motion } from 'framer-motion';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { Icon } from '@/components/ui/icon';
 import { cn } from '@/lib/utils';
 import { avatarGradient } from '@/lib/avatar';
-import { toggleFocus, setPeerVolume, setPeerScreenVolume } from '@/lib/voice';
+import { clearFocus, toggleFocus, setPeerVolume, setPeerScreenVolume } from '@/lib/voice';
 import { useAudioUnlockStore } from '@/stores/audio-unlock';
 import { useVoiceStore, type TileNet, type VoiceTile } from '@/stores/voice';
 
@@ -18,6 +18,15 @@ type FsDocument = Document & {
   webkitFullscreenElement?: Element | null;
   webkitExitFullscreen?: () => Promise<void> | void;
 };
+
+// Сколько держим «шторку» проводов из демонстрации, прежде чем сами вернуть
+// зрителя в сетку. Меньше секунды читается как рывок, больше двух — как зависший
+// экран; полторы секунды хватает прочитать строку и понять, что происходит.
+const OUTRO_MS = 1600;
+
+// Поля по краям кадра считаем заметными от 4% расхождения пропорций — ниже это
+// уже мера погрешности округления, а не «чёрные полосы».
+const LETTERBOX_TOLERANCE = 0.04;
 
 // Выше 200% ползунок физически «тормозит»: 200 единиц драга дают только 100%
 // прироста (вместо 1:1) — тот же путь мышкой требует вдвое больше усилия,
@@ -210,10 +219,64 @@ function SignalBars({ net }: { net: TileNet }) {
 }
 
 /**
+ * Заливка полей кадра. Показывая картинку целиком (object-contain), мы получаем
+ * чёрные поля везде, где пропорции кадра и плитки разошлись — на мониторе 21:9
+ * обычная демонстрация 16:9 висит в пустоте почти на треть ширины. Вместо пустоты
+ * кладём под кадр его же размытое продолжение: снимаем крошечное превью (160×90)
+ * пять раз в секунду и растягиваем на всю плитку. Стоит это как иконка — рисуем
+ * с того же <video>, лишнего декодирования нет.
+ */
+function AmbientWash({ videoRef }: { videoRef: React.RefObject<HTMLVideoElement | null> }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+
+    const draw = () => {
+      const video = videoRef.current;
+      // HAVE_CURRENT_DATA: раньше кадра нет и drawImage нарисует пустоту.
+      // Про свёрнутую вкладку не думаем: там таймеры и так придушены браузером,
+      // а лишняя проверка на document.hidden уже оставляла заливку пустой в
+      // окружениях, где вкладка «скрыта», но кадр всё равно видно.
+      if (!video || video.readyState < 2) return;
+      try {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      } catch {
+        /* кадр ещё не готов — возьмём следующий тик */
+      }
+    };
+
+    draw();
+    const id = window.setInterval(draw, 200);
+    return () => window.clearInterval(id);
+  }, [videoRef]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={160}
+      height={90}
+      aria-hidden
+      // scale-110 — чтобы размытие не показало собственный край канвы. washIn
+      // (globals.css) проявляет заливку; после анимации остаётся базовый opacity-50.
+      className="pointer-events-none absolute inset-0 h-full w-full scale-110 object-cover opacity-50 blur-[44px] motion-safe:animate-[washIn_400ms_ease-out]"
+    />
+  );
+}
+
+/**
  * Видеоплитка участника. Привязывает поток к <video srcObject>, сама следит
  * за треками (watchStream/updateTileMedia) — показывает видео или аватарку.
  * Кнопка-«развернуть» — настоящий Fullscreen API; клик по телу плитки —
  * театр-режим (фокус через стор).
+ *
+ * Крупный план и демонстрацию показываем кадром целиком, а поля по краям
+ * закрашиваем его же размытым продолжением (AmbientWash) — иначе на мониторе
+ * 21:9 картинка либо обрезается, либо висит в чёрной пустоте. Конец показа под
+ * крупным планом не выкидывает зрителя рывком: сначала шторка с объяснением,
+ * потом плитка сама уезжает обратно в сетку.
  */
 export function VideoTile({
   tile,
@@ -227,6 +290,13 @@ export function VideoTile({
   const videoRef = useRef<HTMLVideoElement>(null);
   const tileRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  // Кнопка громкости трансляции: она сама переключает поповер, поэтому «клик
+  // мимо» её не считает — иначе закрытие по mousedown и открытие по click гасят
+  // друг друга, и повторный щелчок не закрывает меню.
+  const volumeBtnRef = useRef<HTMLButtonElement>(null);
+  // Шёл ли на плитке показ экрана к прошлой отрисовке — чтобы отличить его конец
+  // от «камеры тут и не было».
+  const wasScreen = useRef(false);
   const micOn = useVoiceStore((s) => s.micOn);
   // Обводка «говорит сейчас»: булев селектор — плитка перерисуется только на
   // смене состояния, а не на каждый тик опроса уровня.
@@ -246,6 +316,29 @@ export function VideoTile({
   // Открытое меню громкости: 'voice' (ПКМ по плитке) | 'screen' (иконка снизу)
   const [menu, setMenu] = useState<'voice' | 'screen' | null>(null);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
+  // Идут проводы из демонстрации: показ кончился, пока мы смотрели его крупно.
+  const [outro, setOutro] = useState(false);
+  // Пропорции живого кадра и самой плитки — по расхождению видно чёрные поля.
+  const [videoAr, setVideoAr] = useState(0);
+  const [boxAr, setBoxAr] = useState(0);
+
+  // Своя плитка: videoOn — единственный источник истины (избегаем гонки с addtrack).
+  // Чужая плитка: videoOn === false от сигнала перекрывает hasVideo (замёрзший кадр).
+  const novideo = tile.isLocal ? tile.videoOn !== true : !hasVideo || tile.videoOn === false;
+  // Полный экран любой природы (нативный API или CSS-фолбэк) против «крупного
+  // плана» вообще — включая театр-режим внутри сцены.
+  const fullscreen = isFs || cssFs;
+  const immersive = focused || fullscreen;
+  // Кадр показываем целиком, а не по размеру плитки: крупный план — потому что
+  // ради него и разворачивали, демонстрацию — потому что обрезать чужой рабочий
+  // стол по краям нельзя (на 21:9 «обрезка» съедает верх и низ картинки).
+  const fitContain = immersive || tile.screen;
+  // Поля есть только при object-contain и только если пропорции разошлись.
+  const letterboxed =
+    fitContain &&
+    videoAr > 0 &&
+    boxAr > 0 &&
+    Math.abs(videoAr - boxAr) / boxAr > LETTERBOX_TOLERANCE;
 
   // Привязка потока + слежение за треками (watchStream/updateTileMedia)
   useEffect(() => {
@@ -295,6 +388,36 @@ export function VideoTile({
     };
   }, [tile.stream, tile.isLocal]);
 
+  // Пропорции живого кадра: сначала из метаданных, дальше — на каждой смене
+  // разрешения (у демонстрации оно скачет при смене окна и при адаптации к каналу).
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const read = () =>
+      setVideoAr(video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : 0);
+    read();
+    video.addEventListener('loadedmetadata', read);
+    video.addEventListener('resize', read);
+    return () => {
+      video.removeEventListener('loadedmetadata', read);
+      video.removeEventListener('resize', read);
+    };
+  }, [tile.stream]);
+
+  // Пропорции самой плитки — только пока кадр вписан целиком: в остальных
+  // режимах полей не бывает, и наблюдатель зря будет дёргать ре-рендер.
+  useEffect(() => {
+    const el = tileRef.current;
+    if (!fitContain || !el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      // Округляем: без этого каждый пиксель ресайза окна — новый ре-рендер.
+      if (width > 0 && height > 0) setBoxAr(Math.round((width / height) * 100) / 100);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [fitContain]);
+
   // Иконка кнопки полноэкранного режима отражает состояние. Слушаем и
   // webkit-префиксное событие — WebKit (Safari/WKWebView) шлёт его вместо
   // стандартного `fullscreenchange`.
@@ -322,11 +445,55 @@ export function VideoTile({
     return () => document.removeEventListener('keydown', onKey);
   }, [cssFs]);
 
+  /** Вернуть плитку в сетку из любого крупного плана: FS, CSS-фолбэк, театр. */
+  const leaveImmersive = useCallback(() => {
+    setCssFs(false);
+    const d = document as FsDocument;
+    const el = tileRef.current;
+    if (el && (d.fullscreenElement ?? d.webkitFullscreenElement) === el) {
+      void (d.exitFullscreen ?? d.webkitExitFullscreen)?.call(d);
+    }
+    // Фокус глобальный: гасим только свой, чужой крупный план не трогаем.
+    if (useVoiceStore.getState().focusedId === tile.id) clearFocus();
+  }, [tile.id]);
+
+  // Демонстрация кончилась, пока мы смотрели её крупно. Выкидывать зрителя в
+  // сетку тем же кадром — резко: только что был экран во всю ширину, и вдруг
+  // мелкая плитка с аватаркой. Поэтому сначала «шторка» с объяснением, а зум-аут
+  // уже осмысленный — его ждут. Ловим именно переход показа true → false: если
+  // плитку развернули уже после конца показа, провожать не из чего.
+  useEffect(() => {
+    if (tile.screen) {
+      wasScreen.current = true;
+      return;
+    }
+    if (!wasScreen.current) return;
+    wasScreen.current = false;
+    if (immersive) setOutro(true);
+  }, [tile.screen, immersive]);
+
+  useEffect(() => {
+    if (!outro) return;
+    const id = window.setTimeout(() => {
+      setOutro(false);
+      leaveImmersive();
+    }, OUTRO_MS);
+    return () => window.clearTimeout(id);
+  }, [outro, leaveImmersive]);
+
+  // Свернули руками (Escape, кнопка, клик по плитке) — шторке больше не за чем
+  // следить, снимаем её сразу, без остатка отсчёта.
+  useEffect(() => {
+    if (!immersive) setOutro(false);
+  }, [immersive]);
+
   // Меню громкости закрываем по клику мимо него и по Escape
   useEffect(() => {
     if (!menu) return;
     const onDown = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setMenu(null);
+      const target = e.target as Node;
+      if (menuRef.current?.contains(target) || volumeBtnRef.current?.contains(target)) return;
+      setMenu(null);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setMenu(null);
@@ -379,10 +546,6 @@ export function VideoTile({
     Promise.resolve(request.call(el)).catch(() => setCssFs(true));
   }
 
-  // Своя плитка: videoOn — единственный источник истины (избегаем гонки с addtrack).
-  // Чужая плитка: videoOn === false от сигнала перекрывает hasVideo (замёрзший кадр).
-  const novideo = tile.isLocal ? tile.videoOn !== true : !hasVideo || tile.videoOn === false;
-
   return (
     <motion.div
       ref={tileRef}
@@ -419,15 +582,17 @@ export function VideoTile({
         speaking && 'border-ok ring-2 ring-ok shadow-[0_0_16px_3px_rgba(70,193,127,0.45)]',
         focused && 'col-span-full row-span-full !aspect-auto h-full min-h-0 cursor-zoom-out',
         // CSS-полноэкран (фолбэк для WKWebView): плитка поверх всего окна.
-        cssFs &&
-          'fixed inset-0 z-[100] !m-0 h-screen w-screen !max-w-none rounded-none border-none bg-black !aspect-auto cursor-zoom-out',
+        cssFs && 'fixed inset-0 z-[100] !m-0 h-screen w-screen !max-w-none !aspect-auto',
+        // Во весь экран уезжает кадр, а не оформление: рамка, скругление и ободок
+        // «говорит сейчас», растянутые на монитор целиком, выглядят мусором.
+        fullscreen && 'cursor-zoom-out rounded-none border-none bg-black shadow-none ring-0',
       )}
     >
       {/* Подложка «без видео»: мягкое свечение + аватар в кольце с тихим «дыханием».
           Видна ТОЛЬКО когда нет живого видео — при видеосвязи её перекрывает
-          <video> (object-cover), при демонстрации экрана/театре — его чёрный фон
-          (object-contain), плюс мы гасим её opacity синхронно с novideo. Поэтому
-          ни видео, ни демонстрация не страдают. */}
+          <video> (object-cover), при демонстрации экрана/театре — кадр целиком и
+          заливка полей поверх неё, плюс мы гасим её opacity синхронно с novideo.
+          Поэтому ни видео, ни демонстрация не страдают. */}
       <div
         className={cn(
           'absolute inset-0 flex items-center justify-center overflow-hidden bg-[radial-gradient(125%_125%_at_50%_22%,#33363c_0%,#202227_46%,#121316_100%)] transition-opacity duration-300',
@@ -443,6 +608,10 @@ export function VideoTile({
         />
       </div>
 
+      {/* Поля кадра заливаем его же размытым продолжением — но только когда они
+          реально есть (кадр 16:9 на мониторе 21:9 и наоборот). */}
+      {letterboxed && !novideo && <AmbientWash videoRef={videoRef} />}
+
       <video
         ref={videoRef}
         autoPlay
@@ -453,21 +622,27 @@ export function VideoTile({
         className={cn(
           'relative z-[1] block h-full w-full object-cover',
           tile.isLocal && !tile.screen && '-scale-x-100', // зеркалим себя, но не демонстрацию
-          tile.isLocal && tile.screen && 'bg-black object-contain',
-          (focused || cssFs) && 'bg-black object-contain',
-          novideo && 'invisible',
+          // Кадр целиком: крупный план и любая демонстрация — своя и чужая.
+          // Прозрачный фон вместо чёрного — под полями лежит заливка.
+          fitContain && 'object-contain',
+          // Кадр уже погас, но плитка ещё крупная — под шторкой держим последний
+          // кадр и мягко отводим его назад, чтобы зум-аут читался как движение.
+          // Переход навешиваем вместе с самим отъездом: постоянный ломал бы
+          // мгновенное «раззеркаливание» своей плитки на старте демонстрации.
+          outro && 'scale-[0.98] opacity-70 transition-[transform,opacity] duration-500',
+          novideo && !outro && 'invisible',
         )}
       />
 
       {/* Кнопка «во весь экран» (видна при наведении) */}
       <button
         type="button"
-        title={isFs || cssFs ? 'Свернуть' : 'Во весь экран'}
-        aria-label={isFs || cssFs ? 'Свернуть из полного экрана' : 'Во весь экран'}
+        title={fullscreen ? 'Свернуть' : 'Во весь экран'}
+        aria-label={fullscreen ? 'Свернуть из полного экрана' : 'Во весь экран'}
         onClick={onExpand}
         className="absolute left-2.5 top-2.5 z-[4] grid h-[30px] w-[30px] place-items-center rounded-md bg-black/55 text-white opacity-0 transition group-hover:opacity-90 hover:!opacity-100 hover:!bg-black/85 active:scale-[0.88]"
       >
-        <Icon name={isFs || cssFs ? 'minimize-2' : 'maximize-2'} className="text-lg" />
+        <Icon name={fullscreen ? 'minimize-2' : 'maximize-2'} className="text-lg" />
       </button>
 
       {/* Статус соединения — либо тег разрешения в углу при видео. Тег «аудио»
@@ -507,6 +682,7 @@ export function VideoTile({
       {!tile.isLocal && tile.hasScreenAudio && (
         <button
           type="button"
+          ref={volumeBtnRef}
           title="Громкость трансляции"
           aria-label="Громкость звука демонстрации"
           onClick={(e) => {
@@ -552,6 +728,59 @@ export function VideoTile({
           )}
         </div>
       )}
+
+      {/* Проводы из демонстрации: показ кончился, а мы всё ещё во весь экран.
+          Шторка накрывает погасший кадр (и заодно размывает подписи под собой),
+          объясняет, что произошло, и полоской показывает, сколько осталось до
+          возврата в сетку. Клик — вернуться сразу, не досматривая отсчёт. */}
+      <AnimatePresence>
+        {outro && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.28, ease: 'easeOut' }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setOutro(false);
+              leaveImmersive();
+            }}
+            role="status"
+            aria-live="polite"
+            className="absolute inset-0 z-[7] flex cursor-zoom-out flex-col items-center justify-center gap-3 bg-black/45 backdrop-blur-[10px]"
+          >
+            <motion.span
+              initial={{ scale: 0.85, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ type: 'spring', stiffness: 340, damping: 24 }}
+              className="grid h-12 w-12 place-items-center rounded-full bg-white/10 ring-1 ring-inset ring-white/15"
+            >
+              <Icon name="screen-share-off" className="text-[22px] text-text-header" />
+            </motion.span>
+
+            <div className="px-4 text-center">
+              <p className="text-[15px] font-bold text-text-header">Демонстрация завершена</p>
+              <p className="mt-0.5 text-[12px] text-text-muted">
+                {tile.isLocal
+                  ? 'Возвращаемся к сетке'
+                  : `Показ от ${tile.name} остановлен — возвращаемся к сетке`}
+              </p>
+            </div>
+
+            {/* Полоска отсчёта: истекает ровно за OUTRO_MS — видно, что возврат
+                произойдёт сам, и ждать нечего. */}
+            <span className="h-[3px] w-24 overflow-hidden rounded-full bg-white/15">
+              <motion.span
+                initial={{ scaleX: 1 }}
+                animate={{ scaleX: 0 }}
+                transition={{ duration: OUTRO_MS / 1000, ease: 'linear' }}
+                style={{ originX: 0 }}
+                className="block h-full w-full rounded-full bg-accent"
+              />
+            </span>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }

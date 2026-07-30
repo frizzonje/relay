@@ -1781,6 +1781,10 @@ export function initVoice() {
 
   s.on('media-update', ({ from, camOn: peerCam, screenOn: peerScreen }) => {
     setTileVideoOn(from, peerCam || peerScreen);
+    // Экран в видеослоте собеседника — не косметика: плитка показывает такой
+    // кадр целиком (а не обрезает по краям), а погасший флаг — сигнал «показ
+    // окончен», по которому крупный план сам возвращается в сетку.
+    setTileScreen(from, peerScreen);
   });
 
   // Собеседник сменил тег — обновляем подпись его плитки и имя пира.
