@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { getSocket } from '@/lib/socket';
 import { MAIN_SERVER_ID } from '@/lib/constants';
 import { useServersStore } from '@/stores/servers';
+import { tx } from '@/lib/i18n';
 
 /**
  * Действия над реестром каналов. Сервер — единственный источник правды: мы лишь
@@ -31,7 +32,7 @@ export function createChannel(type: ChannelType, name: string, mode?: VoiceMode)
   // Набор главного сервера фиксирован (сервер откажет молча) — интерфейс сюда
   // и не ведёт, но если дорога всё же нашлась, объясняем, а не глотаем.
   if (serverId === MAIN_SERVER_ID) {
-    toast('В главном сервере набор каналов фиксирован — создайте свой сервер.');
+    toast(tx('channels.mainFixed'));
     return;
   }
   getSocket().emit('channel-create', { serverId, type, name: trimmed, ...(mode ? { mode } : {}) });
@@ -41,22 +42,12 @@ export function createChannel(type: ChannelType, name: string, mode?: VoiceMode)
 function refusalText(error: string, occupants?: number): string {
   if (error === 'occupied') {
     return occupants
-      ? `В канале сейчас ${occupants} ${plural(occupants, 'человек', 'человека', 'человек')} — сначала пусть выйдут.`
-      : 'В канале сейчас люди — сначала пусть выйдут.';
+      ? tx('channels.refusal.occupiedCount', { count: occupants })
+      : tx('channels.refusal.occupied');
   }
-  if (error === 'forbidden') return 'Этот канал трогать нельзя.';
-  if (error === 'bad-name') return 'Пустое имя каналу не подходит.';
-  return 'Канала больше нет — список уже обновился.';
-}
-
-/** Склонение по числу: 1 человек, 2 человека, 5 человек. */
-export function plural(n: number, one: string, few: string, many: string): string {
-  const mod100 = n % 100;
-  if (mod100 >= 11 && mod100 <= 14) return many;
-  const mod10 = n % 10;
-  if (mod10 === 1) return one;
-  if (mod10 >= 2 && mod10 <= 4) return few;
-  return many;
+  if (error === 'forbidden') return tx('channels.refusal.forbidden');
+  if (error === 'bad-name') return tx('channels.refusal.badName');
+  return tx('channels.refusal.gone');
 }
 
 /**

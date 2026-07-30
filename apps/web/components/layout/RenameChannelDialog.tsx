@@ -13,6 +13,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
 import { renameChannel } from '@/lib/channels';
+import { useT } from '@/lib/i18n';
 
 export interface RenameChannelTarget {
   id: string;
@@ -33,6 +34,7 @@ export function RenameChannelDialog({
   target: RenameChannelTarget | null;
   onOpenChange: (open: boolean) => void;
 }) {
+  const t = useT();
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -68,11 +70,8 @@ export function RenameChannelDialog({
     <Dialog open={target !== null} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[420px]">
         <DialogHeader>
-          <DialogTitle>Переименовать канал</DialogTitle>
-          <DialogDescription>
-            Новое имя увидят все участники. Адрес канала не меняется — переписка и приглашения
-            останутся на месте.
-          </DialogDescription>
+          <DialogTitle>{t('renameChannel.title')}</DialogTitle>
+          <DialogDescription>{t('renameChannel.description')}</DialogDescription>
         </DialogHeader>
 
         <form onSubmit={submit} className="flex flex-col gap-4">
@@ -81,7 +80,7 @@ export function RenameChannelDialog({
               htmlFor="channel-rename"
               className="mb-1.5 block text-[11px] font-bold uppercase tracking-[0.3px] text-text-muted"
             >
-              Название
+              {t('common.name')}
             </label>
             <div className="flex items-center gap-2 rounded-lg border border-black/40 bg-bg-deep/70 px-3 focus-within:border-accent focus-within:ring-1 focus-within:ring-accent/60">
               {isText ? (
@@ -110,10 +109,10 @@ export function RenameChannelDialog({
               onClick={() => onOpenChange(false)}
               disabled={busy}
             >
-              Отмена
+              {t('common.cancel')}
             </Button>
             <Button type="submit" variant="primary" disabled={!trimmed || busy}>
-              Сохранить
+              {t('common.save')}
             </Button>
           </DialogFooter>
         </form>

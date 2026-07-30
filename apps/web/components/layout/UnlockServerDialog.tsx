@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { serverGradient, serverInitials } from '@/lib/server-visual';
 import { unlockServer } from '@/lib/servers';
 import { useServersStore } from '@/stores/servers';
+import { useT } from '@/lib/i18n';
 
 /**
  * Модалка ввода пароля закрытого сервера. Открывается кликом по серверу с замком
@@ -21,6 +22,7 @@ import { useServersStore } from '@/stores/servers';
  * `unlockError` сюда. Управляется через servers-стор (`unlockTargetId`).
  */
 export function UnlockServerDialog() {
+  const t = useT();
   const servers = useServersStore((s) => s.servers);
   const targetId = useServersStore((s) => s.unlockTargetId);
   const error = useServersStore((s) => s.unlockError);
@@ -55,8 +57,10 @@ export function UnlockServerDialog() {
               {target?.emoji ?? serverInitials(target?.name ?? '')}
             </div>
             <div className="min-w-0">
-              <DialogTitle className="truncate">🔒 {target?.name ?? 'Сервер'}</DialogTitle>
-              <DialogDescription>Закрытый сервер. Введите пароль для входа.</DialogDescription>
+              <DialogTitle className="truncate">
+                🔒 {target?.name ?? t('sidebar.server.fallback')}
+              </DialogTitle>
+              <DialogDescription>{t('unlockServer.description')}</DialogDescription>
             </div>
           </div>
         </DialogHeader>
@@ -71,22 +75,22 @@ export function UnlockServerDialog() {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Пароль сервера"
+                placeholder={t('unlockServer.password.placeholder')}
                 maxLength={64}
                 autoFocus
                 autoComplete="off"
                 className="min-w-0 flex-1 border-0 bg-transparent py-2.5 text-[15px] text-text outline-none placeholder:text-text-muted/60"
               />
             </div>
-            {error && <p className="mt-1.5 text-[13px] font-semibold text-danger">{error}</p>}
+            {error && <p className="mt-1.5 text-[13px] font-semibold text-danger">{t(error)}</p>}
           </div>
 
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={closeUnlock}>
-              Отмена
+              {t('common.cancel')}
             </Button>
             <Button type="submit" variant="primary" disabled={!password.trim()}>
-              Войти
+              {t('unlockServer.submit')}
             </Button>
           </DialogFooter>
         </form>

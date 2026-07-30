@@ -16,6 +16,7 @@ import { createServer, rememberServerPassword } from '@/lib/servers';
 import { serverGradient, serverInitials } from '@/lib/server-visual';
 import { useServersStore } from '@/stores/servers';
 import { useUiStore } from '@/stores/ui';
+import { useT } from '@/lib/i18n';
 
 // Быстрый выбор эмодзи-иконки. Пусто → рисуем инициалы.
 // Рендерятся обесцвеченными (grayscale) — фирменный цвет даёт градиент-фон,
@@ -39,6 +40,7 @@ export function CreateServerDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const t = useT();
   const [name, setName] = useState('');
   const [emoji, setEmoji] = useState<string | undefined>(undefined);
   const [password, setPassword] = useState('');
@@ -76,16 +78,14 @@ export function CreateServerDialog({
     setTimeout(() => openCreateChannel('text'), 160);
   }
 
-  const initials = serverInitials(name || 'Новый сервер');
+  const initials = serverInitials(name || t('createServer.name.fallback'));
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[440px]">
         <DialogHeader>
-          <DialogTitle>Создать сервер</DialogTitle>
-          <DialogDescription>
-            Своя иконка в рейке, свои каналы. Появится у всех участников.
-          </DialogDescription>
+          <DialogTitle>{t('createServer.title')}</DialogTitle>
+          <DialogDescription>{t('createServer.description')}</DialogDescription>
         </DialogHeader>
 
         <form onSubmit={submit} className="flex flex-col gap-4">
@@ -103,13 +103,13 @@ export function CreateServerDialog({
                 htmlFor="server-name"
                 className="mb-1.5 block text-[11px] font-bold uppercase tracking-[0.3px] text-text-muted"
               >
-                Название сервера
+                {t('createServer.name')}
               </label>
               <input
                 id="server-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Мой сервер"
+                placeholder={t('createServer.name.placeholder')}
                 maxLength={32}
                 autoFocus
                 className="w-full rounded-lg border border-black/40 bg-bg-deep/70 px-3 py-2.5 text-[15px] text-text outline-none placeholder:text-text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent/60"
@@ -120,7 +120,7 @@ export function CreateServerDialog({
           {/* Эмодзи-иконка (необязательно) */}
           <div>
             <div className="mb-1.5 text-[11px] font-bold uppercase tracking-[0.3px] text-text-muted">
-              Иконка (необязательно)
+              {t('createServer.icon')}
             </div>
             <div className="flex flex-wrap gap-1.5">
               {EMOJI.map((e) => {
@@ -152,7 +152,7 @@ export function CreateServerDialog({
               htmlFor="server-password"
               className="mb-1.5 block text-[11px] font-bold uppercase tracking-[0.3px] text-text-muted"
             >
-              Пароль (необязательно)
+              {t('createServer.password')}
             </label>
             <div className="flex items-center gap-2 rounded-lg border border-black/40 bg-bg-deep/70 px-3 focus-within:border-accent focus-within:ring-1 focus-within:ring-accent/60">
               <span aria-hidden className="text-[15px] leading-none text-text-muted">
@@ -163,24 +163,23 @@ export function CreateServerDialog({
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="без пароля — открытый сервер"
+                placeholder={t('createServer.password.placeholder')}
                 maxLength={64}
                 autoComplete="new-password"
                 className="min-w-0 flex-1 border-0 bg-transparent py-2.5 text-[15px] text-text outline-none placeholder:text-text-muted/60"
               />
             </div>
             <p className="mt-1 text-[11px] leading-tight text-text-muted">
-              Задашь пароль — сервер будет виден всем в рейке с замком, но зайти и увидеть
-              каналы можно только по паролю.
+              {t('createServer.password.hint')}
             </p>
           </div>
 
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
-              Отмена
+              {t('common.cancel')}
             </Button>
             <Button type="submit" variant="primary" disabled={!name.trim()}>
-              <Icon name="plus" /> Создать сервер
+              <Icon name="plus" /> {t('createServer.submit')}
             </Button>
           </DialogFooter>
         </form>

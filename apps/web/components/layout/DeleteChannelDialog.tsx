@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChannelType } from '@relay/shared';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { channelStats, deleteChannel, plural } from '@/lib/channels';
+import { channelStats, deleteChannel } from '@/lib/channels';
+import { useT } from '@/lib/i18n';
 
 export interface DeleteChannelTarget {
   id: string;
@@ -29,6 +30,7 @@ export function DeleteChannelDialog({
   target: DeleteChannelTarget | null;
   onOpenChange: (open: boolean) => void;
 }) {
+  const t = useT();
   const [stats, setStats] = useState<Stats | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -69,13 +71,9 @@ export function DeleteChannelDialog({
     <ConfirmDialog
       open={target !== null}
       onOpenChange={onOpenChange}
-      title={<>Удалить канал «{shown?.name}»?</>}
-      description={
-        isVoice
-          ? 'Канал исчезнет у всех участников сервера. Отменить это нельзя.'
-          : 'Канал и вся его переписка исчезнут у всех участников. Отменить это нельзя.'
-      }
-      confirmLabel={blocked ? 'Канал занят' : 'Удалить канал'}
+      title={t('deleteChannel.title', { name: shown?.name ?? '' })}
+      description={t(isVoice ? 'deleteChannel.voice.body' : 'deleteChannel.text.body')}
+      confirmLabel={t(blocked ? 'deleteChannel.busy' : 'deleteChannel.submit')}
       busy={busy}
       confirmDisabled={blocked || !stats}
       onConfirm={() => void confirm()}
@@ -94,12 +92,13 @@ function Details({
   stats: Stats | null;
   blocked: boolean;
 }) {
+  const t = useT();
   if (!target) return null;
 
   if (!stats) {
     return (
       <p className="rounded-lg border border-line bg-bg-deep/60 px-3 py-2.5 text-[13px] text-text-muted">
-        Смотрим, кто сейчас в канале…
+        {t('deleteChannel.counting')}
       </p>
     );
   }
@@ -107,8 +106,7 @@ function Details({
   if (blocked) {
     return (
       <p className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2.5 text-[13px] leading-snug text-danger">
-        В эфире {stats.occupants} {plural(stats.occupants, 'человек', 'человека', 'человек')} —
-        канал не удалить, пока разговор идёт. Дождитесь, когда все выйдут.
+        {t('deleteChannel.occupied', { count: stats.occupants })}
       </p>
     );
   }
@@ -116,14 +114,10 @@ function Details({
   const lines: string[] = [];
   if (target.type === 'text') {
     if (stats.occupants > 0) {
-      lines.push(
-        `Канал сейчас открыт у ${stats.occupants} ${plural(stats.occupants, 'человека', 'человек', 'человек')} — лента закроется прямо на глазах.`,
-      );
+      lines.push(t('deleteChannel.openFor', { count: stats.occupants }));
     }
     if (stats.messages > 0) {
-      lines.push(
-        `Пропадёт история: ${stats.messages} ${plural(stats.messages, 'сообщение', 'сообщения', 'сообщений')}.`,
-      );
+      lines.push(t('deleteChannel.history', { count: stats.messages }));
     }
   }
   if (!lines.length) return null;

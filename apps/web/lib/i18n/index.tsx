@@ -1,6 +1,13 @@
 'use client';
 
-import { createContext, useCallback, useContext, useMemo, type ReactNode } from 'react';
+import {
+  createContext,
+  Fragment,
+  useCallback,
+  useContext,
+  useMemo,
+  type ReactNode,
+} from 'react';
 import {
   DEFAULT_LOCALE,
   LOCALE_COOKIE,
@@ -37,6 +44,35 @@ export function useLocale(): Locale {
 export function useT(): Translate {
   const locale = useLocale();
   return useCallback((key: MessageKey, vars?: Vars) => translate(locale, key, vars), [locale]);
+}
+
+/**
+ * `t` for messages that carry a React node inside them — an animated counter, a
+ * badge, a link. The node fills a `{slot}` placeholder, so the translation keeps
+ * one sentence with the element wherever that language wants it, instead of
+ * being chopped into "before" and "after" halves that fix the word order.
+ */
+export function useRichT(): (
+  key: MessageKey,
+  slots: Record<string, ReactNode>,
+  vars?: Vars,
+) => ReactNode {
+  const locale = useLocale();
+  return useCallback(
+    (key: MessageKey, slots: Record<string, ReactNode>, vars?: Vars) => {
+      const text = translate(locale, key, vars);
+      // Split keeps the delimiters, so odd indices are the placeholder names.
+      const parts = text.split(/\{(\w+)\}/g);
+      return parts.map((part, i) =>
+        i % 2 === 1 ? (
+          <Fragment key={i}>{slots[part] ?? `{${part}}`}</Fragment>
+        ) : (
+          <Fragment key={i}>{part}</Fragment>
+        ),
+      );
+    },
+    [locale],
+  );
 }
 
 /**

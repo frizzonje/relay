@@ -15,15 +15,17 @@ import { Icon } from '@/components/ui/icon';
 import { cn } from '@/lib/utils';
 import { createChannel } from '@/lib/channels';
 import { useSfuAvailable } from '@/lib/use-sfu';
+import { useT } from '@/lib/i18n';
+import type { MessageKey } from '@/lib/i18n';
 
-const TYPES: { value: ChannelType; label: string; hint: string }[] = [
-  { value: 'text', label: 'Текстовый', hint: 'Лента сообщений и файлов' },
-  { value: 'voice', label: 'Голосовой', hint: 'Живой эфир: голос, видео, экран' },
+const TYPES: { value: ChannelType; label: MessageKey; hint: MessageKey }[] = [
+  { value: 'text', label: 'createChannel.type.text', hint: 'createChannel.type.text.hint' },
+  { value: 'voice', label: 'createChannel.type.voice', hint: 'createChannel.type.voice.hint' },
 ];
 
-const MODES: { value: VoiceMode; label: string; hint: string }[] = [
-  { value: 'p2p', label: 'Напрямую', hint: 'Меньше задержка. До 3 человек с видео' },
-  { value: 'sfu', label: 'Через сервер', hint: 'Держит 7 человек с видео' },
+const MODES: { value: VoiceMode; label: MessageKey; hint: MessageKey }[] = [
+  { value: 'p2p', label: 'createChannel.transport.p2p', hint: 'createChannel.transport.p2p.hint' },
+  { value: 'sfu', label: 'createChannel.transport.sfu', hint: 'createChannel.transport.sfu.hint' },
 ];
 
 /**
@@ -40,6 +42,7 @@ export function CreateChannelDialog({
   initialType: ChannelType;
   onOpenChange: (open: boolean) => void;
 }) {
+  const t = useT();
   const [type, setType] = useState<ChannelType>(initialType);
   const [name, setName] = useState('');
   const [mode, setMode] = useState<VoiceMode>('p2p');
@@ -69,24 +72,24 @@ export function CreateChannelDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[440px]">
         <DialogHeader>
-          <DialogTitle>Создать канал</DialogTitle>
-          <DialogDescription>Появится у всех участников сервера.</DialogDescription>
+          <DialogTitle>{t('createChannel.title')}</DialogTitle>
+          <DialogDescription>{t('createChannel.description')}</DialogDescription>
         </DialogHeader>
 
         <form onSubmit={submit} className="flex flex-col gap-4">
           {/* Тип канала — сегмент-переключатель */}
           <div>
             <div className="mb-1.5 text-[11px] font-bold uppercase tracking-[0.3px] text-text-muted">
-              Тип канала
+              {t('createChannel.type')}
             </div>
             <div className="grid grid-cols-2 gap-2">
-              {TYPES.map((t) => {
-                const selected = type === t.value;
+              {TYPES.map((item) => {
+                const selected = type === item.value;
                 return (
                   <button
-                    key={t.value}
+                    key={item.value}
                     type="button"
-                    onClick={() => setType(t.value)}
+                    onClick={() => setType(item.value)}
                     aria-pressed={selected}
                     className={cn(
                       'flex flex-col items-start gap-1 rounded-lg border p-3 text-left outline-none transition-colors',
@@ -97,16 +100,16 @@ export function CreateChannelDialog({
                     )}
                   >
                     <span className="flex items-center gap-2 text-[15px] font-semibold">
-                      {t.value === 'text' ? (
+                      {item.value === 'text' ? (
                         <span className="grid h-[18px] w-[18px] place-items-center text-lg leading-none text-current">
                           #
                         </span>
                       ) : (
                         <Icon name="volume-2" className="text-[18px]" />
                       )}
-                      {t.label}
+                      {item.label}
                     </span>
-                    <span className="text-[11px] leading-tight opacity-80">{t.hint}</span>
+                    <span className="text-[11px] leading-tight opacity-80">{item.hint}</span>
                   </button>
                 );
               })}
@@ -118,7 +121,7 @@ export function CreateChannelDialog({
           {!isText && (
             <div>
               <div className="mb-1.5 text-[11px] font-bold uppercase tracking-[0.3px] text-text-muted">
-                Связь
+                {t('createChannel.transport')}
               </div>
               <div className="grid grid-cols-2 gap-2">
                 {MODES.map((m) => {
@@ -131,7 +134,7 @@ export function CreateChannelDialog({
                       onClick={() => setMode(m.value)}
                       disabled={disabled}
                       aria-pressed={selected}
-                      title={disabled ? 'Медиасервер не запущен на этом сервере' : undefined}
+                      title={disabled ? t('createChannel.sfu.offTitle') : undefined}
                       className={cn(
                         'flex flex-col items-start gap-1 rounded-lg border p-3 text-left outline-none transition-colors',
                         'focus-visible:ring-2 focus-visible:ring-accent/70',
@@ -142,9 +145,9 @@ export function CreateChannelDialog({
                             : 'border-line bg-bg-rail/40 text-text-muted hover:bg-bg-hover hover:text-text',
                       )}
                     >
-                      <span className="text-[15px] font-semibold">{m.label}</span>
+                      <span className="text-[15px] font-semibold">{t(m.label)}</span>
                       <span className="text-[11px] leading-tight opacity-80">
-                        {disabled ? 'Медиасервер не запущен' : m.hint}
+                        {t(disabled ? 'createChannel.sfu.off' : m.hint)}
                       </span>
                     </button>
                   );
@@ -159,7 +162,7 @@ export function CreateChannelDialog({
               htmlFor="channel-name"
               className="mb-1.5 block text-[11px] font-bold uppercase tracking-[0.3px] text-text-muted"
             >
-              Название
+              {t('common.name')}
             </label>
             <div className="flex items-center gap-2 rounded-lg border border-black/40 bg-bg-deep/70 px-3 focus-within:border-accent focus-within:ring-1 focus-within:ring-accent/60">
               {isText ? (
@@ -172,7 +175,7 @@ export function CreateChannelDialog({
                 ref={inputRef}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder={isText ? 'новый-канал' : 'переговорка'}
+                placeholder={t(isText ? 'createChannel.name.text' : 'createChannel.name.voice')}
                 maxLength={32}
                 autoFocus
                 className="min-w-0 flex-1 border-0 bg-transparent py-2.5 text-[15px] text-text outline-none placeholder:text-text-muted/60"
@@ -182,10 +185,10 @@ export function CreateChannelDialog({
 
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
-              Отмена
+              {t('common.cancel')}
             </Button>
             <Button type="submit" variant="primary" disabled={!name.trim()}>
-              <Icon name="plus" /> Создать канал
+              <Icon name="plus" /> {t('createChannel.submit')}
             </Button>
           </DialogFooter>
         </form>

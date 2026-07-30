@@ -7,6 +7,7 @@ import { AnimatedCount } from '@/components/ui/AnimatedCount';
 import { useUiStore } from '@/stores/ui';
 import { useChatStore } from '@/stores/chat';
 import { avatarStyle } from '@/lib/avatar';
+import { useRichT, useT } from '@/lib/i18n';
 
 /**
  * Правая колонка текстового канала (раздел 05 референса, 232px): «В сети» —
@@ -14,17 +15,19 @@ import { avatarStyle } from '@/lib/avatar';
  * сервера событием `chat-roster` и лежит в chat-сторе. Видна только в тексте.
  */
 export function OnlineMembers() {
+  const t = useT();
+  const rt = useRichT();
   const view = useUiStore((s) => s.view);
   const callsign = useUiStore((s) => s.callsign);
   const roster = useChatStore((s) => s.roster);
   if (view !== 'text') return null;
 
-  const me = callsign.trim() || 'Аноним';
+  const me = callsign.trim() || t('common.anonymous');
 
   return (
     <aside className="panel panel-sidebar flex w-[232px] shrink-0 flex-col overflow-hidden border-l border-line max-md:grow max-md:border-l-0">
       <h3 className="flex h-[52px] shrink-0 items-center gap-1 border-b border-line px-4 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-text-faint shadow-[0_1px_2px_rgba(0,0,0,0.2)]">
-        В сети — <AnimatedCount value={roster.length} />
+        {rt('members.online', { count: <AnimatedCount value={roster.length} /> })}
       </h3>
       <div className="flex-1 overflow-y-auto px-2 py-3">
         <AnimatePresence initial={false}>
@@ -49,7 +52,7 @@ export function OnlineMembers() {
                   name === me ? 'font-semibold text-text-header' : 'text-text',
                 )}
               >
-                {name === me ? `${name} (вы)` : name}
+                {name === me ? t('common.you', { name }) : name}
               </div>
             </motion.div>
           ))}

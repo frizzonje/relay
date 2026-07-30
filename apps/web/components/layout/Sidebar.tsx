@@ -11,7 +11,8 @@ import { useUiStore } from '@/stores/ui';
 import { useChannelsStore } from '@/stores/channels';
 import { useServersStore } from '@/stores/servers';
 import { useUnreadStore, isChannelUnread } from '@/stores/unread';
-import { DEFAULT_STATUS, MAIN_SERVER_ID } from '@/lib/constants';
+import { MAIN_SERVER_ID } from '@/lib/constants';
+import { useRichT, useT } from '@/lib/i18n';
 import { avatarStyle } from '@/lib/avatar';
 import { serverGradient, serverInitials } from '@/lib/server-visual';
 import { sanitizeTag, saveTag } from '@/lib/identity';
@@ -133,6 +134,7 @@ function ChannelRow({
   sfuAvailable?: boolean;
   children: ReactNode;
 }) {
+  const t = useT();
   // Переключить на «через сервер» нельзя, пока медиасервер не поднят. Обратно
   // (на p2p) — можно всегда: p2p работает без всякой инфраструктуры.
   const modeLocked = mode === 'p2p' && !sfuAvailable;
@@ -175,13 +177,13 @@ function ChannelRow({
                 if (!modeLocked) onToggleMode();
               }}
               disabled={modeLocked}
-              title={
+              title={t(
                 modeLocked
-                  ? 'Медиасервер не запущен — доступна только прямая связь'
+                  ? 'channel.mode.locked'
                   : mode === 'sfu'
-                    ? 'Через медиасервер. Нажмите, чтобы звонить напрямую'
-                    : 'Напрямую между участниками. Нажмите, чтобы пустить через медиасервер'
-              }
+                    ? 'channel.mode.sfu'
+                    : 'channel.mode.p2p',
+              )}
               className={cn(
                 'shrink-0 rounded px-1 text-[9px] font-bold uppercase leading-[15px] tracking-[0.3px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent',
                 modeLocked && 'cursor-not-allowed opacity-40',
@@ -201,8 +203,8 @@ function ChannelRow({
                 e.stopPropagation();
                 onInvite();
               }}
-              title="Пригласить по ссылке"
-              aria-label="Пригласить по ссылке"
+              title={t('channel.invite')}
+              aria-label={t('channel.invite')}
               className="grid h-5 w-5 shrink-0 place-items-center rounded text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-text-header focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100 max-md:opacity-100"
             >
               <LinkIcon size={13} />
@@ -214,8 +216,8 @@ function ChannelRow({
                 e.stopPropagation();
                 onMenu(e);
               }}
-              title="Действия с каналом"
-              aria-label="Действия с каналом"
+              title={t('channel.actions')}
+              aria-label={t('channel.actions')}
               aria-haspopup="menu"
               className="grid h-5 w-5 shrink-0 place-items-center rounded text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-text-header focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100 max-md:opacity-100"
             >
@@ -235,6 +237,8 @@ function ChannelRow({
  * модалку создания. Ниже — панель «голос подключён» и панель пользователя с @-тегом.
  */
 export function Sidebar() {
+  const t = useT();
+  const rt = useRichT();
   const view = useUiStore((s) => s.view);
   const textRoom = useUiStore((s) => s.textRoom);
   const voiceRoom = useUiStore((s) => s.voiceRoom);
@@ -322,7 +326,7 @@ export function Sidebar() {
     const clean = sanitizeTag(callsign);
     setCallsign(clean);
     saveTag(clean);
-    renameSelf(clean || 'Аноним');
+    renameSelf(clean || t('common.anonymous'));
   }
 
   return (
@@ -346,7 +350,7 @@ export function Sidebar() {
           </span>
         )}
         <span className="truncate font-bold text-text-header">
-          {isMain ? 'relay' : (activeServer?.name ?? 'Сервер')}
+          {isMain ? 'relay' : (activeServer?.name ?? t('sidebar.server.fallback'))}
         </span>
         {!isMain && activeServer?.removable && (
           <button
@@ -354,8 +358,8 @@ export function Sidebar() {
             // тем же, что и у каналов (window.confirm в нативной оболочке
             // выдаёт себя системным окном браузера).
             onClick={() => setConfirmServerDelete(true)}
-            title="Удалить сервер"
-            aria-label="Удалить сервер"
+            title={t('sidebar.server.delete')}
+            aria-label={t('sidebar.server.delete')}
             className="ml-auto grid h-6 w-6 shrink-0 place-items-center rounded text-lg leading-none text-text-muted outline-none transition-colors hover:text-danger focus-visible:ring-2 focus-visible:ring-accent"
           >
             ×
@@ -372,25 +376,27 @@ export function Sidebar() {
           className="mb-1 flex w-full items-center gap-1.5 rounded-[10px] border border-line bg-bg-elev px-3 py-2 text-[14px] font-medium text-text-muted outline-none transition-colors hover:text-text-header md:hidden"
         >
           <Icon name="plus" className="text-[16px]" />
-          Войти по коду
+          {t('sidebar.joinByCode')}
         </button>
 
         {/* Свежий сервер без каналов — подсказываем создать первый */}
         {!isMain && serverChannels.length === 0 && (
           <div className="mx-1 mt-2 rounded-lg border border-dashed border-line px-3 py-4 text-center text-[13px] leading-snug text-text-muted">
-            Пока пусто. Создай первый канал кнопкой{' '}
-            <span className="inline-grid h-4 w-4 -translate-y-px place-items-center rounded bg-ok/15 align-middle text-ok">
-              +
-            </span>{' '}
-            у секции.
+            {rt('sidebar.empty', {
+              plus: (
+                <span className="inline-grid h-4 w-4 -translate-y-px place-items-center rounded bg-ok/15 align-middle text-ok">
+                  +
+                </span>
+              ),
+            })}
           </div>
         )}
 
         <Category
           onAdd={isMain ? undefined : () => openCreate('text')}
-          addLabel="Создать текстовый канал"
+          addLabel={t('sidebar.channel.createText')}
         >
-          — Текстовые
+          {t('sidebar.section.text')}
         </Category>
         <AnimatePresence key={`text-${activeServerId}`} initial={false}>
           {textChannels.map((c) => (
@@ -420,9 +426,9 @@ export function Sidebar() {
 
         <Category
           onAdd={isMain ? undefined : () => openCreate('voice')}
-          addLabel="Создать голосовой канал"
+          addLabel={t('sidebar.channel.createVoice')}
         >
-          — Голосовые
+          {t('sidebar.section.voice')}
         </Category>
         <AnimatePresence key={`voice-${activeServerId}`} initial={false}>
           {voiceChannels.map((c) => (
@@ -481,18 +487,18 @@ export function Sidebar() {
           <div
             onClick={showVoiceStage}
             className="min-w-0 flex-1 cursor-pointer rounded px-1 py-0.5 hover:bg-bg-hover"
-            title="Вернуться к видео"
+            title={t('voice.panel.backToVideo')}
           >
             <div className="flex items-center gap-1.5 text-sm font-bold text-ok">
               <span className="h-2 w-2 animate-pulse-dot rounded-full bg-ok shadow-[0_0_6px_var(--color-ok)]" />
-              Голос подключён
+              {t('voice.panel.connected')}
             </div>
             <div className={cn('text-[11px]', ping.waiting ? 'text-ok' : 'text-text-muted')}>
               {ping.waiting ? (
                 <span className="vp-dots">{ping.label}</span>
               ) : (
                 <>
-                  задержка:{' '}
+                  {t('voice.panel.latency')}{' '}
                   <span
                     className={cn(
                       'font-bold',
@@ -501,15 +507,15 @@ export function Sidebar() {
                       ping.grade === 'bad' && 'text-danger',
                     )}
                   >
-                    {ping.ms} мс
+                    {t('voice.panel.ms', { ms: ping.ms ?? 0 })}
                   </span>
                 </>
               )}
             </div>
           </div>
           <button
-            title="Микрофон"
-            aria-label={micOn ? 'Выключить микрофон' : 'Включить микрофон'}
+            title={t('voice.mic')}
+            aria-label={t(micOn ? 'voice.mic.turnOff' : 'voice.mic.turnOn')}
             aria-pressed={!micOn}
             onClick={toggleMic}
             className={cn(
@@ -520,8 +526,8 @@ export function Sidebar() {
             <Icon name={micOn ? 'mic' : 'mic-off'} className="text-[18px]" />
           </button>
           <button
-            title={speakersOn ? 'Выключить звук (и микрофон)' : 'Включить звук'}
-            aria-label={speakersOn ? 'Выключить звук' : 'Включить звук'}
+            title={t(speakersOn ? 'voice.sound.turnOffAll' : 'voice.sound.turnOn')}
+            aria-label={t(speakersOn ? 'voice.sound.turnOff' : 'voice.sound.turnOn')}
             aria-pressed={!speakersOn}
             onClick={toggleSpeakers}
             className={cn(
@@ -532,8 +538,8 @@ export function Sidebar() {
             <Icon name={speakersOn ? 'headphones' : 'headphone-off'} className="text-[18px]" />
           </button>
           <button
-            title="Отключиться"
-            aria-label="Выйти из голосового канала"
+            title={t('voice.leave')}
+            aria-label={t('voice.leave.aria')}
             onClick={() => leaveVoice()}
             className="rounded p-1 text-text-muted outline-none transition-colors hover:bg-bg-hover hover:text-danger focus-visible:ring-2 focus-visible:ring-accent"
           >
@@ -559,11 +565,11 @@ export function Sidebar() {
                 if (e.key === 'Enter') e.currentTarget.blur();
               }}
               maxLength={20}
-              title="Тег — Enter или клик мимо, чтобы применить"
+              title={t('user.tag.hint')}
               className="w-full border-0 border-b border-transparent bg-transparent p-0 text-sm font-semibold text-text-header outline-none focus:border-accent"
             />
           </div>
-          <div className="truncate text-[11px] text-text-muted">{DEFAULT_STATUS}</div>
+          <div className="truncate text-[11px] text-text-muted">{t('user.status.online')}</div>
         </div>
       </div>
 
@@ -587,9 +593,9 @@ export function Sidebar() {
       <ConfirmDialog
         open={confirmServerDelete}
         onOpenChange={setConfirmServerDelete}
-        title={<>Удалить сервер «{activeServer?.name}»?</>}
-        description="Сервер и все его каналы вместе с перепиской исчезнут у всех участников. Отменить это нельзя."
-        confirmLabel="Удалить сервер"
+        title={t('server.delete.title', { name: activeServer?.name ?? '' })}
+        description={t('server.delete.body')}
+        confirmLabel={t('sidebar.server.delete')}
         onConfirm={() => {
           setConfirmServerDelete(false);
           deleteServer(activeServerId);

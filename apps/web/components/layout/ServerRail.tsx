@@ -19,6 +19,7 @@ import { AddHostDialog } from '@/components/layout/AddHostDialog';
 import { CreateServerDialog } from '@/components/layout/CreateServerDialog';
 import { UnlockServerDialog } from '@/components/layout/UnlockServerDialog';
 import { SettingsDialog } from '@/components/layout/SettingsDialog';
+import { useT } from '@/lib/i18n';
 
 /** Шестерёнка настроек (инлайновый line-icon, раздел 01 референса). */
 function GearIcon() {
@@ -84,6 +85,7 @@ function Pill({ active, unread }: { active: boolean; unread?: boolean }) {
  * «+N»). Видно только на ховере — сама плашка появляется лишь тогда.
  */
 function RailTooltip({ label, serverId }: { label: string; serverId?: string }) {
+  const t = useT();
   const channels = useChannelsStore((s) => s.channels);
   const presence = useVoiceStore((s) => s.presence);
 
@@ -91,7 +93,7 @@ function RailTooltip({ label, serverId }: { label: string; serverId?: string }) 
   if (serverId) {
     for (const c of channels) {
       if (c.serverId === serverId && c.type === 'voice') {
-        for (const m of presence[c.slug] ?? []) inVoice.push({ id: m.id, name: m.name || 'Аноним' });
+        for (const m of presence[c.slug] ?? []) inVoice.push({ id: m.id, name: m.name || t('common.anonymous') });
       }
     }
   }
@@ -136,6 +138,7 @@ function RailTooltip({ label, serverId }: { label: string; serverId?: string }) 
  * (сайдбар показывает его каналы). Зелёный «+» внизу создаёт новый сервер.
  */
 export function ServerRail() {
+  const t = useT();
   const servers = useServersStore((s) => s.servers);
   const activeServerId = useServersStore((s) => s.activeServerId);
   const unlockedIds = useServersStore((s) => s.unlockedIds);
@@ -204,8 +207,8 @@ export function ServerRail() {
       <div className="group/srv relative">
         <button
           onClick={() => setCreateOpen(true)}
-          title="Создать сервер"
-          aria-label="Создать сервер"
+          title={t('rail.server.create')}
+          aria-label={t('rail.server.create')}
           className="group grid h-12 w-12 place-items-center rounded-[50%] bg-white/[0.04] text-text-muted outline-none transition-[background-color,border-radius,color] duration-200 hover:rounded-2xl hover:bg-ok/15 hover:text-ok focus-visible:rounded-2xl focus-visible:ring-2 focus-visible:ring-ok/60 active:scale-95"
         >
           {/* Пунктирное кольцо — «слот под новый сервер», гаснет при наведении */}
@@ -223,33 +226,33 @@ export function ServerRail() {
       <span className="my-1 h-0.5 w-8 rounded-full bg-white/10" />
       {hosts.map((h) => (
         <HostIcon key={h.url} host={h} onRemove={() => {
-          if (window.confirm(`Убрать хост «${hostLabel(h)}» из списка?`)) removeHost(h.url);
+          if (window.confirm(t('rail.host.removeConfirm', { name: hostLabel(h) }))) removeHost(h.url);
         }} />
       ))}
       <div className="group/srv relative">
         <button
           onClick={() => setAddHostOpen(true)}
-          title="Добавить хост"
-          aria-label="Добавить хост"
+          title={t('rail.host.add')}
+          aria-label={t('rail.host.add')}
           className="group grid h-12 w-12 place-items-center rounded-[50%] bg-white/[0.04] text-text-muted outline-none transition-[background-color,border-radius,color] duration-200 hover:rounded-2xl hover:bg-accent/15 hover:text-text-header focus-visible:rounded-2xl focus-visible:ring-2 focus-visible:ring-accent/60 active:scale-95"
         >
           <span className="pointer-events-none absolute inset-1 rounded-[inherit] border border-dashed border-white/15 transition-opacity duration-200 group-hover:opacity-0" />
           <GlobeIcon />
         </button>
-        <RailTooltip label="Добавить хост" />
+        <RailTooltip label={t('rail.host.add')} />
       </div>
 
       {/* Настройки — внизу рейки */}
       <div className="group/srv relative mt-auto">
         <button
           onClick={() => setSettingsOpen(true)}
-          title="Настройки"
-          aria-label="Настройки"
+          title={t('rail.settings')}
+          aria-label={t('rail.settings')}
           className="grid h-11 w-11 place-items-center rounded-[14px] text-text-muted outline-none transition-colors hover:bg-bg-hover hover:text-text-header focus-visible:ring-2 focus-visible:ring-line-strong"
         >
           <GearIcon />
         </button>
-        <RailTooltip label="Настройки" />
+        <RailTooltip label={t('rail.settings')} />
       </div>
 
       <CreateServerDialog open={createOpen} onOpenChange={setCreateOpen} />
@@ -267,6 +270,7 @@ export function ServerRail() {
  * никуда не ведёт.
  */
 function HostIcon({ host, onRemove }: { host: RemoteHost; onRemove: () => void }) {
+  const t = useT();
   const current = isCurrentHost(host.url);
   const label = hostLabel(host);
   return (
@@ -276,7 +280,7 @@ function HostIcon({ host, onRemove }: { host: RemoteHost; onRemove: () => void }
         onClick={() => {
           if (!current) window.location.assign(host.url);
         }}
-        aria-label={current ? `${label} — текущий хост` : `Перейти на ${label}`}
+        aria-label={t(current ? 'rail.host.current' : 'rail.host.goto', { name: label })}
         style={{ background: serverGradient(host.url) }}
         className={cn(
           'grid h-12 w-12 place-items-center overflow-hidden text-white outline-none ring-1 ring-inset ring-white/10',
@@ -291,7 +295,7 @@ function HostIcon({ host, onRemove }: { host: RemoteHost; onRemove: () => void }
           {serverInitials(label)}
         </span>
       </button>
-      <RailTooltip label={current ? `${label} — вы здесь` : label} />
+      <RailTooltip label={current ? t('rail.host.here', { name: label }) : label} />
       {/* Глобус-бейдж: это внешняя инсталляция, не гильдия этого сервера */}
       <span
         aria-hidden
@@ -305,8 +309,8 @@ function HostIcon({ host, onRemove }: { host: RemoteHost; onRemove: () => void }
           e.stopPropagation();
           onRemove();
         }}
-        title="Убрать хост"
-        aria-label={`Убрать хост ${label}`}
+        title={t('rail.host.remove')}
+        aria-label={t('rail.host.removeNamed', { name: label })}
         className="absolute -bottom-0.5 -right-0.5 grid h-[18px] w-[18px] place-items-center rounded-full border-2 border-bg-rail bg-bg-deep text-[11px] leading-none text-text-muted opacity-0 shadow outline-none transition-[opacity,color] hover:text-danger focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/srv:opacity-100"
       >
         ×
@@ -327,6 +331,7 @@ function ServerIcon({
   locked: boolean;
   onClick: () => void;
 }) {
+  const t = useT();
   const channels = useChannelsStore((s) => s.channels);
   const hasUnread = useUnreadStore((s) => {
     if (active || locked) return false;
@@ -340,7 +345,7 @@ function ServerIcon({
       <Pill active={active} unread={hasUnread} />
       <button
         onClick={onClick}
-        aria-label={locked ? `${server.name} — под паролем` : server.name}
+        aria-label={locked ? t('rail.server.locked', { name: server.name }) : server.name}
         aria-pressed={active}
         style={{ background: serverGradient(server.id) }}
         className={cn(
@@ -361,7 +366,7 @@ function ServerIcon({
         )}
       </button>
       <RailTooltip
-        label={locked ? `${server.name} — под паролем` : server.name}
+        label={locked ? t('rail.server.locked', { name: server.name }) : server.name}
         serverId={server.id}
       />
       {/* Бейдж-замок у закрытых серверов (пока не введён пароль) */}

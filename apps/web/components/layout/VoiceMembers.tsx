@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { listItem, springLayout } from '@/lib/motion';
 import { Icon } from '@/components/ui/icon';
 import { useVoiceStore } from '@/stores/voice';
+import { useT } from '@/lib/i18n';
 
 /**
  * Кто сидит в голосовом канале — как в Discord.
@@ -16,6 +17,7 @@ import { useVoiceStore } from '@/stores/voice';
  * участник не слышит канал); состояние раздаёт сервер в том же presence.
  */
 export function VoiceMembers({ room }: { room: string }) {
+  const t = useT();
   const members = useVoiceStore((s) => s.presence[room]);
   const myId = useVoiceStore((s) => s.myId);
 
@@ -25,7 +27,7 @@ export function VoiceMembers({ room }: { room: string }) {
     <div className="my-px mb-1 flex flex-col gap-px">
       <AnimatePresence initial={false}>
         {members.map((m) => {
-          const name = m.name || 'Аноним';
+          const name = m.name || t('common.anonymous');
           const me = m.id === myId;
           const muted = m.micOn === false;
           return (
@@ -44,14 +46,14 @@ export function VoiceMembers({ room }: { room: string }) {
               style={avatarStyle(name)}
             />
             <div className={cn('flex min-w-0 flex-1 items-center gap-1.5', me && 'font-semibold text-text')}>
-              <span className="truncate">{me ? name + ' (вы)' : name}</span>
+              <span className="truncate">{me ? t('common.you', { name }) : name}</span>
               {/* Пришёл по инвайт-ссылке — доступ только к этому каналу */}
               {m.guest && (
                 <span
-                  title="Гость по инвайт-ссылке"
+                  title={t('members.guest.title')}
                   className="shrink-0 rounded border border-line bg-bg-elev px-1 py-px text-[9px] font-bold uppercase tracking-[0.06em] text-text-muted"
                 >
-                  гость
+                  {t('members.guest')}
                 </span>
               )}
             </div>
@@ -61,12 +63,12 @@ export function VoiceMembers({ room }: { room: string }) {
               <Icon
                 name="mic-off"
                 className={cn('text-[14px]', muted ? 'animate-member-badge' : 'invisible')}
-                title="Микрофон выключен"
+                title={t('members.mic.off')}
               />
               <Icon
                 name="headphone-off"
                 className={cn('text-[14px]', m.deafened ? 'animate-member-badge' : 'invisible')}
-                title="Звук выключен — не слышит канал"
+                title={t('members.deafened')}
               />
               </div>
             </motion.div>

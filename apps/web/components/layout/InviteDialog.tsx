@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { getSocket } from '@/lib/socket';
+import { useT } from '@/lib/i18n';
 
 /** Цепочка-ссылка (инлайновый line-icon, в наборе /img/icons её нет). */
 export function LinkIcon({ size = 16 }: { size?: number }) {
@@ -52,6 +53,7 @@ export function InviteDialog({
   target: { slug: string; label: string } | null;
   onOpenChange: (open: boolean) => void;
 }) {
+  const t = useT();
   const [state, setState] = useState<InviteState>({ phase: 'loading' });
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -82,11 +84,11 @@ export function InviteDialog({
   async function copy(url: string) {
     try {
       await navigator.clipboard.writeText(url);
-      toast('Ссылка скопирована');
+      toast(t('invite.copied'));
     } catch {
       // Буфер недоступен (http/старый браузер) — выделяем текст для ручного Cmd+C.
       inputRef.current?.select();
-      toast('Скопируйте ссылку вручную (Ctrl/Cmd+C)');
+      toast(t('invite.copyManually'));
     }
   }
 
@@ -98,23 +100,21 @@ export function InviteDialog({
             <span className="text-text-muted">
               <LinkIcon size={18} />
             </span>
-            Пригласить в «{target?.label}»
+            {t('invite.dialog.title', { channel: target?.label ?? '' })}
           </DialogTitle>
-          <DialogDescription>
-            Гость войдёт по ссылке без пароля — сразу в этот голосовой канал.
-          </DialogDescription>
+          <DialogDescription>{t('invite.dialog.description')}</DialogDescription>
         </DialogHeader>
 
         {state.phase === 'error' ? (
           <p className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2.5 text-[13px] text-danger">
-            Не удалось создать приглашение. Проверьте соединение и попробуйте ещё раз.
+            {t('invite.dialog.failed')}
           </p>
         ) : (
           <div className="flex items-center gap-2">
             <input
               ref={inputRef}
               readOnly
-              value={state.phase === 'ready' ? state.url : 'Создаём ссылку…'}
+              value={state.phase === 'ready' ? state.url : t('invite.dialog.creating')}
               onFocus={(e) => e.currentTarget.select()}
               className="min-w-0 flex-1 rounded-lg border border-black/40 bg-bg-deep/70 px-3 py-2.5 font-mono text-[12px] text-text outline-none focus:border-accent"
             />
@@ -124,19 +124,18 @@ export function InviteDialog({
               disabled={state.phase !== 'ready'}
               onClick={() => state.phase === 'ready' && void copy(state.url)}
             >
-              Скопировать
+              {t('invite.dialog.copy')}
             </Button>
           </div>
         )}
 
         <p className="text-[11px] leading-snug text-text-muted">
-          Ссылка действует 24 часа, входить по ней может любое число гостей. Чаты и другие каналы
-          гостям недоступны.
+          {t('invite.dialog.note')}
         </p>
 
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
-            Закрыть
+            {t('common.close')}
           </Button>
         </DialogFooter>
       </DialogContent>

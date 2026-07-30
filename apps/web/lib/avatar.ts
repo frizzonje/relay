@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import { CALLSIGNS } from './constants';
+import { tx } from '@/lib/i18n';
 import { seedGradient } from './gradient';
 
 /**
@@ -21,7 +21,11 @@ export function avatarStyle(name: string): CSSProperties {
 
 /** Случайное имя-подсказка вида «Сокол-42». */
 export function randomCallsign(): string {
-  const base = CALLSIGNS[Math.floor(Math.random() * CALLSIGNS.length)];
+  // Пул подсказок живёт в словаре: русскому предлагать «Falcon-42» так же
+  // неуютно, как англичанину «Сокол-42». Список — строка через запятую,
+  // потому что словарь плоский; свой язык добавляет свой набор слов.
+  const pool = tx('identity.callsigns').split(',');
+  const base = pool[Math.floor(Math.random() * pool.length)];
   const num = Math.floor(Math.random() * 90) + 10;
   return `${base}-${num}`;
 }

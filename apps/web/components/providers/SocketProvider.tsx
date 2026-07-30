@@ -216,7 +216,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         }
       } else {
         forgetServerPassword(id);
-        if (s.unlockTargetId === id) s.setUnlockError('Неверный пароль — попробуй ещё раз.');
+        if (s.unlockTargetId === id) s.setUnlockError('unlockServer.error.wrongPassword');
       }
     });
 

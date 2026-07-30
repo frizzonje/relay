@@ -2,11 +2,13 @@
 
 import { Icon } from '@/components/ui/icon';
 import { useUiStore } from '@/stores/ui';
+import { useT } from '@/lib/i18n';
 
 /**
  * Шапка сцены: название открытого канала (голос/текст) или подсказка в лобби.
  */
 export function Topbar() {
+  const t = useT();
   const view = useUiStore((s) => s.view);
   const voiceLabel = useUiStore((s) => s.voiceLabel);
   const textLabel = useUiStore((s) => s.textLabel);
@@ -25,7 +27,7 @@ export function Topbar() {
             {textLabel}
           </>
         ) : (
-          'Выберите канал'
+          t('topbar.noChannel')
         )}
       </span>
     </div>

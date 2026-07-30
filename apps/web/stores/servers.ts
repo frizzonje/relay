@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { MessageKey } from '@/lib/i18n/translate';
 import type { Server } from '@relay/shared';
 import { DEFAULT_SERVERS, MAIN_SERVER_ID } from '@/lib/constants';
 
@@ -18,13 +19,13 @@ interface ServersState {
   activeServerId: string;
   unlockedIds: string[];
   unlockTargetId: string | null;
-  unlockError: string | null;
+  unlockError: MessageKey | null;
   setServers: (servers: Server[]) => void;
   setActiveServer: (id: string) => void;
   markUnlocked: (id: string) => void;
   openUnlock: (id: string) => void;
   closeUnlock: () => void;
-  setUnlockError: (message: string | null) => void;
+  setUnlockError: (message: MessageKey | null) => void;
 }
 
 export const useServersStore = create<ServersState>((set) => ({

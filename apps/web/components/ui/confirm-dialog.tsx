@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { useT } from '@/lib/i18n';
 
 /**
  * Подтверждение необратимого действия. Один диалог на всё приложение — вместо
@@ -27,7 +28,7 @@ export function ConfirmDialog({
   title,
   description,
   details,
-  confirmLabel = 'Удалить',
+  confirmLabel,
   busy,
   confirmDisabled,
   onConfirm,
@@ -46,6 +47,7 @@ export function ConfirmDialog({
   confirmDisabled?: boolean;
   onConfirm: () => void;
 }) {
+  const t = useT();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[420px]">
@@ -58,7 +60,7 @@ export function ConfirmDialog({
 
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
-            Отмена
+            {t('common.cancel')}
           </Button>
           {/* Фокус по умолчанию радикс отдаёт первой кнопке (Отмена) — так
               Enter сразу после открытия ничего не сносит. */}
@@ -68,7 +70,7 @@ export function ConfirmDialog({
             onClick={onConfirm}
             disabled={busy || confirmDisabled}
           >
-            {confirmLabel}
+            {confirmLabel ?? t('common.delete')}
           </Button>
         </DialogFooter>
       </DialogContent>

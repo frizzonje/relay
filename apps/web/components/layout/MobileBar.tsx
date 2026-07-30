@@ -6,6 +6,7 @@ import { Icon } from '@/components/ui/icon';
 import { useUiStore, type MobilePanel } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import { toggleMic, leaveVoice, showVoiceStage } from '@/lib/voice';
+import { useT } from '@/lib/i18n';
 
 /* Инлайновые line-иконки таб-бара (набор Icon — CSS-маски — не содержит hash/
    users/grid, поэтому рисуем сами, в общей стилистике GearIcon: stroke 1.8). */
@@ -99,6 +100,7 @@ function Tab({
  * весь компонент скрыт: там колонки видны разом.
  */
 export function MobileBar() {
+  const t = useT();
   const panel = useUiStore((s) => s.mobilePanel);
   const setPanel = useUiStore((s) => s.setMobilePanel);
   const view = useUiStore((s) => s.view);
@@ -126,12 +128,12 @@ export function MobileBar() {
               showVoiceStage();
             }}
             className="flex min-w-0 flex-1 items-center gap-2 text-left"
-            title="Вернуться к звонку"
+            title={t('mobile.backToCall')}
           >
             <span className="h-2 w-2 shrink-0 animate-pulse-dot rounded-full bg-ok shadow-[0_0_6px_var(--color-ok)]" />
             <span className="min-w-0">
               <span className="block text-[13px] font-bold leading-tight text-ok">
-                Голос подключён
+                {t('voice.panel.connected')}
               </span>
               <span className="block truncate text-[11px] leading-tight text-text-muted">
                 {voiceLabel}
@@ -141,7 +143,7 @@ export function MobileBar() {
           <button
             type="button"
             onClick={toggleMic}
-            aria-label={micOn ? 'Выключить микрофон' : 'Включить микрофон'}
+            aria-label={t(micOn ? 'voice.mic.turnOff' : 'voice.mic.turnOn')}
             aria-pressed={!micOn}
             className={cn(
               'grid h-9 w-9 shrink-0 place-items-center rounded-[10px] bg-bg-active text-text outline-none transition-colors',
@@ -153,7 +155,7 @@ export function MobileBar() {
           <button
             type="button"
             onClick={() => leaveVoice()}
-            aria-label="Отключиться"
+            aria-label={t('voice.leave')}
             className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] bg-danger text-white outline-none transition-[filter] active:brightness-110"
           >
             <Icon name="phone-off" className="text-[18px]" />
@@ -162,14 +164,14 @@ export function MobileBar() {
       )}
 
       <div className="flex items-stretch pb-[env(safe-area-inset-bottom)]">
-        <Tab active={effective === 'nav'} label="Каналы" onClick={() => setPanel('nav')}>
+        <Tab active={effective === 'nav'} label={t('mobile.tab.channels')} onClick={() => setPanel('nav')}>
           <IconHash />
         </Tab>
-        <Tab active={effective === 'stage'} label="Сцена" onClick={() => setPanel('stage')}>
+        <Tab active={effective === 'stage'} label={t('mobile.tab.stage')} onClick={() => setPanel('stage')}>
           <IconStage />
         </Tab>
         {hasPeople && (
-          <Tab active={effective === 'people'} label="Состав" onClick={() => setPanel('people')}>
+          <Tab active={effective === 'people'} label={t('mobile.tab.people')} onClick={() => setPanel('people')}>
             <IconPeople />
           </Tab>
         )}

@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useUiStore } from '@/stores/ui';
 import { joinVoice } from '@/lib/voice';
 import { codeToSlug } from '@/lib/join-code';
+import { useT } from '@/lib/i18n';
 
 /**
  * Мобильный bottom sheet быстрого входа по коду/ссылке. Даёт то же, что лобби на
@@ -12,6 +13,7 @@ import { codeToSlug } from '@/lib/join-code';
  * есть само лобби. Открытие/закрытие — через ui-стор (`joinByCodeOpen`).
  */
 export function JoinByCodeSheet() {
+  const t = useT();
   const open = useUiStore((s) => s.joinByCodeOpen);
   const setOpen = useUiStore((s) => s.setJoinByCodeOpen);
   const [code, setCode] = useState('');
@@ -42,11 +44,11 @@ export function JoinByCodeSheet() {
       className="fixed inset-0 z-50 md:hidden"
       role="dialog"
       aria-modal="true"
-      aria-label="Войти по коду"
+      aria-label={t('sidebar.joinByCode')}
     >
       {/* Затемнение — тап закрывает */}
       <button
-        aria-label="Закрыть"
+        aria-label={t('common.close')}
         onClick={() => setOpen(false)}
         className="absolute inset-0 h-full w-full bg-black/60 backdrop-blur-[2px]"
       />
@@ -57,12 +59,12 @@ export function JoinByCodeSheet() {
         {/* Ручка-грабер */}
         <span aria-hidden className="mx-auto h-1 w-9 rounded-full bg-line-strong" />
         <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-text-faint">
-          быстрый вход
+          {t('lobby.kicker')}
         </div>
         <input
           value={code}
           onChange={(e) => setCode(e.target.value)}
-          placeholder="ссылка или код канала"
+          placeholder={t('lobby.code.placeholder')}
           autoComplete="off"
           spellCheck={false}
           autoFocus
@@ -73,7 +75,7 @@ export function JoinByCodeSheet() {
           disabled={!code.trim()}
           className="w-full rounded-[10px] bg-accent-strong px-3 py-3 text-[15px] font-semibold text-bg-app transition active:translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Присоединиться
+          {t('lobby.join')}
         </button>
       </form>
     </div>

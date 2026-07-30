@@ -12,6 +12,7 @@ import {
   type MenuIcon,
   type OpenMenu,
 } from '@/stores/context-menu';
+import { useT } from '@/lib/i18n';
 
 /**
  * Контекстное меню relay: одно на всё приложение.
@@ -146,6 +147,7 @@ function Glyph({ name }: { name: MenuIcon }) {
 }
 
 export function ContextMenu() {
+  const t = useT();
   const menu = useContextMenuStore((s) => s.menu);
   const close = useContextMenuStore((s) => s.close);
   const ref = useRef<HTMLDivElement>(null);
@@ -276,7 +278,7 @@ export function ContextMenu() {
         <motion.div
           ref={ref}
           role="menu"
-          aria-label={menu.label ?? 'Действия'}
+          aria-label={menu.label ?? t('common.actions')}
           initial={{ opacity: 0, scale: 0.94 }}
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.09 } }}
