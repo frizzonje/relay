@@ -259,6 +259,146 @@ window.addEventListener("hashchange", () => {
   if (location.hash === "#pick") cancelAuto();
 });
 
+// ── Контекстное меню ────────────────────────────────────────────────────────
+
+// ПКМ в нативном клиенте не должен показывать меню движка («Назад», «Обновить»,
+// «Просмотреть код») — это чужой интерфейс, по которому окно сразу читается как
+// веб-страница. Экран выбора сервера маленький, поэтому и меню тут короткое:
+// буфер обмена в поле адреса и действия над строкой недавних. Web-UI делает то
+// же самое своим меню (apps/web/components/ui/ContextMenu.tsx).
+// Shift+ПКМ оставляем движку — на случай отладки сборки.
+
+const MOD = /mac/i.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl+";
+let ctxEl = null;
+let ctxTouch = false;
+
+function closeCtx() {
+  ctxEl?.remove();
+  ctxEl = null;
+}
+
+/** Показать меню в точке курсора; items — [{ label, hint, danger, run }]. */
+function openCtx(x, y, items) {
+  closeCtx();
+  if (!items.length) return;
+  const menu = document.createElement("div");
+  menu.className = "ctx";
+  menu.setAttribute("role", "menu");
+  for (const it of items) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = it.danger ? "ctx-item danger" : "ctx-item";
+    btn.setAttribute("role", "menuitem");
+    const label = document.createElement("span");
+    label.textContent = it.label;
+    btn.append(label);
+    if (it.hint) {
+      const hintEl = document.createElement("span");
+      hintEl.className = "ctx-hint";
+      hintEl.textContent = it.hint;
+      btn.append(hintEl);
+    }
+    // Фокус остаётся в поле — иначе «Вырезать»/«Вставить» потеряют выделение.
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", () => {
+      closeCtx();
+      it.run();
+    });
+    menu.append(btn);
+  }
+  document.body.append(menu);
+  ctxEl = menu;
+  // Прижимаем к экрану: у края меню раскрывается в другую сторону.
+  const pad = 8;
+  const flipX = x + menu.offsetWidth + pad > window.innerWidth;
+  const flipY = y + menu.offsetHeight + pad > window.innerHeight;
+  menu.style.left = `${Math.max(pad, flipX ? x - menu.offsetWidth : x)}px`;
+  menu.style.top = `${Math.max(pad, flipY ? y - menu.offsetHeight : y)}px`;
+  menu.style.transformOrigin = `${flipY ? "bottom" : "top"} ${flipX ? "right" : "left"}`;
+}
+
+/** Пункты буфера обмена для поля адреса. */
+function fieldItems(field) {
+  const items = [];
+  const selected = field.value.slice(field.selectionStart ?? 0, field.selectionEnd ?? 0);
+  const put = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      err.textContent = `Движок не даёт скопировать через меню — сработает с клавиатуры (${MOD}C).`;
+      return false;
+    }
+  };
+  if (selected) {
+    items.push({
+      label: "Вырезать",
+      hint: `${MOD}X`,
+      run: async () => {
+        if (!(await put(selected))) return;
+        const start = field.selectionStart;
+        field.value = field.value.slice(0, start) + field.value.slice(field.selectionEnd);
+        field.setSelectionRange(start, start);
+      },
+    });
+    items.push({ label: "Копировать", hint: `${MOD}C`, run: () => put(selected) });
+  }
+  items.push({
+    label: "Вставить",
+    hint: `${MOD}V`,
+    run: async () => {
+      let text = "";
+      try {
+        text = await navigator.clipboard.readText();
+      } catch {
+        err.textContent = `Движок не даёт вставить через меню — сработает с клавиатуры (${MOD}V).`;
+        return;
+      }
+      if (!text) return;
+      const start = field.selectionStart ?? field.value.length;
+      const end = field.selectionEnd ?? start;
+      field.value = field.value.slice(0, start) + text + field.value.slice(end);
+      field.setSelectionRange(start + text.length, start + text.length);
+    },
+  });
+  if (field.value) {
+    items.push({ label: "Выделить всё", hint: `${MOD}A`, run: () => field.select() });
+  }
+  return items;
+}
+
+document.addEventListener("pointerdown", (e) => {
+  ctxTouch = e.pointerType === "touch";
+  if (ctxEl && !ctxEl.contains(e.target)) closeCtx();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeCtx();
+});
+window.addEventListener("blur", closeCtx);
+window.addEventListener("resize", closeCtx);
+
+document.addEventListener("contextmenu", (e) => {
+  if (e.shiftKey || ctxTouch) return; // аварийный выход к меню движка
+  e.preventDefault();
+  const field = e.target.closest("input");
+  if (field) return openCtx(e.clientX, e.clientY, fieldItems(field));
+
+  // Строка недавнего сервера: адрес в буфер и «убрать», чтобы не целиться в «×».
+  const go = e.target.closest(".recent-go");
+  if (go) {
+    const origin = go.textContent;
+    return openCtx(e.clientX, e.clientY, [
+      {
+        label: "Копировать адрес",
+        hint: `${MOD}C`,
+        run: () => navigator.clipboard?.writeText(origin).catch(() => {}),
+      },
+      { label: "Убрать из списка", danger: true, run: () => forget(origin) },
+    ]);
+  }
+  closeCtx(); // по пустому месту карточки — просто тишина вместо меню движка
+});
+
 // ── Старт ───────────────────────────────────────────────────────────────────
 
 // Прошлый адрес (или тестовый дефолт) — заранее в поле, чтобы «Подключиться»
