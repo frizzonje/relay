@@ -41,35 +41,40 @@ export function VoiceMembers({ room }: { room: string }) {
               transition={springLayout}
               className="flex cursor-default items-center gap-2 rounded py-1 pl-[26px] pr-2 text-sm text-text-muted transition-colors hover:bg-bg-hover"
             >
-            <div
-              className="relative h-[22px] w-[22px] shrink-0 rounded-full after:absolute after:-bottom-px after:-right-px after:h-2 after:w-2 after:rounded-full after:border-2 after:border-bg-sidebar after:bg-ok after:content-['']"
-              style={avatarStyle(name)}
-            />
-            <div className={cn('flex min-w-0 flex-1 items-center gap-1.5', me && 'font-semibold text-text')}>
-              <span className="truncate">{me ? t('common.you', { name }) : name}</span>
-              {/* Пришёл по инвайт-ссылке — доступ только к этому каналу */}
-              {m.guest && (
-                <span
-                  title={t('members.guest.title')}
-                  className="shrink-0 rounded border border-line bg-bg-elev px-1 py-px text-[9px] font-bold uppercase tracking-[0.06em] text-text-muted"
-                >
-                  {t('members.guest')}
-                </span>
-              )}
-            </div>
-            {/* Слоты под иконки всегда зарезервированы (даже пустые), чтобы имя не
+              <div
+                className="relative h-[22px] w-[22px] shrink-0 rounded-full after:absolute after:-bottom-px after:-right-px after:h-2 after:w-2 after:rounded-full after:border-2 after:border-bg-sidebar after:bg-ok after:content-['']"
+                style={avatarStyle(name)}
+              />
+              <div
+                className={cn(
+                  'flex min-w-0 flex-1 items-center gap-1.5',
+                  me && 'font-semibold text-text',
+                )}
+              >
+                <span className="truncate">{me ? t('common.you', { name }) : name}</span>
+                {/* Пришёл по инвайт-ссылке — доступ только к этому каналу */}
+                {m.guest && (
+                  <span
+                    title={t('members.guest.title')}
+                    className="shrink-0 rounded border border-line bg-bg-elev px-1 py-px text-[9px] font-bold uppercase tracking-[0.06em] text-text-muted"
+                  >
+                    {t('members.guest')}
+                  </span>
+                )}
+              </div>
+              {/* Слоты под иконки всегда зарезервированы (даже пустые), чтобы имя не
                 «прыгало» при переключении мута/глушилки по отдельности. */}
-            <div className="flex shrink-0 items-center gap-1 text-danger/85">
-              <Icon
-                name="mic-off"
-                className={cn('text-[14px]', muted ? 'animate-member-badge' : 'invisible')}
-                title={t('members.mic.off')}
-              />
-              <Icon
-                name="headphone-off"
-                className={cn('text-[14px]', m.deafened ? 'animate-member-badge' : 'invisible')}
-                title={t('members.deafened')}
-              />
+              <div className="flex shrink-0 items-center gap-1 text-danger/85">
+                <Icon
+                  name="mic-off"
+                  className={cn('text-[14px]', muted ? 'animate-member-badge' : 'invisible')}
+                  title={t('members.mic.off')}
+                />
+                <Icon
+                  name="headphone-off"
+                  className={cn('text-[14px]', m.deafened ? 'animate-member-badge' : 'invisible')}
+                  title={t('members.deafened')}
+                />
               </div>
             </motion.div>
           );

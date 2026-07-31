@@ -1,13 +1,6 @@
 'use client';
 
-import {
-  createContext,
-  Fragment,
-  useCallback,
-  useContext,
-  useMemo,
-  type ReactNode,
-} from 'react';
+import { createContext, Fragment, useCallback, useContext, useMemo, type ReactNode } from 'react';
 import {
   DEFAULT_LOCALE,
   LOCALE_COOKIE,

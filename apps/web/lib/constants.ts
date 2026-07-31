@@ -5,7 +5,6 @@ import type { Channel, Server } from '@relay/shared';
  * ДОЛЖНЫ совпадать с дефолтами в signaling.gateway.ts.
  */
 
-
 /**
  * Главный сервер relay — неудаляем; его id носят каналы по умолчанию.
  * ДОЛЖЕН совпадать с MAIN_SERVER_ID в gateway.

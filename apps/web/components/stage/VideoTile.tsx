@@ -763,11 +763,11 @@ export function VideoTile({
             </motion.span>
 
             <div className="px-4 text-center">
-              <p className="text-[15px] font-bold text-text-header">{t('tile.screenShare.ended')}</p>
+              <p className="text-[15px] font-bold text-text-header">
+                {t('tile.screenShare.ended')}
+              </p>
               <p className="mt-0.5 text-[12px] text-text-muted">
-                {tile.isLocal
-                  ? t('tile.outro.self')
-                  : t('tile.outro.peer', { name: tile.name })}
+                {tile.isLocal ? t('tile.outro.self') : t('tile.outro.peer', { name: tile.name })}
               </p>
             </div>
 

@@ -116,7 +116,9 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
       peers: this.rooms.producersFor(peer),
     });
     client.to(roomKey(peer.room)).emit('peer-joined', { peerId: peer.id, name: peer.name });
-    this.logger.log(`peer ${peer.id} (${peer.name || '?'}) joined "${peer.room}" ua="${shortUa(client)}"`);
+    this.logger.log(
+      `peer ${peer.id} (${peer.name || '?'}) joined "${peer.room}" ua="${shortUa(client)}"`,
+    );
   }
 
   handleDisconnect(client: Socket): void {

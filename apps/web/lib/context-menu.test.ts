@@ -129,11 +129,6 @@ describe('targetEntries', () => {
     input.value = 'текст';
     input.setSelectionRange(0, 5);
     // Язык в тестах — базовый (en); проверяем сам набор пунктов и их вид.
-    expect(labels(targetEntries(input, ''))).toEqual([
-      'Cut',
-      'Copy',
-      'Paste',
-      'Select all',
-    ]);
+    expect(labels(targetEntries(input, ''))).toEqual(['Cut', 'Copy', 'Paste', 'Select all']);
   });
 });

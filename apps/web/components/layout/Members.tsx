@@ -49,31 +49,31 @@ export function Members() {
                 transition={springLayout}
                 className="flex items-center gap-2.5 rounded-[8px] px-2 py-1.5 transition-colors hover:bg-bg-hover"
               >
-              <div
-                className={cn(
-                  'relative h-8 w-8 shrink-0 rounded-full',
-                  "after:absolute after:-bottom-0.5 after:-right-0.5 after:h-[11px] after:w-[11px] after:rounded-full after:border-2 after:border-bg-sidebar after:bg-ok after:content-['']",
-                  speaking && 'ring-2 ring-ok',
-                )}
-                style={avatarStyle(tile.name)}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[14px] font-medium text-text">{tile.name}</div>
                 <div
                   className={cn(
-                    'truncate font-mono text-[11px]',
-                    speaking ? 'text-ok' : 'text-text-faint',
+                    'relative h-8 w-8 shrink-0 rounded-full',
+                    "after:absolute after:-bottom-0.5 after:-right-0.5 after:h-[11px] after:w-[11px] after:rounded-full after:border-2 after:border-bg-sidebar after:bg-ok after:content-['']",
+                    speaking && 'ring-2 ring-ok',
                   )}
-                >
-                  {t(
-                    selfMuted
-                      ? 'members.state.muted'
-                      : speaking
-                        ? 'members.state.speaking'
-                        : 'members.state.live',
-                  )}
+                  style={avatarStyle(tile.name)}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[14px] font-medium text-text">{tile.name}</div>
+                  <div
+                    className={cn(
+                      'truncate font-mono text-[11px]',
+                      speaking ? 'text-ok' : 'text-text-faint',
+                    )}
+                  >
+                    {t(
+                      selfMuted
+                        ? 'members.state.muted'
+                        : speaking
+                          ? 'members.state.speaking'
+                          : 'members.state.live',
+                    )}
+                  </div>
                 </div>
-              </div>
                 {selfMuted && (
                   <Icon
                     name="mic-off"

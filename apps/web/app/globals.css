@@ -41,10 +41,10 @@
 
   /* — Типографика: IBM Plex Sans (UI) + IBM Plex Mono (метки/метрики/таймстампы).
        Переменные --font-plex-* приходят из next/font (app/layout.tsx). — */
-  --font-sans: var(--font-plex-sans), 'IBM Plex Sans', 'Segoe UI', 'Helvetica Neue',
-    Arial, sans-serif;
-  --font-mono: var(--font-plex-mono), 'IBM Plex Mono', ui-monospace, 'SFMono-Regular',
-    Consolas, monospace;
+  --font-sans:
+    var(--font-plex-sans), 'IBM Plex Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono:
+    var(--font-plex-mono), 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Consolas, monospace;
 
   /* — Радиусы — */
   --radius-card: 15px; /* карточки/окна 14–16px */

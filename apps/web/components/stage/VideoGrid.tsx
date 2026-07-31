@@ -59,7 +59,12 @@ export function VideoGrid() {
           {tiles.map((tile) => {
             const hidden = !!focusedId && tile.id !== focusedId;
             return (
-              <VideoTile key={tile.id} tile={tile} focused={focusedId === tile.id} hidden={hidden} />
+              <VideoTile
+                key={tile.id}
+                tile={tile}
+                focused={focusedId === tile.id}
+                hidden={hidden}
+              />
             );
           })}
         </AnimatePresence>

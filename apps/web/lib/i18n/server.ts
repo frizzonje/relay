@@ -1,11 +1,5 @@
 import { cookies, headers } from 'next/headers';
-import {
-  LOCALE_COOKIE,
-  isLocale,
-  matchLocale,
-  parseAcceptLanguage,
-  type Locale,
-} from './config';
+import { LOCALE_COOKIE, isLocale, matchLocale, parseAcceptLanguage, type Locale } from './config';
 import { translate, type MessageKey, type Vars } from './translate';
 
 /**

@@ -1215,9 +1215,7 @@ function onPresence(presence: VoicePresence) {
   // Съезжать некуда: либо нас слишком много для прямых звонков, либо напрямую
   // звоним как раз мы. Молчать нельзя — человек должен понимать, почему тишина.
   toast.error(
-    mine === 'sfu'
-      ? msg('voice.toast.peerCannotHear', { names })
-      : msg('voice.toast.youAreDirect'),
+    mine === 'sfu' ? msg('voice.toast.peerCannotHear', { names }) : msg('voice.toast.youAreDirect'),
   );
   sfx().play('error');
 }

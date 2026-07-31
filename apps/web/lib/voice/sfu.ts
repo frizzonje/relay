@@ -793,7 +793,9 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         dropConsumer(producerId);
       });
       s.on('peer-left', ({ peerId }: { peerId: string }) => {
-        host.setStatus('voice.status.peerLeft', { name: names.get(peerId) || tx('voice.peer.fallback') });
+        host.setStatus('voice.status.peerLeft', {
+          name: names.get(peerId) || tx('voice.peer.fallback'),
+        });
         dropPeer(peerId);
         host.playSfx('peerLeave');
       });

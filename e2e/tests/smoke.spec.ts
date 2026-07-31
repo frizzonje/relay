@@ -6,6 +6,16 @@ const PASSWORD = process.env.SITE_PASSWORD || 'testpass123';
 const UPLOAD = path.join(process.cwd(), 'fixtures', 'sample.txt');
 
 test.beforeEach(async ({ context }) => {
+  // Язык интерфейса фиксируем кукой (её читает сервер, см. apps/web/lib/i18n):
+  // подписи в тесте английские, и они не должны зависеть ни от Accept-Language
+  // раннера, ни от того, какой язык добавят в словари следующим.
+  await context.addCookies([
+    {
+      name: 'relay-lang',
+      value: 'en',
+      url: process.env.BASE_URL || 'https://localhost',
+    },
+  ]);
   await context.addInitScript(() => {
     try {
       // Тег выбран заранее — выбор личности (IdentityGate) не перехватывает клики.
@@ -23,8 +33,8 @@ test('логин → канал → сообщение → upload', async ({ pag
   await expect(page.getByRole('heading', { name: 'relay' })).toBeVisible();
 
   // ── Логин ──
-  await page.getByPlaceholder('Пароль').fill(PASSWORD);
-  await page.getByRole('button', { name: 'Войти' }).click();
+  await page.getByPlaceholder('Password').fill(PASSWORD);
+  await page.getByRole('button', { name: 'Sign in' }).click();
 
   // После успеха фронт делает location.replace('/') — ждём список каналов.
   // «общий» точным совпадением — это текстовый канал главного сервера;
@@ -34,7 +44,7 @@ test('логин → канал → сообщение → upload', async ({ pag
 
   // ── Вход в текстовый канал ──
   await channel.click();
-  const composer = page.getByPlaceholder(/Сообщение/);
+  const composer = page.getByPlaceholder(/^message #/);
   await expect(composer).toBeVisible({ timeout: 10_000 });
 
   // ── Отправка сообщения (эхо приходит обратно через socket) ──

@@ -164,14 +164,26 @@ export function MobileBar() {
       )}
 
       <div className="flex items-stretch pb-[env(safe-area-inset-bottom)]">
-        <Tab active={effective === 'nav'} label={t('mobile.tab.channels')} onClick={() => setPanel('nav')}>
+        <Tab
+          active={effective === 'nav'}
+          label={t('mobile.tab.channels')}
+          onClick={() => setPanel('nav')}
+        >
           <IconHash />
         </Tab>
-        <Tab active={effective === 'stage'} label={t('mobile.tab.stage')} onClick={() => setPanel('stage')}>
+        <Tab
+          active={effective === 'stage'}
+          label={t('mobile.tab.stage')}
+          onClick={() => setPanel('stage')}
+        >
           <IconStage />
         </Tab>
         {hasPeople && (
-          <Tab active={effective === 'people'} label={t('mobile.tab.people')} onClick={() => setPanel('people')}>
+          <Tab
+            active={effective === 'people'}
+            label={t('mobile.tab.people')}
+            onClick={() => setPanel('people')}
+          >
             <IconPeople />
           </Tab>
         )}

@@ -168,7 +168,12 @@ export function GuestStage({ slug, label, exp }: { slug: string; label: string; 
                 </button>
               </div>
 
-              <Button type="submit" variant="primary" size="lg" disabled={!clean || joining || expired}>
+              <Button
+                type="submit"
+                variant="primary"
+                size="lg"
+                disabled={!clean || joining || expired}
+              >
                 {t(joining ? 'guest.join.busy' : 'guest.join')}
               </Button>
             </form>
@@ -178,9 +183,7 @@ export function GuestStage({ slug, label, exp }: { slug: string; label: string; 
               <p className="mt-2 text-[12px] leading-snug text-danger">{t('guest.mic.denied')}</p>
             )}
             {expired && (
-              <p className="mt-2 text-[12px] leading-snug text-danger">
-                {t('guest.expired')}
-              </p>
+              <p className="mt-2 text-[12px] leading-snug text-danger">{t('guest.expired')}</p>
             )}
 
             <p className="mt-3 text-[10px] leading-snug text-text-muted opacity-70">

@@ -87,7 +87,9 @@ describe('api auth (sync, node:crypto)', () => {
       }),
     ).toBe('auth-tok');
     expect(
-      extractToken({ headers: { cookie: `${AUTH_COOKIE}=cookie-tok`, authorization: 'Bearer header-tok' } }),
+      extractToken({
+        headers: { cookie: `${AUTH_COOKIE}=cookie-tok`, authorization: 'Bearer header-tok' },
+      }),
     ).toBe('header-tok');
     expect(extractToken({ headers: { cookie: `${AUTH_COOKIE}=cookie-tok` } })).toBe('cookie-tok');
     expect(extractToken({ headers: {} })).toBeUndefined();

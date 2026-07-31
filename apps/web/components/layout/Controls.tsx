@@ -121,7 +121,9 @@ function MicControl({ micOn }: { micOn: boolean }) {
   return (
     <div ref={wrapRef} className="relative">
       <CtlBtn
-        title={currentMicLabel ? t('controls.mic.named', { device: currentMicLabel }) : t('controls.mic')}
+        title={
+          currentMicLabel ? t('controls.mic.named', { device: currentMicLabel }) : t('controls.mic')
+        }
         icon={micOn ? 'mic' : 'mic-off'}
         off={!micOn}
         onClick={toggleMic}
@@ -143,9 +145,7 @@ function MicControl({ micOn }: { micOn: boolean }) {
             {t('controls.mic')}
           </div>
           {mics.length === 0 ? (
-            <div className="px-2.5 py-2 text-xs text-text-muted">
-              {t('controls.devices.empty')}
-            </div>
+            <div className="px-2.5 py-2 text-xs text-text-muted">{t('controls.devices.empty')}</div>
           ) : (
             mics.map((m, i) => {
               const active = m.deviceId === currentMicId;
@@ -294,9 +294,7 @@ function SpeakerControl({ speakersOn }: { speakersOn: boolean }) {
             {t('controls.speakers.title')}
           </div>
           {speakers.length === 0 ? (
-            <div className="px-2.5 py-2 text-xs text-text-muted">
-              {t('controls.devices.empty')}
-            </div>
+            <div className="px-2.5 py-2 text-xs text-text-muted">{t('controls.devices.empty')}</div>
           ) : (
             speakers.map((sp, i) => {
               const active = currentSpeakerId
@@ -373,7 +371,10 @@ export function Controls() {
               <span
                 key={i}
                 className="h-1 w-[3px] rounded-full bg-ok"
-                style={{ transformOrigin: 'bottom', animation: `eq ${d}s ease-in-out infinite alternate` }}
+                style={{
+                  transformOrigin: 'bottom',
+                  animation: `eq ${d}s ease-in-out infinite alternate`,
+                }}
               />
             ))}
           </div>
@@ -394,9 +395,7 @@ export function Controls() {
       <MicControl micOn={micOn} />
       <SpeakerControl speakersOn={speakersOn} />
       <CtlBtn
-        title={
-          t(camOn ? 'controls.cam.off' : 'controls.cam.on')
-        }
+        title={t(camOn ? 'controls.cam.off' : 'controls.cam.on')}
         icon={camOn ? 'video' : 'video-off'}
         off={!camOn}
         onClick={() => void toggleCamera()}

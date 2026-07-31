@@ -61,7 +61,8 @@ export function comboLabel(combo: string): string {
 }
 
 function isTextTarget(): boolean {
-  const el = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null;
+  const el =
+    typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null;
   if (!el) return false;
   const tag = el.tagName;
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;

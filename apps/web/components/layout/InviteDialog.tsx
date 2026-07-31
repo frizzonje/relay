@@ -35,10 +35,7 @@ export function LinkIcon({ size = 16 }: { size?: number }) {
   );
 }
 
-type InviteState =
-  | { phase: 'loading' }
-  | { phase: 'ready'; url: string }
-  | { phase: 'error' };
+type InviteState = { phase: 'loading' } | { phase: 'ready'; url: string } | { phase: 'error' };
 
 /**
  * Модалка «Пригласить по ссылке»: запрашивает у сервера гостевой токен на
@@ -129,9 +126,7 @@ export function InviteDialog({
           </div>
         )}
 
-        <p className="text-[11px] leading-snug text-text-muted">
-          {t('invite.dialog.note')}
-        </p>
+        <p className="text-[11px] leading-snug text-text-muted">{t('invite.dialog.note')}</p>
 
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>

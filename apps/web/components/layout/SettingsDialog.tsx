@@ -12,7 +12,15 @@ import {
   switchServer,
 } from '@/lib/desktop';
 import { getTheme, setTheme, type Theme } from '@/lib/theme';
-import { LOCALES, LOCALE_LABELS, setLocale, tx, useLocale, useT, type MessageKey } from '@/lib/i18n';
+import {
+  LOCALES,
+  LOCALE_LABELS,
+  setLocale,
+  tx,
+  useLocale,
+  useT,
+  type MessageKey,
+} from '@/lib/i18n';
 import { isLocale } from '@/lib/i18n/config';
 import { comboLabel, eventToCombo } from '@/lib/hotkeys';
 import { useDesktopStore } from '@/stores/desktop';
@@ -171,9 +179,7 @@ function InputLevel({ active }: { active: boolean }) {
       <div className="h-2.5 w-full overflow-hidden rounded-full bg-black/45">
         <div ref={fillRef} className="h-full w-0 rounded-full bg-ok transition-none" />
       </div>
-      <p className="mt-1.5 text-[12px] text-text-muted">
-        {t('settings.inputLevel.hint')}
-      </p>
+      <p className="mt-1.5 text-[12px] text-text-muted">{t('settings.inputLevel.hint')}</p>
     </div>
   );
 }
@@ -384,7 +390,10 @@ function PttKeybindRow() {
 
   const warning = shell.ptt ? globalKeyWarning(shell.ptt) : null;
   const note = shell.pttError
-    ? { text: t('settings.hotkeys.assignFailed', { reason: shell.pttError }), tone: 'danger' as const }
+    ? {
+        text: t('settings.hotkeys.assignFailed', { reason: shell.pttError }),
+        tone: 'danger' as const,
+      }
     : warning
       ? { text: warning, tone: 'muted' as const }
       : undefined;
@@ -477,7 +486,9 @@ function UpdateRow() {
     <div className="flex items-center justify-between gap-4 rounded-[10px] border border-line bg-bg-elev/60 px-3.5 py-3">
       <div className="min-w-0">
         <div className="text-[14px] font-medium text-text">{t('settings.updates')}</div>
-        <div className={cn('text-[12px]', update.kind === 'error' ? 'text-danger' : 'text-text-muted')}>
+        <div
+          className={cn('text-[12px]', update.kind === 'error' ? 'text-danger' : 'text-text-muted')}
+        >
           {status}
         </div>
       </div>

@@ -54,6 +54,9 @@ export const useServersStore = create<ServersState>((set) => ({
 }));
 
 /** Сервер доступен, если он не под паролем или мы уже ввели верный пароль. */
-export function isServerUnlocked(server: Pick<Server, 'id' | 'locked'>, unlockedIds: string[]): boolean {
+export function isServerUnlocked(
+  server: Pick<Server, 'id' | 'locked'>,
+  unlockedIds: string[],
+): boolean {
   return !server.locked || unlockedIds.includes(server.id);
 }

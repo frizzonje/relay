@@ -167,6 +167,7 @@ let instance: SfxApi | null = null;
 /** Синглтон звукового пула. */
 export function getSfx(): SfxApi {
   if (instance) return instance;
-  instance = typeof window !== 'undefined' && typeof Audio !== 'undefined' ? createBrowser() : createNoop();
+  instance =
+    typeof window !== 'undefined' && typeof Audio !== 'undefined' ? createBrowser() : createNoop();
   return instance;
 }

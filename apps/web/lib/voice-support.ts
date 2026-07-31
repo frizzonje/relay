@@ -43,14 +43,10 @@ function noWebrtcMessage(): string {
   const isLinux = typeof navigator !== 'undefined' && /linux/i.test(navigator.userAgent ?? '');
 
   if (isDesktopShell && isLinux) {
-    return (
-      tx('support.webkitgtk.noWebrtc')
-    );
+    return tx('support.webkitgtk.noWebrtc');
   }
   if (isLinux) {
-    return (
-      tx('support.noWebrtc.gnome')
-    );
+    return tx('support.noWebrtc.gnome');
   }
   return tx('support.noWebrtc');
 }

@@ -53,9 +53,7 @@
   },
   "plugins": {
     "updater": {
-      "endpoints": [
-        "https://github.com/frizzonje/relay/releases/latest/download/latest.json"
-      ],
+      "endpoints": ["https://github.com/frizzonje/relay/releases/latest/download/latest.json"],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ1MzA0QzM4NDFEQTkzOEUKUldTT2s5cEJPRXd3UldIKzBybjgrbWdiakw5dkhhZE9CUmRhcFovS0xRU0lCMDFFcFgrL2lJOGkK"
     }
   }

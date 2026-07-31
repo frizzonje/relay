@@ -110,9 +110,9 @@ export async function startNativeScreenAudio(): Promise<MediaStreamTrack | null>
       node.port.postMessage(pcm, [pcm.buffer]);
     };
 
-    void t.event.listen<{ sampleRate: number }>('screen-audio-format', onFormat).then((u) =>
-      unlisten.push(u),
-    );
+    void t.event
+      .listen<{ sampleRate: number }>('screen-audio-format', onFormat)
+      .then((u) => unlisten.push(u));
     void t.event.listen<string>('screen-audio-frame', onFrame).then((u) => unlisten.push(u));
 
     // Просим Rust начать захват.

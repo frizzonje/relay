@@ -93,7 +93,8 @@ function RailTooltip({ label, serverId }: { label: string; serverId?: string }) 
   if (serverId) {
     for (const c of channels) {
       if (c.serverId === serverId && c.type === 'voice') {
-        for (const m of presence[c.slug] ?? []) inVoice.push({ id: m.id, name: m.name || t('common.anonymous') });
+        for (const m of presence[c.slug] ?? [])
+          inVoice.push({ id: m.id, name: m.name || t('common.anonymous') });
       }
     }
   }
@@ -225,9 +226,14 @@ export function ServerRail() {
           один хост; «глобус-плюс» добавляет новый. */}
       <span className="my-1 h-0.5 w-8 rounded-full bg-white/10" />
       {hosts.map((h) => (
-        <HostIcon key={h.url} host={h} onRemove={() => {
-          if (window.confirm(t('rail.host.removeConfirm', { name: hostLabel(h) }))) removeHost(h.url);
-        }} />
+        <HostIcon
+          key={h.url}
+          host={h}
+          onRemove={() => {
+            if (window.confirm(t('rail.host.removeConfirm', { name: hostLabel(h) })))
+              removeHost(h.url);
+          }}
+        />
       ))}
       <div className="group/srv relative">
         <button

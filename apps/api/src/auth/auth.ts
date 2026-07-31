@@ -50,7 +50,10 @@ function guestHmac(message: string): string {
     .digest('base64url');
 }
 
-export function issueGuestToken(slug: string, ttlMs = GUEST_TOKEN_TTL_MS): {
+export function issueGuestToken(
+  slug: string,
+  ttlMs = GUEST_TOKEN_TTL_MS,
+): {
   token: string;
   exp: number;
 } {

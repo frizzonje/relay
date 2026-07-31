@@ -36,7 +36,18 @@ type Draft = ReplyRef;
 // ── Иконки действий (Feather, strokeWidth 2) ───────────────────────────────
 function IconReply({ className }: { className?: string }) {
   return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
       <polyline points="9 17 4 12 9 7" />
       <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
     </svg>
@@ -44,7 +55,17 @@ function IconReply({ className }: { className?: string }) {
 }
 function IconEdit() {
   return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <path d="M12 20h9" />
       <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
     </svg>
@@ -52,7 +73,17 @@ function IconEdit() {
 }
 function IconTrash() {
   return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <polyline points="3 6 5 6 21 6" />
       <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
     </svg>
@@ -60,7 +91,17 @@ function IconTrash() {
 }
 function IconEye() {
   return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
       <circle cx="12" cy="12" r="3" />
     </svg>
@@ -68,7 +109,17 @@ function IconEye() {
 }
 function IconSmile() {
   return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <circle cx="12" cy="12" r="10" />
       <path d="M8 14s1.5 2 4 2 4-2 4-2" />
       <line x1="9" y1="9" x2="9.01" y2="9" />
@@ -87,7 +138,17 @@ function IconDots() {
 }
 function IconArrowDown() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <line x1="12" y1="5" x2="12" y2="19" />
       <polyline points="19 12 12 19 5 12" />
     </svg>
@@ -99,7 +160,8 @@ function IconArrowDown() {
 // раскрываются в панель ровно того же размера и формы, что и сама капсула,
 // и выравниваются по её правому краю — не «второе окошко другой породы».
 /** Геометрия капсулы: скругление, рамка, внутренний отступ, шаг кнопок. */
-const CAPSULE = 'flex items-center gap-px rounded-full border border-white/[0.08] p-[2px] backdrop-blur-md';
+const CAPSULE =
+  'flex items-center gap-px rounded-full border border-white/[0.08] p-[2px] backdrop-blur-md';
 /**
  * Выпадающая капсула: та же геометрия, но плотный фон и тень — она лежит
  * поверх ленты. Позиционируется от тулбара (у него `relative`), поэтому оба
@@ -118,7 +180,10 @@ const CAPSULE_POPOVER_UP = cn(
 /** Ячейка капсулы — общий размер для кнопок и эмодзи. */
 const CAPSULE_CELL = 'grid h-6 w-6 place-items-center rounded-full';
 /** Кнопка капсулы: ячейка плюс монохромный ховер. */
-const CAPSULE_BTN = cn(CAPSULE_CELL, 'text-text-muted transition-colors hover:bg-white/[0.08] hover:text-text-header');
+const CAPSULE_BTN = cn(
+  CAPSULE_CELL,
+  'text-text-muted transition-colors hover:bg-white/[0.08] hover:text-text-header',
+);
 /** Общая анимация раскрытия меню — одинаковая у пикера и у «⋯». */
 const popoverAnim = {
   initial: { opacity: 0, y: -4, scale: 0.94 },
@@ -590,7 +655,12 @@ function Message({
     openContextMenu(
       e,
       [
-        { id: 'msg-reply', label: t('chat.action.reply'), icon: 'reply' as const, run: () => onReply(msg) },
+        {
+          id: 'msg-reply',
+          label: t('chat.action.reply'),
+          icon: 'reply' as const,
+          run: () => onReply(msg),
+        },
         msg.text
           ? {
               id: 'msg-copy',
@@ -632,18 +702,21 @@ function Message({
       {/* Карточка обжимается по содержимому (flex-ребёнок без flex-1) — не
           растягивается на всю страницу; подсветка ховера обнимает только её.
           В режиме правки даём умеренную фиксированную ширину под textarea. */}
-      <div
-        className="flex min-w-0 max-w-[min(100%,720px)] gap-3 rounded-[10px] px-2.5 py-1.5 transition-colors group-hover:bg-white/[0.03]"
-      >
+      <div className="flex min-w-0 max-w-[min(100%,720px)] gap-3 rounded-[10px] px-2.5 py-1.5 transition-colors group-hover:bg-white/[0.03]">
         <div
           className="mt-0.5 h-[38px] w-[38px] shrink-0 rounded-full"
           style={avatarStyle(msg.name ?? '')}
         />
         <div className="min-w-0 flex-1">
-          {msg.replyTo && <ReplyQuote reply={msg.replyTo} onJump={() => onJumpTo(msg.replyTo!.id)} />}
+          {msg.replyTo && (
+            <ReplyQuote reply={msg.replyTo} onJump={() => onJumpTo(msg.replyTo!.id)} />
+          )}
           <div className="flex items-baseline gap-2">
             <span
-              className={cn('text-[15px] font-semibold', mine ? 'text-[#79a6ff]' : 'text-text-header')}
+              className={cn(
+                'text-[15px] font-semibold',
+                mine ? 'text-[#79a6ff]' : 'text-text-header',
+              )}
             >
               {msg.name}
             </span>
@@ -679,7 +752,16 @@ function Message({
             aria-label={t('chat.edit.cancel')}
             className={CAPSULE_BTN}
           >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <svg
+              width="11"
+              height="11"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
@@ -871,8 +953,7 @@ export function ChatPanel() {
       await uploadAndSend(p, useReply);
       if (p.previewUrl) URL.revokeObjectURL(p.previewUrl);
     }
-    if (t)
-      getSocket().emit('chat-message', { text: t, ...(replyId ? { replyTo: replyId } : {}) });
+    if (t) getSocket().emit('chat-message', { text: t, ...(replyId ? { replyTo: replyId } : {}) });
   }
 
   async function uploadAndSend(p: PendingFile, replyToId?: string) {
@@ -907,7 +988,9 @@ export function ChatPanel() {
     const accepted: PendingFile[] = [];
     for (const file of files) {
       if (file.size > MAX_UPLOAD_BYTES) {
-        toast.error(t('chat.upload.tooBig', { name: file.name, limit: fmtBytes(MAX_UPLOAD_BYTES) }));
+        toast.error(
+          t('chat.upload.tooBig', { name: file.name, limit: fmtBytes(MAX_UPLOAD_BYTES) }),
+        );
         continue;
       }
       accepted.push({
@@ -1035,7 +1118,17 @@ export function ChatPanel() {
             className="pointer-events-none absolute inset-2 z-30 grid place-items-center rounded-[14px] border-2 border-dashed border-line-strong bg-bg-app/75 backdrop-blur-sm"
           >
             <div className="flex flex-col items-center gap-2 text-text-header">
-              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <svg
+                width="30"
+                height="30"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
                 <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
               </svg>
               <span className="font-mono text-[12px] uppercase tracking-[0.16em]">
@@ -1103,7 +1196,9 @@ export function ChatPanel() {
                 <IconReply className="shrink-0 text-text-muted" />
                 <span className="text-text-muted">{t('chat.reply.label')}</span>
                 <span className="shrink-0 font-medium text-text-header">{reply.name}</span>
-                <span className="truncate text-text-muted">{reply.text || t('chat.attachment')}</span>
+                <span className="truncate text-text-muted">
+                  {reply.text || t('chat.attachment')}
+                </span>
                 <button
                   type="button"
                   onClick={() => setReply(null)}
@@ -1117,7 +1212,11 @@ export function ChatPanel() {
           )}
         </AnimatePresence>
 
-        <PendingAttachments items={pending} onRemove={removePending} onToggleSpoiler={toggleSpoiler} />
+        <PendingAttachments
+          items={pending}
+          onRemove={removePending}
+          onToggleSpoiler={toggleSpoiler}
+        />
         <form
           onSubmit={send}
           className="flex items-center gap-1 rounded-2xl bg-bg-active px-2 py-1.5 ring-1 ring-line transition-shadow focus-within:ring-2 focus-within:ring-line-strong"

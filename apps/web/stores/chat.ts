@@ -39,6 +39,5 @@ export const useChatStore = create<ChatState>((set) => ({
     set((s) => ({
       messages: s.messages.map((m) => (m.id === id ? { ...m, text, editedTs } : m)),
     })),
-  applyDelete: (id) =>
-    set((s) => ({ messages: s.messages.filter((m) => m.id !== id) })),
+  applyDelete: (id) => set((s) => ({ messages: s.messages.filter((m) => m.id !== id) })),
 }));

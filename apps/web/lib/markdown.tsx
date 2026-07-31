@@ -80,7 +80,10 @@ export function renderMarkdownMini(text: string): ReactNode {
   CODE_RE.lastIndex = 0;
   let i = 0;
   while ((m = CODE_RE.exec(text))) {
-    if (m.index > last) out.push(<Fragment key={`c-t${i}`}>{renderText(text.slice(last, m.index), `t${i}`)}</Fragment>);
+    if (m.index > last)
+      out.push(
+        <Fragment key={`c-t${i}`}>{renderText(text.slice(last, m.index), `t${i}`)}</Fragment>,
+      );
     out.push(
       <code
         key={`c-c${i++}`}
@@ -91,6 +94,7 @@ export function renderMarkdownMini(text: string): ReactNode {
     );
     last = CODE_RE.lastIndex;
   }
-  if (last < text.length) out.push(<Fragment key={`c-t${i}`}>{renderText(text.slice(last), `t${i}`)}</Fragment>);
+  if (last < text.length)
+    out.push(<Fragment key={`c-t${i}`}>{renderText(text.slice(last), `t${i}`)}</Fragment>);
   return out;
 }
