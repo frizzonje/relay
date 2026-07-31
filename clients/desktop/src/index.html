@@ -1,124 +1,299 @@
 <!doctype html>
-<html lang="ru">
+<!-- lang проставляет main.js по языку движка; en — база словаря. -->
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>relay</title>
     <style>
-      /* Токены из apps/web (relay dark). Локальный экран выбора сервера —
-         единственная «своя» страница десктопа; всё остальное грузится из web-UI. */
+      /* Экран выбора сервера — единственная «своя» страница десктопа, всё
+         остальное грузится из web-UI. Токены, знак и фон взяты из apps/web
+         (relay dark), но композиция здесь своя: на логине веба одно поле, а тут
+         пять смысловых блоков, и центрировать их стопкой нечестно. Всё сидит на
+         одной левой сетке, а главный сценарий экрана — вернуться на знакомый
+         сервер, поэтому «Недавние» оформлены как настоящие строки-кнопки, а не
+         как список-приписка.
+         ВНИМАНИЕ: у страницы нет сборки и общего источника с apps/web — при
+         правке брендовых токенов или знака в вебе править и здесь. */
       :root {
         --bg: #08090b;
-        --panel: #0f1114;
+        --panel: #0d0f12;
+        --elev: #111418;
         --text: #e7e9ec;
+        --header: #f2f3f5;
         --muted: #8b9199;
-        --line: rgba(255, 255, 255, 0.1);
+        --faint: #5b6169;
+        --line: rgba(255, 255, 255, 0.07);
+        --line-strong: rgba(255, 255, 255, 0.12);
         --accent: #e8eaed;
         --danger: #e5573f;
+        --radius-card: 15px;
       }
       * {
         box-sizing: border-box;
       }
+      /* Свой display (flex/grid) перебивает UA-стиль атрибута hidden — а на нём
+         держится всё переключение экранов в main.js. Ставим явно и один раз. */
+      [hidden] {
+        display: none !important;
+      }
       html,
       body {
-        height: 100%;
         margin: 0;
       }
       body {
+        /* min-height, а не height: в маленьком окне (minHeight 960×600) карточка
+           с баннером «нет WebRTC» и списком недавних выше экрана — при height
+           верх карточки уехал бы за край без возможности доскроллить. */
+        min-height: 100vh;
         background: var(--bg);
         color: var(--text);
         font-family:
           'IBM Plex Sans',
           system-ui,
           -apple-system,
+          'Segoe UI',
           sans-serif;
+        -webkit-font-smoothing: antialiased;
         display: grid;
         place-items: center;
+        padding: 24px 20px;
       }
+
+      /* ── Фон-«атмосфера» (порт .atmos из apps/web/app/globals.css) ────────── */
+      .atmos {
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        overflow: hidden;
+        pointer-events: none;
+        background: var(--bg);
+      }
+      .atmos__dots {
+        position: absolute;
+        inset: 0;
+        background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1.5px);
+        background-size: 26px 26px;
+        -webkit-mask-image: radial-gradient(130% 120% at 50% 40%, #000 20%, transparent 82%);
+        mask-image: radial-gradient(130% 120% at 50% 40%, #000 20%, transparent 82%);
+      }
+      .atmos__glow {
+        position: absolute;
+        filter: blur(48px);
+        mix-blend-mode: screen;
+        will-change: transform;
+      }
+      .atmos__glow--a {
+        width: 52%;
+        height: 160%;
+        left: -6%;
+        top: -30%;
+        background: radial-gradient(circle at center, rgba(120, 150, 200, 0.16), transparent 60%);
+        animation: drift1 22s ease-in-out infinite;
+      }
+      .atmos__glow--b {
+        width: 48%;
+        height: 160%;
+        right: -8%;
+        bottom: -32%;
+        background: radial-gradient(circle at center, rgba(190, 196, 214, 0.11), transparent 60%);
+        animation: drift2 28s ease-in-out infinite;
+      }
+      @keyframes drift1 {
+        0%,
+        100% {
+          transform: translate3d(0, 0, 0) scale(1);
+        }
+        50% {
+          transform: translate3d(8%, -7%, 0) scale(1.18);
+        }
+      }
+      @keyframes drift2 {
+        0%,
+        100% {
+          transform: translate3d(0, 0, 0) scale(1.1);
+        }
+        50% {
+          transform: translate3d(-9%, 6%, 0) scale(1.28);
+        }
+      }
+
+      /* ── Карточка ─────────────────────────────────────────────────────────── */
       .card {
-        width: 360px;
-        max-width: calc(100vw - 48px);
+        width: 100%;
+        max-width: 400px;
         background: var(--panel);
         border: 1px solid var(--line);
-        border-radius: 16px;
-        padding: 28px 24px;
+        border-radius: var(--radius-card);
+        padding: 24px;
         box-shadow: 0 40px 120px rgba(0, 0, 0, 0.55);
+        /* Тот же вход, что у карточки логина в вебе (opacity/y через framer). */
+        animation: cardIn 0.4s ease-out both;
+      }
+      @keyframes cardIn {
+        from {
+          opacity: 0;
+          transform: translateY(14px);
+        }
+      }
+      /* Ошибка трясёт карточку — как на /login в вебе. */
+      .card.shake {
+        animation: cardShake 0.4s ease both;
+      }
+      @keyframes cardShake {
+        0%,
+        100% {
+          transform: translateX(0);
+        }
+        20% {
+          transform: translateX(-8px);
+        }
+        40% {
+          transform: translateX(8px);
+        }
+        60% {
+          transform: translateX(-8px);
+        }
+        80% {
+          transform: translateX(8px);
+        }
+      }
+
+      /* Шапка: знак и слово в одну строку — у карточки появляется верх, а не
+         стопка из трёх центрированных элементов над единственным полем. */
+      .head {
+        display: flex;
+        align-items: center;
+        gap: 13px;
+        margin-bottom: 22px;
       }
       .brand {
+        margin: 0;
+        font-size: 21px;
         font-weight: 600;
-        letter-spacing: 0.04em;
-        margin: 0 0 4px;
+        letter-spacing: -0.01em;
+        line-height: 1.1;
+        color: var(--header);
       }
       .hint {
+        margin: 3px 0 0;
         color: var(--muted);
-        font-size: 13px;
-        margin: 0 0 20px;
+        font-size: 12.5px;
+        line-height: 1.35;
+      }
+
+      /* ── Форма ────────────────────────────────────────────────────────────── */
+      form {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
       }
       label {
-        display: block;
-        font-size: 12px;
-        color: var(--muted);
-        margin-bottom: 8px;
+        font-size: 10.5px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--faint);
       }
       input {
         width: 100%;
-        padding: 11px 12px;
-        background: #0b0c0f;
+        padding: 11px 13px;
+        background: var(--elev);
         border: 1px solid var(--line);
         border-radius: 10px;
         color: var(--text);
-        font-family: 'IBM Plex Mono', ui-monospace, monospace;
-        font-size: 14px;
+        font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+        font-size: 13.5px;
         outline: none;
+        transition:
+          border-color 0.15s ease,
+          box-shadow 0.15s ease;
+      }
+      input::placeholder {
+        color: var(--faint);
       }
       input:focus {
-        border-color: rgba(255, 255, 255, 0.24);
+        border-color: var(--line-strong);
+        box-shadow: 0 0 0 1px var(--line-strong);
       }
       .primary {
-        margin-top: 16px;
         width: 100%;
-        padding: 11px 12px;
+        margin-top: 2px;
+        padding: 11px 13px;
         background: var(--accent);
         color: #0b0c0f;
         border: 0;
         border-radius: 10px;
+        font-family: inherit;
         font-weight: 600;
         font-size: 14px;
         cursor: pointer;
+        transition:
+          filter 0.15s ease,
+          transform 0.06s ease;
+      }
+      .primary:hover {
+        filter: brightness(0.95);
+      }
+      .primary:active {
+        transform: translateY(1px);
       }
       .primary:disabled {
-        opacity: 0.5;
-        cursor: default;
+        opacity: 0.6;
+        cursor: wait;
+        transform: none;
+        filter: none;
       }
-      .err {
+
+      /* Ошибка/статус. :empty — чтобы место под сообщение не зияло дырой между
+         кнопкой и «Недавними»: резервировать его незачем, сообщение приходит
+         только в ответ на действие человека. */
+      .msg {
+        margin: 12px 0 0;
+        font-size: 12.5px;
+        line-height: 1.4;
+        font-weight: 600;
         color: var(--danger);
-        font-size: 12px;
-        min-height: 16px;
-        margin-top: 10px;
       }
-      /* :not([hidden]) — иначе display перебил бы UA-стиль атрибута hidden. */
-      .skip:not([hidden]) {
+      .msg:empty {
+        display: none;
+      }
+      /* Техническая причина от движка — приглушённой строкой под сообщением. */
+      .msg-detail {
+        display: block;
+        margin-top: 3px;
+        font-family: 'IBM Plex Mono', ui-monospace, monospace;
+        font-size: 11px;
+        font-weight: 400;
+        color: var(--faint);
+      }
+      /* «Проверяю доступность…» — не ошибка, тон нейтральный. */
+      .msg.busy {
+        color: var(--muted);
+        font-weight: 400;
+      }
+      .skip {
         display: inline-block;
+        margin-top: 6px;
         color: var(--muted);
         font-size: 12px;
-        margin-top: 4px;
       }
       .skip:hover {
         color: var(--text);
       }
 
-      /* Автоподключение к последнему серверу: пока идёт проверка, показываем
-         куда именно идём и даём отменить — иначе автопереход выглядел бы как
-         «клиент сам куда-то ушёл». */
+      /* ── Автоподключение к последнему серверу ─────────────────────────────── */
+      /* Показывается вместо формы, пока идёт проверка: видно, куда именно идём,
+         и есть чем отменить — иначе автопереход выглядел бы как «клиент сам
+         куда-то ушёл». Индикатор процесса — сам знак (data-v="onair"). */
       .auto-origin {
         font-family: 'IBM Plex Mono', ui-monospace, monospace;
-        font-size: 14px;
+        font-size: 13.5px;
         margin: 0 0 6px;
         overflow-wrap: anywhere;
       }
       .auto-note {
         color: var(--muted);
-        font-size: 12px;
+        font-size: 12.5px;
         margin: 0;
       }
       .ghost {
@@ -129,22 +304,34 @@
         color: var(--muted);
         border: 1px solid var(--line);
         border-radius: 10px;
+        font-family: inherit;
         font-size: 13px;
         cursor: pointer;
+        transition:
+          color 0.15s ease,
+          border-color 0.15s ease;
       }
       .ghost:hover {
         color: var(--text);
-        border-color: rgba(255, 255, 255, 0.24);
+        border-color: var(--line-strong);
       }
 
-      /* Недавние серверы: чаще всего нужен один из уже знакомых адресов, а не
-         набор с нуля. */
+      /* ── Недавние серверы ─────────────────────────────────────────────────── */
+      /* Главный сценарий экрана: вернуться туда, где уже был. Поэтому строки —
+         настоящие кнопки с ховером и фокусом, хост подан ярче схемы (схема —
+         шум, хост — информация), а у адреса, куда клиент уходит сам, стоит
+         пометка: иначе автопереход при старте ничем не объяснён. */
+      #recent-wrap {
+        margin-top: 20px;
+        padding-top: 18px;
+        border-top: 1px solid var(--line);
+      }
       .recent-title {
-        margin: 20px 0 8px;
-        font-size: 11px;
-        letter-spacing: 0.16em;
+        margin: 0 0 6px;
+        font-size: 10.5px;
+        letter-spacing: 0.14em;
         text-transform: uppercase;
-        color: var(--muted);
+        color: var(--faint);
       }
       .recent {
         list-style: none;
@@ -152,45 +339,83 @@
         padding: 0;
         display: flex;
         flex-direction: column;
-        gap: 4px;
       }
       .recent li {
         display: flex;
         align-items: center;
-        gap: 4px;
+        gap: 2px;
       }
       .recent-go {
         flex: 1;
         min-width: 0;
-        padding: 8px 10px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 10px;
         background: transparent;
-        border: 1px solid transparent;
+        border: 0;
         border-radius: 8px;
-        color: var(--text);
         font-family: 'IBM Plex Mono', ui-monospace, monospace;
         font-size: 12.5px;
         text-align: left;
         cursor: pointer;
+        transition: background-color 0.15s ease;
+      }
+      .recent-go:hover {
+        background: rgba(255, 255, 255, 0.05);
+      }
+      .recent-go:focus-visible {
+        outline: 1px solid var(--line-strong);
+        outline-offset: -1px;
+      }
+      .recent-addr {
+        min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-      .recent-go:hover {
-        border-color: var(--line);
-        background: rgba(255, 255, 255, 0.04);
+      .recent-scheme {
+        color: var(--faint);
+      }
+      .recent-host {
+        color: var(--text);
+      }
+      .recent-go:hover .recent-host {
+        color: var(--header);
+      }
+      /* «Сюда клиент вернётся сам при следующем запуске». */
+      .recent-badge {
+        flex: none;
+        margin-left: auto;
+        font-family: inherit;
+        font-size: 9.5px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--faint);
       }
       .recent-del {
         flex: none;
-        width: 28px;
-        height: 28px;
+        width: 26px;
+        height: 26px;
         padding: 0;
         background: transparent;
         border: 0;
-        border-radius: 8px;
-        color: var(--muted);
-        font-size: 17px;
+        border-radius: 7px;
+        color: var(--faint);
+        font-size: 16px;
         line-height: 1;
         cursor: pointer;
+        opacity: 0;
+        transition:
+          opacity 0.15s ease,
+          color 0.15s ease,
+          background-color 0.15s ease;
+      }
+      /* Крестик — не главное действие строки: проступает по наведению, а не
+         висит красным пятном в спокойном состоянии. */
+      .recent li:hover .recent-del,
+      .recent-del:focus-visible {
+        opacity: 1;
       }
       .recent-del:hover {
         color: var(--danger);
@@ -203,17 +428,237 @@
         border: 1px solid rgba(229, 87, 63, 0.45);
         background: rgba(229, 87, 63, 0.08);
         border-radius: 10px;
-        padding: 12px 14px;
+        padding: 11px 13px;
         margin: 0 0 18px;
         font-size: 12px;
         line-height: 1.5;
       }
       .warn b {
         display: block;
-        margin-bottom: 4px;
+        margin-bottom: 3px;
       }
       .warn span {
         color: var(--muted);
+      }
+
+      /* ── Знак relay: mesh-триада (порт components/ui/Logo.tsx) ─────────────
+         Три узла-друга, соединённые рёбрами. Здесь знак — индикатор состояния,
+         а не украшение: спокойные draw/pulse в покое, onair пока стучимся на
+         сервер, handshake в момент, когда сервер ответил и мы уходим на него
+         (вариант ставит main.js через data-v). */
+      .logo {
+        flex: none;
+        display: inline-flex;
+      }
+      .logo svg {
+        overflow: visible;
+      }
+      .logo .v {
+        display: none;
+      }
+      .logo[data-v='pulse'] .v-pulse,
+      .logo[data-v='onair'] .v-onair,
+      .logo[data-v='handshake'] .v-handshake {
+        display: block;
+      }
+
+      .logo circle.node {
+        transform-box: fill-box;
+        transform-origin: center;
+      }
+
+      /* draw: рёбра прочерчиваются, узлы всплывают пружиной */
+      .logo[data-v='draw'] .edge {
+        --len: 30;
+        stroke-dasharray: 30;
+        animation: drawEdge 2.6s ease infinite alternate both;
+      }
+      .logo[data-v='draw'] .edge-1 {
+        animation-delay: 0.1s;
+      }
+      .logo[data-v='draw'] .edge-2 {
+        animation-delay: 0.35s;
+      }
+      .logo[data-v='draw'] .edge-3 {
+        animation-delay: 0.6s;
+      }
+      .logo[data-v='draw'] .node {
+        animation: nodeIn 2.6s cubic-bezier(0.2, 1.4, 0.4, 1) infinite alternate both;
+      }
+      .logo[data-v='draw'] .node-top {
+        animation-delay: 1s;
+      }
+      .logo[data-v='draw'] .node-left {
+        animation-delay: 1.15s;
+      }
+      .logo[data-v='draw'] .node-right {
+        animation-delay: 1.3s;
+      }
+      @keyframes drawEdge {
+        0% {
+          stroke-dashoffset: var(--len);
+        }
+        35%,
+        100% {
+          stroke-dashoffset: 0;
+        }
+      }
+      @keyframes nodeIn {
+        0% {
+          opacity: 0;
+          transform: scale(0);
+        }
+        25% {
+          opacity: 1;
+          transform: scale(1.08);
+        }
+        35%,
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+
+      /* pulse: узлы бьются по очереди с расходящимися кольцами */
+      .logo[data-v='pulse'] .ring {
+        transform-box: fill-box;
+        transform-origin: center;
+        animation: hbRing 2s ease infinite;
+      }
+      .logo[data-v='pulse'] .ring-left {
+        animation-delay: 0.16s;
+      }
+      .logo[data-v='pulse'] .ring-right {
+        animation-delay: 0.32s;
+      }
+      .logo[data-v='pulse'] .node {
+        animation: hbPulse 2s ease infinite;
+      }
+      .logo[data-v='pulse'] .node-left {
+        animation-delay: 0.16s;
+      }
+      .logo[data-v='pulse'] .node-right {
+        animation-delay: 0.32s;
+      }
+      @keyframes hbPulse {
+        0%,
+        100% {
+          transform: scale(1);
+        }
+        12% {
+          transform: scale(1.16);
+        }
+        26% {
+          transform: scale(1);
+        }
+      }
+      @keyframes hbRing {
+        0% {
+          transform: scale(0.7);
+          opacity: 0.5;
+        }
+        70% {
+          opacity: 0;
+        }
+        100% {
+          transform: scale(2.4);
+          opacity: 0;
+        }
+      }
+
+      /* onair: активный узел пускает волны-пинги — «стучимся на сервер» */
+      .logo[data-v='onair'] .ping {
+        transform-box: fill-box;
+        transform-origin: center;
+        animation: logoPing 2.4s ease infinite;
+      }
+      .logo[data-v='onair'] .ping-2 {
+        animation-delay: 1.2s;
+      }
+      .logo[data-v='onair'] .node-top {
+        animation: topGlow 2.4s ease infinite;
+      }
+      @keyframes logoPing {
+        0% {
+          transform: scale(0.55);
+          opacity: 0.6;
+        }
+        75% {
+          opacity: 0;
+        }
+        100% {
+          transform: scale(3);
+          opacity: 0;
+        }
+      }
+      @keyframes topGlow {
+        0%,
+        100% {
+          filter: drop-shadow(0 0 1px rgba(231, 233, 236, 0.3));
+        }
+        50% {
+          filter: drop-shadow(0 0 5px rgba(231, 233, 236, 0.9));
+        }
+      }
+
+      /* handshake: рёбра по кругу «схватываются», узлы вспыхивают — сервер
+         ответил, уходим на него (играет, пока грузится web-UI) */
+      .logo[data-v='handshake'] .hs-edge {
+        --len: 24;
+        stroke-dasharray: 24;
+        stroke-dashoffset: 24;
+        animation: hsEdge 3s ease infinite;
+      }
+      .logo[data-v='handshake'] .hs-edge-2 {
+        animation-delay: 0.55s;
+      }
+      .logo[data-v='handshake'] .hs-edge-3 {
+        animation-delay: 1.1s;
+      }
+      .logo[data-v='handshake'] .node {
+        animation: hsNode 3s ease infinite;
+      }
+      .logo[data-v='handshake'] .node-left {
+        animation-delay: 0.35s;
+      }
+      .logo[data-v='handshake'] .node-right {
+        animation-delay: 0.9s;
+      }
+      @keyframes hsEdge {
+        0% {
+          stroke-dashoffset: var(--len);
+          opacity: 0;
+        }
+        6% {
+          opacity: 1;
+        }
+        20% {
+          stroke-dashoffset: 0;
+          opacity: 1;
+        }
+        40% {
+          opacity: 0.9;
+        }
+        55%,
+        100% {
+          stroke-dashoffset: 0;
+          opacity: 0;
+        }
+      }
+      @keyframes hsNode {
+        0%,
+        100% {
+          transform: scale(1);
+          filter: drop-shadow(0 0 0 rgba(242, 243, 245, 0));
+        }
+        12% {
+          transform: scale(1.22);
+          filter: drop-shadow(0 0 4px rgba(242, 243, 245, 0.8));
+        }
+        24% {
+          transform: scale(1);
+          filter: drop-shadow(0 0 0 rgba(242, 243, 245, 0));
+        }
       }
 
       /* Контекстное меню оболочки. Меню движка отсюда выключено (см. main.js):
@@ -225,7 +670,7 @@
         min-width: 190px;
         padding: 4px;
         background: #101216;
-        border: 1px solid rgba(255, 255, 255, 0.12);
+        border: 1px solid var(--line-strong);
         border-radius: 11px;
         box-shadow: 0 18px 44px rgba(0, 0, 0, 0.6);
         animation: ctxIn 0.13s cubic-bezier(0.16, 1, 0.3, 1);
@@ -255,7 +700,7 @@
       }
       .ctx-item:hover {
         background: rgba(255, 255, 255, 0.07);
-        color: #f2f3f5;
+        color: var(--header);
       }
       .ctx-item.danger:hover {
         background: rgba(229, 87, 63, 0.15);
@@ -265,46 +710,210 @@
         flex: none;
         font-family: 'IBM Plex Mono', ui-monospace, monospace;
         font-size: 10.5px;
-        color: #5b6169;
+        color: var(--faint);
+      }
+
+      /* Доступность: уважаем prefers-reduced-motion (как globals.css в вебе). */
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.001ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.001ms !important;
+        }
       }
     </style>
   </head>
   <body>
-    <main class="card">
-      <p class="brand">relay</p>
-      <p class="hint" id="hint">Адрес вашей инсталляции relay</p>
+    <div class="atmos" aria-hidden="true">
+      <div class="atmos__dots"></div>
+      <div class="atmos__glow atmos__glow--a"></div>
+      <div class="atmos__glow atmos__glow--b"></div>
+    </div>
+
+    <main class="card" id="card">
+      <header class="head">
+        <!-- Знак relay. Разметка 1:1 с apps/web/components/ui/Logo.tsx; заливка
+             узлов совпадает с фоном карточки, чтобы «прорезать» рёбра. -->
+        <span class="logo" id="logo" data-v="draw" aria-hidden="true">
+          <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
+            <line
+              class="edge edge-1"
+              x1="24"
+              y1="13"
+              x2="12.5"
+              y2="34"
+              stroke="#7a828d"
+              stroke-width="1.5"
+              stroke-linecap="round"
+            />
+            <line
+              class="edge edge-2"
+              x1="24"
+              y1="13"
+              x2="35.5"
+              y2="34"
+              stroke="#7a828d"
+              stroke-width="1.5"
+              stroke-linecap="round"
+            />
+            <line
+              class="edge edge-3"
+              x1="12.5"
+              y1="34"
+              x2="35.5"
+              y2="34"
+              stroke="#7a828d"
+              stroke-width="1.5"
+              stroke-linecap="round"
+            />
+
+            <g class="v v-pulse">
+              <circle
+                class="ring ring-top"
+                cx="24"
+                cy="13"
+                r="6"
+                fill="none"
+                stroke="rgba(231,233,236,.6)"
+                stroke-width="1.5"
+              />
+              <circle
+                class="ring ring-left"
+                cx="12.5"
+                cy="34"
+                r="5"
+                fill="none"
+                stroke="rgba(154,160,168,.55)"
+                stroke-width="1.5"
+              />
+              <circle
+                class="ring ring-right"
+                cx="35.5"
+                cy="34"
+                r="5"
+                fill="none"
+                stroke="rgba(154,160,168,.55)"
+                stroke-width="1.5"
+              />
+            </g>
+
+            <g class="v v-onair">
+              <circle
+                class="ping ping-1"
+                cx="24"
+                cy="13"
+                r="6"
+                fill="none"
+                stroke="rgba(231,233,236,.7)"
+                stroke-width="1.5"
+              />
+              <circle
+                class="ping ping-2"
+                cx="24"
+                cy="13"
+                r="6"
+                fill="none"
+                stroke="rgba(231,233,236,.7)"
+                stroke-width="1.5"
+              />
+            </g>
+
+            <g class="v v-handshake">
+              <line
+                class="hs-edge hs-edge-1"
+                x1="24"
+                y1="13"
+                x2="12.5"
+                y2="34"
+                stroke="#f2f3f5"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              />
+              <line
+                class="hs-edge hs-edge-2"
+                x1="35.5"
+                y1="34"
+                x2="24"
+                y2="13"
+                stroke="#f2f3f5"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              />
+              <line
+                class="hs-edge hs-edge-3"
+                x1="12.5"
+                y1="34"
+                x2="35.5"
+                y2="34"
+                stroke="#f2f3f5"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              />
+            </g>
+
+            <circle
+              class="node node-left"
+              cx="12.5"
+              cy="34"
+              r="5"
+              fill="#0d0f12"
+              stroke="#9aa0a8"
+              stroke-width="1.5"
+            />
+            <circle
+              class="node node-right"
+              cx="35.5"
+              cy="34"
+              r="5"
+              fill="#0d0f12"
+              stroke="#9aa0a8"
+              stroke-width="1.5"
+            />
+            <circle class="node node-top" cx="24" cy="13" r="6" fill="#e7e9ec" />
+          </svg>
+        </span>
+        <div>
+          <h1 class="brand">relay</h1>
+          <p class="hint" id="hint" data-i18n="hint.pick"></p>
+        </div>
+      </header>
 
       <!-- Заполняется из main.js только если движок не умеет WebRTC. -->
       <section class="warn" id="no-webrtc" hidden></section>
 
-      <!-- Автоподключение к последнему серверу. Показывается вместо формы,
-           пока идёт проверка доступности; «Отмена» возвращает к выбору. -->
       <section id="auto" hidden>
         <p class="auto-origin" id="auto-origin"></p>
-        <p class="auto-note">Проверяю доступность…</p>
-        <button class="ghost" id="auto-cancel" type="button">Отмена</button>
+        <p class="auto-note" data-i18n="status.checking"></p>
+        <button class="ghost" id="auto-cancel" type="button" data-i18n="action.cancel"></button>
       </section>
 
+      <!-- type="text", а не "url": адрес разбирает normalize() в main.js и об
+           ошибке говорит нашим оформлением. У type="url" отправку перехватил бы
+           движок своим пузырём валидации — чужой интерфейс в нативном окне,
+           ровно как меню движка по ПКМ. -->
       <form id="form">
-        <label for="url">Сервер</label>
+        <label for="url" data-i18n="field.server"></label>
         <input
           id="url"
           name="url"
-          type="url"
+          type="text"
           inputmode="url"
           placeholder="https://relay.example.com"
           autocomplete="off"
           spellcheck="false"
         />
-        <button class="primary" id="go" type="submit">Подключиться</button>
-        <p class="err" id="err"></p>
-        <!-- Показывается только когда probe сервера упал: обход на случай,
-             если проверка ошибается, а навигация прошла бы. -->
-        <a class="skip" id="skip" href="#" hidden>Перейти всё равно</a>
+        <button class="primary" id="go" type="submit" data-i18n="action.connect"></button>
       </form>
 
+      <p class="msg" id="err" role="status" aria-live="polite"></p>
+      <!-- Показывается только когда probe сервера упал: обход на случай,
+           если проверка ошибается, а навигация прошла бы. -->
+      <a class="skip" id="skip" href="#" hidden data-i18n="action.goAnyway"></a>
+
       <section id="recent-wrap" hidden>
-        <p class="recent-title">Недавние</p>
+        <p class="recent-title" data-i18n="recent.title"></p>
         <ul class="recent" id="recent"></ul>
       </section>
     </main>
