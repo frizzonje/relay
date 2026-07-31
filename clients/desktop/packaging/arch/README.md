@@ -30,6 +30,11 @@ no extra CI build needed.
 
 ## Install (end user)
 
+> [!NOTE]
+> Neither package is published to the AUR yet — the commands below will only work
+> once the recipes below are pushed to their AUR git repos. Until then, build them
+> from this directory (see "Test a PKGBUILD locally").
+
 ```bash
 paru -S relay-desktop-bin      # prebuilt (fast); or `yay -S …`
 paru -S relay-desktop          # build from source
