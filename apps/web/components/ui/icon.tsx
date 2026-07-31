@@ -6,6 +6,8 @@ import { cn } from '@/lib/utils';
  */
 export type IconName =
   | 'chevron-up'
+  | 'eye-off'
+  | 'eye'
   | 'headphone-off'
   | 'headphones'
   | 'maximize-2'
