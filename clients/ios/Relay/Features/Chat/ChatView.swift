@@ -9,6 +9,7 @@ struct ChatView: View {
     let channel: Channel
 
     @State private var draft: String = ""
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,6 +21,11 @@ struct ChatView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { socket.chatJoin(slug: channel.slug, name: nil) }
         .onDisappear { socket.chatLeave() }
+        // Канал удалили, пока мы в нём сидели — уходим назад к списку. Писать
+        // всё равно уже некуда: сервер выписал нас из комнаты.
+        .onChange(of: socket.closedChat) {
+            if socket.closedChat == channel.slug { dismiss() }
+        }
     }
 
     private var messageList: some View {

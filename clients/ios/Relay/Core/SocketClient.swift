@@ -23,6 +23,9 @@ final class SocketClient: ObservableObject {
     // Текстовый чат текущего открытого канала.
     @Published private(set) var messages: [ChatMessage] = []
     @Published private(set) var roster: [String] = []
+    /// Слаг канала, который сервер закрыл под нами (удалили). ChatView по нему
+    /// уходит назад — иначе на экране остался бы канал-призрак.
+    @Published private(set) var closedChat: String?
 
     // Токен протух (сервер сделал disconnect сразу после connect) → релогин.
     var onAuthExpired: (() -> Void)?
@@ -106,6 +109,10 @@ final class SocketClient: ObservableObject {
         sock.on("chat-roster") { [weak self] data, _ in
             self?.onMain { self?.roster = SocketClient.decode(data.first) ?? [] }
         }
+        sock.on("chat-closed") { [weak self] data, _ in
+            guard let d = data.first as? [String: Any], let slug = d["slug"] as? String else { return }
+            self?.onMain { self?.closedChat = slug }
+        }
 
         // ── Голос (WebRTC mesh) ──────────────────────────────────────────────────
         sock.on("peers") { [weak self] data, _ in
@@ -163,6 +170,7 @@ final class SocketClient: ObservableObject {
     func chatJoin(slug: String, name: String?) {
         messages = []
         roster = []
+        closedChat = nil
         var payload: [String: Any] = ["room": slug]
         if let name { payload["name"] = name }
         socket?.emit("chat-join", payload)
