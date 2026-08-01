@@ -54,7 +54,7 @@ mod imp {
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
     };
-    use windows::Win32::System::Threading::{CreateEventW, SetEvent, WaitForSingleObject, INFINITE};
+    use windows::Win32::System::Threading::{CreateEventW, SetEvent, WaitForSingleObject};
 
     // Частота и формат захвата. Process-loopback-клиент инициализируется ЗАДАННЫМ
     // форматом (GetMixFormat для него не годится) — берём 48 кГц stereo f32 и сами
@@ -70,6 +70,10 @@ mod imp {
     const BUFFERFLAGS_SILENT: u32 = 0x2;
     // 100-нс единицы: 20 мс буфер устройства.
     const HNS_BUFFER: i64 = 200_000;
+    // Сколько ждём асинхронную активацию process-loopback клиента, мс. Обычно
+    // она приходит мгновенно; ждать дольше нет смысла — демонстрация уже идёт,
+    // и без звука она лучше, чем зависший поток.
+    const ACTIVATE_TIMEOUT_MS: u32 = 5_000;
 
     /// Дописать строку в лог захвата (`%TEMP%\relay-screen-audio.log`). Ошибки
     /// игнорируем — диагностика не должна ронять захват.
@@ -265,12 +269,23 @@ mod imp {
         *guard = Some(Session { stop, handle });
     }
 
-    /// Остановить захват и дождаться завершения потока.
+    /// Остановить захват. Ждать завершения потока ЗДЕСЬ нельзя: stop() зовётся
+    /// из обработчика события Tauri, то есть на главном потоке приложения, — а
+    /// поток захвата в этот момент сидит внутри WASAPI (GetBuffer/активация) и
+    /// может отвечать не мгновенно. `join()` на главном потоке подвешивал бы всё
+    /// окно, вплоть до «приложение не отвечает». Поэтому флаг ставим сразу, а
+    /// join уносим в отдельный поток — только чтобы прибрать за собой.
+    ///
+    /// Слот SESSION при этом свободен сразу, так что новый старт не ждёт конца
+    /// старого. Пары кадров от уходящего сеанса не будет: перед каждой отправкой
+    /// поток сверяется со своим флагом остановки.
     pub fn stop() {
         let session = SESSION.lock().unwrap().take();
         if let Some(s) = session {
             s.stop.store(true, Ordering::SeqCst);
-            let _ = s.handle.join();
+            std::thread::spawn(move || {
+                let _ = s.handle.join();
+            });
         }
     }
 
@@ -309,9 +324,14 @@ mod imp {
             &handler,
         )?;
 
-        // Ждём коллбэка и забираем результат.
-        if WaitForSingleObject(event, INFINITE) != WAIT_OBJECT_0 {
-            let _ = CloseHandle(event);
+        // Ждём коллбэка и забираем результат. Ждём НЕ бесконечно: если система
+        // не ответила, поток должен уметь умереть — иначе он навсегда останется
+        // висеть внутри WASAPI, а с ним и уборка сеанса.
+        if WaitForSingleObject(event, ACTIVATE_TIMEOUT_MS) != WAIT_OBJECT_0 {
+            // Хендл НЕ закрываем: операция ещё жива и её коллбэк позже дёрнет
+            // SetEvent — на закрытом (и, возможно, переиспользованном) хендле это
+            // уже чужая ручка. Один утёкший event за неудачную активацию дешевле.
+            log("activation TIMED OUT — нативного звука демонстрации не будет");
             return Err(windows::core::Error::from_win32());
         }
         let _ = CloseHandle(event);
@@ -414,8 +434,10 @@ mod imp {
                     }
                     capture.ReleaseBuffer(frames)?;
 
-                    // Флашим накопленное кадрами ~20 мс.
-                    while mono.len() >= FRAME_SAMPLES {
+                    // Флашим накопленное кадрами ~20 мс. Останов проверяем и
+                    // здесь: сеанс, которому сказали умереть, не должен досылать
+                    // кадры в уже собранный на стороне web граф.
+                    while !stop.load(Ordering::SeqCst) && mono.len() >= FRAME_SAMPLES {
                         let chunk: Vec<i16> = mono.drain(..FRAME_SAMPLES).collect();
                         let peak = chunk.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
                         if peak > interval_peak {

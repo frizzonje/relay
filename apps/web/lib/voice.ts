@@ -6,6 +6,7 @@ import { getSocket } from '@/lib/socket';
 import { getSfx } from '@/lib/sfx';
 import {
   isDesktopWindows,
+  notifyScreenPicker,
   startNativeScreenAudio,
   stopNativeScreenAudio,
 } from '@/lib/desktop-screen-audio';
@@ -1520,6 +1521,11 @@ async function startScreen() {
   const nativeAudio = isDesktopWindows();
 
   let display: MediaStream;
+  // Пока открыт нативный выбор источника, оболочка знает об этом: пикер рисует
+  // движок своим модальным окном, и после его закрытия окну нужна побудка
+  // (см. notifyScreenPicker). Закрытие отбиваем в finally — «Отмена» здесь
+  // такой же выход, как и удачный выбор.
+  notifyScreenPicker(true);
   try {
     display = await navigator.mediaDevices.getDisplayMedia({
       video: SCREEN_VIDEO_CONSTRAINTS,
@@ -1532,6 +1538,8 @@ async function startScreen() {
       toast.error(msg('voice.toast.screenFailed', { reason: mediaErrorText(err) }));
     }
     return;
+  } finally {
+    notifyScreenPicker(false);
   }
 
   // Экран реально получен — только теперь освобождаем видео-слот от камеры

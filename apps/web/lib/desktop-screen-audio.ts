@@ -28,6 +28,24 @@ function tauri(): TauriGlobal | null {
   return (window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__ ?? null;
 }
 
+/**
+ * Сообщить оболочке, что открылся (`true`) или закрылся (`false`) нативный
+ * выбор источника демонстрации. Вне Tauri — no-op.
+ *
+ * Пикер рисует движок, а не мы: на Windows это модальное окно WebView2 поверх
+ * нашего. Оболочке эта пара событий нужна, чтобы (1) в логе было видно, дожил
+ * ли клиент до закрытия пикера — есть жалоба на зависание ровно на «Отмене», и
+ * (2) после закрытия разбудить цикл событий окна и вернуть ему фокус. Подробнее
+ * — в обработчике `screen-picker` (clients/desktop/src-tauri/src/main.rs).
+ */
+export function notifyScreenPicker(open: boolean): void {
+  const t = tauri();
+  if (!t) return;
+  void t.event.emit('screen-picker', open).catch(() => {
+    /* оболочка старая или прав нет — на демонстрацию это не влияет */
+  });
+}
+
 /** Оболочка Tauri именно на Windows: только там есть нативный process-loopback. */
 export function isDesktopWindows(): boolean {
   if (!tauri()) return false;
