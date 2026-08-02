@@ -20,6 +20,33 @@ function authGate(req: Request, res: Response, next: NextFunction) {
   res.status(401).json({ error: 'unauthorized' });
 }
 
+/**
+ * Загрузки — плоская витрина: одно имя файла, сгенерированное multer'ом, и
+ * ничего глубже. Проверка не про удобство, а про то, что на ЭТОМ ЖЕ томе живёт
+ * состояние сервиса: DATA_DIR по умолчанию (и в обоих compose) — подпапка
+ * uploads, а в ней registry.json с хэшами паролей закрытых серверов и полным
+ * списком их каналов. Статика отдала бы его по прямой ссылке любому участнику
+ * с пропуском — сокет при этом честно скрывает те же каналы, и дыра выглядит
+ * как «пароль есть, а секрета нет». Режем путь ДО express.static: вложенных
+ * путей у загрузок не бывает ни одного.
+ */
+function flatUploadsOnly(req: Request, res: Response, next: NextFunction) {
+  let name: string;
+  try {
+    // Декодируем сами: express.static раскроет %2f уже после нас, и «плоское»
+    // имя вида `state%2fregistry.json` иначе прошло бы проверку насквозь.
+    name = decodeURIComponent(req.path).replace(/^\/+/, '');
+  } catch {
+    res.status(400).json({ error: 'bad path' });
+    return;
+  }
+  if (!name || name.startsWith('.') || /[\\/]/.test(name)) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+  next();
+}
+
 async function bootstrap() {
   const certPath = process.env.TLS_CERT;
   const keyPath = process.env.TLS_KEY;
@@ -53,6 +80,7 @@ async function bootstrap() {
     );
   }
   app.use(authGate);
+  app.use('/uploads', flatUploadsOnly);
   // Загруженные в чат файлы отдаёт Nest за гейтом; остальную статику (фронт)
   // теперь раздаёт Next за обратным прокси Caddy — здесь её больше нет.
   app.useStaticAssets(UPLOAD_DIR, {

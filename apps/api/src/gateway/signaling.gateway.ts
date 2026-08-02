@@ -8,9 +8,17 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
-import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
+import {
+  createHmac,
+  randomBytes,
+  randomUUID,
+  scrypt,
+  scryptSync,
+  timingSafeEqual,
+} from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { Server, Socket } from 'socket.io';
 import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
 import { sfuHealthy } from '../sfu/sfu-health';
@@ -168,13 +176,27 @@ type SfuTokenResult =
 
 // Пароль сервера храним как `salt:hash` hex (scrypt) — не обратимо, соль на
 // каждый сервер своя. Проверка за постоянное время (timingSafeEqual).
+// Хэшируем при создании сервера — раз в жизни, синхронно и не жалко.
 function hashServerPassword(password: string): string {
   const salt = randomBytes(16);
   const hash = scryptSync(password, salt, 32);
   return salt.toString('hex') + ':' + hash.toString('hex');
 }
 
-function verifyServerPassword(password: string, stored: string): boolean {
+// А вот ПРОВЕРКА — только асинхронная. scrypt честно стоит десятки миллисекунд
+// (замер в контейнере: ~45 мс, на односпроцессорной VM больше), и в синхронном
+// виде это не «медленно», а полная остановка сигналинга: пока считается хэш, не
+// движется ни один звонок. Клиент к тому же переспрашивает разблокировку сам
+// после каждого реконнекта (пароли лежат у него в localStorage), так что после
+// рестарта сервиса такие проверки приходят пачкой ровно в тот момент, когда все
+// переподключаются.
+const scryptAsync = promisify(scrypt) as (
+  password: string,
+  salt: Buffer,
+  keylen: number,
+) => Promise<Buffer>;
+
+async function verifyServerPassword(password: string, stored: string): Promise<boolean> {
   const [saltHex, hashHex] = stored.split(':');
   if (!saltHex || !hashHex) return false;
   let expected: Buffer;
@@ -183,7 +205,7 @@ function verifyServerPassword(password: string, stored: string): boolean {
   } catch {
     return false;
   }
-  const actual = scryptSync(password, Buffer.from(saltHex, 'hex'), 32);
+  const actual = await scryptAsync(password, Buffer.from(saltHex, 'hex'), 32);
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
@@ -396,6 +418,33 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   private static readonly RL_CAPACITY = 40;
   private static readonly RL_REFILL_PER_SEC = 20;
 
+  // ── Разблокировка закрытых серверов ─────────────────────────────────────
+  // Общий бакет (20/с) от перебора пароля почти не защищает: 20 попыток в
+  // секунду с сокета, а сокетов можно открыть сколько угодно. Держим отдельный
+  // счётчик неудач на сокете: после порога сокет уходит в растущий простой, и
+  // подбор упирается в необходимость каждый раз переподключаться заново.
+  // Порог тот же, что у входа на сайт (MAX_ATTEMPTS в auth.controller): ошибиться
+  // восемь раз подряд живой человек ещё может, дальше это уже не опечатки.
+  private static readonly UNLOCK_FAILS_FREE = 8;
+  private static readonly UNLOCK_COOLDOWN_MS = 30_000;
+  private static readonly UNLOCK_COOLDOWN_MAX_MS = 5 * 60_000;
+
+  // Уже проверенные пароли: ключ — HMAC от «хэш + пароль» на случайном ключе
+  // процесса (голый sha256 пароля в памяти — плохая идея, а так дамп кучи не
+  // даёт ничего). Ради этого кэша всё и затевалось: авто-разблокировка после
+  // реконнекта перестаёт быть пересчётом scrypt на каждого вернувшегося.
+  private readonly unlockCache = new Map<string, true>();
+  private readonly unlockCacheKey = randomBytes(32);
+  private static readonly UNLOCK_CACHE_MAX = 500;
+
+  // Ключ вяжем к самому хэшу, а не к id сервера: id можно освободить удалением и
+  // занять заново с другим паролем — тогда запись из кэша пустила бы по старому.
+  private unlockCacheId(storedHash: string, password: string): string {
+    return createHmac('sha256', this.unlockCacheKey)
+      .update(storedHash + '\0' + password)
+      .digest('base64url');
+  }
+
   // Presence меняется пачками (заход нескольких, серия media-update) —
   // коалесцируем рассылку в один emit за короткое окно вместо O(n) обхода+emit
   // на каждое событие. 80 мс незаметны на индикаторах мута/эфира.
@@ -461,7 +510,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // видимые ему (закрытые серверы скрыты до ввода пароля).
     client.emit('servers', this.publicServers());
     client.emit('channels', this.channelsFor(client));
-    client.emit('voice-presence', this.buildVoicePresence());
+    client.emit('voice-presence', this.presenceFor(client, this.buildVoicePresence()));
   }
 
   // Гость по инвайту: разрешён только эфир своей комнаты (join/leave/сигналинг/
@@ -485,15 +534,56 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // Текстовым подмешиваем время последнего сообщения: по нему клиент зажигает
   // «непрочитано» сразу после загрузки, не дожидаясь живого `chat-activity`.
   private channelsFor(client: Socket): Channel[] {
-    const unlocked = (client.data.unlocked as Set<string>) ?? new Set<string>();
-    const lockedIds = new Set(this.servers.filter((s) => s.passwordHash).map((s) => s.id));
     return this.channels
-      .filter((c) => !lockedIds.has(c.serverId) || unlocked.has(c.serverId))
+      .filter((c) => this.canSee(client, c))
       .map((c) => {
         if (c.type !== 'text') return c;
         const lastTs = this.lastChatTs(c.slug);
         return lastTs ? { ...c, lastTs } : c;
       });
+  }
+
+  // Видит ли сокет этот канал: закрытый сервер — только после ввода пароля.
+  private canSee(client: Socket, channel: Channel): boolean {
+    const srv = this.servers.find((s) => s.id === channel.serverId);
+    if (!srv?.passwordHash) return true;
+    return (client.data.unlocked as Set<string>)?.has(srv.id) === true;
+  }
+
+  /**
+   * Вправе ли сокет войти в голосовую комнату. Комната, за которой нет канала
+   * реестра, — это «сирота» (канал удалили под живым разговором) или комната
+   * инвайта: их не запираем, запирать нечего. А вот канал закрытого сервера
+   * пускает только по паролю: `join` берёт слаг, и без этой проверки пароль
+   * обходится одной строкой, даже когда сам канал в списке не показан.
+   */
+  private mayEnter(client: Socket, room: string): boolean {
+    const channel = this.channels.find((c) => c.type === 'voice' && c.slug === room);
+    return !channel || this.canSee(client, channel);
+  }
+
+  /**
+   * Присутствие в форме, пригодной этому сокету. Правило белого списка: комната
+   * едет к нему, только если за ней стоит видимый ему канал реестра. Слаг канала
+   * закрытого сервера — такой же секрет, как и сам канал (по нему заходят: `join`
+   * берёт слаг, а не id), а комната, которой в реестре нет вовсе, — вообще не
+   * канал: `join` пускает в любой слаг, и рассылка такой строки означала бы, что
+   * каждый участник может нарисовать остальным на главном сервере «эфир» с
+   * произвольным названием. Своя комната — исключение: в ней человек сидит, и
+   * не показать её ему было бы враньём.
+   */
+  private presenceFor(
+    client: Socket,
+    presence: Record<string, VoicePresenceEntry[]>,
+  ): Record<string, VoicePresenceEntry[]> {
+    const own = typeof client.data.room === 'string' ? client.data.room : null;
+    const visible = new Set<string>();
+    for (const c of this.channels) {
+      if (c.type === 'voice' && this.canSee(client, c)) visible.add(c.slug);
+    }
+    return Object.fromEntries(
+      Object.entries(presence).filter(([room]) => room === own || visible.has(room)),
+    );
   }
 
   // Время последней НЕсистемной реплики канала (0 — писать ещё не начинали).
@@ -553,7 +643,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   @SubscribeMessage('server-unlock')
-  handleServerUnlock(
+  async handleServerUnlock(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ServerUnlockPayload,
   ) {
@@ -570,11 +660,51 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       client.emit('server-unlock-result', { id, ok: true });
       return;
     }
-    const ok = verifyServerPassword(password, srv.passwordHash);
+    // Сокет уже отстрелялся неудачами — до конца простоя даже не считаем хэш.
+    const fails = (client.data.unlockFails as { count: number; until: number } | undefined) ?? {
+      count: 0,
+      until: 0,
+    };
+    if (Date.now() < fails.until) {
+      client.emit('server-unlock-result', { id, ok: false });
+      return;
+    }
+    const cacheKey = this.unlockCacheId(srv.passwordHash, password);
+    const ok = this.unlockCache.has(cacheKey)
+      ? true
+      : await verifyServerPassword(password, srv.passwordHash);
+    if (!ok) {
+      fails.count += 1;
+      if (fails.count > SignalingGateway.UNLOCK_FAILS_FREE) {
+        const over = fails.count - SignalingGateway.UNLOCK_FAILS_FREE;
+        fails.until =
+          Date.now() +
+          Math.min(
+            SignalingGateway.UNLOCK_COOLDOWN_MS * 2 ** (over - 1),
+            SignalingGateway.UNLOCK_COOLDOWN_MAX_MS,
+          );
+        this.logger.warn(`server-unlock: ${fails.count} failed attempts from ${client.id}`);
+      }
+      client.data.unlockFails = fails;
+    }
     if (ok) {
+      client.data.unlockFails = { count: 0, until: 0 };
+      // Кэш держим ограниченным: ключей ровно столько, сколько разных паролей
+      // предъявили, а вытесняем самый старый (Map хранит порядок вставки).
+      if (!this.unlockCache.has(cacheKey)) {
+        if (this.unlockCache.size >= SignalingGateway.UNLOCK_CACHE_MAX) {
+          const oldest = this.unlockCache.keys().next().value;
+          if (oldest) this.unlockCache.delete(oldest);
+        }
+        this.unlockCache.set(cacheKey, true);
+      }
       (client.data.unlocked as Set<string>)?.add(id);
-      // Пароль подошёл — теперь этому сокету видны каналы сервера.
+      // Пароль подошёл — теперь этому сокету видны каналы сервера…
       client.emit('channels', this.channelsFor(client));
+      // …и состав их эфиров. Без этого строки каналов стоят пустыми до первого
+      // чужого входа-выхода: присутствие теперь режется по видимости, и
+      // прошлую рассылку этот сокет получил ещё запертым.
+      client.emit('voice-presence', this.presenceFor(client, this.buildVoicePresence()));
     }
     client.emit('server-unlock-result', { id, ok });
   }
@@ -849,7 +979,12 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     }
     // Режим канала — не декорация: пропуск выдаём только тем каналам, что
     // помечены sfu. Дефолтные (всегда p2p) отсюда уходят ни с чем.
-    const channel = this.channels.find((c) => c.type === 'voice' && c.slug === room);
+    // Пропуск — только в видимый канал: закрытый сервер запирает и медиасервер,
+    // иначе пароль обходится одним слагом. Гость идёт по своей комнате: реестра
+    // у него нет, а к каналу он уже пришит проверкой выше.
+    const channel = (this.isGuest(client) ? this.channels : this.channelsFor(client)).find(
+      (c) => c.type === 'voice' && c.slug === room,
+    );
     if (!channel || channel.mode !== 'sfu') return { ok: false, error: 'not-sfu' };
     // Имя берём из запроса: пропуск спрашивают ДО `join`, и client.data.name в
     // этот момент ещё пуст (заполнен он только при пере-выдаче во время звонка).
@@ -891,6 +1026,13 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!room) return;
     // Гость «пришит» к каналу из своего токена — другие комнаты недоступны.
     if (this.isGuest(client) && room !== client.data.guestRoom) return;
+    // Канал закрытого сервера — только для тех, кто ввёл пароль. Комнату, которой
+    // в реестре нет вовсе, пропускаем: это либо канал, удалённый под живым
+    // разговором, либо инвайт-комната, и запирать их не за что.
+    if (!this.isGuest(client) && !this.mayEnter(client, room)) {
+      this.logger.warn(`voice: join to locked room "${room}" refused for ${client.id}`);
+      return;
+    }
     const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 20) : undefined;
     const clientId =
       typeof payload?.clientId === 'string' ? payload.clientId.trim().slice(0, 64) : '';
@@ -1122,9 +1264,17 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     this.rememberHistory(room, history);
 
     this.server.to(room).emit('chat', msg);
-    // Лёгкий пинг активности — всем: сайдбар зажигает «непрочитано» на закрытых
-    // сейчас каналах. Только слаг и время, без содержимого (контент не утекает).
-    this.server.emit('chat-activity', { slug: room.slice(CHAT_PREFIX.length), ts: msg.ts });
+    // Лёгкий пинг активности: сайдбар зажигает «непрочитано» на закрытых сейчас
+    // каналах. Только слаг и время, без содержимого. Рассылаем не всем подряд, а
+    // тем, кому канал виден: слаг канала закрытого сервера — часть секрета, и
+    // «в тайном канале сейчас пишут» посторонним знать неоткуда.
+    const slug = room.slice(CHAT_PREFIX.length);
+    const channel = this.channels.find((c) => c.type === 'text' && c.slug === slug);
+    for (const sock of this.server.sockets.sockets.values()) {
+      if (sock.data.guest === true) continue; // гостю реестр не положен вовсе
+      if (channel && !this.canSee(sock, channel)) continue;
+      sock.emit('chat-activity', { slug, ts: msg.ts });
+    }
   }
 
   // Правка своего сообщения. Автора сверяем по тегу (chatName) — та же модель
@@ -1330,7 +1480,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
           const room = sock.data.guestRoom as string;
           sock.emit('voice-presence', room in presence ? { [room]: presence[room] } : {});
         } else {
-          sock.emit('voice-presence', presence);
+          sock.emit('voice-presence', this.presenceFor(sock, presence));
         }
       }
     }, SignalingGateway.PRESENCE_DEBOUNCE_MS);
