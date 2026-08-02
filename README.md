@@ -14,6 +14,8 @@ curl -fsSL https://raw.githubusercontent.com/frizzonje/relay/main/install.sh | b
 
 It installs Docker, asks for your domain, login password, TURN and the media server, pulls prebuilt images, opens the firewall, and starts everything — then hands you a `relay` CLI (`relay update`, `relay logs`, `relay config`, `relay backup`). The stack lives in `/opt/relay`.
 
+**No domain?** Say so and the installer takes a Let's Encrypt certificate for the server's IP address instead — real HTTPS at `https://<your-ip>`, no browser warnings, nothing to buy. Such certificates are only valid for six days by design, so Caddy renews them every couple of days on its own. If issuance fails (port 80 closed, address behind NAT), the stack still comes up with a self-signed certificate.
+
 > [!TIP]
 > Prefer to read before you pipe into a shell? Download it first:
 > ```bash
@@ -173,7 +175,7 @@ CI (`.github/workflows/ci.yml`) runs the same three groups on pushes to `main`/`
 | Variable | Default | Description |
 |---|---|---|
 | `SITE_PASSWORD` | _(empty)_ | Login password. Shared by api and web. Empty → auth disabled |
-| `DOMAIN` | `localhost` | Domain for Caddy. `localhost` → self-signed CA, real domain → Let's Encrypt |
+| `DOMAIN` | `localhost` | Host for Caddy. `localhost` → self-signed CA, real domain → Let's Encrypt. A public IP also gets a Let's Encrypt certificate, but needs the issuer block `install.sh` writes into `tls-mode.caddy` |
 | `SERVER_HOST` | `localhost` | Host for the ICE config and coturn realm |
 | `TURN_USERNAME` | `webrtc` | TURN user |
 | `TURN_CREDENTIAL` | _(empty)_ | TURN server password. Required with `--profile turn` |

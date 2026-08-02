@@ -5,6 +5,8 @@
 # TLS определяется именем хоста автоматически:
 #   localhost  → внутренний CA Caddy (self-signed, доверенный в системе)
 #   реальный домен → Let's Encrypt (ACME, сертификат берётся автоматически)
+#   голый публичный IP → тоже Let's Encrypt, но нужен явный профиль shortlived;
+#     его задаёт tls-mode.caddy (см. import ниже), который пишет install.sh
 #
 # Домен задаётся через переменную окружения DOMAIN (прод-compose передаёт её).
 # В dev-compose DOMAIN не задан → {$DOMAIN:localhost} → localhost.
@@ -17,9 +19,15 @@
 }
 
 {$DOMAIN:localhost} {
-	# TLS не задаём явно: Caddy сам выбирает по имени хоста — localhost получает
-	# внутренний CA (self-signed), реальный домен — сертификат Let's Encrypt.
-	# Форсить `tls internal` нельзя: на проде это ломает доверенный HTTPS.
+	# TLS обычно не задаём явно: Caddy сам выбирает по имени хоста — localhost
+	# получает внутренний CA (self-signed), реальный домен — сертификат Let's
+	# Encrypt. Форсить `tls internal` нельзя: на проде это ломает доверенный HTTPS.
+	#
+	# Исключение — сертификат на голый IP: там нужен явный issuer с профилем
+	# shortlived, и он приезжает отдельным файлом. Шаблон (`tls-*.caddy`, а не
+	# имя файла) выбран сознательно: если файла нет вовсе, import молча ничего не
+	# делает, и Caddyfile остаётся рабочим сам по себе.
+	import tls-*.caddy
 
 	@backend path /api/* /socket.io/* /uploads/*
 	handle @backend {

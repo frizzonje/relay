@@ -99,6 +99,12 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # TLS-режим: пустой по умолчанию, install.sh пишет сюда issuer с профилем
+      # shortlived, когда сертификат берётся на голый IP. Файл обязан
+      # существовать рядом с compose — иначе docker создаст на его месте каталог
+      # и Caddy откажется парсить конфиг («is a directory»). install.sh скачивает
+      # его вместе с Caddyfile.
+      - ./tls-mode.caddy:/etc/caddy/tls-mode.caddy:ro
       - caddy_data:/data
       - caddy_config:/config
 
@@ -123,34 +129,10 @@ services:
       - TURN_EXTERNAL_IP=${TURN_EXTERNAL_IP:-}
     volumes:
       - caddy_data:/certs:ro
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        EXT="$${TURN_EXTERNAL_IP:-$$SERVER_HOST}"
-        case "$$EXT" in
-          ""|*[!0-9.]*) EXTFLAG="" ;;
-          *) EXTFLAG="--external-ip=$$EXT" ;;
-        esac
-        CERT=$$(find /certs/caddy/certificates -type f -name "$$SERVER_HOST.crt" 2>/dev/null | head -n1)
-        KEY=$$(find /certs/caddy/certificates -type f -name "$$SERVER_HOST.key" 2>/dev/null | head -n1)
-        if [ -n "$$CERT" ] && [ -n "$$KEY" ]; then
-          TLSFLAGS="--tls-listening-port=5349 --cert=$$CERT --pkey=$$KEY --no-dtls"
-        else
-          TLSFLAGS="--no-tls --no-dtls"
-        fi
-        exec turnserver -n --log-file=stdout \
-          --realm="$$SERVER_HOST" \
-          --listening-port=3478 \
-          --min-port=49160 --max-port=49200 \
-          --lt-cred-mech \
-          --user="$$TURN_USERNAME:$$TURN_CREDENTIAL" \
-          $$TLSFLAGS --no-cli \
-          --no-multicast-peers \
-          --denied-peer-ip=10.0.0.0-10.255.255.255 \
-          --denied-peer-ip=172.16.0.0-172.31.255.255 \
-          --denied-peer-ip=192.168.0.0-192.168.255.255 \
-          $$EXTFLAG
+      # Точка входа вынесена в файл: она ждёт сертификат Caddy на первом старте и
+      # перечитывает его при ротации (см. комментарии внутри скрипта).
+      - ./coturn-entrypoint.sh:/coturn-entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/coturn-entrypoint.sh"]
 
 volumes:
   uploads:

@@ -14,6 +14,8 @@ curl -fsSL https://raw.githubusercontent.com/frizzonje/relay/main/install.sh | b
 
 Поставит Docker, спросит домен, пароль входа, TURN и медиасервер, скачает готовые образы, откроет порты в фаерволе и запустит всё — а затем даст CLI `relay` (`relay update`, `relay logs`, `relay config`, `relay backup`). Стек лежит в `/opt/relay`.
 
+**Нет домена?** Так и ответьте — инсталлятор возьмёт сертификат Let's Encrypt прямо на IP сервера: настоящий HTTPS по адресу `https://<ваш-ip>`, без предупреждений браузера и без покупки домена. Такие сертификаты по правилам живут шесть дней, поэтому Caddy сам продлевает их раз в пару дней. Если выпустить не удалось (закрыт 80-й порт, адрес за NAT), стек всё равно поднимется — с самоподписанным сертификатом.
+
 > [!TIP]
 > Не любите слепой `curl | bash`? Скачайте и прочитайте сперва:
 > ```bash
@@ -173,7 +175,7 @@ CI (`.github/workflows/ci.yml`) гоняет те же три группы на 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
 | `SITE_PASSWORD` | _(пусто)_ | Пароль входа. Общий для api и web. Пусто → авторизация выключена |
-| `DOMAIN` | `localhost` | Домен для Caddy. `localhost` → self-signed CA, реальный домен → Let's Encrypt |
+| `DOMAIN` | `localhost` | Хост для Caddy. `localhost` → self-signed CA, реальный домен → Let's Encrypt. Публичный IP тоже получает сертификат Let's Encrypt, но требует issuer-блока, который `install.sh` пишет в `tls-mode.caddy` |
 | `SERVER_HOST` | `localhost` | Хост для ICE-конфига и realm coturn |
 | `TURN_USERNAME` | `webrtc` | Пользователь TURN |
 | `TURN_CREDENTIAL` | _(пусто)_ | Пароль TURN-сервера. Обязателен при `--profile turn` |

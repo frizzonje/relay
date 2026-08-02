@@ -11,6 +11,9 @@
 # login password), writes /opt/relay/.env, pulls prebuilt images from GHCR,
 # opens the firewall, starts the stack, and installs a `relay` helper CLI.
 #
+# No domain is fine: Let's Encrypt issues certificates for bare IP addresses
+# too, so the installer can still give you a trusted https:// — see step 4.
+#
 # Interactive: questions are read from /dev/tty so it works under `curl | bash`.
 set -euo pipefail
 
@@ -54,6 +57,29 @@ ask_yn() { # ask_yn "Question" "Y|N" -> returns 0 for yes
 gen_secret() { # url-safe-ish 24 chars
   if command -v openssl >/dev/null 2>&1; then openssl rand -base64 18 | tr '+/' '-_' | tr -d '=\n'
   else head -c 18 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n'; fi
+}
+
+# Is this a routable IPv4? Let's Encrypt issues certificates for public
+# addresses only — offering an IP certificate for a LAN or CGNAT address would
+# just buy the user a failed ACME challenge and a confusing wait.
+# Plain ifs on purpose: `[ ... ] && return 1` as a function's last command
+# returns 1 when the test is false, which is the opposite of what it reads like.
+is_public_ipv4() {
+  local ip="$1" a b c d o
+  IFS=. read -r a b c d <<<"$ip" || return 1
+  for o in "$a" "$b" "$c" "$d"; do
+    case "$o" in ''|*[!0-9]*) return 1 ;; esac
+    if [ "$o" -gt 255 ]; then return 1; fi
+  done
+  case "$a" in
+    0|10|127) return 1 ;;                       # this-network, private, loopback
+    172) if [ "$b" -ge 16 ] && [ "$b" -le 31 ]; then return 1; fi ;;
+    192) if [ "$b" = 168 ]; then return 1; fi ;;
+    169) if [ "$b" = 254 ]; then return 1; fi ;; # link-local
+    100) if [ "$b" -ge 64 ] && [ "$b" -le 127 ]; then return 1; fi ;;  # CGNAT
+  esac
+  if [ "$a" -ge 224 ]; then return 1; fi        # multicast / reserved
+  return 0
 }
 
 # ── 0. Root ──────────────────────────────────────────────────────────────────
@@ -100,10 +126,16 @@ hr
 printf '%sLet'\''s configure your relay server.%s\n' "$B" "$N"
 hr
 
-# ── 4. Domain ────────────────────────────────────────────────────────────────
+# ── 4. Domain / TLS ──────────────────────────────────────────────────────────
+# Three tiers, best first:
+#   domain     — real hostname, ordinary 90-day Let's Encrypt certificate
+#   ip         — no domain: Let's Encrypt certificate for the bare IP. Generally
+#                available since 2026-01-15, mandatory `shortlived` profile
+#                (160 h), renewed by Caddy on its own every couple of days.
+#   selfsigned — Caddy's internal CA. Works everywhere, warns in every browser.
 DOMAIN="localhost"   # Caddy: localhost => internal CA (self-signed)
 SERVER_HOST="${PUBIP:-localhost}"
-USING_DOMAIN=0
+TLS_MODE="selfsigned"
 if ask_yn "Do you have a domain pointed at this server? (needed for a trusted HTTPS cert)" "Y"; then
   while :; do
     D="$(ask "  Domain (e.g. relay.example.com):" "")"
@@ -120,10 +152,23 @@ if ask_yn "Do you have a domain pointed at this server? (needed for a trusted HT
       warn "  $D does not resolve yet (DNS may still be propagating)."
       ask_yn "  Use it anyway?" "N" || continue
     fi
-    DOMAIN="$D"; SERVER_HOST="$D"; USING_DOMAIN=1; break
+    DOMAIN="$D"; SERVER_HOST="$D"; TLS_MODE="domain"; break
   done
+elif [ -n "$PUBIP" ] && is_public_ipv4 "$PUBIP"; then
+  printf '%s  No domain is fine: Let'\''s Encrypt issues certificates for bare IP%s\n' "$DIM" "$N"
+  printf '%s  addresses too, so you still get a trusted https:// with no warnings.%s\n' "$DIM" "$N"
+  printf '%s  Such certificates live 6 days — Caddy renews them by itself.%s\n' "$DIM" "$N"
+  if ask_yn "Get a real certificate for ${PUBIP}?" "Y"; then
+    DOMAIN="$PUBIP"; SERVER_HOST="$PUBIP"; TLS_MODE="ip"
+    ok "  Certificate will be issued for $PUBIP."
+  else
+    info "No domain → serving over IP with a self-signed cert (browsers show a warning)."
+    SERVER_HOST="$PUBIP"
+  fi
 else
-  info "No domain → serving over IP with a self-signed cert (browsers show a warning)."
+  # No public IPv4 (private address, IPv6-only, or detection failed) — ACME has
+  # nothing to validate against, so the internal CA is the only honest option.
+  info "No domain and no public IPv4 → self-signed cert (browsers show a warning)."
   [ -n "$PUBIP" ] && SERVER_HOST="$PUBIP"
 fi
 
@@ -169,7 +214,34 @@ info "Installing to $INSTALL_DIR…"
 mkdir -p "$INSTALL_DIR"
 curl -fsSL "${RAW_BASE}/${COMPOSE_FILE}" -o "$INSTALL_DIR/${COMPOSE_FILE}" || die "Failed to download ${COMPOSE_FILE}."
 curl -fsSL "${RAW_BASE}/infra/Caddyfile"  -o "$INSTALL_DIR/Caddyfile"       || die "Failed to download Caddyfile."
+# Both are bind-mounted by the compose file. A missing source would make docker
+# silently create a directory in its place, and both consumers then fail in a
+# way that looks nothing like "the file wasn't downloaded" — so fetch them even
+# when the corresponding feature is off.
+curl -fsSL "${RAW_BASE}/infra/tls-mode.caddy" -o "$INSTALL_DIR/tls-mode.caddy" || die "Failed to download tls-mode.caddy."
+curl -fsSL "${RAW_BASE}/infra/coturn-entrypoint.sh" -o "$INSTALL_DIR/coturn-entrypoint.sh" || die "Failed to download coturn-entrypoint.sh."
 ok "Stack files downloaded"
+
+# ── 7b. TLS mode ─────────────────────────────────────────────────────────────
+# The downloaded tls-mode.caddy is empty (comments only), which is exactly right
+# for a domain or for the internal CA — Caddy picks the issuer by hostname. A
+# bare IP is the one case it can't infer: Let's Encrypt refuses IP identifiers
+# outside the `shortlived` profile, and Caddy won't try ACME for an IP at all
+# unless told to. `issuer internal` behind it is the safety net — if issuance
+# fails (port 80 firewalled, rate limits), the site still comes up self-signed
+# instead of not coming up.
+if [ "$TLS_MODE" = "ip" ]; then
+  cat >"$INSTALL_DIR/tls-mode.caddy" <<'TLSMODE'
+# Written by install.sh — certificate issued for a bare IP address.
+tls {
+	issuer acme {
+		profile shortlived
+	}
+	issuer internal
+}
+TLSMODE
+  ok "TLS mode: Let's Encrypt certificate for $DOMAIN"
+fi
 
 # ── 8. Write .env ────────────────────────────────────────────────────────────
 ENV_FILE="$INSTALL_DIR/.env"
@@ -278,10 +350,19 @@ ok "Installed 'relay' CLI (try: relay logs)"
 
 # ── 12. Health wait + summary ────────────────────────────────────────────────
 info "Waiting for the server to answer…"
-URL_HOST="$([ "$USING_DOMAIN" = 1 ] && echo "$DOMAIN" || echo "${PUBIP:-localhost}")"
+# What we print vs what we probe: with a self-signed cert Caddy serves the site
+# under the name `localhost`, so a request for the public IP matches no site and
+# comes back 404 — probe the name Caddy actually answers to.
+case "$TLS_MODE" in
+  domain|ip) URL_HOST="$DOMAIN"; PROBE_HOST="$DOMAIN" ;;
+  *)         URL_HOST="${PUBIP:-localhost}"; PROBE_HOST="localhost" ;;
+esac
 UP=0
 for _ in $(seq 1 30); do
-  if curl -fsSk --max-time 3 "https://localhost/" >/dev/null 2>&1; then UP=1; break; fi
+  # --resolve pins the name to loopback: DNS may not have propagated yet, and a
+  # NAT'd VM often cannot reach its own public IP from the inside.
+  if curl -fsSk --max-time 3 --resolve "${PROBE_HOST}:443:127.0.0.1" \
+       "https://${PROBE_HOST}/" >/dev/null 2>&1; then UP=1; break; fi
   sleep 2
 done
 
@@ -292,10 +373,14 @@ printf '  %sURL:%s      https://%s\n' "$B" "$N" "$URL_HOST"
 printf '  %sPassword:%s %s\n' "$B" "$N" "$SITE_PASSWORD"
 # Plain ifs: a false `[ ... ] && printf` is a failing last command and `set -e`
 # would end the installer right here, swallowing the rest of the summary.
-if [ "$USING_DOMAIN" = 0 ]; then
-  printf '  %s(self-signed cert — your browser will warn on first visit)%s\n' "$DIM" "$N"
-else
+if [ "$TLS_MODE" = "domain" ]; then
   printf '  %s(first load may take ~30s while Let'\''s Encrypt issues the cert)%s\n' "$DIM" "$N"
+elif [ "$TLS_MODE" = "ip" ]; then
+  printf '  %s(trusted cert for the IP itself — first load may take ~30s while%s\n' "$DIM" "$N"
+  printf '  %s Let'\''s Encrypt issues it; renewed automatically every few days)%s\n' "$DIM" "$N"
+  printf '  %s(the address is tied to this IP — if it ever changes, re-run the installer)%s\n' "$DIM" "$N"
+else
+  printf '  %s(self-signed cert — your browser will warn on first visit)%s\n' "$DIM" "$N"
 fi
 if [ "$USE_SFU" = 1 ]; then
   printf '  %sMedia server: on%s %s(calls of 4+ with video; per-channel switch in the UI)%s\n' "$B" "$N" "$DIM" "$N"
