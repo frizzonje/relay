@@ -11,8 +11,11 @@
 //     (комбинация или null) переназначает хоткей, `set-autostart` (bool) —
 //     автозапуск, `switch-server` возвращает окно на экран выбора сервера.
 
+mod native_audio;
+mod native_audio_shim;
 mod screen_audio;
 mod settings;
+mod webrtc_linux;
 
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -251,11 +254,13 @@ fn main() {
             // после выдачи микрофона.
             #[cfg(target_os = "linux")]
             if let Some(win) = handle.get_webview_window("main") {
-                let _ = win.with_webview(|webview| {
+                let h = handle.clone();
+                let _ = win.with_webview(move |webview| {
                     use webkit2gtk::glib::prelude::*;
                     use webkit2gtk::{
                         DeviceInfoPermissionRequest, PermissionRequestExt, SettingsExt,
-                        UserMediaPermissionRequest, WebViewExt,
+                        UserContentInjectedFrames, UserContentManagerExt, UserMediaPermissionRequest,
+                        UserScript, UserScriptInjectionTime, WebViewExt,
                     };
                     let wv = webview.inner();
                     if let Some(s) = WebViewExt::settings(&wv) {
@@ -275,7 +280,51 @@ fn main() {
                         }
                         media
                     });
-                    ulog("linux webview: media permission handler installed");
+
+                    // Вставляем нативный микрофонный шим: в WebKitGTK getUserMedia
+                    // для аудио не работает (движок без звукового WebRTC), поэтому
+                    // подменяем его на захват через cpal (PulseAudio/PipeWire) с
+                    // подачей PCM в AudioWorklet → MediaStreamAudioDestinationNode.
+                    // Два скрипта: первый кладёт код AudioWorklet-процессора в
+                    // window.__nativeMicProcessorCode, второй — сам шим.
+                    let Some(cm) = wv.user_content_manager() else {
+                        ulog("linux webview: no user content manager");
+                        return;
+                    };
+                    let proc = UserScript::new(
+                        &format!(
+                            "window.__nativeMicProcessorCode = {};",
+                            serde_json::to_string(native_audio_shim::PROCESSOR_CODE)
+                                .unwrap_or_else(|_| "''".into())
+                        ),
+                        UserContentInjectedFrames::TopFrame,
+                        UserScriptInjectionTime::Start,
+                        &[],
+                        &[],
+                    );
+                    cm.add_script(&proc);
+                    let shim = UserScript::new(
+                        native_audio_shim::SHIM_CODE,
+                        UserContentInjectedFrames::TopFrame,
+                        UserScriptInjectionTime::Start,
+                        &[],
+                        &[],
+                    );
+                    cm.add_script(&shim);
+                    let rtc = UserScript::new(
+                        native_audio_shim::RTC_POLYFILL_CODE,
+                        UserContentInjectedFrames::TopFrame,
+                        UserScriptInjectionTime::Start,
+                        &[],
+                        &[],
+                    );
+                    cm.add_script(&rtc);
+                    ulog("linux webview: media permission handler + native mic shim + rtc polyfill installed");
+
+                    // Сигнал JS-шиму: движок WebKitGTK полностью настроен, WebRTC-стек
+                    // (enable-webrtc + нативный микрофон) готов к работе. Модули JS
+                    // (webrtc-check.js, voice-support.ts) могут на это положиться.
+                    let _ = h.emit("webrtc-ready", true);
                 });
             }
 
@@ -396,6 +445,90 @@ fn main() {
                         let _ = win.set_focus();
                     }
                 });
+            });
+
+            // Linux: нативный захват микрофона через cpal (PulseAudio/PipeWire).
+            // JS-шим дёргает эти события, подменяя getUserMedia({audio:true}).
+            let h = handle.clone();
+            handle.listen("native-audio-start", move |event| {
+                let device: Option<String> = serde_json::from_str::<serde_json::Value>(
+                    event.payload(),
+                )
+                .ok()
+                .and_then(|v| v.get("device")?.as_str().map(|s| s.to_string()));
+                native_audio::start(&h, device);
+            });
+            handle.listen("native-audio-stop", move |_event| {
+                native_audio::stop();
+            });
+            let h = handle.clone();
+            handle.listen("native-audio-devices-get", move |_event| {
+                native_audio::enumerate(&h);
+            });
+
+            // Linux: RTCPeerConnection полифил → мост к webrtc_linux.rs.
+            // JS-полифил шлёт команды (create/offer/answer/…), Rust обрабатывает
+            // через webrtc-rs и отвечает асинхронно.
+            {
+                let h = handle.clone();
+                handle.listen("webrtc:create", move |event| {
+                    if let Ok(payload) = serde_json::from_str::<webrtc_linux::CreatePayload>(event.payload()) {
+                        let app = h.clone();
+                        tauri::async_runtime::spawn(async move {
+                            webrtc_linux::create_peer(app, payload).await;
+                        });
+                    }
+                });
+            }
+            {
+                let h = handle.clone();
+                handle.listen("webrtc:offer", move |event| {
+                    if let Ok(payload) = serde_json::from_str::<webrtc_linux::PcIdPayload>(event.payload()) {
+                        let app = h.clone();
+                        tauri::async_runtime::spawn(async move {
+                            webrtc_linux::create_offer(app, payload).await;
+                        });
+                    }
+                });
+            }
+            {
+                let h = handle.clone();
+                handle.listen("webrtc:answer", move |event| {
+                    if let Ok(payload) = serde_json::from_str::<webrtc_linux::PcIdPayload>(event.payload()) {
+                        let app = h.clone();
+                        tauri::async_runtime::spawn(async move {
+                            webrtc_linux::create_answer(app, payload).await;
+                        });
+                    }
+                });
+            }
+            handle.listen("webrtc:set-remote", move |event| {
+                if let Ok(payload) = serde_json::from_str::<webrtc_linux::SdpPayload>(event.payload()) {
+                    tauri::async_runtime::spawn(async move {
+                        webrtc_linux::set_remote_description(payload).await;
+                    });
+                }
+            });
+            handle.listen("webrtc:add-ice", move |event| {
+                if let Ok(payload) = serde_json::from_str::<webrtc_linux::IceCandidatePayload>(event.payload()) {
+                    tauri::async_runtime::spawn(async move {
+                        webrtc_linux::add_ice_candidate(payload).await;
+                    });
+                }
+            });
+            handle.listen("webrtc:add-track", move |event| {
+                if let Ok(payload) = serde_json::from_str::<webrtc_linux::PcIdPayload>(event.payload()) {
+                    tauri::async_runtime::spawn(async move {
+                        webrtc_linux::add_audio_track(payload).await;
+                    });
+                }
+            });
+            handle.listen("webrtc:close", move |event| {
+                if let Ok(payload) = serde_json::from_str::<webrtc_linux::PcIdPayload>(event.payload()) {
+                    tauri::async_runtime::spawn(async move {
+                        webrtc_linux::close_peer(payload).await;
+                    });
+                }
             });
 
             // Обновления по запросу из web-настроек. `check-updates` ({notify})

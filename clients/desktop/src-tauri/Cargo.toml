@@ -43,6 +43,14 @@ webkit2gtk-sys = "2.0"
 # webkitgtk НЕ разрешает медиа-запросы — делаем сами в setup() (см. main.rs).
 # Фича v2_38 — та же, с которой крейт уже собирается внутри wry.
 webkit2gtk = { version = "2.0", features = ["v2_38"] }
+# Нативный захват микрофона: PulseAudio/PipeWire → PCM → webview (см. native_audio.rs).
+# На Linux WebKitGTK не тянет аудио-WebRTC — микрофон берём через cpal и подаём в
+# AudioWorklet шима, подменяя getUserMedia.
+cpal = "0.15"
+# RTCPeerConnection в Rust: системный WebKitGTK собран без WebRTC
+# (-DENABLE_WEB_RTC=OFF в дистрибутивах), поэтому весь стек (SDP/ICE/DTLS/Opus)
+# реализуем в Rust через webrtc-rs и мостим в JS полифилом RTCPeerConnection.
+webrtc = "0.11"
 
 # Нативный захват звука экрана (process-loopback exclude) — только Windows.
 # WASAPI + COM через windows-rs. На macOS/Linux screen_audio компилируется в

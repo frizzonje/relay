@@ -27,9 +27,11 @@ function hasPeerConnection(): boolean {
       ? RTCPeerConnection
       : (globalThis as { webkitRTCPeerConnection?: typeof RTCPeerConnection })
           .webkitRTCPeerConnection;
-  // Мало наличия конструктора: в урезанных сборках класс бывает объявлен, но без
-  // методов согласования — тогда звонок развалится уже после входа в канал.
   return typeof PC === 'function' && typeof PC.prototype?.createOffer === 'function';
+}
+
+function isDesktopTauri(): boolean {
+  return typeof window !== 'undefined' && Boolean((window as { __TAURI__?: unknown }).__TAURI__);
 }
 
 /**
@@ -62,6 +64,14 @@ export function voiceSupport(): VoiceSupport {
       reason: 'insecure',
       message: tx('support.insecure'),
     };
+  }
+  // В десктоп-оболочке Tauri Rust обеспечивает полный WebRTC-стек:
+  // настройки WebKitGTK + нативный захват микрофона (cpal/PulseAudio) +
+  // RTCPeerConnection (webrtc-rs). Браузерный RTCPeerConnection в WebKitGTK
+  // отсутствует (сборки дистрибутивов с -DENABLE_WEB_RTC=OFF), поэтому
+  // пропускаем проверку — Rust уже всё предоставил.
+  if (isDesktopTauri()) {
+    return { ok: true };
   }
   if (!hasPeerConnection()) {
     return { ok: false, reason: 'no-webrtc', message: noWebrtcMessage() };
