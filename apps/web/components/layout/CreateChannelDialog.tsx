@@ -107,9 +107,9 @@ export function CreateChannelDialog({
                       ) : (
                         <Icon name="volume-2" className="text-[18px]" />
                       )}
-                      {item.label}
+                      {t(item.label)}
                     </span>
-                    <span className="text-[11px] leading-tight opacity-80">{item.hint}</span>
+                    <span className="text-[11px] leading-tight opacity-80">{t(item.hint)}</span>
                   </button>
                 );
               })}
