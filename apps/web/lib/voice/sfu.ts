@@ -155,9 +155,6 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
   // Consumer'ы по producerId — так их снимает `producer-closed`.
   const consumers = new Map<string, { consumer: Consumer; peerId: string; source: Source }>();
   const names = new Map<string, string>();
-  // По одному MediaStream на собеседника: в него кладём его видео, плитка
-  // держит ссылку и переживает смену дорожки (камера → экран) без пересоздания.
-  const streams = new Map<string, MediaStream>();
   // Счётчики прошлого тика по собеседникам — из них считаются потери за
   // интервал и мгновенный битрейт (см. quality.ts).
   const netHistory = new Map<string, NetSnapshot>();
@@ -195,8 +192,11 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
 
   // ── Публикация своих дорожек ──────────────────────────────────────────
 
-  async function produce(source: Source, track: MediaStreamTrack): Promise<void> {
-    if (!sendTransport || !device) return;
+  async function produce(source: Source, track: MediaStreamTrack): Promise<boolean> {
+    if (!sendTransport || !device) {
+      host.diag('sfu produce skipped', `${source} no transport`);
+      return false;
+    }
     if (track.kind === 'video' && !device.canProduce('video')) {
       // Тихий отказ здесь — это и есть «звук есть, видео нет»: движок не нашёл
       // ни одного видеокодека роутера в своих send-возможностях (WebKit шлёт
@@ -204,14 +204,14 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       // консоль, и на сервер: иначе диагностируется только гаданием.
       console.error('[sfu] device cannot produce video — нет совпадающего кодека');
       host.diag('sfu no video codec', source);
-      return;
+      return false;
     }
     // Дорожка этой роли уже течёт (повторный вызов publishScreen и т.п.) —
     // подменяем её в существующем producer'е, а не заводим второй.
     const live = producers.get(source);
     if (live) {
       await live.replaceTrack({ track }).catch(() => {});
-      return;
+      return true;
     }
     // appData уходит в `produce` на сервер (см. sendTransport 'produce' ниже) —
     // по нему остальные узнают роль дорожки, а не гадают по порядку.
@@ -235,8 +235,14 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       // сервере. По нему сразу ясно, что ушло (video/VP8, video/H264…), а не
       // «producer вроде создан». Дёшево и снимает половину догадок при разборе.
       host.diag('sfu produce', `${source} ${producer.rtpParameters.codecs[0]?.mimeType ?? '?'}`);
+      return true;
     } catch (err) {
+      // Молчать здесь нельзя: не уехавший микрофон — это «я в канале, меня не
+      // слышно», ровно та тишина, которую разбирают перезаходами. В нативной
+      // оболочке консоли нет вовсе, так что веху обязан увидеть сервер.
       console.error(`[sfu] produce ${source} failed:`, err);
+      host.diag('sfu produce failed', `${source} ${String((err as Error)?.message ?? err)}`);
+      return false;
     }
   }
 
@@ -299,7 +305,12 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       producerId: info.id,
       rtpCapabilities: device.rtpCapabilities,
     });
-    if (!res) return;
+    if (!res) {
+      // Отказ в подписке — это «его дорожка есть, но у меня её нет», а на
+      // десктоп-оболочке консоли никто не видит. Веху обязан увидеть сервер.
+      host.diag('sfu consume denied', `${info.source} ${info.kind}`);
+      return;
+    }
     const c = res.consumer;
     let consumer: Consumer;
     try {
@@ -311,17 +322,23 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       });
     } catch (err) {
       console.error('[sfu] consume failed:', err);
+      host.diag('sfu consume failed', `${info.source} ${String((err as Error)?.message ?? err)}`);
       return;
     }
     consumers.set(c.producerId, { consumer, peerId, source: c.source });
+    // Единственное доказательство, что пакеты реально пошли: дорожка consumer'а
+    // рождается `muted` и снимает мут первым же дошедшим RTP. Без этой вехи
+    // «подписался, но чёрный экран» и «подписался, и ничего не прислали» с
+    // сервера выглядят одинаково.
+    if (c.kind === 'video') {
+      const onRtp = () => {
+        consumer.track.removeEventListener('unmute', onRtp);
+        host.diag('sfu rtp', `${c.source} from ${peerId}`);
+      };
+      consumer.track.addEventListener('unmute', onRtp);
+    }
 
-    // Все дорожки собеседника держим в ОДНОМ MediaStream, как приходило из mesh
-    // (`ontrack` отдавал общий поток). Это не косметика: скрытый `<audio>`-сток
-    // из фазы 1 «прокачивает» дорожку, без него на части Chrome/Safari WebAudio
-    // отдаёт тишину. Сток заводится по этому же потоку.
-    const stream = ensureStream(peerId);
-    if (c.kind === 'video') stream.getVideoTracks().forEach((t) => stream.removeTrack(t));
-    stream.addTrack(consumer.track);
+    const stream = rebuildStream(peerId);
     host.addTile(peerId, names.get(peerId) ?? tx('voice.peer.fallback'), stream, false);
     host.setTileState(peerId, '');
 
@@ -334,17 +351,39 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     }
 
     // Протокол требует именно такого порядка: consumer приходит на паузе, трек
-    // подключён — только теперь просим пустить пакеты.
-    await ask('resume', { consumerId: consumer.id });
+    // подключён — только теперь просим пустить пакеты. Не дошло — дорожка так и
+    // останется на паузе навсегда, и это неотличимо от «прислали чёрный кадр».
+    if (!(await ask('resume', { consumerId: consumer.id }))) {
+      host.diag('sfu resume failed', `${c.source} from ${peerId}`);
+    }
   }
 
-  function ensureStream(peerId: string): MediaStream {
-    let stream = streams.get(peerId);
-    if (!stream) {
-      stream = new MediaStream();
-      streams.set(peerId, stream);
-    }
-    return stream;
+  /**
+   * Пересобрать поток собеседника из его живых дорожек — и обязательно НОВЫМ
+   * объектом.
+   *
+   * Здесь легко ошибиться, и ошибка стоила демонстрации экрана целиком. В mesh
+   * поток приезжал из `ontrack`: наполнял его движок, и на каждую дорожку он же
+   * слал потоку событие `addtrack`. Витрина подписана ровно на это событие
+   * (VideoTile) — по нему она узнаёт о новом видео и подписывается на его
+   * `unmute`, а до того держит плитку под аватаркой.
+   *
+   * У SFU поток свой, дорожки в него кладём мы, а скриптовый
+   * `MediaStream.addTrack()` события `addtrack` НЕ порождает — по спецификации
+   * его шлёт только движок. Значит, положив дорожку в прежний поток, мы не
+   * сообщаем витрине ничего: чужое видео приезжает, декодируется и остаётся
+   * невидимым под аватаркой навсегда.
+   *
+   * Поэтому единственный способ сказать «состав дорожек сменился» — отдать
+   * другой объект: по нему плитка перепривяжет `srcObject` и заново подпишется
+   * на все дорожки, а микшер переставит свой скрытый сток (ensurePeerAudio уже
+   * это умеет). Работает в обе стороны: показ кончился — дорожка ушла, и плитка
+   * гасит кадр вместо того, чтобы держать замёрзший последний.
+   */
+  function rebuildStream(peerId: string): MediaStream {
+    return new MediaStream(
+      [...consumers.values()].filter((e) => e.peerId === peerId).map((e) => e.consumer.track),
+    );
   }
 
   function dropConsumer(producerId: string) {
@@ -353,7 +392,11 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     consumers.delete(producerId);
     gotLayer.delete(entry.consumer.id);
     entry.consumer.close();
-    streams.get(entry.peerId)?.removeTrack(entry.consumer.track);
+    // Дорожки не стало — витрине нужен новый объект потока, иначе она об этом
+    // не узнает (`removetrack` скриптовый `removeTrack()` тоже не порождает) и
+    // оставит на плитке замёрзший последний кадр законченного показа.
+    const stream = rebuildStream(entry.peerId);
+    host.addTile(entry.peerId, names.get(entry.peerId) ?? tx('voice.peer.fallback'), stream, false);
     // `close()` дорожку останавливает, но `ended` не шлёт — узел микшера
     // пришлось бы оставить висеть. Снимаем его явно.
     if (entry.consumer.kind === 'audio') {
@@ -365,7 +408,6 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     for (const [producerId, entry] of [...consumers]) {
       if (entry.peerId === peerId) dropConsumer(producerId);
     }
-    streams.delete(peerId);
     names.delete(peerId);
     host.removeTile(peerId);
   }
@@ -431,14 +473,25 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     return transport;
   }
 
-  /** Всё, что нужно отдать наружу сразу после подключения. */
-  async function publishLocal() {
+  /**
+   * Всё, что нужно отдать наружу сразу после подключения. Возвращает false, если
+   * микрофон у нас есть, а уехать не смог: это не мелочь, а весь смысл звонка —
+   * дальше по стеку такой заход лечится переездом в p2p, а не тишиной с
+   * зелёной надписью «подключено».
+   */
+  async function publishLocal(): Promise<boolean> {
     const stream = host.localStream();
     const screenAudio = host.screenAudioTrack();
     const mic = stream?.getAudioTracks().find((t) => t !== screenAudio) ?? null;
-    if (mic) await produce('mic', mic);
+    let micOk = true;
+    if (mic) micOk = await produce('mic', mic);
+    // Микрофона нет вовсе (не выдали устройство) — это не отказ медиасервера:
+    // напрямую человек будет так же нем, переезжать незачем. Но веха нужна:
+    // снаружи «его не слышно» выглядит одинаково в обоих случаях.
+    else host.diag('sfu no mic track', stream ? 'stream without audio' : 'no local stream');
     if (screenAudio) await produce('screen-audio', screenAudio);
     await syncVideo();
+    return micOk;
   }
 
   async function onWelcome(payload: WelcomePayload) {
@@ -448,21 +501,34 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       sendTransport = await openTransport('send');
       recvTransport = await openTransport('recv');
       if (!sendTransport || !recvTransport) throw new Error('no transports');
-      await publishLocal();
+      // Микрофон не уехал — считаем это несостоявшимся входом, как и мёртвый
+      // транспорт: дирижёр уведёт звонок в p2p, где дорожка пойдёт напрямую.
+      // Раньше такой заход молча заканчивался «подключено» и полной тишиной.
+      if (!(await publishLocal())) throw new Error('mic not published');
+      // Вход состоялся ЗДЕСЬ: транспорты стоят, своё медиа уехало — нас уже
+      // слышно. Подписки на чужие дорожки идут следом и в счёт входа не идут:
+      // каждая — отдельный запрос с ответом (до 10 с ожидания), и в людной
+      // комнате их сумма легко перебирала сторож входа. Сторож срабатывал на
+      // полностью исправном соединении и уводил весь звонок в p2p.
+      ready = true;
+      if (setupTimer) clearTimeout(setupTimer);
+      setupTimer = null;
+      // Число своих дорожек — в ту же веху: «встал» без единой из них и есть тот
+      // самый немой заход, и по логу это должно читаться одной строкой.
+      host.diag('sfu up', `peers=${payload.peers.length} tracks=${producers.size}`);
       for (const peer of payload.peers) {
         names.set(peer.peerId, peer.name || tx('voice.peer.fallback'));
         host.addTile(peer.peerId, peer.name || tx('voice.peer.fallback'), null, false);
         host.setTileState(peer.peerId, 'tile.state.connecting');
         for (const producer of peer.producers) await consume(peer.peerId, producer);
       }
-      ready = true;
-      if (setupTimer) clearTimeout(setupTimer);
-      setupTimer = null;
-      host.diag('sfu up', `peers=${payload.peers.length}`);
     } catch (err) {
       console.error('[sfu] setup failed:', err);
       host.diag('sfu setup failed', String((err as Error)?.message ?? err));
-      giveUp('setup');
+      // Упало ДО того, как мы встали, — это несостоявшийся вход (дирижёр уводит
+      // в p2p безусловно). Упало после — мы уже на связи и слышны, решение о
+      // переезде принимается по составу комнаты, как при любой другой потере.
+      giveUp(ready ? 'lost' : 'setup');
     }
   }
 
@@ -731,7 +797,6 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     device = null;
     // Плитки собеседников снимает дирижёр (при выходе он чистит их целиком),
     // но своё состояние обнуляем сами.
-    streams.clear();
     names.clear();
     netHistory.clear();
     gotLayer.clear();

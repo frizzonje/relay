@@ -85,6 +85,18 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(SfuGateway.name);
   private readonly peers = new Map<string, Peer>();
 
+  /**
+   * Потолки на участника. Транспортов ему нужно ровно два (send и recv), плюс
+   * запас на пересборку: клиент строит новые до того, как сервер закроет старые.
+   * Потолок здесь не про злой умысел даже — каждый WebRtcTransport занимает порт
+   * из диапазона (по умолчанию 40000-40100, то есть их сотня на всех), и цикл
+   * переподключений у одного клиента иначе съедает его для всей комнаты.
+   * Дорожек четыре по числу ролей (mic/cam/screen/screen-audio), запас — на
+   * пересоздание видео при смене камера↔экран.
+   */
+  private static readonly MAX_TRANSPORTS_PER_PEER = 6;
+  private static readonly MAX_PRODUCERS_PER_PEER = 6;
+
   @WebSocketServer()
   server!: Server;
 
@@ -137,6 +149,10 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ): Promise<Ack<{ params: unknown; direction: 'send' | 'recv' }>> {
     const peer = this.peers.get(client.id);
     if (!peer) return fail('no-peer');
+    if (peer.transports.size >= SfuGateway.MAX_TRANSPORTS_PER_PEER) {
+      this.logger.warn(`create-transport refused for ${peer.id}: ${peer.transports.size} already`);
+      return fail('too-many-transports');
+    }
     const direction = payload?.direction === 'recv' ? 'recv' : 'send';
     try {
       const { params } = await this.rooms.createTransport(peer);
@@ -224,6 +240,10 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
       ? (payload.source as ProducerSource)
       : null;
     if (!source) return fail('bad-source');
+    if (peer.producers.size >= SfuGateway.MAX_PRODUCERS_PER_PEER) {
+      this.logger.warn(`produce refused for ${peer.id}: ${peer.producers.size} already`);
+      return fail('too-many-producers');
+    }
     try {
       const producer = await transport.produce({
         kind,
@@ -276,9 +296,25 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
       | undefined;
     if (!producerId || !rtpCapabilities) return fail('bad-request');
     peer.rtpCapabilities = rtpCapabilities;
-    if (!router.canConsume({ producerId, rtpCapabilities })) return fail('cannot-consume');
     const owner = this.rooms.peers(peer.room).find((p) => p.producers.has(producerId));
     if (!owner) return fail('no-producer');
+    const producer = owner.producers.get(producerId)!;
+    // Единственный отказ, который раньше уходил молча. А молчит он ровно в том
+    // случае, который снаружи выглядит как «дорожка есть, но её никто не видит»:
+    // дорожка доехала до сервера, а подписаться на неё некому. Называем обе
+    // стороны несовпадения — кодек producer'а и то, что умеет приёмник.
+    if (!router.canConsume({ producerId, rtpCapabilities })) {
+      const wanted = producer.rtpParameters.codecs.map((c) => c.mimeType).join(',');
+      const has = rtpCapabilities.codecs
+        ?.filter((c) => c.kind === producer.kind)
+        .map((c) => c.mimeType)
+        .join(',');
+      this.logger.warn(
+        `cannot-consume: ${peer.id} → ${owner.id} ${producerInfo(producer).source} ` +
+          `producer=[${wanted}] consumer=[${has}]`,
+      );
+      return fail('cannot-consume');
+    }
     try {
       // paused: true — обязательный шаг протокола: клиент создаёт consumer,
       // подключает трек и только потом шлёт `resume`. Иначе первые пакеты
@@ -304,6 +340,13 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
         peer.consumers.delete(consumer.id);
         client.emit('producer-closed', { peerId: owner.id, producerId });
       });
+      const source = producerInfo(producer).source;
+      // Вторая половина пары к строчке `produce`: она говорит, что дорожка
+      // доехала до сервера, эта — что на неё кто-то подписался. Без неё разрыв
+      // «producer есть, картинки нет» неотличим от «никто не подписывался».
+      this.logger.log(
+        `peer ${peer.id} consumes ${source} (${consumer.kind}/${consumer.rtpParameters.codecs[0]?.mimeType ?? '?'}) from ${owner.id}`,
+      );
       return {
         ok: true,
         consumer: {
@@ -312,7 +355,7 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
           peerId: owner.id,
           kind: consumer.kind,
           rtpParameters: consumer.rtpParameters,
-          source: producerInfo(owner.producers.get(producerId)!).source,
+          source,
         },
       };
     } catch (err) {
