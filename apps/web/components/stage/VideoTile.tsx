@@ -351,8 +351,14 @@ export function VideoTile({
 
     if (stream && video.srcObject !== stream) {
       video.srcObject = stream;
-      video.play().catch(() => {
-        // автоплей заблокирован браузером — показываем кнопку разблокировки звука
+      video.play().catch((err: unknown) => {
+        // Отказы у play() разной природы, и путать их нельзя. Запрет
+        // автовоспроизведения — это `NotAllowedError`, только он повод звать
+        // человека нажать кнопку. `AbortError` же означает «загрузку прервала
+        // следующая»: srcObject переприсвоили, пока play() ещё висел, — элемент
+        // при этом продолжает играть новый поток. Показывать из-за него «браузер
+        // заглушил звук» значит врать в лицо.
+        if ((err as { name?: string })?.name !== 'NotAllowedError') return;
         if (!tile.isLocal) useAudioUnlockStore.getState().show();
       });
     }
@@ -384,11 +390,25 @@ export function VideoTile({
     };
     stream.addEventListener('addtrack', handleAddTrack);
     stream.addEventListener('removetrack', refresh);
+    // Дорожку мало получить — надо заметить, что по ней пошли кадры, иначе
+    // `hasVideo` остаётся снимком, сделанным в момент привязки. Дорожка приходит
+    // `muted` и снимает мут первым RTP, но одного события `unmute` мало: на
+    // consumer'ах SFU оно живьём не приходило ни разу, и плитка так и висела с
+    // аватаркой поверх идущего видео (входящий стрим при заходе в разговор).
+    // Сам элемент об этом знает точно — метаданные, первый кадр и смена размера
+    // означают, что декодер получил картинку; свойство `muted` к этому моменту
+    // уже честное, даже если событие мы прозевали.
+    video.addEventListener('loadedmetadata', refresh);
+    video.addEventListener('playing', refresh);
+    video.addEventListener('resize', refresh);
     refresh();
 
     return () => {
       stream.removeEventListener('addtrack', handleAddTrack);
       stream.removeEventListener('removetrack', refresh);
+      video.removeEventListener('loadedmetadata', refresh);
+      video.removeEventListener('playing', refresh);
+      video.removeEventListener('resize', refresh);
     };
   }, [tile.stream, tile.isLocal]);
 

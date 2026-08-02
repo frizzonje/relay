@@ -155,6 +155,9 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
   // Consumer'ы по producerId — так их снимает `producer-closed`.
   const consumers = new Map<string, { consumer: Consumer; peerId: string; source: Source }>();
   const names = new Map<string, string>();
+  // Какая видеодорожка сейчас отдана плитке собеседника (null — показываем
+  // аватарку). По ней `syncTileVideo` решает, есть ли что менять.
+  const shownVideo = new Map<string, MediaStreamTrack | null>();
   // Счётчики прошлого тика по собеседникам — из них считаются потери за
   // интервал и мгновенный битрейт (см. quality.ts).
   const netHistory = new Map<string, NetSnapshot>();
@@ -330,22 +333,15 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     // рождается `muted` и снимает мут первым же дошедшим RTP. Без этой вехи
     // «подписался, но чёрный экран» и «подписался, и ничего не прислали» с
     // сервера выглядят одинаково.
-    if (c.kind === 'video') {
-      const onRtp = () => {
-        consumer.track.removeEventListener('unmute', onRtp);
-        host.diag('sfu rtp', `${c.source} from ${peerId}`);
-      };
-      consumer.track.addEventListener('unmute', onRtp);
-    }
+    if (c.kind === 'video') reportRtp(consumer.track, c.source, peerId);
 
-    const stream = rebuildStream(peerId);
-    host.addTile(peerId, names.get(peerId) ?? tx('voice.peer.fallback'), stream, false);
+    syncTileVideo(peerId);
     host.setTileState(peerId, '');
 
     if (c.kind === 'audio') {
       // Звук — в тот же микшер, что и в mesh: громкость по собеседнику, VAD,
       // разделение «голос / звук демонстрации». Само видео на плитке заглушено.
-      host.attachRemoteAudio(peerId, consumer.track, AUDIO_SLOT[c.source] ?? '9', stream);
+      host.attachRemoteAudio(peerId, consumer.track, AUDIO_SLOT[c.source] ?? '9', audioOf(peerId));
     } else {
       applyLayers(peerId, consumer);
     }
@@ -358,32 +354,66 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     }
   }
 
+  function tracksOf(peerId: string, kind: 'audio' | 'video'): MediaStreamTrack[] {
+    return [...consumers.values()]
+      .filter((e) => e.peerId === peerId && e.consumer.kind === kind)
+      .map((e) => e.consumer.track);
+  }
+
+  /** Поток для скрытого стока микшера — только звук: видео он не «прокачивает». */
+  function audioOf(peerId: string): MediaStream {
+    return new MediaStream(tracksOf(peerId, 'audio'));
+  }
+
   /**
-   * Пересобрать поток собеседника из его живых дорожек — и обязательно НОВЫМ
-   * объектом.
+   * Отдать плитке видеодорожку собеседника — новым объектом потока и ТОЛЬКО
+   * когда она действительно сменилась.
    *
-   * Здесь легко ошибиться, и ошибка стоила демонстрации экрана целиком. В mesh
-   * поток приезжал из `ontrack`: наполнял его движок, и на каждую дорожку он же
-   * слал потоку событие `addtrack`. Витрина подписана ровно на это событие
-   * (VideoTile) — по нему она узнаёт о новом видео и подписывается на его
-   * `unmute`, а до того держит плитку под аватаркой.
+   * Оба условия здесь выстраданы. Новый объект нужен потому, что дорожки в поток
+   * кладём мы сами, а скриптовый `MediaStream.addTrack()` события `addtrack` не
+   * порождает — по спецификации его шлёт только движок (в mesh поток приезжал из
+   * `ontrack`, там движок и слал). Плитка подписана ровно на это событие, так что
+   * подмена дорожки в прежнем потоке для неё не происходит вовсе: видео приезжает,
+   * декодируется и навсегда остаётся невидимым под аватаркой.
    *
-   * У SFU поток свой, дорожки в него кладём мы, а скриптовый
-   * `MediaStream.addTrack()` события `addtrack` НЕ порождает — по спецификации
-   * его шлёт только движок. Значит, положив дорожку в прежний поток, мы не
-   * сообщаем витрине ничего: чужое видео приезжает, декодируется и остаётся
-   * невидимым под аватаркой навсегда.
-   *
-   * Поэтому единственный способ сказать «состав дорожек сменился» — отдать
-   * другой объект: по нему плитка перепривяжет `srcObject` и заново подпишется
-   * на все дорожки, а микшер переставит свой скрытый сток (ensurePeerAudio уже
-   * это умеет). Работает в обе стороны: показ кончился — дорожка ушла, и плитка
-   * гасит кадр вместо того, чтобы держать замёрзший последний.
+   * А «только когда сменилась» — потому что каждый новый объект это ещё и
+   * переприсваивание `srcObject`, которое обрывает висящий `play()` с AbortError.
+   * Подписки приходят пачкой (mic, screen, screen-audio при входе в идущий
+   * разговор), и пересборка на каждую давала очередь оборванных play() — а плитка
+   * считает любой отказ play() запретом автовоспроизведения и показывает «браузер
+   * заглушил звук». Звук до плитки всё равно не доходит: он идёт в микшер, а
+   * элемент заглушён навсегда, — поэтому здесь ровно одна видеодорожка и ничего
+   * больше.
    */
-  function rebuildStream(peerId: string): MediaStream {
-    return new MediaStream(
-      [...consumers.values()].filter((e) => e.peerId === peerId).map((e) => e.consumer.track),
+  function syncTileVideo(peerId: string) {
+    const track = tracksOf(peerId, 'video')[0] ?? null;
+    if ((shownVideo.get(peerId) ?? null) === track) return;
+    shownVideo.set(peerId, track);
+    host.addTile(
+      peerId,
+      names.get(peerId) ?? tx('voice.peer.fallback'),
+      new MediaStream(track ? [track] : []),
+      false,
     );
+  }
+
+  /**
+   * Веха «пакеты реально пошли». Дорожка consumer'а рождается `muted` и снимает
+   * мут первым дошедшим RTP — но полагаться на одно лишь событие нельзя: живьём
+   * оно не пришло ни разу, ни при входе, ни в идущем разговоре. Поэтому сначала
+   * смотрим само свойство, и только если дорожка ещё молчит — ждём событие.
+   */
+  function reportRtp(track: MediaStreamTrack, source: Source, peerId: string) {
+    const tell = () => host.diag('sfu rtp', `${source} from ${peerId}`);
+    if (!track.muted) {
+      tell();
+      return;
+    }
+    const onRtp = () => {
+      track.removeEventListener('unmute', onRtp);
+      tell();
+    };
+    track.addEventListener('unmute', onRtp);
   }
 
   function dropConsumer(producerId: string) {
@@ -392,11 +422,10 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     consumers.delete(producerId);
     gotLayer.delete(entry.consumer.id);
     entry.consumer.close();
-    // Дорожки не стало — витрине нужен новый объект потока, иначе она об этом
-    // не узнает (`removetrack` скриптовый `removeTrack()` тоже не порождает) и
-    // оставит на плитке замёрзший последний кадр законченного показа.
-    const stream = rebuildStream(entry.peerId);
-    host.addTile(entry.peerId, names.get(entry.peerId) ?? tx('voice.peer.fallback'), stream, false);
+    // Дорожки не стало — плитке нужен новый объект потока, иначе она об этом не
+    // узнает (`removetrack` скриптовый `removeTrack()` тоже не порождает) и
+    // оставит замёрзший последний кадр законченного показа.
+    syncTileVideo(entry.peerId);
     // `close()` дорожку останавливает, но `ended` не шлёт — узел микшера
     // пришлось бы оставить висеть. Снимаем его явно.
     if (entry.consumer.kind === 'audio') {
@@ -409,6 +438,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       if (entry.peerId === peerId) dropConsumer(producerId);
     }
     names.delete(peerId);
+    shownVideo.delete(peerId);
     host.removeTile(peerId);
   }
 
@@ -798,6 +828,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     // Плитки собеседников снимает дирижёр (при выходе он чистит их целиком),
     // но своё состояние обнуляем сами.
     names.clear();
+    shownVideo.clear();
     netHistory.clear();
     gotLayer.clear();
     focusedId = null;
