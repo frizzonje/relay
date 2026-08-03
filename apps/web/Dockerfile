@@ -24,6 +24,9 @@ ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 COPY --from=builder /mono/apps/web/.next/standalone ./
 COPY --from=builder /mono/apps/web/.next/static ./apps/web/.next/static
 COPY --from=builder /mono/apps/web/public ./apps/web/public
+# Прослойка без права записи на диск — тома не монтируются, next/image не
+# используется: единственный владелец рантайма — node (audit S6).
+USER node
 EXPOSE 3001
 ENV PORT=3001 HOSTNAME="0.0.0.0"
 CMD ["node", "apps/web/server.js"]

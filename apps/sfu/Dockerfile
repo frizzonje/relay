@@ -26,5 +26,8 @@ FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production PORT=3100
 COPY --from=pruner /deploy .
+# Ни одного тома, медиа идёт в RTC-диапазоне от порта 3100 — root не нужен
+# (audit S6). Точки входа нет: temp mediasoup-воркера живёт в /tmp.
+USER node
 EXPOSE 3100
 CMD ["node", "dist/main.js"]
