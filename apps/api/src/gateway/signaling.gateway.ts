@@ -161,6 +161,12 @@ interface ChatMessage {
 }
 
 const CHAT_PREFIX = 'chat:';
+// Комната всех НЕгостевых сокетов. Гость по инвайту пришит к своему войс-каналу
+// и реестров не получает — ни на подключении, ни рассылкой.
+// Решётка в имени не случайна: комнатами служат ещё и слаги каналов, а `#`
+// slugifyChannel вырезает — значит совпасть имена не могут. Совпади они, гость
+// в голосовом канале с таким названием получал бы реестр серверов.
+const MEMBERS_ROOM = '#members';
 const HISTORY_LIMIT = 50;
 const MAX_CHANNELS = 50;
 const MAX_SERVERS = 20;
@@ -353,6 +359,18 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   private static readonly PRESENCE_DEBOUNCE_MS = 80;
   private presenceTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // То же окно — реестру каналов и пингам активности чата. Обе рассылки идут по
+  // всем сокетам, и без коалесцирования работа растёт как квадрат их числа:
+  // каждое сообщение с каждого сокета — обход всех остальных.
+  private static readonly REGISTRY_DEBOUNCE_MS = 80;
+  private channelsTimer: ReturnType<typeof setTimeout> | null = null;
+  // slug -> время последней реплики и сервер, под паролем которого канал лежит
+  // (null — открытый или неизвестный). Видимость решаем в момент отправки
+  // сообщения, а не при сбросе: канал за эти 80 мс могут удалить, и тогда его
+  // слаг — уже «неизвестный» — уехал бы посторонним.
+  private readonly pendingActivity = new Map<string, { ts: number; locked: string | null }>();
+  private activityTimer: ReturnType<typeof setTimeout> | null = null;
+
   // Списываем токен; false → бакет пуст (флуд), обработчик молча выходит.
   private readonly logger = new Logger(SignalingGateway.name);
 
@@ -404,6 +422,9 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       );
       return;
     }
+    // Комната всех участников (гости в неё не входят) — по ней идут рассылки,
+    // одинаковые для всех: реестр серверов.
+    client.join(MEMBERS_ROOM);
     // Набор серверов, разблокированных этим сокетом (закрытые под паролем).
     // `??=` — чтобы восстановление сессии (CSR) не сбросило уже введённые пароли.
     (client.data.unlocked as Set<string>) ??= new Set<string>();
@@ -500,15 +521,55 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     return 0;
   }
 
+  // Реестр серверов одинаков для всех участников — одна рассылка на комнату
+  // MEMBERS_ROOM. Гости в неё не входят: на подключении реестры им не шлём, и
+  // добираться до них следующей же чужой правкой было бы странно.
   private broadcastServers() {
-    this.server.emit('servers', this.publicServers());
+    this.server.to(MEMBERS_ROOM).emit('servers', this.publicServers());
   }
 
-  // Каналы рассылаем персонально: у каждого свой набор (скрытые закрытые серверы).
+  /**
+   * Каналы у каждого свои (закрытые серверы скрыты до пароля), поэтому рассылка
+   * пер-сокетная — и потому же она была самой дорогой в гейтвее: на каждую
+   * правку реестра полный обход сокетов, а внутри на каждый — фильтр всех
+   * каналов с поиском сервера по id.
+   *
+   * Считаем иначе. Набор каналов зависит ровно от одного — какие закрытые
+   * серверы этот сокет разблокировал. Сокеты с одинаковым набором получают
+   * одинаковый ответ, и подавляющее большинство сидит в одной группе (пустой).
+   * Плюс дебаунс: правки реестра ходят пачками (создание сервера — это сразу
+   * servers + channels, удаление — каналы следом за сервером).
+   */
   private broadcastChannels() {
-    for (const sock of this.server.sockets.sockets.values()) {
-      sock.emit('channels', this.channelsFor(sock));
+    if (this.channelsTimer) return;
+    this.channelsTimer = setTimeout(() => {
+      this.channelsTimer = null;
+      const byVisibility = new Map<string, Channel[]>();
+      for (const sock of this.server.sockets.sockets.values()) {
+        if (sock.data.guest === true) continue;
+        const key = this.visibilityKey(sock);
+        let payload = byVisibility.get(key);
+        if (!payload) {
+          payload = this.channelsFor(sock);
+          byVisibility.set(key, payload);
+        }
+        sock.emit('channels', payload);
+      }
+    }, SignalingGateway.REGISTRY_DEBOUNCE_MS);
+    this.channelsTimer.unref?.();
+  }
+
+  // Чем один сокет отличается от другого с точки зрения видимости каналов:
+  // списком разблокированных ЗАКРЫТЫХ серверов. Открытые видны всем и в ключ
+  // не идут.
+  private visibilityKey(client: Socket): string {
+    const unlocked = client.data.unlocked as Set<string> | undefined;
+    if (!unlocked?.size) return '';
+    const ids: string[] = [];
+    for (const s of this.servers) {
+      if (s.passwordHash && unlocked.has(s.id)) ids.push(s.id);
     }
+    return ids.join('\0');
   }
 
   // ===== Реестр серверов =====
@@ -1181,11 +1242,33 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // «в тайном канале сейчас пишут» посторонним знать неоткуда.
     const slug = room.slice(CHAT_PREFIX.length);
     const channel = this.channels.find((c) => c.type === 'text' && c.slug === slug);
-    for (const sock of this.server.sockets.sockets.values()) {
-      if (sock.data.guest === true) continue; // гостю реестр не положен вовсе
-      if (channel && !this.canSee(sock, channel)) continue;
-      sock.emit('chat-activity', { slug, ts: msg.ts });
-    }
+    const srv = channel ? this.servers.find((s) => s.id === channel.serverId) : undefined;
+    this.queueChatActivity(slug, msg.ts, srv?.passwordHash ? srv.id : null);
+  }
+
+  /**
+   * Пинг активности — это состояние («в канале писали в такой-то момент»), а не
+   * событие, поэтому его можно копить: из десяти реплик подряд смысл несёт
+   * последняя. Без этого каждое сообщение каждого участника означало обход всех
+   * сокетов — та самая квадратичная работа при живом разговоре.
+   */
+  private queueChatActivity(slug: string, ts: number, locked: string | null) {
+    this.pendingActivity.set(slug, { ts, locked });
+    if (this.activityTimer) return;
+    this.activityTimer = setTimeout(() => {
+      this.activityTimer = null;
+      const batch = [...this.pendingActivity];
+      this.pendingActivity.clear();
+      for (const sock of this.server.sockets.sockets.values()) {
+        if (sock.data.guest === true) continue; // гостю реестр не положен вовсе
+        const unlocked = sock.data.unlocked as Set<string> | undefined;
+        for (const [slug, { ts, locked }] of batch) {
+          if (locked && !unlocked?.has(locked)) continue;
+          sock.emit('chat-activity', { slug, ts });
+        }
+      }
+    }, SignalingGateway.REGISTRY_DEBOUNCE_MS);
+    this.activityTimer.unref?.();
   }
 
   // Правка своего сообщения. Автора сверяем по тегу (chatName) — та же модель
