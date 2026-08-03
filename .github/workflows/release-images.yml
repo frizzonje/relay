@@ -20,16 +20,37 @@ on:
       tag:
         description: 'Image tag to publish (e.g. 0.4.0). "latest" is always added.'
         required: true
-        default: 'latest'
 
 permissions:
   contents: read
   packages: write
 
 jobs:
+  # Ворот на публикацию. CI по тегу не бежит (его триггеры — ветки и PR), так
+  # что «тег на сломанном коммите» проверить больше некому, кроме самого
+  # релиза: этот job перегоняет ровно то, что CI проверяет на каждой ветке, —
+  # на том коммите, который сейчас уедет в GHCR (audit S9).
+  gate:
+    name: verify (lint · typecheck · test · build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm turbo run typecheck test build
+
   build:
     name: build · push (${{ matrix.app }})
     runs-on: ubuntu-latest
+    needs: gate
     strategy:
       matrix:
         include:
