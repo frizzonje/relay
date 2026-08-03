@@ -53,6 +53,15 @@ services:
       - SFU_INTERNAL_URL=${SFU_INTERNAL_URL:-http://host.docker.internal:3100}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Зависший (не упавший) процесс `restart: unless-stopped` не замечает —
+    # повисший цикл событий в HTTP не отвечает, и healthcheck его выносит.
+    # /api/health публичен (без куки), версии не отдаёт (audit S7).
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     volumes:
       - uploads:/app/uploads
     expose:
@@ -69,6 +78,14 @@ services:
       - SITE_PASSWORD=${SITE_PASSWORD:-}
     expose:
       - "3001"
+    # Как у api: /login отдаётся без авторизации (сама страница входа) —
+    # это и есть доступный health-пробе web (audit S7).
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/login"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   # Медиасервер (SFU): звонки на 4+ человек с видео. Без него всё работает на
   # p2p (mesh) — поэтому профиль опциональный, как у coturn.

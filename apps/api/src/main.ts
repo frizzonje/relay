@@ -12,7 +12,10 @@ import { UPLOAD_DIR } from './uploads';
 // редирект неавторизованных на /login делает middleware Next — здесь 401 JSON.
 function authGate(req: Request, res: Response, next: NextFunction) {
   if (!authEnabled()) return next();
-  if (req.path === '/api/login') return next();
+  // /api/health публичен: по нему стоят docker healthcheck и внешний мониторинг,
+  // и оба обязаны работать без куки. Содержимое — только «жив ли процесс»,
+  // ничего об инсталляции (см. health.controller.ts).
+  if (req.path === '/api/login' || req.path === '/api/health') return next();
   if (isAuthorized(req)) return next();
   // Гость по инвайту: без ICE-конфига (TURN) его звонок не соберётся за строгим
   // NAT. Только этот путь — остальное API гостю не положено.
