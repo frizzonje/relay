@@ -16,14 +16,13 @@ import {
   scryptSync,
   timingSafeEqual,
 } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { Server, Socket } from 'socket.io';
 import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
 import { sfuHealthy } from '../sfu/sfu-health';
 import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
 import { Attachment, UploadsService } from '../uploads';
+import { Channel, ServerEntry, VoiceMode, loadRegistry, saveRegistry } from './registry';
 
 interface JoinPayload {
   room?: unknown;
@@ -63,34 +62,8 @@ interface ChatReactPayload {
 
 type ReactionMap = Record<string, string[]>;
 
-// Реестр направлений (api намеренно не тянет @relay/shared — типы дублируем, как и
-// прочие константы здесь; формат совпадает с Channel/Server из packages/shared).
-type ChannelType = 'text' | 'voice';
-// Транспорт голосового канала: p2p (mesh, каждый каждому) или sfu (через
-// медиасервер). Отсутствие поля = p2p — старые registry.json читаются как есть.
-type VoiceMode = 'p2p' | 'sfu';
-// Реестровый сервер (гильдия). Имя ServerEntry, чтобы не столкнуться с socket.io
-// `Server` (WebSocketServer) выше. Формат совпадает с Server из packages/shared.
-interface ServerEntry {
-  id: string;
-  name: string;
-  emoji?: string;
-  removable: boolean;
-  // Хэш пароля закрытого сервера (`salt:hash` hex, scrypt). Клиенту НЕ отдаём —
-  // наружу уходит только флаг `locked`. Персистится в registry.json.
-  passwordHash?: string;
-}
-interface Channel {
-  id: string;
-  serverId: string;
-  type: ChannelType;
-  name: string;
-  slug: string;
-  removable: boolean;
-  // Только для type: 'voice'. Меняется через channel-mode, права — как у
-  // channel-delete: дефолтные каналы (removable: false) остаются на p2p.
-  mode?: VoiceMode;
-}
+// Реестровые типы (ServerEntry, Channel) живут рядом с их хранилищем — см.
+// ./registry. Оттуда же загрузка и запись файла.
 interface ServerCreatePayload {
   id?: unknown;
   name?: unknown;
@@ -282,31 +255,6 @@ const DEFAULT_CHANNELS: Channel[] = [
 // навсегда остался бы с лишней строкой. Вычищаем их по id при загрузке.
 const RETIRED_CHANNEL_IDS = new Set(['text-general']);
 
-// Реестр серверов/каналов переживает рестарт: пишем его в JSON.
-// Куда: DATA_DIR из env, иначе `<cwd>/data` — в дев/превью процесс запускается с
-// `-w /app/apps/api` на bind-примонтированном репозитории, так что `apps/api/data/`
-// ложится на ХОСТ и переживает пересоздание контейнера без всяких доп-монтирований.
-// В проде DATA_DIR задаём явно на persistent-том uploads (см. docker-compose.yml).
-const DATA_DIR = process.env.DATA_DIR || join(process.cwd(), 'data');
-const REGISTRY_FILE = join(DATA_DIR, 'registry.json');
-
-interface PersistedRegistry {
-  servers?: ServerEntry[];
-  channels?: Channel[];
-}
-
-// Читаем сохранённый реестр (или {} — файла ещё нет / битый). Диск не источник
-// правды по дефолтам: их всегда подмешиваем поверх (mergeById), поэтому даже
-// пустой/повреждённый файл безопасен — вернёмся к сидам.
-function loadRegistry(): PersistedRegistry {
-  try {
-    const parsed = JSON.parse(readFileSync(REGISTRY_FILE, 'utf8')) as PersistedRegistry;
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
 // Дефолты — источник правды: копируем их первыми, затем добавляем сохранённые
 // записи с новыми id (созданные пользователями). Так дефолты всегда актуальны,
 // а их изменение между версиями не перетирается старым файлом.
@@ -359,7 +307,10 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   constructor(private readonly uploads: UploadsService) {
     // Поднимаем сохранённый реестр и подмешиваем дефолты. Каналы «сирот» (сервер
     // которых не существует) отбрасываем — иначе повиснут вне рейки.
-    const saved = loadRegistry();
+    // Битый файл loadRegistry разбирает сам: откладывает исходные байты в
+    // сторону, пробует прошлую копию и кричит в лог. Сюда в худшем случае
+    // придут пустые данные — и это уже осознанный, а не молчаливый худший случай.
+    const saved = loadRegistry().data;
     this.servers = mergeById(DEFAULT_SERVERS, saved.servers);
     const serverIds = new Set(this.servers.map((s) => s.id));
     this.channels = mergeById(DEFAULT_CHANNELS, saved.channels).filter(
@@ -367,18 +318,15 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     );
   }
 
-  // Сохраняем реестр на диск атомарно (temp + rename), чтобы рестарт не потерял
-  // серверы/каналы пользователей. Вызываем после каждого изменения. Диск-ошибку
-  // не роняем на пользователя — только логируем: живой реестр в памяти важнее.
+  // Сохраняем реестр на диск (атомарно, с fsync и прошлой копией — см.
+  // saveRegistry), чтобы рестарт не потерял серверы/каналы пользователей.
+  // Вызываем после каждого изменения. Диск-ошибку не роняем на пользователя —
+  // только логируем: живой реестр в памяти важнее.
   private persist() {
     try {
-      mkdirSync(DATA_DIR, { recursive: true });
-      const tmp = REGISTRY_FILE + '.tmp';
-      const data = JSON.stringify({ servers: this.servers, channels: this.channels });
-      writeFileSync(tmp, data);
-      renameSync(tmp, REGISTRY_FILE);
+      saveRegistry({ servers: this.servers, channels: this.channels });
     } catch (e) {
-      console.error('[registry] не удалось сохранить реестр:', e);
+      this.logger.error(`не удалось сохранить реестр: ${e}`);
     }
   }
 
