@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/frizzonje/relay/main/install.sh | b
 | Нагрузка на сервер | нет (только сигналинг) | CPU и RTC-порты |
 | Требует | ничего | `--profile sfu` + `SFU_SECRET` |
 
-Медиасервер опционален по замыслу: инсталляция без него остаётся полнофункциональной. Если SFU выключен или лежит, каналы `sfu` автоматически откатываются на p2p и предупреждают об этом в интерфейсе. Обоснование разделения — [docs/sfu-plan.md](docs/sfu-plan.md).
+Медиасервер опционален по замыслу: инсталляция без него остаётся полнофункциональной. Если SFU выключен или лежит, каналы `sfu` автоматически откатываются на p2p и предупреждают об этом в интерфейсе. Обоснование разделения — [docs/plans/old/sfu.md](docs/plans/old/sfu.md).
 
 ## Клиенты
 
@@ -81,7 +81,7 @@ clients/
   ios/        iOS — Swift/SwiftUI + WebRTC.xcframework
 infra/        Caddyfile, dev/e2e compose
 e2e/          Playwright-тесты
-docs/         архитектура, фронтенд, бэкенд, протокол, SFU
+docs/         архитектура, фронтенд, бэкенд, протокол, plans/
 docker-compose.yml        прод-стек из исходников (точка входа)
 docker-compose.prod.yml   тот же стек на готовых образах GHCR
 install.sh                инсталлятор в одну команду
@@ -234,7 +234,9 @@ Web-клиент идёт на английском и русском; `en` — 
 - [Фронтенд](docs/frontend.md) — компоненты, сторы, WebRTC-клиент
 - [Бэкенд](docs/backend.md) — NestJS, Socket.io gateway, REST
 - [Протокол](docs/protocol.md) — спецификация API для клиентов (web / iOS / desktop)
-- [SFU](docs/sfu-plan.md) — проектная записка о масштабировании видео через медиасервер mediasoup
+- [SFU](docs/plans/old/sfu.md) — проектная записка о масштабировании видео через медиасервер mediasoup
+- [1.0](docs/plans/relay-1.0.md) — что несёт следующий мажор: идентичность, история на Postgres, углубление основ
+- [2.0](docs/plans/relay-2.0.md) — личные сообщения и звонок один на один, следующий за ним релиз
 
 ## Участие
 

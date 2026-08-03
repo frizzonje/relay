@@ -13,7 +13,7 @@ import type { TileNet, UplinkStatus, VoicePing } from '@/stores/voice';
  * обратно дирижёру через `TransportHost`.
  *
  * Первая реализация — `mesh.ts` (p2p, perfect negotiation). Вторая, `sfu.ts`,
- * появится в шаге D плана (docs/sfu-plan.md) и встанет под тот же интерфейс.
+ * появится в шаге D плана (docs/plans/old/sfu.md) и встанет под тот же интерфейс.
  */
 
 /** Что транспорт может попросить у дирижёра: локальные дорожки + витрина. */

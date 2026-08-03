@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
 import type { TransportHost } from './voice/types';
 
 /**
- * Политика фолбэка при падении медиасервера (шаг E, docs/sfu-plan.md).
+ * Политика фолбэка при падении медиасервера (шаг E, docs/plans/old/sfu.md).
  *
  * Проверяем не медиа (для него нужен настоящий WebRTC), а РЕШЕНИЕ дирижёра:
  * SFU-транспорт заменён заглушкой, которая по команде теста говорит «я не

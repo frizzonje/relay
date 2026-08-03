@@ -48,7 +48,7 @@ Voice channels created by members carry a `mode` that any member can flip from t
 | Server load | none (signaling only) | CPU and RTC ports |
 | Requires | nothing | `--profile sfu` + `SFU_SECRET` |
 
-The media server is optional by design: an installation without it stays fully functional. If the SFU is down or disabled, `sfu` channels fall back to P2P automatically and warn in the UI. Design note behind the split (Russian): [docs/sfu-plan.md](docs/sfu-plan.md).
+The media server is optional by design: an installation without it stays fully functional. If the SFU is down or disabled, `sfu` channels fall back to P2P automatically and warn in the UI. Design note behind the split (Russian): [docs/plans/old/sfu.md](docs/plans/old/sfu.md).
 
 ## Clients
 
@@ -81,7 +81,7 @@ clients/
   ios/        iOS — Swift/SwiftUI + WebRTC.xcframework
 infra/        Caddyfile, dev/e2e compose
 e2e/          Playwright tests
-docs/         architecture, frontend, backend, protocol, SFU
+docs/         architecture, frontend, backend, protocol, plans/
 docker-compose.yml        production stack, built from source (entry point)
 docker-compose.prod.yml   the same stack on prebuilt GHCR images
 install.sh                one-command installer
@@ -234,7 +234,9 @@ Docs and code comments are in Russian; the two READMEs are the English-facing en
 - [Frontend](docs/frontend.md) — components, stores, WebRTC client
 - [Backend](docs/backend.md) — NestJS, Socket.io gateway, REST
 - [Protocol](docs/protocol.md) — client API spec (web / iOS / desktop)
-- [SFU](docs/sfu-plan.md) — design note on scaling video via a mediasoup media server
+- [SFU](docs/plans/old/sfu.md) — design note on scaling video via a mediasoup media server
+- [1.0](docs/plans/relay-1.0.md) — what the next major brings: identity, persistent history, deeper basics
+- [2.0](docs/plans/relay-2.0.md) — direct messages and one-to-one calls, the release after
 
 ## Contributing
 

@@ -30,7 +30,7 @@ const sfx = () => getSfx();
  *
  * Доставку медиа собеседникам дирижёр НЕ делает сам — этим занят транспорт за
  * интерфейсом `VoiceTransport` (`lib/voice/types.ts`). Сегодня это mesh
- * (`lib/voice/mesh.ts`), рядом с ним встанет SFU — см. docs/sfu-plan.md.
+ * (`lib/voice/mesh.ts`), рядом с ним встанет SFU — см. docs/plans/old/sfu.md.
  *
  * SFX-звуки эфира (join/leave/peer/error/reconnect/connLost) подключены здесь
  * через пул `lib/sfx`.
