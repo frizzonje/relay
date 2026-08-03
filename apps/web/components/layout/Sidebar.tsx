@@ -267,7 +267,6 @@ export function Sidebar() {
   const createType = useUiStore((s) => s.createChannelType);
   const openCreate = useUiStore((s) => s.openCreateChannel);
   const setCreateOpen = useUiStore((s) => s.setCreateChannelOpen);
-  const openJoinByCode = useUiStore((s) => s.setJoinByCodeOpen);
 
   // Инвайт-ссылка на войс-канал: null — модалка закрыта.
   const [inviteTarget, setInviteTarget] = useState<{ slug: string; label: string } | null>(null);
@@ -369,16 +368,6 @@ export function Sidebar() {
 
       {/* Каналы */}
       <div className="flex-1 overflow-y-auto px-2 py-3">
-        {/* Быстрый вход по коду — только на мобиле (на десктопе это делает лобби) */}
-        <button
-          type="button"
-          onClick={() => openJoinByCode(true)}
-          className="mb-1 flex w-full items-center gap-1.5 rounded-[10px] border border-line bg-bg-elev px-3 py-2 text-[14px] font-medium text-text-muted outline-none transition-colors hover:text-text-header md:hidden"
-        >
-          <Icon name="plus" className="text-[16px]" />
-          {t('sidebar.joinByCode')}
-        </button>
-
         {/* Свежий сервер без каналов — подсказываем создать первый */}
         {!isMain && serverChannels.length === 0 && (
           <div className="mx-1 mt-2 rounded-lg border border-dashed border-line px-3 py-4 text-center text-[13px] leading-snug text-text-muted">

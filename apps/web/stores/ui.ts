@@ -34,9 +34,6 @@ interface UiState {
   /** Какая панель открыта на мобиле (см. MobilePanel). */
   mobilePanel: MobilePanel;
   setMobilePanel: (panel: MobilePanel) => void;
-  /** Bottom sheet быстрого входа по коду/ссылке (мобильный доступ к лобби). */
-  joinByCodeOpen: boolean;
-  setJoinByCodeOpen: (open: boolean) => void;
   /** Окно настроек. В сторе, а не в рейке: открывается ещё и из ПКМ-меню. */
   settingsOpen: boolean;
   setSettingsOpen: (open: boolean) => void;
@@ -62,8 +59,6 @@ export const useUiStore = create<UiState>((set, get) => ({
   // Стартуем со списка каналов — как в мобильном Discord: сперва выбор, потом сцена.
   mobilePanel: 'nav',
   setMobilePanel: (panel) => set({ mobilePanel: panel }),
-  joinByCodeOpen: false,
-  setJoinByCodeOpen: (open) => set({ joinByCodeOpen: open }),
   settingsOpen: false,
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   openText: (slug, label) => set({ view: 'text', textRoom: slug, textLabel: label }),

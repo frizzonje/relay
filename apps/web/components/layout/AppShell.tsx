@@ -10,7 +10,6 @@ import { Controls } from '@/components/layout/Controls';
 import { Members } from '@/components/layout/Members';
 import { OnlineMembers } from '@/components/layout/OnlineMembers';
 import { MobileBar } from '@/components/layout/MobileBar';
-import { JoinByCodeSheet } from '@/components/layout/JoinByCodeSheet';
 import { Stage } from '@/components/stage/Stage';
 
 /**
@@ -82,7 +81,6 @@ export function AppShell() {
       </div>
 
       <MobileBar />
-      <JoinByCodeSheet />
     </div>
   );
 }
