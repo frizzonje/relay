@@ -102,7 +102,19 @@ AppModule
 
 ### `POST /api/upload`
 
-Multipart, поле `file`. Ограничение: 25 МБ (`MAX_UPLOAD_BYTES`). Возвращает:
+Multipart, поле `file`. Ограничения:
+
+- **25 МБ на файл** (`MAX_UPLOAD_BYTES`), сверх — 413.
+- **бюджет байтов на адрес**: всплеск 300 МиБ, дальше 100 МиБ/мин. Сверх — 429,
+  причём отказ приходит до записи тела на диск (гард стоит раньше multer).
+  Списывается настоящий размер файла после записи, а не `Content-Length`:
+  заголовок пишет клиент, и бюджет, который ему верит, обходится одной строкой.
+- **потолок на весь каталог** — `UPLOAD_MAX_TOTAL_BYTES` (`2G`, `512M` или
+  байты; по умолчанию 2 ГиБ). За потолком вытесняются самые старые файлы, и об
+  этом пишется в лог: отказ вместо вытеснения означал бы, что один человек,
+  забивший каталог, останавливает вложения всем до прихода администратора.
+
+Возвращает:
 ```json
 {
   "id": "uuid-filename",
@@ -128,7 +140,9 @@ apps/api/src/
     auth.controller.ts       POST /api/login
   config.controller.ts       GET /api/config
   upload.controller.ts       POST /api/upload
-  uploads.ts                 UploadsService (реестр + detectKind + sanitizeName)
+  upload.guard.ts            бюджет байтов на адрес (429 до записи на диск)
+  uploads.ts                 UploadsService (реестр + квота + detectKind + sanitizeName)
   gateway/
+    registry.ts              типы реестра + чтение/запись registry.json
     signaling.gateway.ts     всё WebSocket
 ```

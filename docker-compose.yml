@@ -32,6 +32,10 @@ services:
       # Реестр серверов/каналов — на persistent-том uploads (подпапка state/),
       # чтобы серверы пользователей переживали рестарт/пересборку контейнера.
       - DATA_DIR=/app/uploads/state
+      # Потолок на весь каталог загрузок; пусто — встроенный дефолт (2 ГиБ).
+      # За потолком вытесняются самые старые вложения: том общий с реестром и
+      # сертификатами, и кончиться он не должен. Принимает 2G / 512M / байты.
+      - UPLOAD_MAX_TOTAL_BYTES=${UPLOAD_MAX_TOTAL_BYTES:-}
       - SITE_PASSWORD=${SITE_PASSWORD:-}
       - SERVER_HOST=${SERVER_HOST:-localhost}
       - STUN_URLS=${STUN_URLS:-}

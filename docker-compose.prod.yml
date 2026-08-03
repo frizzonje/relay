@@ -26,6 +26,11 @@ services:
       - PORT=3000
       - UPLOAD_DIR=/app/uploads
       - DATA_DIR=/app/uploads/state
+      # Ceiling on the whole uploads directory; empty means the built-in default
+      # (2 GiB). Past it the oldest attachments are evicted, so the volume — which
+      # also holds the registry and Caddy's certificates — cannot be filled up.
+      # Accepts 2G / 512M / plain bytes.
+      - UPLOAD_MAX_TOTAL_BYTES=${UPLOAD_MAX_TOTAL_BYTES:-}
       - SITE_PASSWORD=${SITE_PASSWORD:-}
       - SERVER_HOST=${SERVER_HOST:-localhost}
       - STUN_URLS=${STUN_URLS:-}
