@@ -8,21 +8,14 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
-import {
-  createHmac,
-  randomBytes,
-  randomUUID,
-  scrypt,
-  scryptSync,
-  timingSafeEqual,
-} from 'node:crypto';
-import { promisify } from 'node:util';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { Server, Socket } from 'socket.io';
 import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
 import { sfuHealthy } from '../sfu/sfu-health';
 import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
 import { Attachment, UploadsService } from '../uploads';
 import { Channel, ServerEntry, VoiceMode, loadRegistry, saveRegistry } from './registry';
+import { UnlockAttempts, clientIp, hashServerPassword, verifyServerPassword } from './unlock';
 
 interface JoinPayload {
   room?: unknown;
@@ -146,41 +139,6 @@ function oneLine(value: string): string {
 type SfuTokenResult =
   | { ok: true; token: string; exp: number; url: string }
   | { ok: false; error: 'forbidden' | 'unavailable' | 'not-in-room' | 'not-sfu' };
-
-// Пароль сервера храним как `salt:hash` hex (scrypt) — не обратимо, соль на
-// каждый сервер своя. Проверка за постоянное время (timingSafeEqual).
-// Хэшируем при создании сервера — раз в жизни, синхронно и не жалко.
-function hashServerPassword(password: string): string {
-  const salt = randomBytes(16);
-  const hash = scryptSync(password, salt, 32);
-  return salt.toString('hex') + ':' + hash.toString('hex');
-}
-
-// А вот ПРОВЕРКА — только асинхронная. scrypt честно стоит десятки миллисекунд
-// (замер в контейнере: ~45 мс, на односпроцессорной VM больше), и в синхронном
-// виде это не «медленно», а полная остановка сигналинга: пока считается хэш, не
-// движется ни один звонок. Клиент к тому же переспрашивает разблокировку сам
-// после каждого реконнекта (пароли лежат у него в localStorage), так что после
-// рестарта сервиса такие проверки приходят пачкой ровно в тот момент, когда все
-// переподключаются.
-const scryptAsync = promisify(scrypt) as (
-  password: string,
-  salt: Buffer,
-  keylen: number,
-) => Promise<Buffer>;
-
-async function verifyServerPassword(password: string, stored: string): Promise<boolean> {
-  const [saltHex, hashHex] = stored.split(':');
-  if (!saltHex || !hashHex) return false;
-  let expected: Buffer;
-  try {
-    expected = Buffer.from(hashHex, 'hex');
-  } catch {
-    return false;
-  }
-  const actual = await scryptAsync(password, Buffer.from(saltHex, 'hex'), 32);
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
-}
 
 // Снимок цитируемого сообщения (reply) — копией, а не ссылкой: исходное могут
 // отредактировать/удалить, цитата остаётся прежней. Совпадает с ReplyRef из shared.
@@ -367,15 +325,11 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   private static readonly RL_REFILL_PER_SEC = 20;
 
   // ── Разблокировка закрытых серверов ─────────────────────────────────────
-  // Общий бакет (20/с) от перебора пароля почти не защищает: 20 попыток в
-  // секунду с сокета, а сокетов можно открыть сколько угодно. Держим отдельный
-  // счётчик неудач на сокете: после порога сокет уходит в растущий простой, и
-  // подбор упирается в необходимость каждый раз переподключаться заново.
-  // Порог тот же, что у входа на сайт (MAX_ATTEMPTS в auth.controller): ошибиться
-  // восемь раз подряд живой человек ещё может, дальше это уже не опечатки.
-  private static readonly UNLOCK_FAILS_FREE = 8;
-  private static readonly UNLOCK_COOLDOWN_MS = 30_000;
-  private static readonly UNLOCK_COOLDOWN_MAX_MS = 5 * 60_000;
+  // Общий бакет (20/с) от перебора пароля не защищает: 20 попыток в секунду с
+  // сокета, а сокетов можно открыть сколько угодно. Счётчик неудач живёт не на
+  // сокете (реконнект обнулял бы его за один round-trip), а на паре «адрес +
+  // сервер» — см. ./unlock, там же семафор на одновременные scrypt.
+  private readonly unlockAttempts = new UnlockAttempts();
 
   // Уже проверенные пароли: ключ — HMAC от «хэш + пароль» на случайном ключе
   // процесса (голый sha256 пароля в памяти — плохая идея, а так дамп кучи не
@@ -560,7 +514,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // ===== Реестр серверов =====
 
   @SubscribeMessage('server-create')
-  handleServerCreate(
+  async handleServerCreate(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ServerCreatePayload,
   ) {
@@ -578,8 +532,16 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
         ? payload.emoji.trim().slice(0, 8)
         : undefined;
     // Пароль (если задан) → сервер закрытый. Хэшируем, храним только хэш.
+    // Хэширование асинхронное и через тот же семафор, что и проверка: в
+    // синхронном виде оно стоит десятки миллисекунд ПОЛНОЙ остановки — не пула,
+    // а цикла событий, — и цикл «создать закрытый сервер, удалить, повторить»
+    // укладывал бы сигналинг с одного сокета.
     const password = typeof payload?.password === 'string' ? payload.password : '';
-    const passwordHash = password ? hashServerPassword(password) : undefined;
+    const passwordHash = password ? await hashServerPassword(password) : undefined;
+    // Пока считался хэш, реестр мог измениться: тот же id мог занять другой
+    // сокет, а свободное место — кончиться.
+    if (this.servers.length >= MAX_SERVERS) return;
+    if (this.servers.some((s) => s.id === id)) return;
 
     this.servers.push({ id, name, emoji, removable: true, passwordHash });
     // Создатель знает пароль — сразу разблокируем сервер для его сокета.
@@ -608,12 +570,11 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       client.emit('server-unlock-result', { id, ok: true });
       return;
     }
-    // Сокет уже отстрелялся неудачами — до конца простоя даже не считаем хэш.
-    const fails = (client.data.unlockFails as { count: number; until: number } | undefined) ?? {
-      count: 0,
-      until: 0,
-    };
-    if (Date.now() < fails.until) {
+    // Этот адрес уже отстрелялся неудачами по этому серверу — до конца простоя
+    // даже не считаем хэш. Проверка ДО scrypt — она же и есть то, что не даёт
+    // перебору забить пул: сам семафор только ограничивает ущерб.
+    const ip = clientIp(client.handshake);
+    if (this.unlockAttempts.blockedUntil(ip, id)) {
       client.emit('server-unlock-result', { id, ok: false });
       return;
     }
@@ -621,22 +582,21 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const ok = this.unlockCache.has(cacheKey)
       ? true
       : await verifyServerPassword(password, srv.passwordHash);
+    // Пока считался хэш, сервер могли удалить — тогда разблокировать нечего.
+    if (!this.servers.some((s) => s.id === id)) {
+      client.emit('server-unlock-result', { id, ok: false });
+      return;
+    }
     if (!ok) {
-      fails.count += 1;
-      if (fails.count > SignalingGateway.UNLOCK_FAILS_FREE) {
-        const over = fails.count - SignalingGateway.UNLOCK_FAILS_FREE;
-        fails.until =
-          Date.now() +
-          Math.min(
-            SignalingGateway.UNLOCK_COOLDOWN_MS * 2 ** (over - 1),
-            SignalingGateway.UNLOCK_COOLDOWN_MAX_MS,
-          );
-        this.logger.warn(`server-unlock: ${fails.count} failed attempts from ${client.id}`);
-      }
-      client.data.unlockFails = fails;
+      // Пишем каждую неудачу, а не только превышение порога: по одной строчке
+      // «превышено» не видно ни начала подбора, ни его темпа.
+      const { count, until } = this.unlockAttempts.fail(ip, id);
+      const cooldown =
+        until > Date.now() ? `, cooldown ${Math.round((until - Date.now()) / 1000)}s` : '';
+      this.logger.warn(`server-unlock: failed attempt ${count} for "${id}" from ${ip}${cooldown}`);
     }
     if (ok) {
-      client.data.unlockFails = { count: 0, until: 0 };
+      this.unlockAttempts.succeed(ip, id);
       // Кэш держим ограниченным: ключей ровно столько, сколько разных паролей
       // предъявили, а вытесняем самый старый (Map хранит порядок вставки).
       if (!this.unlockCache.has(cacheKey)) {
@@ -671,6 +631,9 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const srv = this.servers[idx];
     if (srv.passwordHash && !(client.data.unlocked as Set<string>)?.has(id)) return;
     this.servers.splice(idx, 1);
+    // Простой за неудачи вязался к этому id — новому серверу с тем же id он
+    // достаться не должен.
+    this.unlockAttempts.forgetServer(id);
     this.broadcastServers();
 
     // Каналы удалённого сервера уходят вместе с ним — иначе повиснут сиротами.
