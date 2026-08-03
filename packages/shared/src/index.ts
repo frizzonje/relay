@@ -134,6 +134,13 @@ export interface Server {
    * только этот флаг.
    */
   locked?: boolean;
+  /**
+   * Стабильный id устройства, создавшего сервер (clientId из localStorage).
+   * Только его обладатель может удалить сервер и править каналы внутри него.
+   * У записей, созданных до появления поля, его нет — их по-прежнему может
+   * править любой участник (это заслон от случайного сноса, не личность).
+   */
+  creatorId?: string;
 }
 
 export interface ServerCreatePayload {
@@ -143,11 +150,25 @@ export interface ServerCreatePayload {
   emoji?: string;
   /** Необязательный пароль: если задан — сервер становится закрытым (locked). */
   password?: string;
+  /** Стабильный id устройства-создателя (clientId) — сервер запомнит его как владельца. */
+  clientId?: string;
 }
 
 export interface ServerDeletePayload {
   id: string;
+  /** Тот самый clientId, которым сервер создавали — иначе «не ваш» сервер. */
+  clientId?: string;
 }
+
+/**
+ * Итог удаления сервера (ack), по образцу ChannelDeleteResult:
+ * - `not-owner` — сервер создан другим устройством, а без личности в 1.0
+ *   владельца от подделки не отличить (clientId живёт в localStorage);
+ * - `forbidden` — сервер по умолчанию либо закрытый без введённого пароля.
+ */
+export type ServerDeleteResult =
+  | { ok: true }
+  | { ok: false; error: 'not-found' | 'forbidden' | 'not-owner' };
 
 /** Ввод пароля для доступа к закрытому серверу. */
 export interface ServerUnlockPayload {
@@ -203,6 +224,12 @@ export interface Channel {
    */
   mode?: VoiceMode;
   /**
+   * Стабильный id устройства, создавшего канал (clientId из localStorage).
+   * Только его обладатель может переименовать канал, удалить его или сменить
+   * транспорт. У старых записей поля нет — их может править любой участник.
+   */
+  creatorId?: string;
+  /**
    * Время последнего сообщения текстового канала — снимок активности для
    * «непрочитано». Только для `type: 'text'` и только если в канале вообще
    * что-то писали. Клиент сравнивает его с сохранённой отметкой чтения, поэтому
@@ -223,21 +250,26 @@ export interface ChannelCreatePayload {
   name: string;
   /** Режим для голосового канала; у текстовых игнорируется. */
   mode?: VoiceMode;
+  /** Стабильный id устройства-создателя (clientId) — канал запомнит его как владельца. */
+  clientId?: string;
 }
 
 export interface ChannelDeletePayload {
   id: string;
+  /** clientId создателя — удалить чужой канал нельзя. */
+  clientId?: string;
 }
 
 /**
  * Итог удаления (ack). Отказ — не «ничего не произошло»: интерфейс обязан
  * сказать, почему канал остался на месте.
  * - `occupied` — в голосовом канале кто-то есть; `occupants` — сколько именно;
+ * - `not-owner` — канал создан другим устройством;
  * - `forbidden` — канал по умолчанию (или сервер под паролем не разблокирован).
  */
 export type ChannelDeleteResult =
   | { ok: true }
-  | { ok: false; error: 'not-found' | 'forbidden' | 'occupied'; occupants?: number };
+  | { ok: false; error: 'not-found' | 'forbidden' | 'occupied' | 'not-owner'; occupants?: number };
 
 /**
  * Переименование канала. Меняется только отображаемое имя — `slug` остаётся
@@ -247,20 +279,26 @@ export type ChannelDeleteResult =
 export interface ChannelRenamePayload {
   id: string;
   name: string;
+  /** clientId создателя — переименовать чужой канал нельзя. */
+  clientId?: string;
 }
 
 export type ChannelRenameResult =
   | { ok: true }
-  | { ok: false; error: 'not-found' | 'forbidden' | 'bad-name' };
+  | { ok: false; error: 'not-found' | 'forbidden' | 'bad-name' | 'not-owner' };
 
-/** Смена транспорта голосового канала (только `removable`). */
+/** Смена транспорта голосового канала (только своего `removable`). */
 export interface ChannelModePayload {
   id: string;
   mode: VoiceMode;
+  /** clientId создателя — сменить транспорт чужому каналу нельзя. */
+  clientId?: string;
 }
 
 export interface ChannelStatsPayload {
   id: string;
+  /** clientId создателя — чужой срез не отдаём. */
+  clientId?: string;
 }
 
 /**
@@ -269,6 +307,18 @@ export interface ChannelStatsPayload {
  * диалога — рассылать это всем постоянно незачем.
  */
 export type ChannelStatsResult = { ok: true; occupants: number; messages: number } | { ok: false };
+
+export interface ServerStatsPayload {
+  id: string;
+  /** clientId создателя — цену удаления знает только владелец. */
+  clientId?: string;
+}
+
+/**
+ * Живой срез сервера для подтверждения удаления: сколько каналов и сколько
+ * сообщений во всех его текстовых каналах исчезнет вместе с ним.
+ */
+export type ServerStatsResult = { ok: true; channels: number; messages: number } | { ok: false };
 
 // ─────────────────────────────────────────────────────────────────────────
 // ICE / конфиг
@@ -516,7 +566,8 @@ export interface ClientToServerEvents {
   'media-update': (payload: MediaUpdatePayload) => void;
   rename: (payload: RenamePayload) => void;
   'server-create': (payload: ServerCreatePayload) => void;
-  'server-delete': (payload: ServerDeletePayload) => void;
+  'server-delete': (payload: ServerDeletePayload, cb: (res: ServerDeleteResult) => void) => void;
+  'server-stats': (payload: ServerStatsPayload, cb: (res: ServerStatsResult) => void) => void;
   'server-unlock': (payload: ServerUnlockPayload) => void;
   'channel-create': (payload: ChannelCreatePayload) => void;
   'channel-delete': (payload: ChannelDeletePayload, cb: (res: ChannelDeleteResult) => void) => void;

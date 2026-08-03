@@ -38,6 +38,10 @@ export interface ServerEntry {
   // Хэш пароля закрытого сервера (`salt:hash` hex, scrypt). Клиенту НЕ отдаём —
   // наружу уходит только флаг `locked`. Персистится в registry.json.
   passwordHash?: string;
+  // clientId устройства-создателя (localStorage). Поле отсутствует у записей,
+  // созданных до правила владения, — такие серверы остаются в общем доступе.
+  // Заслон от случайного сноса, не личность: clientId подделывается.
+  creatorId?: string;
 }
 export interface Channel {
   id: string;
@@ -49,6 +53,9 @@ export interface Channel {
   // Только для type: 'voice'. Меняется через channel-mode, права — как у
   // channel-delete: дефолтные каналы (removable: false) остаются на p2p.
   mode?: VoiceMode;
+  // clientId устройства-создателя, как у ServerEntry: владелец канала. У старых
+  // записей отсутствует — их может править любой участник.
+  creatorId?: string;
 }
 
 export interface PersistedRegistry {

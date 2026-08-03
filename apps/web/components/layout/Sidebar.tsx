@@ -15,7 +15,7 @@ import { MAIN_SERVER_ID } from '@/lib/constants';
 import { useRichT, useT } from '@/lib/i18n';
 import { avatarStyle } from '@/lib/avatar';
 import { serverGradient, serverInitials } from '@/lib/server-visual';
-import { sanitizeTag, saveTag } from '@/lib/identity';
+import { sanitizeTag, saveTag, loadClientId } from '@/lib/identity';
 import {
   joinVoice,
   leaveVoice,
@@ -28,7 +28,6 @@ import { setChannelMode } from '@/lib/channels';
 import { channelMenuEntries } from '@/lib/channel-menu';
 import { openContextMenu } from '@/lib/context-menu';
 import { useSfuAvailable } from '@/lib/use-sfu';
-import { deleteServer } from '@/lib/servers';
 import { useVoiceStore } from '@/stores/voice';
 import { VoiceMembers } from '@/components/layout/VoiceMembers';
 import { CreateChannelDialog } from '@/components/layout/CreateChannelDialog';
@@ -40,8 +39,11 @@ import {
   RenameChannelDialog,
   type RenameChannelTarget,
 } from '@/components/layout/RenameChannelDialog';
-import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { InviteDialog, LinkIcon } from '@/components/layout/InviteDialog';
+import {
+  DeleteServerDialog,
+  type DeleteServerTarget,
+} from '@/components/layout/DeleteServerDialog';
 
 /**
  * Подпись текстового канала с точкой «непрочитано». Открытый канал считается
@@ -274,7 +276,14 @@ export function Sidebar() {
   const [renameTarget, setRenameTarget] = useState<RenameChannelTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteChannelTarget | null>(null);
   // Подтверждение удаления сервера (спрашиваем — уносит с собой все каналы).
-  const [confirmServerDelete, setConfirmServerDelete] = useState(false);
+  const [serverDeleteTarget, setServerDeleteTarget] = useState<DeleteServerTarget | null>(null);
+
+  // Владение реестровыми записями — по clientId устройства (localStorage).
+  // Запись без creatorId создана до правила владения: владельца у неё нет,
+  // править можно, как раньше. Те же правила держит сервер — здесь лишь их
+  // зеркало, чтобы не рисовать кнопки, которые он отклонит.
+  const myClientId = loadClientId();
+  const owns = (creatorId: string | undefined) => !creatorId || creatorId === myClientId;
 
   // Занятые эфиры, которых нет ни в одном сервере реестра (напр. канал удалили,
   // пока в нём сидят) — не роняем из виду. Слаги считаем глобально (не по активному
@@ -309,6 +318,7 @@ export function Sidebar() {
         onInvite:
           c.type === 'voice' ? () => setInviteTarget({ slug: c.slug, label: c.name }) : undefined,
       },
+      myClientId,
     );
     if (!entries.length) return undefined;
     return (e: MouseEvent<HTMLElement>) =>
@@ -351,12 +361,13 @@ export function Sidebar() {
         <span className="truncate font-bold text-text-header">
           {isMain ? 'relay' : (activeServer?.name ?? t('sidebar.server.fallback'))}
         </span>
-        {!isMain && activeServer?.removable && (
+        {!isMain && activeServer?.removable && owns(activeServer.creatorId) && (
           <button
             // Удаление необратимо и видно всем — спрашиваем своим диалогом,
             // тем же, что и у каналов (window.confirm в нативной оболочке
-            // выдаёт себя системным окном браузера).
-            onClick={() => setConfirmServerDelete(true)}
+            // выдаёт себя системным окном браузера). Только создатель может
+            // удалить сервер — диалог покажет цену: каналы и сообщения.
+            onClick={() => setServerDeleteTarget({ id: activeServerId, name: activeServer.name })}
             title={t('sidebar.server.delete')}
             aria-label={t('sidebar.server.delete')}
             className="ml-auto grid h-6 w-6 shrink-0 place-items-center rounded text-lg leading-none text-text-muted outline-none transition-colors hover:text-danger focus-visible:ring-2 focus-visible:ring-accent"
@@ -436,11 +447,11 @@ export function Sidebar() {
                 onClick={() => void joinVoice(c.slug, c.name)}
                 onInvite={() => setInviteTarget({ slug: c.slug, label: c.name })}
                 onMenu={channelMenu(c)}
-                // Режим правим только у созданных участниками каналов — у
-                // дефолтных он всегда p2p (см. handleChannelMode на бэке).
-                mode={c.removable ? (c.mode ?? 'p2p') : undefined}
+                // Режим правим только у своих каналов — у дефолтных он всегда
+                // p2p, чужие трогает владелец (см. handleChannelMode на бэке).
+                mode={c.removable && owns(c.creatorId) ? (c.mode ?? 'p2p') : undefined}
                 onToggleMode={
-                  c.removable
+                  c.removable && owns(c.creatorId)
                     ? () => setChannelMode(c.id, c.mode === 'sfu' ? 'p2p' : 'sfu')
                     : undefined
                 }
@@ -579,15 +590,10 @@ export function Sidebar() {
           if (!open) setDeleteTarget(null);
         }}
       />
-      <ConfirmDialog
-        open={confirmServerDelete}
-        onOpenChange={setConfirmServerDelete}
-        title={t('server.delete.title', { name: activeServer?.name ?? '' })}
-        description={t('server.delete.body')}
-        confirmLabel={t('sidebar.server.delete')}
-        onConfirm={() => {
-          setConfirmServerDelete(false);
-          deleteServer(activeServerId);
+      <DeleteServerDialog
+        target={serverDeleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setServerDeleteTarget(null);
         }}
       />
       <InviteDialog

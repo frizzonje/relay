@@ -25,6 +25,7 @@
   "channels.refusal.badName": "Пустое имя каналу не подходит.",
   "channels.refusal.forbidden": "Этот канал трогать нельзя.",
   "channels.refusal.gone": "Канала больше нет — список уже обновился.",
+  "channels.refusal.notOwner": "Менять этот канал может только тот, кто его создал.",
   "channels.refusal.occupied": "В канале сейчас люди — сначала пусть выйдут.",
   "channels.refusal.occupiedCount": {
     "one": "В канале сейчас {count} человек — сначала пусть выйдут.",
@@ -148,6 +149,20 @@
   "deleteChannel.text.body": "Канал и вся его переписка исчезнут у всех участников. Отменить это нельзя.",
   "deleteChannel.title": "Удалить канал «{name}»?",
   "deleteChannel.voice.body": "Канал исчезнет у всех участников сервера. Отменить это нельзя.",
+  "deleteServer.channels": {
+    "one": "На сервере {count} канал — он исчезнет вместе с ним.",
+    "few": "На сервере {count} канала — они исчезнут вместе с ним.",
+    "many": "На сервере {count} каналов — они исчезнут вместе с ним.",
+    "other": "На сервере {count} канала — они исчезнут вместе с ним."
+  },
+  "deleteServer.counting": "Смотрим, что на сервере…",
+  "deleteServer.messages": {
+    "one": "В нём пропадёт {count} сообщение.",
+    "few": "В них пропадёт {count} сообщения.",
+    "many": "В них пропадёт {count} сообщений.",
+    "other": "В них пропадёт {count} сообщения."
+  },
+  "deleteServer.submit": "Удалить сервер",
   "desktop.update.noAnswer": "нет ответа — попробуйте ещё раз",
   "desktop.update.unknownError": "неизвестная ошибка",
   "grid.alone": "вы один в канале — позовите остальных",
@@ -281,6 +296,10 @@
   "renameChannel.title": "Переименовать канал",
   "server.delete.body": "Сервер и все его каналы вместе с перепиской исчезнут у всех участников. Отменить это нельзя.",
   "server.delete.title": "Удалить сервер «{name}»?",
+  "server.noAnswer": "Сервер не ответил — попробуйте ещё раз.",
+  "server.refusal.forbidden": "Этот сервер удалить нельзя.",
+  "server.refusal.gone": "Сервера больше нет — список уже обновился.",
+  "server.refusal.notOwner": "Удалить сервер может только тот, кто его создал.",
   "settings.autostart": "Запускать при входе в систему",
   "settings.autostart.failed": "Не удалось изменить автозапуск: {reason}",
   "settings.autostart.hint": "relay стартует свёрнутым в трей — окно не открывается.",

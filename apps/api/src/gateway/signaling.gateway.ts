@@ -62,40 +62,55 @@ interface ServerCreatePayload {
   name?: unknown;
   emoji?: unknown;
   password?: unknown;
+  clientId?: unknown;
 }
 interface ServerDeletePayload {
   id?: unknown;
+  clientId?: unknown;
+}
+interface ServerStatsPayload {
+  id?: unknown;
+  clientId?: unknown;
 }
 interface ChannelCreatePayload {
   serverId?: unknown;
   type?: unknown;
   name?: unknown;
   mode?: unknown;
+  clientId?: unknown;
 }
 interface ChannelModePayload {
   id?: unknown;
   mode?: unknown;
+  clientId?: unknown;
 }
 interface ChannelDeletePayload {
   id?: unknown;
+  clientId?: unknown;
 }
 interface ChannelRenamePayload {
   id?: unknown;
   name?: unknown;
+  clientId?: unknown;
 }
 interface ChannelStatsPayload {
   id?: unknown;
+  clientId?: unknown;
 }
 // Ответы-ack действий над каналом (формат совпадает с одноимёнными типами
 // из shared). Отказ обязан быть внятным: интерфейс объясняет, почему канал
 // остался на месте, вместо молчаливого «ничего не произошло».
 type ChannelDeleteResult =
   | { ok: true }
-  | { ok: false; error: 'not-found' | 'forbidden' | 'occupied'; occupants?: number };
+  | { ok: false; error: 'not-found' | 'forbidden' | 'occupied' | 'not-owner'; occupants?: number };
 type ChannelRenameResult =
   | { ok: true }
-  | { ok: false; error: 'not-found' | 'forbidden' | 'bad-name' };
+  | { ok: false; error: 'not-found' | 'forbidden' | 'bad-name' | 'not-owner' };
 type ChannelStatsResult = { ok: true; occupants: number; messages: number } | { ok: false };
+type ServerDeleteResult =
+  | { ok: true }
+  | { ok: false; error: 'not-found' | 'forbidden' | 'not-owner' };
+type ServerStatsResult = { ok: true; channels: number; messages: number } | { ok: false };
 interface ServerUnlockPayload {
   id?: unknown;
   password?: unknown;
@@ -133,6 +148,14 @@ interface VoicePresenceEntry {
 // и лишних пробелов.
 function oneLine(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+// clientId из payload реестровых действий. Сам по себе он ничего не
+// удостоверяет (лежит в localStorage и подделывается) — это метка «с какого
+// устройства пришло действие» для правила владельца, не аутентификация.
+function payloadClientId(payload: { clientId?: unknown } | undefined): string | undefined {
+  const raw = payload?.clientId;
+  return typeof raw === 'string' ? raw.trim().slice(0, 64) || undefined : undefined;
 }
 
 // Ответ sfu-token (ack) — формат совпадает с SfuTokenResult из shared.
@@ -443,12 +466,16 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   // Публичная форма реестра серверов: без хэша пароля, с флагом `locked`.
+  // creatorId едет наружу: клиент сравнивает его со своим clientId, чтобы
+  // показать кнопки управления только владельцу. Это id устройства, не имя,
+  // — секретом он не был никогда.
   private publicServers() {
     return this.servers.map((s) => ({
       id: s.id,
       name: s.name,
       ...(s.emoji ? { emoji: s.emoji } : {}),
       removable: s.removable,
+      ...(s.creatorId ? { creatorId: s.creatorId } : {}),
       ...(s.passwordHash ? { locked: true } : {}),
     }));
   }
@@ -604,7 +631,18 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (this.servers.length >= MAX_SERVERS) return;
     if (this.servers.some((s) => s.id === id)) return;
 
-    this.servers.push({ id, name, emoji, removable: true, passwordHash });
+    // Владелец — то устройство, с которого сервер создали. clientId не
+    // удостоверяет личность (см. payloadClientId): это заслон от случайного
+    // и ленивого сноса чужого сервера, не от атаки. Настоящие права придут
+    // со слоями 2–3 плана 1.0.
+    this.servers.push({
+      id,
+      name,
+      emoji,
+      removable: true,
+      passwordHash,
+      creatorId: payloadClientId(payload),
+    });
     // Создатель знает пароль — сразу разблокируем сервер для его сокета.
     if (passwordHash) (client.data.unlocked as Set<string>)?.add(id);
     this.broadcastServers();
@@ -682,15 +720,27 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   handleServerDelete(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ServerDeletePayload,
-  ) {
-    if (!this.allow(client) || this.isGuest(client)) return;
+  ): ServerDeleteResult {
+    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
     const id = typeof payload?.id === 'string' ? payload.id : '';
-    if (!id) return;
+    if (!id) return { ok: false, error: 'not-found' };
     const idx = this.servers.findIndex((s) => s.id === id && s.removable);
-    if (idx === -1) return;
+    if (idx === -1) return { ok: false, error: 'not-found' };
     // Закрытый сервер удалить может только тот, кто ввёл пароль (разблокировал).
     const srv = this.servers[idx];
-    if (srv.passwordHash && !(client.data.unlocked as Set<string>)?.has(id)) return;
+    if (srv.passwordHash && !(client.data.unlocked as Set<string>)?.has(id)) {
+      return { ok: false, error: 'forbidden' };
+    }
+    // Владелец — создатель сервера (clientId). У записей без creatorId (созданы
+    // до этого правила) владельца не существует: права прежние. Заблокировать
+    // их удаление навсегда было бы хуже — чужой не нарочно удалит разве что
+    // по неосторожности, а лишённый возможности хозяин не восстановит сервер
+    // никак. Отказ пишем в лог: чужой снос — событие, а не шум.
+    const clientId = payloadClientId(payload);
+    if (srv.creatorId && srv.creatorId !== clientId) {
+      this.logger.warn(`server-delete: "${id}" refused for ${client.id} (not the creator)`);
+      return { ok: false, error: 'not-owner' };
+    }
     this.servers.splice(idx, 1);
     // Простой за неудачи вязался к этому id — новому серверу с тем же id он
     // достаться не должен.
@@ -711,6 +761,34 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     }
     if (this.channels.length !== before) this.broadcastChannels();
     this.persist();
+    return { ok: true };
+  }
+
+  // Цена удаления сервера для диалога подтверждения: сколько каналов и сколько
+  // сообщений исчезнет вместе с ним. Права те же, что у server-delete, — срез
+  // нужен владельцу, которому сервер покажет кнопку; раздавать его каждому
+  // значило бы рассказывать всем, сколько написано в чужих каналах.
+  @SubscribeMessage('server-stats')
+  handleServerStats(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ServerStatsPayload,
+  ): ServerStatsResult {
+    if (!this.allow(client) || this.isGuest(client)) return { ok: false };
+    const id = typeof payload?.id === 'string' ? payload.id : '';
+    const srv = this.servers.find((s) => s.id === id);
+    if (!srv || !srv.removable) return { ok: false };
+    if (srv.passwordHash && !(client.data.unlocked as Set<string>)?.has(id)) return { ok: false };
+    if (srv.creatorId && srv.creatorId !== payloadClientId(payload)) return { ok: false };
+    let channels = 0;
+    let messages = 0;
+    for (const c of this.channels) {
+      if (c.serverId !== id) continue;
+      channels++;
+      if (c.type === 'text') {
+        messages += this.chatHistory.get(CHAT_PREFIX + c.slug)?.length ?? 0;
+      }
+    }
+    return { ok: true, channels, messages };
   }
 
   // ===== Реестр каналов =====
@@ -748,6 +826,9 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       name: rawName,
       slug,
       removable: true,
+      // Владелец канала — создавшее его устройство, как у серверов: заслон
+      // от случайного сноса, не личность (см. handleServerCreate).
+      creatorId: payloadClientId(payload),
       // Режим — только у голосовых; p2p по умолчанию не пишем, отсутствие поля
       // и есть p2p (реестр не распухает, старые записи читаются одинаково).
       ...(type === 'voice' && payload?.mode === 'sfu' ? { mode: 'sfu' as const } : {}),
@@ -758,8 +839,8 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   // Смена транспорта голосового канала. Права те же, что у channel-delete:
-  // трогать можно только созданные участниками каналы (removable), дефолтные
-  // остаются на p2p — они обязаны работать и без поднятого медиасервера.
+  // трогать можно только свои каналы (removable), дефолтные остаются на p2p —
+  // они обязаны работать и без поднятого медиасервера.
   @SubscribeMessage('channel-mode')
   handleChannelMode(@ConnectedSocket() client: Socket, @MessageBody() payload: ChannelModePayload) {
     if (!this.allow(client) || this.isGuest(client)) return;
@@ -767,8 +848,10 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const mode: VoiceMode | null =
       payload?.mode === 'sfu' ? 'sfu' : payload?.mode === 'p2p' ? 'p2p' : null;
     if (!id || !mode) return;
-    const channel = this.channels.find((c) => c.id === id && c.removable && c.type === 'voice');
-    if (!channel) return;
+    const found = this.editableChannel(client, id, payloadClientId(payload));
+    if ('error' in found) return;
+    if (found.channel.type !== 'voice') return;
+    const channel = found.channel;
     const next = mode === 'sfu' ? 'sfu' : undefined;
     if (channel.mode === next) return;
     if (next) channel.mode = next;
@@ -798,18 +881,24 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   /**
-   * Канал, который этому сокету разрешено менять: существующий, не дефолтный
-   * и — если лежит в закрытом сервере — в разблокированном им. Пароль сервера
-   * это и есть право на его каналы (как в handleChannelCreate).
+   * Канал, который этому сокету разрешено менять: существующий, не дефолтный,
+   * свой (создан с этого устройства — clientId) и — если лежит в закрытом
+   * сервере — в разблокированном им. Пароль сервера это и есть право на его
+   * каналы (как в handleChannelCreate).
+   *
+   * У каналов без creatorId (созданы до правила владения) права прежние —
+   * владельца не существует, и менять их может любой участник, как раньше.
    */
   private editableChannel(
     client: Socket,
     id: string,
-  ): { channel: Channel; index: number } | { error: 'not-found' | 'forbidden' } {
+    clientId: string | undefined,
+  ): { channel: Channel; index: number } | { error: 'not-found' | 'forbidden' | 'not-owner' } {
     const index = this.channels.findIndex((c) => c.id === id);
     if (index === -1) return { error: 'not-found' };
     const channel = this.channels[index];
     if (!channel.removable) return { error: 'forbidden' };
+    if (channel.creatorId && channel.creatorId !== clientId) return { error: 'not-owner' };
     const srv = this.servers.find((s) => s.id === channel.serverId);
     if (srv?.passwordHash && !(client.data.unlocked as Set<string>)?.has(srv.id)) {
       return { error: 'forbidden' };
@@ -819,7 +908,8 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   // Живой срез канала для диалога подтверждения (сколько человек внутри,
   // сколько сообщений пропадёт). Спрашивают по одному разу на открытие
-  // диалога — рассылать это всем постоянно незачем.
+  // диалога — рассылать это всем постоянно незачем. Права — как у правки:
+  // срез канала с людьми и перепиской — это уже данные о нём, их не раздаём.
   @SubscribeMessage('channel-stats')
   handleChannelStats(
     @ConnectedSocket() client: Socket,
@@ -827,8 +917,9 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   ): ChannelStatsResult {
     if (!this.allow(client) || this.isGuest(client)) return { ok: false };
     const id = typeof payload?.id === 'string' ? payload.id : '';
-    const channel = this.channelsFor(client).find((c) => c.id === id);
-    if (!channel) return { ok: false };
+    const found = this.editableChannel(client, id, payloadClientId(payload));
+    if ('error' in found) return { ok: false };
+    const channel = found.channel;
     return {
       ok: true,
       occupants: this.occupantsOf(channel),
@@ -853,7 +944,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 32) : '';
     if (!id) return { ok: false, error: 'not-found' };
     if (!name) return { ok: false, error: 'bad-name' };
-    const found = this.editableChannel(client, id);
+    const found = this.editableChannel(client, id, payloadClientId(payload));
     if ('error' in found) return { ok: false, error: found.error };
     if (found.channel.name === name) return { ok: true };
     found.channel.name = name;
@@ -870,7 +961,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
     const id = typeof payload?.id === 'string' ? payload.id : '';
     if (!id) return { ok: false, error: 'not-found' };
-    const found = this.editableChannel(client, id);
+    const found = this.editableChannel(client, id, payloadClientId(payload));
     if ('error' in found) return { ok: false, error: found.error };
     const { channel, index } = found;
 

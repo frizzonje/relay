@@ -7,6 +7,7 @@ import type {
 } from '@relay/shared';
 import { toast } from 'sonner';
 import { getSocket } from '@/lib/socket';
+import { loadClientId } from '@/lib/identity';
 import { MAIN_SERVER_ID } from '@/lib/constants';
 import { useServersStore } from '@/stores/servers';
 import { tx } from '@/lib/i18n';
@@ -18,8 +19,8 @@ import { tx } from '@/lib/i18n';
  * Канал создаётся в активном сервере (открытом в рейке).
  *
  * Удаление и переименование возвращают ack: отказ сервера («в канале люди»,
- * «канал по умолчанию») человек должен увидеть, а не гадать, почему строка
- * осталась на месте.
+ * «канал по умолчанию», «это не ваш канал») человек должен увидеть, а не
+ * гадать, почему строка осталась на месте.
  */
 
 /** Ack может не прийти вовсе (обрыв) — не ждём вечно. */
@@ -35,7 +36,14 @@ export function createChannel(type: ChannelType, name: string, mode?: VoiceMode)
     toast(tx('channels.mainFixed'));
     return;
   }
-  getSocket().emit('channel-create', { serverId, type, name: trimmed, ...(mode ? { mode } : {}) });
+  getSocket().emit('channel-create', {
+    serverId,
+    type,
+    name: trimmed,
+    ...(mode ? { mode } : {}),
+    // Сервер запомнит создателя — менять канал сможет только это устройство.
+    clientId: loadClientId(),
+  });
 }
 
 /** Человеческое объяснение отказа — то же самое и для удаления, и для правки. */
@@ -46,6 +54,7 @@ function refusalText(error: string, occupants?: number): string {
       : tx('channels.refusal.occupied');
   }
   if (error === 'forbidden') return tx('channels.refusal.forbidden');
+  if (error === 'not-owner') return tx('channels.refusal.notOwner');
   if (error === 'bad-name') return tx('channels.refusal.badName');
   return tx('channels.refusal.gone');
 }
@@ -56,7 +65,7 @@ function refusalText(error: string, occupants?: number): string {
  */
 export async function deleteChannel(id: string): Promise<boolean> {
   if (!id) return false;
-  const res = await ask<ChannelDeleteResult>('channel-delete', { id });
+  const res = await ask<ChannelDeleteResult>('channel-delete', { id, clientId: loadClientId() });
   if (res?.ok) return true;
   toast(res ? refusalText(res.error, res.occupants) : tx('channels.noAnswer'));
   return false;
@@ -66,7 +75,11 @@ export async function deleteChannel(id: string): Promise<boolean> {
 export async function renameChannel(id: string, name: string): Promise<boolean> {
   const trimmed = name.trim().slice(0, 32);
   if (!id || !trimmed) return false;
-  const res = await ask<ChannelRenameResult>('channel-rename', { id, name: trimmed });
+  const res = await ask<ChannelRenameResult>('channel-rename', {
+    id,
+    name: trimmed,
+    clientId: loadClientId(),
+  });
   if (res?.ok) return true;
   toast(res ? refusalText(res.error) : tx('channels.noAnswer'));
   return false;
@@ -76,21 +89,21 @@ export async function renameChannel(id: string, name: string): Promise<boolean> 
 export async function channelStats(
   id: string,
 ): Promise<{ occupants: number; messages: number } | null> {
-  const res = await ask<ChannelStatsResult>('channel-stats', { id });
+  const res = await ask<ChannelStatsResult>('channel-stats', { id, clientId: loadClientId() });
   return res?.ok ? { occupants: res.occupants, messages: res.messages } : null;
 }
 
 /**
- * Сменить транспорт голосового канала. Сервер пустит только для созданных
- * участниками каналов — у дефолтных режим не меняется (там всегда p2p).
+ * Сменить транспорт голосового канала. Сервер пустит только создателя — у
+ * дефолтных каналов режим не меняется вовсе (там всегда p2p).
  */
 export function setChannelMode(id: string, mode: VoiceMode): void {
   if (!id) return;
-  getSocket().emit('channel-mode', { id, mode });
+  getSocket().emit('channel-mode', { id, mode, clientId: loadClientId() });
 }
 
 /** Событие с ack и тайм-аутом; null — ответа не дождались. */
-function ask<T>(event: string, payload: unknown): Promise<T | null> {
+export function ask<T>(event: string, payload: unknown): Promise<T | null> {
   return new Promise((resolve) => {
     let settled = false;
     const done = (value: T | null) => {
