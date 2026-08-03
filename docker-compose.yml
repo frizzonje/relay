@@ -53,9 +53,11 @@ services:
       - SFU_INTERNAL_URL=${SFU_INTERNAL_URL:-http://host.docker.internal:3100}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Зависший (не упавший) процесс `restart: unless-stopped` не замечает —
-    # повисший цикл событий в HTTP не отвечает, и healthcheck его выносит.
-    # /api/health публичен (без куки), версии не отдаёт (audit S7).
+    # Зависший (не упавший) процесс `restart: unless-stopped` не замечает:
+    # повисший цикл событий в HTTP не отвечает. Healthcheck делает это
+    # зависание видимым (`docker ps` → unhealthy, внешний мониторинг) —
+    # перезапуск повисшего остаётся за оркестратором, сам compose его не
+    # лечит. /api/health публичен (без куки), версии не отдаёт (audit S7).
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
       interval: 30s
