@@ -51,8 +51,12 @@ services:
     # зависание видимым (`docker ps` → unhealthy, внешний мониторинг) —
     # перезапуск повисшего остаётся за оркестратором, сам compose его не
     # лечит. /api/health публичен (без куки), версии не отдаёт (audit S7).
+    #
+    # Адрес числом, а не `localhost`: busybox-wget (это он в alpine) сначала
+    # пробует ::1, и служба, слушающая только IPv4, для пробы не существует.
+    # api слушает :: и уцелел бы, web — нет; одинаково пишем 127.0.0.1.
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -71,9 +75,11 @@ services:
     expose:
       - "3001"
     # Как у api: /login отдаётся без авторизации (сама страница входа) —
-    # это и есть доступный health-пробе web (audit S7).
+    # это и есть доступный health-пробе web (audit S7). Next standalone
+    # слушает 0.0.0.0 (HOSTNAME в образе), то есть только IPv4, — адрес
+    # числом здесь не педантизм, а условие того, что проба достучится.
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3001/login"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/login"]
       interval: 30s
       timeout: 5s
       retries: 3
