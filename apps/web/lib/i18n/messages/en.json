@@ -145,10 +145,15 @@
     "one": "The server holds {count} channel — it disappears with it.",
     "other": "The server holds {count} channels — they all disappear."
   },
+  "deleteServer.busy": "Server in use",
   "deleteServer.counting": "Checking what the server holds…",
   "deleteServer.messages": {
     "one": "In it, {count} message goes with it.",
     "other": "In them, {count} messages go with them."
+  },
+  "deleteServer.occupied": {
+    "one": "{count} person is on air in this server — it cannot be deleted while the conversation is going. Wait until everyone leaves.",
+    "other": "{count} people are on air in this server — it cannot be deleted while the conversation is going. Wait until everyone leaves."
   },
   "deleteServer.submit": "Delete server",
   "desktop.update.noAnswer": "no answer — try again",
@@ -286,6 +291,11 @@
   "server.delete.title": "Delete server “{name}”?",
   "server.noAnswer": "The server did not answer — try again.",
   "server.refusal.forbidden": "This server cannot be deleted.",
+  "server.refusal.occupied": "Someone is on air in this server — it cannot be deleted while the conversation is going.",
+  "server.refusal.occupiedCount": {
+    "one": "{count} person is on air in this server — it cannot be deleted while the conversation is going.",
+    "other": "{count} people are on air in this server — it cannot be deleted while the conversation is going."
+  },
   "server.refusal.gone": "The server is gone — the list has already caught up.",
   "server.refusal.notOwner": "Only the person who created this server can delete it.",
   "settings.autostart": "Launch at login",

@@ -10,7 +10,7 @@ export interface DeleteServerTarget {
   name: string;
 }
 
-type Stats = { channels: number; messages: number };
+type Stats = { channels: number; messages: number; occupants: number };
 
 /**
  * Подтверждение удаления сервера. Спрашиваем всегда — сервер уносит все свои
@@ -19,8 +19,13 @@ type Stats = { channels: number; messages: number };
  *
  * Как и у каналов, диалог на открытии спрашивает у сервера живой срез
  * (`server-stats`) и показывает цену решения: сколько каналов и сообщений
- * исчезнет. Права на удаление — только у создателя (B2 в pre-1.0-audit),
- * поэтому кнопка в сайдбаре видна только ему; диалог держит те же правила.
+ * исчезнет и сколько человек сейчас в эфирах этого сервера. Занятый эфир —
+ * запрет, а не предупреждение: сервер уносит свои каналы разом, то есть
+ * выбросил бы из разговора всех сразу, и отказывает ровно как отказывает
+ * удалению занятого канала.
+ *
+ * Права на удаление — только у создателя (B2 в pre-1.0-audit), поэтому кнопка
+ * в сайдбаре видна только ему; диалог держит те же правила.
  */
 export function DeleteServerDialog({
   target,
@@ -52,8 +57,12 @@ export function DeleteServerDialog({
   if (target) last.current = target;
   const shown = target ?? last.current;
 
+  // Пока в эфирах сервера кто-то есть — сервер откажет (occupied), и кнопку мы
+  // не предлагаем: отключённая с объяснением честнее отказа после клика.
+  const blocked = (stats?.occupants ?? 0) > 0;
+
   async function confirm() {
-    if (!target) return;
+    if (!target || blocked) return;
     setBusy(true);
     const ok = await deleteServer(target.id);
     setBusy(false);
@@ -68,17 +77,25 @@ export function DeleteServerDialog({
       onOpenChange={onOpenChange}
       title={t('server.delete.title', { name: shown?.name ?? '' })}
       description={t('server.delete.body')}
-      confirmLabel={t('deleteServer.submit')}
+      confirmLabel={t(blocked ? 'deleteServer.busy' : 'deleteServer.submit')}
       busy={busy}
-      confirmDisabled={!stats}
+      confirmDisabled={blocked || !stats}
       onConfirm={() => void confirm()}
-      details={<Details target={shown} stats={stats} />}
+      details={<Details target={shown} stats={stats} blocked={blocked} />}
     />
   );
 }
 
 /** Цена решения: что именно исчезнет. До ответа сервера — честное «считаем». */
-function Details({ target, stats }: { target: DeleteServerTarget | null; stats: Stats | null }) {
+function Details({
+  target,
+  stats,
+  blocked,
+}: {
+  target: DeleteServerTarget | null;
+  stats: Stats | null;
+  blocked: boolean;
+}) {
   const t = useT();
   if (!target) return null;
 
@@ -86,6 +103,14 @@ function Details({ target, stats }: { target: DeleteServerTarget | null; stats: 
     return (
       <p className="rounded-lg border border-line bg-bg-deep/60 px-3 py-2.5 text-[13px] text-text-muted">
         {t('deleteServer.counting')}
+      </p>
+    );
+  }
+
+  if (blocked) {
+    return (
+      <p className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2.5 text-[13px] leading-snug text-danger">
+        {t('deleteServer.occupied', { count: stats.occupants })}
       </p>
     );
   }
