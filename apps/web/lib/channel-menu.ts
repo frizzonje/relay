@@ -12,16 +12,16 @@ import { tx } from '@/lib/i18n';
  * заранее, чтобы человек не жал в стену:
  *   • каналы по умолчанию (removable: false) не переименовать и не удалить —
  *     набор главного сервера фиксирован;
- *   • каналы, созданные другим устройством (creatorId не твой), не трогаются
- *     вовсе — сервер пустит только владельца;
- *   • у записей без creatorId (созданы до правила владения) владельца нет —
- *     ими можно править, как раньше;
+ *   • каналы, созданные другим устройством, не трогаются вовсе — сервер пустит
+ *     только владельца. Своё это или чужое, решает сервер и говорит флагом
+ *     `mine` (у записей без владельца он есть у всех — права там прежние,
+ *     общие);
  *   • голосовой канал, в котором кто-то есть, не удаляется вовсе: удаление
  *     выбросило бы людей из разговора.
  */
 
 export interface ChannelMenuTarget {
-  channel: Pick<Channel, 'id' | 'type' | 'name' | 'removable' | 'creatorId'>;
+  channel: Pick<Channel, 'id' | 'type' | 'name' | 'removable' | 'mine'>;
   /** Сколько человек в канале прямо сейчас (для голосовых — из presence). */
   occupants: number;
 }
@@ -36,7 +36,6 @@ export interface ChannelMenuActions {
 export function channelMenuEntries(
   { channel, occupants }: ChannelMenuTarget,
   { onRename, onDelete, onInvite }: ChannelMenuActions,
-  myClientId: string,
 ): MenuEntry[] {
   const entries: MenuEntry[] = [];
 
@@ -51,8 +50,7 @@ export function channelMenuEntries(
 
   // Дальше — только правка канала. У дефолтных её нет, у чужих — тоже:
   // приглашать можно в любой канал, менять — только свой.
-  const owned = !channel.creatorId || channel.creatorId === myClientId;
-  if (!channel.removable || !owned) return entries;
+  if (!channel.removable || !channel.mine) return entries;
 
   entries.push({
     id: 'channel-rename',

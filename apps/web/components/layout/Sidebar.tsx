@@ -15,7 +15,7 @@ import { MAIN_SERVER_ID } from '@/lib/constants';
 import { useRichT, useT } from '@/lib/i18n';
 import { avatarStyle } from '@/lib/avatar';
 import { serverGradient, serverInitials } from '@/lib/server-visual';
-import { sanitizeTag, saveTag, loadClientId } from '@/lib/identity';
+import { sanitizeTag, saveTag } from '@/lib/identity';
 import {
   joinVoice,
   leaveVoice,
@@ -278,12 +278,10 @@ export function Sidebar() {
   // Подтверждение удаления сервера (спрашиваем — уносит с собой все каналы).
   const [serverDeleteTarget, setServerDeleteTarget] = useState<DeleteServerTarget | null>(null);
 
-  // Владение реестровыми записями — по clientId устройства (localStorage).
-  // Запись без creatorId создана до правила владения: владельца у неё нет,
-  // править можно, как раньше. Те же правила держит сервер — здесь лишь их
-  // зеркало, чтобы не рисовать кнопки, которые он отклонит.
-  const myClientId = loadClientId();
-  const owns = (creatorId: string | undefined) => !creatorId || creatorId === myClientId;
+  // Управление реестровой записью — по флагу `mine`: сервер считает его под
+  // наш сокет и присылает вместе с реестром (audit B2). Id владельца клиенту
+  // не показывают и сравнивать его не с чем — кнопки рисуем ровно там, где
+  // сервер уже сказал «твоё».
 
   // Занятые эфиры, которых нет ни в одном сервере реестра (напр. канал удалили,
   // пока в нём сидят) — не роняем из виду. Слаги считаем глобально (не по активному
@@ -318,7 +316,6 @@ export function Sidebar() {
         onInvite:
           c.type === 'voice' ? () => setInviteTarget({ slug: c.slug, label: c.name }) : undefined,
       },
-      myClientId,
     );
     if (!entries.length) return undefined;
     return (e: MouseEvent<HTMLElement>) =>
@@ -361,7 +358,7 @@ export function Sidebar() {
         <span className="truncate font-bold text-text-header">
           {isMain ? 'relay' : (activeServer?.name ?? t('sidebar.server.fallback'))}
         </span>
-        {!isMain && activeServer?.removable && owns(activeServer.creatorId) && (
+        {!isMain && activeServer?.removable && activeServer.mine && (
           <button
             // Удаление необратимо и видно всем — спрашиваем своим диалогом,
             // тем же, что и у каналов (window.confirm в нативной оболочке
@@ -449,9 +446,9 @@ export function Sidebar() {
                 onMenu={channelMenu(c)}
                 // Режим правим только у своих каналов — у дефолтных он всегда
                 // p2p, чужие трогает владелец (см. handleChannelMode на бэке).
-                mode={c.removable && owns(c.creatorId) ? (c.mode ?? 'p2p') : undefined}
+                mode={c.removable && c.mine ? (c.mode ?? 'p2p') : undefined}
                 onToggleMode={
-                  c.removable && owns(c.creatorId)
+                  c.removable && c.mine
                     ? () => setChannelMode(c.id, c.mode === 'sfu' ? 'p2p' : 'sfu')
                     : undefined
                 }

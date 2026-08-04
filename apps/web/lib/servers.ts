@@ -1,7 +1,6 @@
 import type { ServerDeleteResult, ServerStatsResult } from '@relay/shared';
 import { toast } from 'sonner';
 import { getSocket } from '@/lib/socket';
-import { loadClientId } from '@/lib/identity';
 import { ask } from '@/lib/channels';
 import { tx } from '@/lib/i18n';
 
@@ -11,10 +10,10 @@ import { tx } from '@/lib/i18n';
  * сразу. id генерируем на клиенте (crypto.randomUUID), чтобы тут же открыть
  * новый сервер и создать в нём первый канал, не дожидаясь ответа сокета.
  *
- * С каждым действием едет clientId — метка устройства. Сервер запоминает её
- * как владельца и отдаёт управление только ему: сервер, созданный этим
- * браузером, удалить может только он (каналы внутри — тоже только он;
- * заслон от случайного сноса, не личность — см. audit B2).
+ * Владение считает сервер: устройство называет себя один раз в handshake
+ * сокета (см. lib/socket), и сервер, созданный этим браузером, удалить может
+ * только он — каналы внутри тоже. Заслон от случайного сноса, не личность
+ * (см. audit B2); в самих сообщениях id устройства не ездит.
  */
 export function createServer(server: {
   id: string;
@@ -29,7 +28,6 @@ export function createServer(server: {
     name,
     emoji: server.emoji,
     password: server.password || undefined,
-    clientId: loadClientId(),
   });
 }
 
@@ -40,28 +38,36 @@ export function createServer(server: {
  */
 export async function deleteServer(id: string): Promise<boolean> {
   if (!id) return false;
-  const res = await ask<ServerDeleteResult>('server-delete', { id, clientId: loadClientId() });
+  const res = await ask<ServerDeleteResult>('server-delete', { id });
   if (res?.ok) return true;
-  toast(res ? serverRefusalText(res.error) : tx('server.noAnswer'));
+  toast(res ? serverRefusalText(res.error, res.occupants) : tx('server.noAnswer'));
   return false;
 }
 
-function serverRefusalText(error: string): string {
+function serverRefusalText(error: string, occupants?: number): string {
   if (error === 'not-owner') return tx('server.refusal.notOwner');
+  if (error === 'occupied') {
+    return occupants
+      ? tx('server.refusal.occupiedCount', { count: occupants })
+      : tx('server.refusal.occupied');
+  }
   if (error === 'forbidden') return tx('server.refusal.forbidden');
   return tx('server.refusal.gone');
 }
 
 /**
  * Живой срез сервера для диалога удаления: сколько каналов и сообщений
- * исчезнет вместе с ним. null — сервер не ответил или не наше владение.
+ * исчезнет вместе с ним и сколько человек сидит в его эфирах. null — сервер
+ * не ответил или это не наше владение.
  */
 export async function serverStats(
   id: string,
-): Promise<{ channels: number; messages: number } | null> {
+): Promise<{ channels: number; messages: number; occupants: number } | null> {
   if (!id) return null;
-  const res = await ask<ServerStatsResult>('server-stats', { id, clientId: loadClientId() });
-  return res?.ok ? { channels: res.channels, messages: res.messages } : null;
+  const res = await ask<ServerStatsResult>('server-stats', { id });
+  return res?.ok
+    ? { channels: res.channels, messages: res.messages, occupants: res.occupants }
+    : null;
 }
 
 /** Попытка разблокировать закрытый сервер паролем (ответ придёт server-unlock-result). */

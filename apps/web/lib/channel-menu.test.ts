@@ -14,9 +14,10 @@ const action = (entries: MenuEntry[], id: string) =>
   entries.find((e): e is MenuAction => !isSeparator(e) && e.id === id);
 
 const noop = { onRename: () => {}, onDelete: () => {} };
-// clientId «моего» устройства — тот, что лежит в localStorage браузера.
-const MY = 'dev-1';
 
+// `mine` проставляет сервер под каждый сокет: это его ответ на вопрос «твоя ли
+// эта запись» (см. audit B2). Клиент id владельца не видит и сам ничего не
+// сравнивает — только рисует по флагу.
 function target(
   over: Partial<ChannelMenuTarget['channel']> = {},
   occupants = 0,
@@ -27,7 +28,7 @@ function target(
       type: 'voice',
       name: 'переговорка',
       removable: true,
-      creatorId: MY,
+      mine: true,
       ...over,
     },
     occupants,
@@ -36,7 +37,7 @@ function target(
 
 describe('channelMenuEntries', () => {
   it('в своём голосовом канале даёт позвать, переименовать и удалить', () => {
-    const entries = channelMenuEntries(target(), { ...noop, onInvite: () => {} }, MY);
+    const entries = channelMenuEntries(target(), { ...noop, onInvite: () => {} });
     expect(ids(entries)).toEqual([
       'channel-invite',
       'channel-rename',
@@ -46,51 +47,40 @@ describe('channelMenuEntries', () => {
   });
 
   it('в своём текстовом канале приглашения нет — только правка', () => {
-    const entries = channelMenuEntries(
-      target({ type: 'text' }),
-      { ...noop, onInvite: () => {} },
-      MY,
-    );
+    const entries = channelMenuEntries(target({ type: 'text' }), {
+      ...noop,
+      onInvite: () => {},
+    });
     expect(ids(entries)).toEqual(['channel-rename', 'channel-sep', 'channel-delete']);
   });
 
   it('канал по умолчанию не переименовать и не удалить', () => {
-    const entries = channelMenuEntries(
-      target({ removable: false }),
-      {
-        ...noop,
-        onInvite: () => {},
-      },
-      MY,
-    );
+    const entries = channelMenuEntries(target({ removable: false }), {
+      ...noop,
+      onInvite: () => {},
+    });
     expect(ids(entries)).toEqual(['channel-invite']);
   });
 
   it('у дефолтного текстового канала пунктов нет вовсе — своё меню не показываем', () => {
-    expect(channelMenuEntries(target({ type: 'text', removable: false }), noop, MY)).toEqual([]);
+    expect(channelMenuEntries(target({ type: 'text', removable: false }), noop)).toEqual([]);
   });
 
   it('чужой голосовой канал: позвать можно, менять — нет', () => {
-    const entries = channelMenuEntries(
-      target({ creatorId: 'dev-2' }),
-      { ...noop, onInvite: () => {} },
-      MY,
-    );
+    const entries = channelMenuEntries(target({ mine: undefined }), {
+      ...noop,
+      onInvite: () => {},
+    });
     expect(ids(entries)).toEqual(['channel-invite']);
   });
 
   it('чужой текстовый канал: меню пусто — своё меню не показываем', () => {
-    expect(channelMenuEntries(target({ type: 'text', creatorId: 'dev-2' }), noop, MY)).toEqual([]);
-  });
-
-  it('канал без creatorId (создан до правила владения) — правка доступна любому', () => {
-    const entries = channelMenuEntries(target({ creatorId: undefined }), noop, MY);
-    expect(ids(entries)).toEqual(['channel-rename', 'channel-sep', 'channel-delete']);
+    expect(channelMenuEntries(target({ type: 'text', mine: undefined }), noop)).toEqual([]);
   });
 
   it('пока в эфире кто-то есть, удаление отключено и объясняет причину', () => {
     const onDelete = vi.fn();
-    const entries = channelMenuEntries(target({}, 2), { ...noop, onDelete }, MY);
+    const entries = channelMenuEntries(target({}, 2), { ...noop, onDelete });
     const del = action(entries, 'channel-delete');
     expect(del?.disabled).toBe(true);
     // Подпись собирается словарём; в тестах активна база — английская.
@@ -99,7 +89,7 @@ describe('channelMenuEntries', () => {
   });
 
   it('открытый кем-то текстовый канал удалить можно — там теряется только история', () => {
-    const entries = channelMenuEntries(target({ type: 'text' }, 3), noop, MY);
+    const entries = channelMenuEntries(target({ type: 'text' }, 3), noop);
     expect(action(entries, 'channel-delete')?.disabled).toBeFalsy();
   });
 });

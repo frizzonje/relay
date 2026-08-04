@@ -15,6 +15,14 @@ import { sfuHealthy } from '../sfu/sfu-health';
 import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
 import { Attachment, UploadsService } from '../uploads';
 import { Channel, ServerEntry, VoiceMode, loadRegistry, saveRegistry } from './registry';
+import {
+  type PublicChannel,
+  type PublicServer,
+  normalizeClientId,
+  ownedBy,
+  publicChannel,
+  publicServer,
+} from './ownership';
 import { UnlockAttempts, clientIp, hashServerPassword, verifyServerPassword } from './unlock';
 
 interface JoinPayload {
@@ -62,40 +70,32 @@ interface ServerCreatePayload {
   name?: unknown;
   emoji?: unknown;
   password?: unknown;
-  clientId?: unknown;
 }
 interface ServerDeletePayload {
   id?: unknown;
-  clientId?: unknown;
 }
 interface ServerStatsPayload {
   id?: unknown;
-  clientId?: unknown;
 }
 interface ChannelCreatePayload {
   serverId?: unknown;
   type?: unknown;
   name?: unknown;
   mode?: unknown;
-  clientId?: unknown;
 }
 interface ChannelModePayload {
   id?: unknown;
   mode?: unknown;
-  clientId?: unknown;
 }
 interface ChannelDeletePayload {
   id?: unknown;
-  clientId?: unknown;
 }
 interface ChannelRenamePayload {
   id?: unknown;
   name?: unknown;
-  clientId?: unknown;
 }
 interface ChannelStatsPayload {
   id?: unknown;
-  clientId?: unknown;
 }
 // Ответы-ack действий над каналом (формат совпадает с одноимёнными типами
 // из shared). Отказ обязан быть внятным: интерфейс объясняет, почему канал
@@ -109,8 +109,14 @@ type ChannelRenameResult =
 type ChannelStatsResult = { ok: true; occupants: number; messages: number } | { ok: false };
 type ServerDeleteResult =
   | { ok: true }
-  | { ok: false; error: 'not-found' | 'forbidden' | 'not-owner' };
-type ServerStatsResult = { ok: true; channels: number; messages: number } | { ok: false };
+  | {
+      ok: false;
+      error: 'not-found' | 'forbidden' | 'not-owner' | 'occupied';
+      occupants?: number;
+    };
+type ServerStatsResult =
+  | { ok: true; channels: number; messages: number; occupants: number }
+  | { ok: false };
 interface ServerUnlockPayload {
   id?: unknown;
   password?: unknown;
@@ -150,12 +156,11 @@ function oneLine(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
-// clientId из payload реестровых действий. Сам по себе он ничего не
-// удостоверяет (лежит в localStorage и подделывается) — это метка «с какого
-// устройства пришло действие» для правила владельца, не аутентификация.
-function payloadClientId(payload: { clientId?: unknown } | undefined): string | undefined {
-  const raw = payload?.clientId;
-  return typeof raw === 'string' ? raw.trim().slice(0, 64) || undefined : undefined;
+// Устройство, с которого пришёл сокет: clientId из handshake, положенный в
+// client.data на подключении. Одна точка входа на все реестровые действия —
+// в отдельных сообщениях его не спрашиваем и им не верим (см. ./ownership).
+function deviceId(client: Socket): string | undefined {
+  return client.data.clientId as string | undefined;
 }
 
 // Ответ sfu-token (ack) — формат совпадает с SfuTokenResult из shared.
@@ -184,12 +189,6 @@ interface ChatMessage {
 }
 
 const CHAT_PREFIX = 'chat:';
-// Комната всех НЕгостевых сокетов. Гость по инвайту пришит к своему войс-каналу
-// и реестров не получает — ни на подключении, ни рассылкой.
-// Решётка в имени не случайна: комнатами служат ещё и слаги каналов, а `#`
-// slugifyChannel вырезает — значит совпасть имена не могут. Совпади они, гость
-// в голосовом канале с таким названием получал бы реестр серверов.
-const MEMBERS_ROOM = '#members';
 const HISTORY_LIMIT = 50;
 const MAX_CHANNELS = 50;
 const MAX_SERVERS = 20;
@@ -435,6 +434,15 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       clearTimeout(pending);
       this.pendingLeave.delete(client.id);
     }
+    // Устройство, с которого пришли: по нему решается владение серверами и
+    // каналами (audit B2) и выгоняется «призрак» прошлой вкладки в эфире.
+    // Берём из handshake, а не из каждого сообщения: одна точка входа, и id
+    // владельца не нужно гонять по протоколу. Клиент прошлой версии поля не
+    // пришлёт — его записи останутся без владельца, как и всё, что создано до
+    // правила.
+    client.data.clientId = normalizeClientId(
+      (client.handshake.auth as { clientId?: unknown } | undefined)?.clientId,
+    );
     if (guest) {
       client.data.guest = true;
       client.data.guestRoom = guest.slug;
@@ -445,16 +453,13 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       );
       return;
     }
-    // Комната всех участников (гости в неё не входят) — по ней идут рассылки,
-    // одинаковые для всех: реестр серверов.
-    client.join(MEMBERS_ROOM);
     // Набор серверов, разблокированных этим сокетом (закрытые под паролем).
     // `??=` — чтобы восстановление сессии (CSR) не сбросило уже введённые пароли.
     (client.data.unlocked as Set<string>) ??= new Set<string>();
     // Новому клиенту сразу шлём реестры серверов и каналов и кто где в голосовых.
     // Серверы — публичная форма (без хэшей, с флагом locked); каналы — только
     // видимые ему (закрытые серверы скрыты до ввода пароля).
-    client.emit('servers', this.publicServers());
+    client.emit('servers', this.publicServersFor(client));
     client.emit('channels', this.channelsFor(client));
     client.emit('voice-presence', this.presenceFor(client, this.buildVoicePresence()));
   }
@@ -465,32 +470,23 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     return client.data.guest === true;
   }
 
-  // Публичная форма реестра серверов: без хэша пароля, с флагом `locked`.
-  // creatorId едет наружу: клиент сравнивает его со своим clientId, чтобы
-  // показать кнопки управления только владельцу. Это id устройства, не имя,
-  // — секретом он не был никогда.
-  private publicServers() {
-    return this.servers.map((s) => ({
-      id: s.id,
-      name: s.name,
-      ...(s.emoji ? { emoji: s.emoji } : {}),
-      removable: s.removable,
-      ...(s.creatorId ? { creatorId: s.creatorId } : {}),
-      ...(s.passwordHash ? { locked: true } : {}),
-    }));
+  // Публичная форма реестра серверов: без хэша пароля, с флагом `locked` и с
+  // `mine` — «этой записью управляешь ты». Наружу уходит именно флаг, а не
+  // clientId владельца: рассылать id значило бы раздавать всем то единственное,
+  // чем правило владения и держится (см. ./ownership).
+  private publicServersFor(client: Socket): PublicServer[] {
+    const clientId = deviceId(client);
+    return this.servers.map((s) => publicServer(s, clientId));
   }
 
   // Каналы, видимые сокету: из закрытых серверов — только если он их разблокировал.
   // Текстовым подмешиваем время последнего сообщения: по нему клиент зажигает
   // «непрочитано» сразу после загрузки, не дожидаясь живого `chat-activity`.
-  private channelsFor(client: Socket): Channel[] {
+  private channelsFor(client: Socket): PublicChannel[] {
+    const clientId = deviceId(client);
     return this.channels
       .filter((c) => this.canSee(client, c))
-      .map((c) => {
-        if (c.type !== 'text') return c;
-        const lastTs = this.lastChatTs(c.slug);
-        return lastTs ? { ...c, lastTs } : c;
-      });
+      .map((c) => publicChannel(c, clientId, c.type === 'text' ? this.lastChatTs(c.slug) : 0));
   }
 
   // Видит ли сокет этот канал: закрытый сервер — только после ввода пароля.
@@ -548,11 +544,48 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     return 0;
   }
 
-  // Реестр серверов одинаков для всех участников — одна рассылка на комнату
-  // MEMBERS_ROOM. Гости в неё не входят: на подключении реестры им не шлём, и
-  // добираться до них следующей же чужой правкой было бы странно.
+  /**
+   * Реестр серверов почти одинаков для всех: различает сокеты ровно один бит —
+   * `mine` у записей, созданных этим устройством. Поэтому и группируем по
+   * владению: у кого в реестре ничего своего нет (подавляющее большинство),
+   * получают один и тот же payload, а отдельная сборка достаётся только тем,
+   * кто прямо сейчас онлайн и чем-то владеет.
+   *
+   * Гости пропускаются, как и в рассылке каналов: по инвайту человек пришит к
+   * своему эфиру и реестра не получает вовсе — ни на подключении, ни правкой.
+   * Сама рассылка идёт на создание/удаление сервера, то есть считанные разы за
+   * сессию: обход сокетов здесь ничего не стоит (в отличие от каналов и
+   * активности чата, где он и разгонялся до квадрата — см. S4).
+   */
   private broadcastServers() {
-    this.server.to(MEMBERS_ROOM).emit('servers', this.publicServers());
+    const owners = this.ownerIds(this.servers);
+    const byOwner = new Map<string, PublicServer[]>();
+    for (const sock of this.server.sockets.sockets.values()) {
+      if (sock.data.guest === true) continue;
+      const key = this.ownerKey(sock, owners);
+      let payload = byOwner.get(key);
+      if (!payload) {
+        payload = this.publicServersFor(sock);
+        byOwner.set(key, payload);
+      }
+      sock.emit('servers', payload);
+    }
+  }
+
+  // Кто из создателей вообще встречается в этих записях. Сокет, чьего id здесь
+  // нет, ничем не владеет — а значит, его payload совпадает с payload любого
+  // другого такого же, и собирать его во второй раз незачем.
+  private ownerIds(entries: { creatorId?: string }[]): Set<string> {
+    const ids = new Set<string>();
+    for (const e of entries) if (e.creatorId) ids.add(e.creatorId);
+    return ids;
+  }
+
+  // Чем этот сокет отличается от прочих с точки зрения владения: ничем, если
+  // среди записей нет ни одной его. Пустая строка — общая группа «не владелец».
+  private ownerKey(client: Socket, owners: Set<string>): string {
+    const clientId = deviceId(client);
+    return clientId && owners.has(clientId) ? clientId : '';
   }
 
   /**
@@ -561,9 +594,10 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
    * правку реестра полный обход сокетов, а внутри на каждый — фильтр всех
    * каналов с поиском сервера по id.
    *
-   * Считаем иначе. Набор каналов зависит ровно от одного — какие закрытые
-   * серверы этот сокет разблокировал. Сокеты с одинаковым набором получают
-   * одинаковый ответ, и подавляющее большинство сидит в одной группе (пустой).
+   * Считаем иначе. Набор каналов зависит ровно от двух вещей — какие закрытые
+   * серверы этот сокет разблокировал и какие каналы созданы им самим. Сокеты с
+   * одинаковой парой получают одинаковый ответ, и подавляющее большинство
+   * сидит в одной группе (ничего не разблокировано, ничем не владеет).
    * Плюс дебаунс: правки реестра ходят пачками (создание сервера — это сразу
    * servers + channels, удаление — каналы следом за сервером).
    */
@@ -571,14 +605,15 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (this.channelsTimer) return;
     this.channelsTimer = setTimeout(() => {
       this.channelsTimer = null;
-      const byVisibility = new Map<string, Channel[]>();
+      const owners = this.ownerIds(this.channels);
+      const byGroup = new Map<string, PublicChannel[]>();
       for (const sock of this.server.sockets.sockets.values()) {
         if (sock.data.guest === true) continue;
-        const key = this.visibilityKey(sock);
-        let payload = byVisibility.get(key);
+        const key = this.visibilityKey(sock) + '\u0001' + this.ownerKey(sock, owners);
+        let payload = byGroup.get(key);
         if (!payload) {
           payload = this.channelsFor(sock);
-          byVisibility.set(key, payload);
+          byGroup.set(key, payload);
         }
         sock.emit('channels', payload);
       }
@@ -631,17 +666,17 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (this.servers.length >= MAX_SERVERS) return;
     if (this.servers.some((s) => s.id === id)) return;
 
-    // Владелец — то устройство, с которого сервер создали. clientId не
-    // удостоверяет личность (см. payloadClientId): это заслон от случайного
-    // и ленивого сноса чужого сервера, не от атаки. Настоящие права придут
-    // со слоями 2–3 плана 1.0.
+    // Владелец — то устройство, с которого сервер создали (clientId из
+    // handshake). Личности оно не удостоверяет (см. ./ownership): это заслон
+    // от случайного и ленивого сноса чужого сервера, не от атаки. Настоящие
+    // права придут со слоями 2–3 плана 1.0.
     this.servers.push({
       id,
       name,
       emoji,
       removable: true,
       passwordHash,
-      creatorId: payloadClientId(payload),
+      creatorId: deviceId(client),
     });
     // Создатель знает пароль — сразу разблокируем сервер для его сокета.
     if (passwordHash) (client.data.unlocked as Set<string>)?.add(id);
@@ -731,16 +766,22 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (srv.passwordHash && !(client.data.unlocked as Set<string>)?.has(id)) {
       return { ok: false, error: 'forbidden' };
     }
-    // Владелец — создатель сервера (clientId). У записей без creatorId (созданы
-    // до этого правила) владельца не существует: права прежние. Заблокировать
-    // их удаление навсегда было бы хуже — чужой не нарочно удалит разве что
-    // по неосторожности, а лишённый возможности хозяин не восстановит сервер
-    // никак. Отказ пишем в лог: чужой снос — событие, а не шум.
-    const clientId = payloadClientId(payload);
-    if (srv.creatorId && srv.creatorId !== clientId) {
+    // Владелец — создатель сервера (clientId из handshake). У записей без
+    // creatorId (созданы до этого правила) владельца не существует: права
+    // прежние. Заблокировать их удаление навсегда было бы хуже — чужой не
+    // нарочно удалит разве что по неосторожности, а лишённый возможности
+    // хозяин не восстановит сервер никак. Отказ пишем в лог: чужой снос —
+    // событие, а не шум.
+    if (!ownedBy(srv, deviceId(client))) {
       this.logger.warn(`server-delete: "${id}" refused for ${client.id} (not the creator)`);
       return { ok: false, error: 'not-owner' };
     }
+    // Живой разговор дороже уборки. Канал с людьми в эфире не удаляется
+    // (channel-delete → occupied), и через удаление сервера это правило
+    // обходиться не должно: он уносит все свои каналы разом, то есть выбросил
+    // бы из разговора сразу всех. Ждём, пока эфир опустеет.
+    const occupants = this.voiceOccupantsOfServer(id);
+    if (occupants > 0) return { ok: false, error: 'occupied', occupants };
     this.servers.splice(idx, 1);
     // Простой за неудачи вязался к этому id — новому серверу с тем же id он
     // достаться не должен.
@@ -765,9 +806,11 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   // Цена удаления сервера для диалога подтверждения: сколько каналов и сколько
-  // сообщений исчезнет вместе с ним. Права те же, что у server-delete, — срез
-  // нужен владельцу, которому сервер покажет кнопку; раздавать его каждому
-  // значило бы рассказывать всем, сколько написано в чужих каналах.
+  // сообщений исчезнет вместе с ним и сколько человек сидит в его эфирах
+  // (пока сидят — сервер не удаляется вовсе, см. server-delete). Права те же,
+  // что у server-delete: срез нужен владельцу, которому сервер покажет кнопку,
+  // а раздавать его каждому значило бы рассказывать всем, сколько написано в
+  // чужих каналах.
   @SubscribeMessage('server-stats')
   handleServerStats(
     @ConnectedSocket() client: Socket,
@@ -778,7 +821,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const srv = this.servers.find((s) => s.id === id);
     if (!srv || !srv.removable) return { ok: false };
     if (srv.passwordHash && !(client.data.unlocked as Set<string>)?.has(id)) return { ok: false };
-    if (srv.creatorId && srv.creatorId !== payloadClientId(payload)) return { ok: false };
+    if (!ownedBy(srv, deviceId(client))) return { ok: false };
     let channels = 0;
     let messages = 0;
     for (const c of this.channels) {
@@ -788,7 +831,23 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
         messages += this.chatHistory.get(CHAT_PREFIX + c.slug)?.length ?? 0;
       }
     }
-    return { ok: true, channels, messages };
+    return { ok: true, channels, messages, occupants: this.voiceOccupantsOfServer(id) };
+  }
+
+  // Сколько человек прямо сейчас в голосовых каналах этого сервера. Один обход
+  // сокетов на все каналы разом: occupantsOf считает по одному, а здесь их
+  // может быть десяток.
+  private voiceOccupantsOfServer(serverId: string): number {
+    const rooms = new Set(
+      this.channels.filter((c) => c.serverId === serverId && c.type === 'voice').map((c) => c.slug),
+    );
+    if (!rooms.size) return 0;
+    let count = 0;
+    for (const sock of this.server.sockets.sockets.values()) {
+      const room = sock.data.room as string | undefined;
+      if (room && rooms.has(room)) count++;
+    }
+    return count;
   }
 
   // ===== Реестр каналов =====
@@ -828,7 +887,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       removable: true,
       // Владелец канала — создавшее его устройство, как у серверов: заслон
       // от случайного сноса, не личность (см. handleServerCreate).
-      creatorId: payloadClientId(payload),
+      creatorId: deviceId(client),
       // Режим — только у голосовых; p2p по умолчанию не пишем, отсутствие поля
       // и есть p2p (реестр не распухает, старые записи читаются одинаково).
       ...(type === 'voice' && payload?.mode === 'sfu' ? { mode: 'sfu' as const } : {}),
@@ -848,7 +907,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const mode: VoiceMode | null =
       payload?.mode === 'sfu' ? 'sfu' : payload?.mode === 'p2p' ? 'p2p' : null;
     if (!id || !mode) return;
-    const found = this.editableChannel(client, id, payloadClientId(payload));
+    const found = this.editableChannel(client, id);
     if ('error' in found) return;
     if (found.channel.type !== 'voice') return;
     const channel = found.channel;
@@ -882,27 +941,31 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   /**
    * Канал, который этому сокету разрешено менять: существующий, не дефолтный,
-   * свой (создан с этого устройства — clientId) и — если лежит в закрытом
-   * сервере — в разблокированном им. Пароль сервера это и есть право на его
-   * каналы (как в handleChannelCreate).
+   * свой (создан с этого устройства — clientId из handshake) и — если лежит в
+   * закрытом сервере — в разблокированном им. Пароль сервера это и есть право
+   * на его каналы (как в handleChannelCreate).
    *
    * У каналов без creatorId (созданы до правила владения) права прежние —
    * владельца не существует, и менять их может любой участник, как раньше.
+   *
+   * Порядок проверок не случаен: пароль закрытого сервера идёт ПЕРЕД владением.
+   * Канал закрытого сервера для непосвящённого не существует вовсе, и разные
+   * коды отказа («не твой» против «нет доступа») рассказывали бы по одному id,
+   * есть ли у скрытого канала владелец.
    */
   private editableChannel(
     client: Socket,
     id: string,
-    clientId: string | undefined,
   ): { channel: Channel; index: number } | { error: 'not-found' | 'forbidden' | 'not-owner' } {
     const index = this.channels.findIndex((c) => c.id === id);
     if (index === -1) return { error: 'not-found' };
     const channel = this.channels[index];
     if (!channel.removable) return { error: 'forbidden' };
-    if (channel.creatorId && channel.creatorId !== clientId) return { error: 'not-owner' };
     const srv = this.servers.find((s) => s.id === channel.serverId);
     if (srv?.passwordHash && !(client.data.unlocked as Set<string>)?.has(srv.id)) {
       return { error: 'forbidden' };
     }
+    if (!ownedBy(channel, deviceId(client))) return { error: 'not-owner' };
     return { channel, index };
   }
 
@@ -917,7 +980,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   ): ChannelStatsResult {
     if (!this.allow(client) || this.isGuest(client)) return { ok: false };
     const id = typeof payload?.id === 'string' ? payload.id : '';
-    const found = this.editableChannel(client, id, payloadClientId(payload));
+    const found = this.editableChannel(client, id);
     if ('error' in found) return { ok: false };
     const channel = found.channel;
     return {
@@ -944,7 +1007,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 32) : '';
     if (!id) return { ok: false, error: 'not-found' };
     if (!name) return { ok: false, error: 'bad-name' };
-    const found = this.editableChannel(client, id, payloadClientId(payload));
+    const found = this.editableChannel(client, id);
     if ('error' in found) return { ok: false, error: found.error };
     if (found.channel.name === name) return { ok: true };
     found.channel.name = name;
@@ -961,7 +1024,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
     const id = typeof payload?.id === 'string' ? payload.id : '';
     if (!id) return { ok: false, error: 'not-found' };
-    const found = this.editableChannel(client, id, payloadClientId(payload));
+    const found = this.editableChannel(client, id);
     if ('error' in found) return { ok: false, error: found.error };
     const { channel, index } = found;
 
@@ -1097,8 +1160,13 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       return;
     }
     const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 20) : undefined;
-    const clientId =
-      typeof payload?.clientId === 'string' ? payload.clientId.trim().slice(0, 64) : '';
+    // Устройство: сначала handshake (см. handleConnection), и только если там
+    // пусто — поле payload, которым представляются нативные клиенты. Порядок
+    // именно такой: по этому же id решается владение серверами и каналами, и
+    // возможность переназвать себя одним `voice-join` посреди сессии сделала бы
+    // из него проходной двор. Кто хочет — назовётся в handshake, но ровно один
+    // раз и в одном месте.
+    const clientId = deviceId(client) ?? normalizeClientId(payload?.clientId);
     // Транспорт называет сам клиент: сервер знает лишь режим канала, а решение
     // принимает клиент — и оно может разойтись с режимом (медиасервер не
     // поднялся у него одного, нативный iOS про SFU вовсе не знает). Клиент
@@ -1119,7 +1187,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // комнате (перезагрузка страницы = новый id, старый уйдёт лишь по грейсу).
     // Так участника не двоит у остальных. Делаем ДО сбора списка пиров.
     if (clientId) this.evictGhost(clientId, client.id);
-    client.data.clientId = clientId || undefined;
+    client.data.clientId = clientId;
 
     // Только реально подключённые сокеты: в adapter.rooms может ещё висеть id
     // отвалившегося пира (окно connectionStateRecovery) — ему offer слать некому.

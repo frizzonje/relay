@@ -7,7 +7,6 @@ import type {
 } from '@relay/shared';
 import { toast } from 'sonner';
 import { getSocket } from '@/lib/socket';
-import { loadClientId } from '@/lib/identity';
 import { MAIN_SERVER_ID } from '@/lib/constants';
 import { useServersStore } from '@/stores/servers';
 import { tx } from '@/lib/i18n';
@@ -36,14 +35,9 @@ export function createChannel(type: ChannelType, name: string, mode?: VoiceMode)
     toast(tx('channels.mainFixed'));
     return;
   }
-  getSocket().emit('channel-create', {
-    serverId,
-    type,
-    name: trimmed,
-    ...(mode ? { mode } : {}),
-    // Сервер запомнит создателя — менять канал сможет только это устройство.
-    clientId: loadClientId(),
-  });
+  // Владельцем канала сервер запишет устройство, назвавшееся в handshake
+  // (см. lib/socket) — менять канал сможет только оно.
+  getSocket().emit('channel-create', { serverId, type, name: trimmed, ...(mode ? { mode } : {}) });
 }
 
 /** Человеческое объяснение отказа — то же самое и для удаления, и для правки. */
@@ -65,7 +59,7 @@ function refusalText(error: string, occupants?: number): string {
  */
 export async function deleteChannel(id: string): Promise<boolean> {
   if (!id) return false;
-  const res = await ask<ChannelDeleteResult>('channel-delete', { id, clientId: loadClientId() });
+  const res = await ask<ChannelDeleteResult>('channel-delete', { id });
   if (res?.ok) return true;
   toast(res ? refusalText(res.error, res.occupants) : tx('channels.noAnswer'));
   return false;
@@ -75,11 +69,7 @@ export async function deleteChannel(id: string): Promise<boolean> {
 export async function renameChannel(id: string, name: string): Promise<boolean> {
   const trimmed = name.trim().slice(0, 32);
   if (!id || !trimmed) return false;
-  const res = await ask<ChannelRenameResult>('channel-rename', {
-    id,
-    name: trimmed,
-    clientId: loadClientId(),
-  });
+  const res = await ask<ChannelRenameResult>('channel-rename', { id, name: trimmed });
   if (res?.ok) return true;
   toast(res ? refusalText(res.error) : tx('channels.noAnswer'));
   return false;
@@ -89,7 +79,7 @@ export async function renameChannel(id: string, name: string): Promise<boolean> 
 export async function channelStats(
   id: string,
 ): Promise<{ occupants: number; messages: number } | null> {
-  const res = await ask<ChannelStatsResult>('channel-stats', { id, clientId: loadClientId() });
+  const res = await ask<ChannelStatsResult>('channel-stats', { id });
   return res?.ok ? { occupants: res.occupants, messages: res.messages } : null;
 }
 
@@ -99,7 +89,7 @@ export async function channelStats(
  */
 export function setChannelMode(id: string, mode: VoiceMode): void {
   if (!id) return;
-  getSocket().emit('channel-mode', { id, mode, clientId: loadClientId() });
+  getSocket().emit('channel-mode', { id, mode });
 }
 
 /** Событие с ack и тайм-аутом; null — ответа не дождались. */
