@@ -40,6 +40,24 @@ jobs:
       - name: Build sfu image
         run: docker build -f apps/sfu/Dockerfile -t relay-sfu:ci .
 
+      # api and web are exercised by the e2e stack; sfu is behind a compose
+      # profile and is started by nothing, so nothing would notice that its
+      # image cannot boot. It is the one image that runs a native binary
+      # (mediasoup worker) under a non-root USER — exactly the pair that breaks
+      # quietly. So: start it, ask it, stop it.
+      - name: Smoke-run sfu image
+        run: |
+          docker run -d --name sfu-smoke -e SFU_SECRET=smoke -p 3100:3100 relay-sfu:ci
+          for i in $(seq 30); do
+            if curl -fsS http://localhost:3100/health; then echo; break; fi
+            if [ "$i" = 30 ]; then echo "sfu did not answer /health"; docker logs sfu-smoke; exit 1; fi
+            sleep 1
+          done
+          # The owner of /proc/1 is the user the service actually runs as —
+          # `id` inside exec would only echo the image's USER back at us.
+          test "$(docker exec sfu-smoke stat -c %U /proc/1)" = node
+          docker rm -f sfu-smoke
+
   e2e:
     name: e2e (Playwright)
     runs-on: ubuntu-latest
