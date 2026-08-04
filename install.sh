@@ -334,6 +334,58 @@ case "\${1:-}" in
   backup)  T="\$DIR/relay-backup-\$(date +%Y%m%d-%H%M%S).tar.gz"
            docker run --rm -v relay_uploads:/u -v relay_caddy_data:/c -v "\$DIR":/out alpine \
              tar czf "/out/\$(basename "\$T")" -C / u c && echo "Backup: \$T" ;;
+  # Снять владение с записей реестра. Сервер и канал правит устройство, с
+  # которого их создали, — а устройство теряется: чистая история браузера,
+  # новый ноутбук, чужой уехавший коллега. Запись остаётся, и удалить её не
+  # может уже никто, включая хозяина машины. Потолок в 20 серверов при этом
+  # общий, так что достаточно накопить их, и новые не создаст никто.
+  #
+  # Эта команда — выход из такого тупика: она не удаляет ничего, а возвращает
+  # записи в общее владение, каким оно было до правила. Дальше их удаляют или
+  # переименовывают из интерфейса, как обычно.
+  #
+  # api на время правки останавливается: реестр он держит в памяти и пишет
+  # файл целиком при любом изменении — правка под живым сервисом была бы
+  # затёрта следующим же созданием канала.
+  disown)
+    shift
+    WHAT="\${1:-}"
+    if [ -n "\$WHAT" ]; then dc stop api >/dev/null; fi
+    # Скрипт идёт в node из образа api — там же, где лежит том с реестром, и
+    # той же точкой входа, что опускает права до node: файл обязан остаться
+    # его, иначе api после старта не сможет его переписать. Двойной дефис
+    # перед аргументом обязателен: без него node принимает "--all" за свой
+    # собственный флаг и отказывается стартовать. Обратные кавычки в этом
+    # heredoc, к слову, тоже не украшение текста, а подстановка команды —
+    # поэтому их здесь нет вовсе.
+    dc run --rm --no-deps -T api node -e '
+      const fs = require("fs");
+      const F = (process.env.DATA_DIR || "/app/uploads/state") + "/registry.json";
+      let reg;
+      try { reg = JSON.parse(fs.readFileSync(F, "utf8")); }
+      catch (e) { console.error("No registry to read at " + F); process.exit(1); }
+      const rows = [];
+      for (const kind of ["servers", "channels"])
+        for (const e of reg[kind] || []) rows.push([kind.slice(0, -1), e]);
+      const target = process.argv[1] || "";
+      if (!target) {
+        const owned = rows.filter(function (r) { return r[1].creatorId; });
+        if (!owned.length) { console.log("Every entry is already free to manage."); process.exit(0); }
+        console.log("Owned by a device — only that browser can rename or delete them:");
+        for (const r of owned) console.log("  " + r[0] + "  " + r[1].id + "  " + (r[1].name || ""));
+        console.log("");
+        console.log("  relay disown <id>     release one");
+        console.log("  relay disown --all    release all of them");
+        process.exit(0);
+      }
+      let n = 0;
+      for (const r of rows)
+        if ((target === "--all" || r[1].id === target) && r[1].creatorId) { delete r[1].creatorId; n++; }
+      if (!n) { console.error("Nothing owned matches " + target); process.exit(1); }
+      fs.writeFileSync(F, JSON.stringify(reg, null, 2));
+      console.log("Released " + n + (n === 1 ? " entry." : " entries."));
+    ' -- "\$WHAT" || { [ -n "\$WHAT" ] && dc up -d api >/dev/null; exit 1; }
+    if [ -n "\$WHAT" ]; then dc up -d api >/dev/null; echo "api restarted."; fi ;;
   *) cat <<USAGE
 relay — control CLI (stack in \$DIR)
   relay up | down | restart | ps
@@ -341,6 +393,8 @@ relay — control CLI (stack in \$DIR)
   relay update           pull latest images and restart
   relay config           edit .env, then 'relay up' to apply
   relay backup           snapshot uploads + certs to a tarball
+  relay disown [id]      list servers/channels tied to a device, or
+                         release one (or --all) back to everyone
 USAGE
      ;;
 esac
