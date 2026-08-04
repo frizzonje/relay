@@ -9,7 +9,10 @@
 #   ghcr.io/frizzonje/relay-web
 #   ghcr.io/frizzonje/relay-sfu   (медиасервер, опциональный профиль)
 #
-# Tags applied: the git tag without leading "v" (0.4.0) + "latest".
+# Tags applied: the git tag without leading "v" (0.4.0), plus "latest" for a
+# release tag (v1.2.3) — but not for a prerelease (v1.0.0-rc1) and not for a
+# manual dispatch unless it explicitly asks for it. Everything installed
+# follows :latest, so moving it is a decision, not a side effect.
 name: release-images
 
 on:
@@ -18,8 +21,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Image tag to publish (e.g. 0.4.0). "latest" is always added.'
+        description: 'Image tag to publish (e.g. 0.4.0).'
         required: true
+      latest:
+        description: 'Also move :latest to this build (every installation follows :latest).'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -52,7 +59,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm format:check
-      - run: pnpm turbo run typecheck test build
+      # Последовательно, в отличие от CI на ветках: часть голосовых тестов
+      # держится на времени и на двухъядерном раннере в параллель со сборкой
+      # Next срывается (audit S8). Красный релиз обязан означать сломанный
+      # код, а не занятый раннер, — за это стоит заплатить парой минут.
+      - run: pnpm turbo run typecheck test build --concurrency=1
 
   # Интеграция — отдельно от юнит-уровня: тот же прогон, что e2e-джоба CI
   # (Playwright против поднятого прод-стека). Коммит, ломающий логин/чат/
@@ -97,15 +108,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Derive version tag
+      # Версия и — отдельно — двигать ли `:latest`. За `:latest` идут все живые
+      # инсталляции (`pull_policy: always`), так что это не украшение тега, а
+      # решение «перевести всех на этот образ». Само собой оно принимается
+      # только для релизного тега вида v1.2.3: пререлиз (v1.0.0-rc1) и ручная
+      # пересборка старой версии двигать всех не должны — иначе откат одного
+      # образа тихо откатывает всю инсталляционную базу.
+      - name: Derive tags
         id: ver
+        env:
+          IMAGE: ${{ matrix.image }}
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_LATEST: ${{ github.event.inputs.latest }}
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "$EVENT" = "push" ]; then
             V="${GITHUB_REF_NAME#v}"
+            case "$V" in
+              *-*) LATEST=false ;;   # пререлиз: публикуем под своим номером, и только
+              *)   LATEST=true ;;
+            esac
           else
-            V="${{ github.event.inputs.tag }}"
+            V="$INPUT_TAG"
+            LATEST="$INPUT_LATEST"
           fi
-          echo "version=$V" >>"$GITHUB_OUTPUT"
+          # Список тегов собираем здесь целиком, а не условным выражением в
+          # `tags`: пустая строка там отбрасывается молча, и «latest уехал» от
+          # «не уехал» отличалось бы только внимательным чтением лога.
+          {
+            echo "tags<<EOF"
+            echo "$IMAGE:$V"
+            if [ "$LATEST" = "true" ]; then echo "$IMAGE:latest"; fi
+            echo "EOF"
+          } >>"$GITHUB_OUTPUT"
+          echo "publishing $IMAGE:$V (latest=$LATEST)"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -127,8 +163,6 @@ jobs:
           # исходников под эмуляцией (часы), и arm64 придётся отцепить.
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ matrix.image }}:${{ steps.ver.outputs.version }}
-            ${{ matrix.image }}:latest
+          tags: ${{ steps.ver.outputs.tags }}
           cache-from: type=gha,scope=${{ matrix.app }}
           cache-to: type=gha,mode=max,scope=${{ matrix.app }}
