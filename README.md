@@ -12,7 +12,7 @@ Spin up your own relay on a fresh **Debian/Ubuntu** server in one command:
 curl -fsSL https://raw.githubusercontent.com/frizzonje/relay/main/install.sh | bash
 ```
 
-It installs Docker, asks for your domain, login password, TURN and the media server, pulls prebuilt images, opens the firewall, and starts everything — then hands you a `relay` CLI (`relay update`, `relay logs`, `relay config`, `relay backup`). The stack lives in `/opt/relay`.
+It installs Docker, asks for your domain, login password, TURN and the media server, pulls prebuilt images, opens the firewall, and starts everything — then hands you a `relay` CLI (`relay update`, `relay logs`, `relay config`, `relay backup`, `relay disown`). The stack lives in `/opt/relay`.
 
 **No domain?** Say so and the installer takes a Let's Encrypt certificate for the server's IP address instead — real HTTPS at `https://<your-ip>`, no browser warnings, nothing to buy. Such certificates are only valid for six days by design, so Caddy renews them every couple of days on its own. If issuance fails (port 80 closed, address behind NAT), the stack still comes up with a self-signed certificate.
 
@@ -30,7 +30,7 @@ Want to build from source or hack on it? See [Quick start](#quick-start-from-sou
 - **Voice and video** — camera, screen sharing (tab/system audio via the browser; on Windows the desktop client captures system audio natively), push-to-talk, voice activity detection, mute/deafen indicators, per-participant volume mixer (0–300 %) with memory
 - **Two call transports** — P2P mesh and a mediasoup SFU, picked per voice channel; see [Call topology](#call-topology)
 - **Text channels** — replies, editing, deletion, typing indicators, reactions, attachments up to 25 MB. Chat is ephemeral: the API keeps the last 50 messages per channel in memory — see [Data and persistence](#data-and-persistence)
-- **Servers and channels** — create/delete on the fly, optional per-server password, shared registry for all members, invite links with guest tokens
+- **Servers and channels** — create/delete on the fly, optional per-server password, shared registry for all members, invite links with guest tokens. Renaming and deleting is limited to the device that created the entry; if that browser is gone, `relay disown` on the host hands the entry back to everyone
 - **Closed perimeter** — single login password (HMAC cookie), one origin behind Caddy, automatic TLS via Let's Encrypt
 - **Interface in English and Russian** — resolved server-side from the browser's `Accept-Language` on the first visit (so the first paint is already right), remembered in a cookie, switchable in Settings → Appearance. Adding a language is one JSON file — see [Localization](#localization)
 - **TURN profile** — coturn for calls behind strict NAT (mobile networks, CGNAT), including TURN over TLS on 5349
@@ -38,7 +38,7 @@ Want to build from source or hack on it? See [Quick start](#quick-start-from-sou
 
 ## Call topology
 
-Voice channels created by members carry a `mode` that any member can flip from the sidebar (the channels seeded with a new server are always `p2p`). Both transports live side by side — neither is legacy.
+Voice channels created by members carry a `mode` that its creator can flip from the sidebar (the channels seeded with a new server are always `p2p`). Both transports live side by side — neither is legacy.
 
 | | `p2p` (mesh, default) | `sfu` (media server) |
 |---|---|---|

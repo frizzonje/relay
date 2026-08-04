@@ -139,10 +139,18 @@ apps/api/src/
     auth.ts                  issueToken, verifyToken, passwordMatches
     auth.controller.ts       POST /api/login
   config.controller.ts       GET /api/config
+  health.controller.ts       GET /api/health (публичный, мимо authGate)
+  metrics.controller.ts      GET /api/metrics
+  metrics.ts                 съём CPU/памяти/диска хоста
   upload.controller.ts       POST /api/upload
   upload.guard.ts            бюджет байтов на адрес (429 до записи на диск)
   uploads.ts                 UploadsService (реестр + квота + detectKind + sanitizeName)
   gateway/
     registry.ts              типы реестра + чтение/запись registry.json
+    ownership.ts             правило владения записями + их публичная форма
+    unlock.ts                пароли закрытых серверов (scrypt) + счётчик попыток
     signaling.gateway.ts     всё WebSocket
+  sfu/
+    sfu-health.ts            пинг медиасервера (жив ли он вообще)
+    sfu-token.ts             выдача пропусков в медиасервер
 ```
