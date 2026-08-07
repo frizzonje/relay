@@ -258,3 +258,81 @@ describe('расщепление комнаты по транспортам', ()
     expect(joins()).toHaveLength(1);
   });
 });
+
+/**
+ * Смена транспорта канала владельцем (кнопка P2P/SFU в строке канала). Переезжают
+ * все, кто в эфире, но не одновременно: пропуск в медиасервер каждый спрашивает
+ * сам, и пока комната в пути, участники неизбежно оказываются на разных
+ * транспортах. Раньше первый же такой срез читался как расщепление и утаскивал
+ * переехавшего обратно в mesh, а следом за ним и остальных — то есть кнопка
+ * режима рвала разговор. Проверяем, что середина переезда больше не путается с
+ * расщеплением, что настоящее расщепление при этом не потерялось, и что второе
+ * нажатие не оставляет позади первый транспорт.
+ */
+describe('смена режима канала', () => {
+  const peer = (id: string, transport: 'p2p' | 'sfu') => ({
+    id,
+    name: id.toUpperCase(),
+    micOn: true,
+    deafened: false,
+    transport,
+  });
+
+  /** Мы в p2p-канале, владелец включил медиасервер — мы переехали первыми. */
+  async function switchToSfu() {
+    ticketAnswer = { ok: false, error: 'not-sfu' }; // канал пока прямой
+    await voice.joinVoice('room-x', 'Канал');
+    ticketAnswer = { ok: true, url: '/', token: 'ticket' }; // владелец щёлкнул режим
+    handlers['voice-mode']({ room: 'room-x', mode: 'sfu' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sfuCalls).toEqual(['join']);
+    expect(joins()[1][1]).toMatchObject({ transport: 'sfu' });
+  }
+
+  it('пока комната переезжает, разные транспорты не считаются расщеплением', async () => {
+    await switchToSfu();
+
+    // Мы уже в медиасервере, сосед ещё ждёт свой пропуск.
+    handlers['voice-presence']({ 'room-x': [peer('self', 'sfu'), peer('a', 'p2p')] });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sfuCalls).toEqual(['join']); // никуда не съехали
+
+    // Сосед доехал — расщепления и не было.
+    handlers['voice-presence']({ 'room-x': [peer('self', 'sfu'), peer('a', 'sfu')] });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(sfuCalls).toEqual(['join']);
+    expect(joins()).toHaveLength(2);
+  });
+
+  it('расщепление, пережившее переезд, всё равно разбирается', async () => {
+    await switchToSfu();
+
+    // Сосед в медиасервер так и не попал (нативный клиент, mesh-only).
+    handlers['voice-presence']({ 'room-x': [peer('self', 'sfu'), peer('a', 'p2p')] });
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    // Ждали осадки, но не забыли: съезжаем в p2p, где сойдёмся оба.
+    expect(sfuCalls).toEqual(['join', 'leave']);
+    expect(joins()).toHaveLength(3);
+    expect(joins()[2][1]).toMatchObject({ transport: 'p2p' });
+  });
+
+  it('два переключения подряд не оставляют позади первый транспорт', async () => {
+    ticketAnswer = { ok: false, error: 'not-sfu' };
+    await voice.joinVoice('room-x', 'Канал');
+
+    // Владелец щёлкнул кнопку дважды: сперва в медиасервер, тут же обратно.
+    // Первый переезд ещё ждёт пропуск — доехать после второго он не вправе.
+    ticketAnswer = { ok: true, url: '/', token: 'ticket' };
+    handlers['voice-mode']({ room: 'room-x', mode: 'sfu' });
+    ticketAnswer = { ok: false, error: 'not-sfu' };
+    handlers['voice-mode']({ room: 'room-x', mode: 'p2p' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // В медиасервер не пошли вовсе: иначе за спиной остался бы живой сокет SFU
+    // при mesh-плитках — звонок без звука и без пути назад.
+    expect(sfuCalls).toEqual([]);
+    expect(joins()).toHaveLength(2);
+    expect(joins()[1][1]).toMatchObject({ transport: 'p2p' });
+  });
+});
