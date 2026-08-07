@@ -13,6 +13,11 @@
 # release tag (v1.2.3) — but not for a prerelease (v1.0.0-rc1) and not for a
 # manual dispatch unless it explicitly asks for it. Everything installed
 # follows :latest, so moving it is a decision, not a side effect.
+#
+# Shape of the pipeline: everything that can say "no" runs first and in
+# parallel (gate → e2e, and the sfu smoke run alongside them), all three images
+# are pushed under the version number, and only then does `promote` move
+# `:latest`. That order is the point — see the job comments.
 name: release-images
 
 on:
@@ -40,6 +45,45 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Версия и — отдельно — решение двигать ли `:latest`. Считается один раз и
+  # здесь: тем же числом пользуются и сборка, и перевод `:latest`, а
+  # посчитанное в двух местах однажды разойдётся.
+  meta:
+    name: version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      latest: ${{ steps.v.outputs.latest }}
+    steps:
+      - id: v
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_LATEST: ${{ github.event.inputs.latest }}
+        run: |
+          if [ "$EVENT" = "push" ]; then
+            V="${GITHUB_REF_NAME#v}"
+            case "$V" in
+              *-*) LATEST=false ;;   # пререлиз: публикуем под своим номером, и только
+              *)   LATEST=true ;;
+            esac
+          else
+            # Тот же срез "v", что и у тега: поле просит "0.4.0", но пишут в
+            # него по привычке "v0.4.0" — и образ уехал бы под номером, за
+            # которым не приходит никто.
+            V="${INPUT_TAG#v}"
+            LATEST="$INPUT_LATEST"
+          fi
+          # Номер обязан начинаться с цифры. Опечатку в ручном запуске дешевле
+          # поймать здесь, чем найти в GHCR образ с именем вроде "релиз".
+          case "$V" in
+            [0-9]*) ;;
+            *) echo "не похоже на номер версии: \"$V\"" >&2; exit 1 ;;
+          esac
+          echo "version=$V" >>"$GITHUB_OUTPUT"
+          echo "latest=$LATEST" >>"$GITHUB_OUTPUT"
+          echo "publishing $V (latest=$LATEST)"
+
   # Ворот на публикацию. CI по тегу не бежит (его триггеры — ветки и PR), так
   # что «тег на сломанном коммите» проверить больше некому, кроме самого
   # релиза: этот job перегоняет ровно то, что CI проверяет на каждой ветке, —
@@ -92,10 +136,43 @@ jobs:
         if: always()
         run: docker compose -f docker-compose.yml -f infra/docker-compose.e2e.yml down -v
 
+  # Единственный образ, который в этом конвейере иначе уехал бы ни разу не
+  # запущенным. api и web гоняет e2e выше; sfu стоит за профилем compose, и
+  # его не поднимает ни e2e, ни что-либо ещё — при этом он один запускает
+  # нативный бинарник (воркер mediasoup) из-под непривилегированного
+  # пользователя, пара, ломающаяся молча (audit S6). Та же проверка есть в CI
+  # веток, но по тегу CI не бежит, а публикует именно этот файл.
+  #
+  # Зависимостей нет намеренно: джоба идёт параллельно gate и e2e и потому
+  # ничего не добавляет ко времени релиза — его длина по-прежнему gate + e2e.
+  sfu-smoke:
+    name: sfu image boots
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sfu image
+        run: docker build -f apps/sfu/Dockerfile -t relay-sfu:release .
+      - name: Smoke-run it
+        run: |
+          docker run -d --name sfu-smoke -e SFU_SECRET=smoke -p 3100:3100 relay-sfu:release
+          for i in $(seq 30); do
+            if curl -fsS http://localhost:3100/health; then echo; break; fi
+            if [ "$i" = 30 ]; then echo "sfu did not answer /health"; docker logs sfu-smoke; exit 1; fi
+            sleep 1
+          done
+          # The owner of /proc/1 is the user the service actually runs as —
+          # `id` inside exec would only echo the image's USER back at us.
+          test "$(docker exec sfu-smoke stat -c %U /proc/1)" = node
+          docker rm -f sfu-smoke
+
+  # Публикация — только под номером версии. `:latest` здесь не проставляется
+  # вовсе: матрица пушит три образа независимо, и падение третьего после двух
+  # успешных перевело бы живые инсталляции (`pull_policy: always`) на разъехавшийся
+  # набор служб. Перевод отложен в promote, до которого доходят только все трое.
   build:
     name: build · push (${{ matrix.app }})
     runs-on: ubuntu-latest
-    needs: [gate, e2e]
+    needs: [meta, gate, e2e, sfu-smoke]
     strategy:
       matrix:
         include:
@@ -107,44 +184,6 @@ jobs:
             image: ghcr.io/frizzonje/relay-sfu
     steps:
       - uses: actions/checkout@v4
-
-      # Версия и — отдельно — двигать ли `:latest`. За `:latest` идут все живые
-      # инсталляции (`pull_policy: always`), так что это не украшение тега, а
-      # решение «перевести всех на этот образ». Само собой оно принимается
-      # только для релизного тега вида v1.2.3: пререлиз (v1.0.0-rc1) и ручная
-      # пересборка старой версии двигать всех не должны — иначе откат одного
-      # образа тихо откатывает всю инсталляционную базу.
-      - name: Derive tags
-        id: ver
-        env:
-          IMAGE: ${{ matrix.image }}
-          EVENT: ${{ github.event_name }}
-          INPUT_TAG: ${{ github.event.inputs.tag }}
-          INPUT_LATEST: ${{ github.event.inputs.latest }}
-        run: |
-          if [ "$EVENT" = "push" ]; then
-            V="${GITHUB_REF_NAME#v}"
-            case "$V" in
-              *-*) LATEST=false ;;   # пререлиз: публикуем под своим номером, и только
-              *)   LATEST=true ;;
-            esac
-          else
-            # Тот же срез "v", что и у тега: поле просит "0.4.0", но пишут в
-            # него по привычке "v0.4.0" — и образ уехал бы под номером, за
-            # которым не приходит никто.
-            V="${INPUT_TAG#v}"
-            LATEST="$INPUT_LATEST"
-          fi
-          # Список тегов собираем здесь целиком, а не условным выражением в
-          # `tags`: пустая строка там отбрасывается молча, и «latest уехал» от
-          # «не уехал» отличалось бы только внимательным чтением лога.
-          {
-            echo "tags<<EOF"
-            echo "$IMAGE:$V"
-            if [ "$LATEST" = "true" ]; then echo "$IMAGE:latest"; fi
-            echo "EOF"
-          } >>"$GITHUB_OUTPUT"
-          echo "publishing $IMAGE:$V (latest=$LATEST)"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -166,6 +205,38 @@ jobs:
           # исходников под эмуляцией (часы), и arm64 придётся отцепить.
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.ver.outputs.tags }}
+          tags: ${{ matrix.image }}:${{ needs.meta.outputs.version }}
           cache-from: type=gha,scope=${{ matrix.app }}
           cache-to: type=gha,mode=max,scope=${{ matrix.app }}
+
+  # За `:latest` идут все живые инсталляции, так что это не украшение тега, а
+  # решение «перевести всех на этот образ» — и принимается оно одним шагом на
+  # все три службы, после того как все три опубликованы.
+  #
+  # imagetools ничего не пересобирает: он копирует уже лежащий в реестре
+  # манифест (со всеми платформами) под второе имя. Секунды, и ровно тот же
+  # образ, что проверили выше, — пересборка ради тега дала бы другие байты.
+  promote:
+    name: move :latest
+    runs-on: ubuntu-latest
+    needs: [meta, build]
+    if: needs.meta.outputs.latest == 'true'
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Point :latest at ${{ needs.meta.outputs.version }}
+        env:
+          V: ${{ needs.meta.outputs.version }}
+        run: |
+          for IMAGE in \
+            ghcr.io/frizzonje/relay-api \
+            ghcr.io/frizzonje/relay-web \
+            ghcr.io/frizzonje/relay-sfu
+          do
+            docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$V"
+            echo "$IMAGE:latest -> $V"
+          done
