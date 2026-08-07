@@ -16,6 +16,7 @@ import { useUiStore } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import { useUnreadStore, isChannelUnread } from '@/stores/unread';
 import { AddHostDialog } from '@/components/layout/AddHostDialog';
+import { RemoveHostDialog } from '@/components/layout/RemoveHostDialog';
 import { CreateServerDialog } from '@/components/layout/CreateServerDialog';
 import { UnlockServerDialog } from '@/components/layout/UnlockServerDialog';
 import { SettingsDialog } from '@/components/layout/SettingsDialog';
@@ -147,6 +148,7 @@ export function ServerRail() {
   const openUnlock = useServersStore((s) => s.openUnlock);
   const [createOpen, setCreateOpen] = useState(false);
   const [addHostOpen, setAddHostOpen] = useState(false);
+  const [hostToRemove, setHostToRemove] = useState<RemoteHost | null>(null);
   // Настройки — в ui-сторе: их открывает и шестерёнка рейки, и ПКМ-меню.
   const settingsOpen = useUiStore((s) => s.settingsOpen);
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
@@ -154,7 +156,6 @@ export function ServerRail() {
   // «Другие хосты» — отдельные инсталляции relay (не гильдии этого бэкенда).
   const hosts = useHostsStore((s) => s.hosts);
   const hydrateHosts = useHostsStore((s) => s.hydrate);
-  const removeHost = useHostsStore((s) => s.removeHost);
   useEffect(() => hydrateHosts(), [hydrateHosts]);
 
   const main = servers.find((s) => s.id === MAIN_SERVER_ID);
@@ -226,14 +227,7 @@ export function ServerRail() {
           один хост; «глобус-плюс» добавляет новый. */}
       <span className="my-1 h-0.5 w-8 rounded-full bg-white/10" />
       {hosts.map((h) => (
-        <HostIcon
-          key={h.url}
-          host={h}
-          onRemove={() => {
-            if (window.confirm(t('rail.host.removeConfirm', { name: hostLabel(h) })))
-              removeHost(h.url);
-          }}
-        />
+        <HostIcon key={h.url} host={h} onRemove={() => setHostToRemove(h)} />
       ))}
       <div className="group/srv relative">
         <button
@@ -265,6 +259,10 @@ export function ServerRail() {
       <UnlockServerDialog />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       <AddHostDialog open={addHostOpen} onOpenChange={setAddHostOpen} />
+      <RemoveHostDialog
+        target={hostToRemove}
+        onOpenChange={(open) => !open && setHostToRemove(null)}
+      />
     </nav>
   );
 }

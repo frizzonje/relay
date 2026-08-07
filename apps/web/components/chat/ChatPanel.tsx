@@ -22,6 +22,7 @@ import { useUiStore } from '@/stores/ui';
 import { useChatStore } from '@/stores/chat';
 import { useUnreadStore } from '@/stores/unread';
 import { MessageAttachment } from '@/components/chat/MessageAttachment';
+import { DeleteMessageDialog } from '@/components/chat/DeleteMessageDialog';
 import { tx, useRichT, useT } from '@/lib/i18n';
 
 interface PendingFile {
@@ -826,6 +827,7 @@ export function ChatPanel() {
   const [pending, setPending] = useState<PendingFile[]>([]);
   const [reply, setReply] = useState<Draft | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<ChatMessage | null>(null);
   const [dragging, setDragging] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   const [hasNew, setHasNew] = useState(false);
@@ -852,6 +854,7 @@ export function ChatPanel() {
     setEnterAnim(false);
     setReply(null);
     setEditingId(null);
+    setPendingDelete(null);
     setAtBottom(true);
     const raf = requestAnimationFrame(() => requestAnimationFrame(() => setEnterAnim(true)));
     return () => cancelAnimationFrame(raf);
@@ -918,9 +921,7 @@ export function ChatPanel() {
   }
 
   function deleteMessage(m: ChatMessage) {
-    if (!m.id) return;
-    if (!window.confirm(t('chat.delete.confirm'))) return;
-    getSocket().emit('chat-delete', { id: m.id });
+    if (m.id) setPendingDelete(m);
   }
 
   async function send(e: React.FormEvent) {
@@ -1256,6 +1257,11 @@ export function ChatPanel() {
           </button>
         </form>
       </div>
+
+      <DeleteMessageDialog
+        target={pendingDelete}
+        onOpenChange={(open) => !open && setPendingDelete(null)}
+      />
     </div>
   );
 }
