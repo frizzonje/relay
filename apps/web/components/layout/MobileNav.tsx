@@ -13,46 +13,6 @@ import { useChatStore } from '@/stores/chat';
 import { toggleMic, leaveVoice, showVoiceStage } from '@/lib/voice';
 import { useT } from '@/lib/i18n';
 
-/** Стрелка «назад» — та же стилистика line-иконок, что у шестерёнки рейки. */
-function IconBack() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="22"
-      height="22"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M15 19 8 12l7-7" />
-    </svg>
-  );
-}
-
-/** Состав канала — в наборе Icon (CSS-маски) людей нет, рисуем сами. */
-function IconPeople() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="18"
-      height="18"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1" />
-      <circle cx="9" cy="7" r="3" />
-      <path d="M22 19v-1a4 4 0 0 0-3-3.87M16 4.13A4 4 0 0 1 16 12" />
-    </svg>
-  );
-}
-
 /** Порядок экранов стопки: по нему считаем направление хода для анимации. */
 const DEPTH: Record<MobilePanel, number> = { nav: 0, stage: 1, people: 2 };
 
@@ -96,7 +56,7 @@ function PeopleButton({
         </span>
       ) : (
         <span className="grid h-6 w-6 place-items-center">
-          <IconPeople />
+          <Icon name="users" className="text-[18px]" strokeWidth={1.8} />
         </span>
       )}
       <span className="text-[13px] font-semibold tabular-nums text-text">
@@ -190,7 +150,7 @@ export function MobileNav() {
           aria-label={t('mobile.back')}
           className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-text-muted outline-none transition-colors active:bg-bg-hover active:text-text-header"
         >
-          <IconBack />
+          <Icon name="chevron-left" className="text-[22px]" />
         </button>
 
         {/* Заголовок экрана: тап по нему открывает состав — как карточка чата */}

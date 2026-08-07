@@ -294,20 +294,10 @@
 }
 
 /* ============================================================================
-   Иконки: SVG-маски (line-icons), красятся через currentColor.
-   <span class="ico" style={{ '--icon': "url(/img/icons/mic.svg)" }} />
+   Значки живут в components/ui/icon.tsx — контурами прямо в разметке, а не
+   масками из файлов: до загрузки файла на месте значка было пусто.
    ========================================================================== */
 @layer components {
-  .ico {
-    display: inline-block;
-    width: 1em;
-    height: 1em;
-    flex-shrink: 0;
-    background-color: currentColor;
-    -webkit-mask: var(--icon) center / contain no-repeat;
-    mask: var(--icon) center / contain no-repeat;
-  }
-
   /* Живой уровень микрофона в меню устройства: ширину гонит rAF прямо в DOM
      (кадр без ре-рендера), а цвет — состояние гейта. Цвет здесь, а не в JS:
      «тебя слышно» — это наш зелёный, и он обязан быть тем же самым зелёным. */

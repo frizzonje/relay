@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { Icon } from '@/components/ui/icon';
 import { springTab, tabPanel } from '@/lib/motion';
 import {
   checkForUpdates,
@@ -53,25 +54,6 @@ const TABS: { id: Tab; label: MessageKey; desktopOnly?: boolean }[] = [
   { id: 'account', label: 'settings.tab.account' },
 ];
 
-function Chevron() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-text-muted"
-      aria-hidden="true"
-    >
-      <path d="m6 9 6 6 6-6" />
-    </svg>
-  );
-}
-
 /** Стилизованный native <select> с шевроном — общая обёртка для селектов настроек. */
 function SelectField({
   label,
@@ -97,7 +79,7 @@ function SelectField({
         >
           {children}
         </select>
-        <Chevron />
+        <Icon name="chevron-down" className="text-[16px]" />
       </div>
     </label>
   );

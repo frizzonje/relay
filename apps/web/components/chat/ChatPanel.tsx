@@ -11,6 +11,7 @@ import {
   type UploadResponse,
 } from '@relay/shared';
 import { cn } from '@/lib/utils';
+import { Icon } from '@/components/ui/icon';
 import { copyText, openContextMenu } from '@/lib/context-menu';
 import { chatMessage, springPop } from '@/lib/motion';
 import { avatarStyle } from '@/lib/avatar';
@@ -34,128 +35,6 @@ interface PendingFile {
 
 /** Черновик ответа: снимок цитируемого сообщения, живёт в композере до отправки. */
 type Draft = ReplyRef;
-
-// ── Иконки действий (Feather, strokeWidth 2) ───────────────────────────────
-function IconReply({ className }: { className?: string }) {
-  return (
-    <svg
-      width="13"
-      height="13"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <polyline points="9 17 4 12 9 7" />
-      <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
-    </svg>
-  );
-}
-function IconEdit() {
-  return (
-    <svg
-      width="13"
-      height="13"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M12 20h9" />
-      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-    </svg>
-  );
-}
-function IconTrash() {
-  return (
-    <svg
-      width="13"
-      height="13"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <polyline points="3 6 5 6 21 6" />
-      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-    </svg>
-  );
-}
-function IconEye() {
-  return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
-      <circle cx="12" cy="12" r="3" />
-    </svg>
-  );
-}
-function IconSmile() {
-  return (
-    <svg
-      width="13"
-      height="13"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="12" r="10" />
-      <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-      <line x1="9" y1="9" x2="9.01" y2="9" />
-      <line x1="15" y1="9" x2="15.01" y2="9" />
-    </svg>
-  );
-}
-function IconDots() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <circle cx="5" cy="12" r="1.7" />
-      <circle cx="12" cy="12" r="1.7" />
-      <circle cx="19" cy="12" r="1.7" />
-    </svg>
-  );
-}
-function IconArrowDown() {
-  return (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <line x1="12" y1="5" x2="12" y2="19" />
-      <polyline points="19 12 12 19 5 12" />
-    </svg>
-  );
-}
 
 // ── Капсула действий сообщения ─────────────────────────────────────────────
 // Одна геометрия на тулбар и на его выпадающие меню: «⋯» и пикер реакций
@@ -255,15 +134,15 @@ function PendingAttachments({
                 : 'bg-bg-deep text-text-muted ring-white/10 hover:text-text',
             )}
           >
-            <IconEye />
+            <Icon name="eye" className="text-[12px]" />
           </button>
           <button
             type="button"
             onClick={() => onRemove(p.id)}
             title={t('chat.attachment.remove')}
-            className="absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full bg-bg-deep text-[11px] leading-none text-text-muted shadow ring-1 ring-white/10 transition-colors hover:bg-danger hover:text-white"
+            className="absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full bg-bg-deep text-text-muted shadow ring-1 ring-white/10 transition-colors hover:bg-danger hover:text-white"
           >
-            ✕
+            <Icon name="x" className="text-[10px]" />
           </button>
         </div>
       ))}
@@ -501,7 +380,11 @@ function CapsuleMenu({
 function AddReaction({ id, closeSignal }: { id: string; closeSignal: number }) {
   const t = useT();
   return (
-    <CapsuleMenu icon={<IconSmile />} title={t('chat.react')} closeSignal={closeSignal}>
+    <CapsuleMenu
+      icon={<Icon name="smile" className="text-[13px]" />}
+      title={t('chat.react')}
+      closeSignal={closeSignal}
+    >
       {(close) =>
         // Эмодзи обесцвечены до наведения — не выбиваются из монохрома.
         REACTION_EMOJIS.map((emoji) => (
@@ -538,7 +421,7 @@ function MoreMenu({
   const t = useT();
   return (
     <CapsuleMenu
-      icon={<IconDots />}
+      icon={<Icon name="more-horizontal" className="text-[13px]" />}
       title={t('chat.more')}
       ariaLabel={t('chat.more.aria')}
       closeSignal={closeSignal}
@@ -552,7 +435,7 @@ function MoreMenu({
               onEdit();
             }}
           >
-            <IconEdit />
+            <Icon name="edit" className="text-[13px]" />
           </ActionBtn>
           <ActionBtn
             title={t('chat.action.delete')}
@@ -562,7 +445,7 @@ function MoreMenu({
               onDelete();
             }}
           >
-            <IconTrash />
+            <Icon name="trash" className="text-[13px]" />
           </ActionBtn>
         </>
       )}
@@ -741,19 +624,7 @@ function Message({
             aria-label={t('chat.edit.cancel')}
             className={CAPSULE_BTN}
           >
-            <svg
-              width="11"
-              height="11"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              aria-hidden="true"
-            >
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
+            <Icon name="x" className="text-[11px]" />
           </button>
         </div>
       )}
@@ -770,7 +641,7 @@ function Message({
           )}
         >
           <ActionBtn title={t('chat.action.reply')} onClick={() => onReply(msg)}>
-            <IconReply />
+            <Icon name="reply" className="text-[13px]" />
           </ActionBtn>
           <AddReaction id={msg.id} closeSignal={leaveTick} />
           {mine && (
@@ -1107,19 +978,7 @@ export function ChatPanel() {
             className="pointer-events-none absolute inset-2 z-30 grid place-items-center rounded-[14px] border-2 border-dashed border-line-strong bg-bg-app/75 backdrop-blur-sm"
           >
             <div className="flex flex-col items-center gap-2 text-text-header">
-              <svg
-                width="30"
-                height="30"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.7"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-              </svg>
+              <Icon name="paperclip" className="text-[30px]" strokeWidth={1.7} />
               <span className="font-mono text-[12px] uppercase tracking-[0.16em]">
                 {t('chat.drop')}
               </span>
@@ -1147,7 +1006,7 @@ export function ChatPanel() {
             style={{ bottom: pending.length || reply ? 132 : 84 }}
           >
             {t(hasNew ? 'chat.jump.new' : 'chat.jump.bottom')}
-            <IconArrowDown />
+            <Icon name="arrow-down" className="text-[15px]" />
           </motion.button>
         )}
       </AnimatePresence>
@@ -1184,7 +1043,7 @@ export function ChatPanel() {
               className="overflow-hidden"
             >
               <div className="mb-2 flex items-center gap-2 rounded-[10px] border border-line bg-bg-active/60 px-3 py-1.5 text-[12.5px]">
-                <IconReply className="shrink-0 text-text-muted" />
+                <Icon name="reply" className="text-[13px] text-text-muted" />
                 <span className="text-text-muted">{t('chat.reply.label')}</span>
                 <span className="shrink-0 font-medium text-text-header">{reply.name}</span>
                 <span className="truncate text-text-muted">
@@ -1196,7 +1055,7 @@ export function ChatPanel() {
                   aria-label={t('chat.reply.cancel')}
                   className="ml-auto grid h-5 w-5 shrink-0 place-items-center rounded-full text-text-muted transition-colors hover:bg-bg-hover hover:text-text"
                 >
-                  ✕
+                  <Icon name="x" className="text-[11px]" />
                 </button>
               </div>
             </motion.div>
@@ -1223,19 +1082,7 @@ export function ChatPanel() {
               uploading && 'cursor-progress opacity-60',
             )}
           >
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-            </svg>
+            <Icon name="paperclip" className="text-[20px]" />
           </button>
           <input
             ref={inputRef}

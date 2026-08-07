@@ -22,47 +22,6 @@ import { UnlockServerDialog } from '@/components/layout/UnlockServerDialog';
 import { SettingsDialog } from '@/components/layout/SettingsDialog';
 import { useT } from '@/lib/i18n';
 
-/** Шестерёнка настроек (инлайновый line-icon, раздел 01 референса). */
-function GearIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="22"
-      height="22"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
-  );
-}
-
-/** Глобус — «другая инсталляция» (инлайновый line-icon, как GearIcon). */
-function GlobeIcon({ size = 20 }: { size?: number }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width={size}
-      height={size}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="12" r="10" />
-      <path d="M2 12h20" />
-      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-    </svg>
-  );
-}
-
 /**
  * Белая пилюля-индикатор слева: высокая у активного, короткая на ховере,
  * сжатая в точку когда на сервере есть непрочитанные сообщения.
@@ -237,7 +196,7 @@ export function ServerRail() {
           className="group grid h-12 w-12 place-items-center rounded-[50%] bg-white/[0.04] text-text-muted outline-none transition-[background-color,border-radius,color] duration-200 hover:rounded-2xl hover:bg-accent/15 hover:text-text-header focus-visible:rounded-2xl focus-visible:ring-2 focus-visible:ring-accent/60 active:scale-95"
         >
           <span className="pointer-events-none absolute inset-1 rounded-[inherit] border border-dashed border-white/15 transition-opacity duration-200 group-hover:opacity-0" />
-          <GlobeIcon />
+          <Icon name="globe" className="text-[20px]" strokeWidth={1.8} />
         </button>
         <RailTooltip label={t('rail.host.add')} />
       </div>
@@ -250,7 +209,7 @@ export function ServerRail() {
           aria-label={t('rail.settings')}
           className="grid h-11 w-11 place-items-center rounded-[14px] text-text-muted outline-none transition-colors hover:bg-bg-hover hover:text-text-header focus-visible:ring-2 focus-visible:ring-line-strong"
         >
-          <GearIcon />
+          <Icon name="settings" className="text-[20px]" strokeWidth={1.8} />
         </button>
         <RailTooltip label={t('rail.settings')} />
       </div>
@@ -305,7 +264,7 @@ function HostIcon({ host, onRemove }: { host: RemoteHost; onRemove: () => void }
         aria-hidden
         className="pointer-events-none absolute -bottom-0.5 -right-0.5 grid h-[18px] w-[18px] place-items-center rounded-full border-2 border-bg-rail bg-bg-deep text-text-muted shadow group-hover/srv:opacity-0"
       >
-        <GlobeIcon size={10} />
+        <Icon name="globe" className="text-[10px]" strokeWidth={1.8} />
       </span>
       {/* Убрать хост — появляется на ховере поверх бейджа */}
       <button

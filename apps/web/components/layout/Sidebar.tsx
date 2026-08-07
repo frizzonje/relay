@@ -39,7 +39,7 @@ import {
   RenameChannelDialog,
   type RenameChannelTarget,
 } from '@/components/layout/RenameChannelDialog';
-import { InviteDialog, LinkIcon } from '@/components/layout/InviteDialog';
+import { InviteDialog } from '@/components/layout/InviteDialog';
 import {
   DeleteServerDialog,
   type DeleteServerTarget,
@@ -97,16 +97,6 @@ function Category({
 }
 
 /** Три точки — вход в меню канала (тот же набор, что по правой кнопке). */
-function MoreIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <circle cx="5" cy="12" r="1.7" />
-      <circle cx="12" cy="12" r="1.7" />
-      <circle cx="19" cy="12" r="1.7" />
-    </svg>
-  );
-}
-
 function ChannelRow({
   active,
   connected,
@@ -209,7 +199,7 @@ function ChannelRow({
               aria-label={t('channel.invite')}
               className="grid h-5 w-5 shrink-0 place-items-center rounded text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-text-header focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100 max-md:opacity-100"
             >
-              <LinkIcon size={13} />
+              <Icon name="link" className="text-[13px]" />
             </button>
           )}
           {onMenu && (
@@ -223,7 +213,7 @@ function ChannelRow({
               aria-haspopup="menu"
               className="grid h-5 w-5 shrink-0 place-items-center rounded text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-text-header focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100 max-md:opacity-100"
             >
-              <MoreIcon />
+              <Icon name="more-horizontal" className="text-[15px]" />
             </button>
           )}
         </span>
