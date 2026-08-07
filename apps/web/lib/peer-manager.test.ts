@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
 const sockets = {
   id: 'self',
   connected: true,
+  recovered: false, // socket.io восстановил сессию с тем же id
   emit: vi.fn(),
   on: vi.fn(),
   off: vi.fn(),
@@ -47,14 +48,20 @@ class FakePC {
   static instances: FakePC[] = [];
   signalingState = 'stable';
   connectionState = 'new';
+  iceConnectionState = 'new';
   localDescription: { type: string; sdp?: string } | null = null;
   remoteDescription: { type: string; sdp?: string } | null = null;
   onnegotiationneeded: (() => Promise<void> | void) | null = null;
   onicecandidate: ((e: unknown) => void) | null = null;
   ontrack: ((e: unknown) => void) | null = null;
   onconnectionstatechange: (() => void) | null = null;
+  oniceconnectionstatechange: (() => void) | null = null;
   tracks: unknown[] = [];
   addedIce: unknown[] = [];
+  restarts = 0;
+  closed = false;
+  // Что вернёт getStats — тест подменяет, чтобы разыграть «звук перестал идти».
+  stats: Map<string, Record<string, unknown>> = new Map();
 
   constructor() {
     FakePC.instances.push(this);
@@ -64,6 +71,9 @@ class FakePC {
     return { track: t };
   }
   getSenders() {
+    return [];
+  }
+  getTransceivers() {
     return [];
   }
   async createOffer() {
@@ -83,12 +93,24 @@ class FakePC {
   async addIceCandidate(c: unknown) {
     this.addedIce.push(c);
   }
-  restartIce() {}
+  restartIce() {
+    this.restarts += 1;
+  }
   async getStats() {
-    return new Map();
+    return this.stats;
   }
   close() {
     this.connectionState = 'closed';
+    this.signalingState = 'closed';
+    this.closed = true;
+  }
+
+  /** Разыграть смену состояния связи так, как её сообщает браузер. */
+  setState(conn: string, ice = conn) {
+    this.connectionState = conn;
+    this.iceConnectionState = ice;
+    this.onconnectionstatechange?.();
+    this.oniceconnectionstatechange?.();
   }
 }
 
@@ -167,6 +189,109 @@ describe('PeerManager — perfect negotiation', () => {
 
     expect(emitted('answer')).toHaveLength(0);
     expect(pc.remoteDescription).toBeNull(); // setRemoteDescription не вызывался
+  });
+});
+
+describe('PeerManager — лестница восстановления', () => {
+  // 'zzz' < 'aaa' ложь ⇒ мы «невежливые» и идём по ступеням без задержки —
+  // POLITE_LAG_MS в расчёт времени в этих тестах не входит.
+  async function callWith(peerId = 'aaa') {
+    sockets.id = 'zzz';
+    sockets.connected = true;
+    await voice.joinVoice('room1', 'Канал 1');
+    await fire('peers', [{ id: peerId, name: 'A' }]);
+    return FakePC.instances[0];
+  }
+
+  it('промежуточное «connecting» больше не гасит сторож ступени', async () => {
+    const pc = await callWith();
+
+    pc.setState('disconnected');
+    await vi.advanceTimersByTimeAsync(4000); // RECOVER_GRACE_MS → ступень 1
+    expect(pc.restarts).toBe(1);
+
+    // Так браузер отвечает на restartIce: ICE уходит перебирать пары. Раньше на
+    // этом переходе сторож снимался, и связь застревала здесь навсегда.
+    pc.setState('connecting', 'checking');
+    await vi.advanceTimersByTimeAsync(7000); // RECOVER_WINDOW_MS → ступень 2
+
+    expect(pc.closed).toBe(true);
+    expect(FakePC.instances).toHaveLength(2); // соединение пересобрано
+    expect(FakePC.instances[1].closed).toBe(false);
+  });
+
+  it('пересборки повторяются, а не заканчиваются снятием собеседника', async () => {
+    const pc = await callWith();
+    pc.setState('failed');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pc.restarts).toBe(1); // ступень 1 — сразу, без грейса
+
+    await vi.advanceTimersByTimeAsync(7000); // пересборка №1
+    expect(FakePC.instances).toHaveLength(2);
+
+    FakePC.instances[1].setState('failed');
+    await vi.advanceTimersByTimeAsync(14_000); // пересборка №2 (пауза растёт)
+    expect(FakePC.instances).toHaveLength(3);
+  });
+
+  it('пока сигналинг лежит, ступени не жгутся', async () => {
+    const pc = await callWith();
+    sockets.connected = false;
+
+    pc.setState('failed');
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(pc.restarts).toBe(0);
+    expect(FakePC.instances).toHaveLength(1);
+
+    // Сокет вернулся с тем же id — догоняем упущенное (voice.ts зовёт resync).
+    sockets.connected = true;
+    sockets.recovered = true;
+    await fire('connect');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pc.restarts).toBe(1);
+    sockets.recovered = false;
+  });
+
+  it('связь есть, а звука нет — чиним, а не только пишем в консоль', async () => {
+    const pc = await callWith();
+    pc.setState('connected');
+    // Входящий звук замер на одном и том же счётчике байт.
+    pc.stats = new Map([['in-a', { type: 'inbound-rtp', kind: 'audio', bytesReceived: 4096 }]]);
+
+    await vi.advanceTimersByTimeAsync(3000); // первый снимок — база
+    expect(pc.restarts).toBe(0);
+    await vi.advanceTimersByTimeAsync(9000); // SILENCE_MS вышло → ступень 1
+    expect(pc.restarts).toBe(1);
+    await vi.advanceTimersByTimeAsync(9000); // всё ещё тихо → пересборка
+    expect(pc.closed).toBe(true);
+    expect(FakePC.instances).toHaveLength(2);
+  });
+
+  it('собеседник, пересобравший связь, узнаётся по отпечатку DTLS', async () => {
+    sockets.id = 'aaa'; // «вежливые» — отвечаем на чужие offer'ы
+    sockets.connected = true;
+    await voice.joinVoice('room1', 'Канал 1');
+
+    const offer = (fp: string) => ({
+      from: 'zzz',
+      name: 'Z',
+      sdp: { type: 'offer', sdp: `a=fingerprint:sha-256 ${fp}\r\n${VIDEO_SDP}` },
+    });
+
+    await fire('offer', offer('AA:BB'));
+    const first = FakePC.instances[0];
+    expect(first.remoteDescription?.type).toBe('offer');
+
+    // Тот же отпечаток — обычная ренеготиация: соединение не трогаем.
+    await fire('offer', offer('AA:BB'));
+    expect(FakePC.instances).toHaveLength(1);
+    expect(first.closed).toBe(false);
+
+    // Отпечаток сменился ⇒ за тем же id уже другой pc. Наш выбрасываем.
+    await fire('offer', offer('CC:DD'));
+    expect(first.closed).toBe(true);
+    expect(FakePC.instances).toHaveLength(2);
+    expect(FakePC.instances[1].localDescription?.type).toBe('answer');
   });
 });
 

@@ -442,7 +442,7 @@
   "voice.toast.mode.sfu": "медиасервер",
   "voice.toast.modeSwitched": "Канал переключён на {mode}…",
   "voice.toast.peerCannotHear": "{names} вас не слышит: у него звонок идёт напрямую, а не через медиасервер.",
-  "voice.toast.peerUnreachable": "Не удалось соединиться с «{name}»: сеть блокирует подключение. Администратору стоит проверить TURN-сервер.",
+  "voice.toast.peerUnreachable": "Не удалось соединиться с «{name}»: сеть блокирует подключение. Продолжаем попытки — администратору стоит проверить TURN-сервер.",
   "voice.toast.peersDirect": "{names} не может через медиасервер — звоним напрямую.",
   "voice.toast.screenEnded": "Демонстрация экрана завершена.",
   "voice.toast.screenFailed": "Не удалось начать демонстрацию: {reason}.",

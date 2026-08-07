@@ -430,7 +430,7 @@
   "voice.toast.mode.sfu": "the media server",
   "voice.toast.modeSwitched": "Channel switched to {mode}…",
   "voice.toast.peerCannotHear": "{names} cannot hear you: their call is direct, not through the media server.",
-  "voice.toast.peerUnreachable": "Could not connect to “{name}”: the network is blocking it. An admin should check the TURN server.",
+  "voice.toast.peerUnreachable": "Could not connect to “{name}”: the network is blocking it. Still trying — an admin should check the TURN server.",
   "voice.toast.peersDirect": "{names} cannot use the media server — calling directly.",
   "voice.toast.screenEnded": "Screen sharing ended.",
   "voice.toast.screenFailed": "Could not start sharing: {reason}.",
