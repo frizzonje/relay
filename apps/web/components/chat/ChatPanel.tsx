@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
@@ -17,6 +17,7 @@ import { avatarStyle } from '@/lib/avatar';
 import { fmtBytes, fmtClock } from '@/lib/format';
 import { renderMarkdownMini } from '@/lib/markdown';
 import { getSocket } from '@/lib/socket';
+import { useDismiss } from '@/lib/use-dismiss';
 import { useUiStore } from '@/stores/ui';
 import { useChatStore } from '@/stores/chat';
 import { useUnreadStore } from '@/stores/unread';
@@ -435,27 +436,35 @@ function ReactionBar({
   );
 }
 
-/** Кнопка-«смайлик» (в тулбаре сообщения) с попапом выбора реакции. */
-function AddReaction({ id, closeSignal }: { id: string; closeSignal: number }) {
-  const t = useT();
+/**
+ * Кнопка тулбара, раскрывающая под собой капсулу-меню (или над собой — у нижнего
+ * края ленты, см. fitsBelow). Одна механика на пикер реакций и на «⋯»: они
+ * отличались только значком и содержимым, а копии успели разойтись.
+ */
+function CapsuleMenu({
+  icon,
+  title,
+  ariaLabel,
+  closeSignal,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  ariaLabel?: string;
+  /** Мышь ушла с сообщения — родитель дёргает счётчик, меню закрывается. */
+  closeSignal: number;
+  /** Содержимое капсулы; `close` закрывает её после выбора. */
+  children: (close: () => void) => React.ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const [openUp, setOpenUp] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDismiss(open, close, wrapRef);
 
-  // Мышь ушла с сообщения (родитель дёрнул счётчик) — пикер закрываем, чтобы
-  // при возврате курсора не встречало «залипшее» меню.
-  useEffect(() => {
-    setOpen(false);
-  }, [closeSignal]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [open]);
+  // Курсор ушёл с сообщения — закрываем, чтобы при возврате не встречало
+  // «залипшее» меню.
+  useEffect(close, [closeSignal, close]);
 
   // Обёртка без `relative`: меню якорится к капсуле тулбара (см. CAPSULE_POPOVER).
   return (
@@ -466,11 +475,12 @@ function AddReaction({ id, closeSignal }: { id: string; closeSignal: number }) {
           setOpenUp(!fitsBelow(wrapRef.current));
           setOpen((o) => !o);
         }}
-        title={t('chat.react')}
-        aria-label={t('chat.react')}
+        title={title}
+        aria-label={ariaLabel ?? title}
+        aria-expanded={open}
         className={cn(CAPSULE_BTN, open && 'bg-white/[0.08] text-text-header')}
       >
-        <IconSmile />
+        {icon}
       </button>
       <AnimatePresence>
         {open && (
@@ -478,27 +488,39 @@ function AddReaction({ id, closeSignal }: { id: string; closeSignal: number }) {
             {...(openUp ? popoverAnimUp : popoverAnim)}
             className={openUp ? CAPSULE_POPOVER_UP : CAPSULE_POPOVER}
           >
-            {/* Эмодзи обесцвечены до наведения — не выбиваются из монохрома. */}
-            {REACTION_EMOJIS.map((emoji) => (
-              <button
-                key={emoji}
-                type="button"
-                onClick={() => {
-                  react(id, emoji);
-                  setOpen(false);
-                }}
-                className={cn(
-                  CAPSULE_CELL,
-                  'text-[15px] leading-none grayscale transition-[transform,filter,background-color] duration-100 hover:scale-110 hover:bg-white/[0.08] hover:grayscale-0',
-                )}
-              >
-                {emoji}
-              </button>
-            ))}
+            {children(close)}
           </motion.div>
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+/** Кнопка-«смайлик» (в тулбаре сообщения) с попапом выбора реакции. */
+function AddReaction({ id, closeSignal }: { id: string; closeSignal: number }) {
+  const t = useT();
+  return (
+    <CapsuleMenu icon={<IconSmile />} title={t('chat.react')} closeSignal={closeSignal}>
+      {(close) =>
+        // Эмодзи обесцвечены до наведения — не выбиваются из монохрома.
+        REACTION_EMOJIS.map((emoji) => (
+          <button
+            key={emoji}
+            type="button"
+            onClick={() => {
+              react(id, emoji);
+              close();
+            }}
+            className={cn(
+              CAPSULE_CELL,
+              'text-[15px] leading-none grayscale transition-[transform,filter,background-color] duration-100 hover:scale-110 hover:bg-white/[0.08] hover:grayscale-0',
+            )}
+          >
+            {emoji}
+          </button>
+        ))
+      }
+    </CapsuleMenu>
   );
 }
 
@@ -513,68 +535,37 @@ function MoreMenu({
   closeSignal: number;
 }) {
   const t = useT();
-  const [open, setOpen] = useState(false);
-  const [openUp, setOpenUp] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-
-  // Мышь ушла с сообщения — меню закрываем (см. AddReaction).
-  useEffect(() => {
-    setOpen(false);
-  }, [closeSignal]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [open]);
-
-  function item(title: string, icon: React.ReactNode, danger: boolean, action: () => void) {
-    return (
-      <button
-        type="button"
-        title={title}
-        aria-label={title}
-        onClick={() => {
-          setOpen(false);
-          action();
-        }}
-        className={cn(CAPSULE_BTN, danger && 'hover:!bg-danger/15 hover:!text-danger')}
-      >
-        {icon}
-      </button>
-    );
-  }
-
-  // Обёртка без `relative`: меню якорится к капсуле тулбара (см. CAPSULE_POPOVER).
   return (
-    <div ref={wrapRef}>
-      <button
-        type="button"
-        onClick={() => {
-          setOpenUp(!fitsBelow(wrapRef.current));
-          setOpen((o) => !o);
-        }}
-        title={t('chat.more')}
-        aria-label={t('chat.more.aria')}
-        className={cn(CAPSULE_BTN, open && 'bg-white/[0.08] text-text-header')}
-      >
-        <IconDots />
-      </button>
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            {...(openUp ? popoverAnimUp : popoverAnim)}
-            className={openUp ? CAPSULE_POPOVER_UP : CAPSULE_POPOVER}
+    <CapsuleMenu
+      icon={<IconDots />}
+      title={t('chat.more')}
+      ariaLabel={t('chat.more.aria')}
+      closeSignal={closeSignal}
+    >
+      {(close) => (
+        <>
+          <ActionBtn
+            title={t('chat.action.edit')}
+            onClick={() => {
+              close();
+              onEdit();
+            }}
           >
-            {item(t('chat.action.edit'), <IconEdit />, false, onEdit)}
-            {item(t('chat.action.delete'), <IconTrash />, true, onDelete)}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+            <IconEdit />
+          </ActionBtn>
+          <ActionBtn
+            title={t('chat.action.delete')}
+            danger
+            onClick={() => {
+              close();
+              onDelete();
+            }}
+          >
+            <IconTrash />
+          </ActionBtn>
+        </>
+      )}
+    </CapsuleMenu>
   );
 }
 

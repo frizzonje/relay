@@ -8,6 +8,7 @@ import { avatarGradient } from '@/lib/avatar';
 import { clearFocus, toggleFocus, setPeerVolume, setPeerScreenVolume } from '@/lib/voice';
 import { useAudioUnlockStore } from '@/stores/audio-unlock';
 import { useVoiceStore, type TileNet, type VoiceTile } from '@/stores/voice';
+import { useDismiss } from '@/lib/use-dismiss';
 import { useT } from '@/lib/i18n';
 import type { MessageKey } from '@/lib/i18n';
 
@@ -319,6 +320,7 @@ export function VideoTile({
   // Открытое меню громкости: 'voice' (ПКМ по плитке) | 'screen' (иконка снизу)
   const [menu, setMenu] = useState<'voice' | 'screen' | null>(null);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
+  const closeMenu = useCallback(() => setMenu(null), []);
   // Идут проводы из демонстрации: показ кончился, пока мы смотрели его крупно.
   const [outro, setOutro] = useState(false);
   // Пропорции живого кадра и самой плитки — по расхождению видно чёрные поля.
@@ -511,24 +513,8 @@ export function VideoTile({
     if (!immersive) setOutro(false);
   }, [immersive]);
 
-  // Меню громкости закрываем по клику мимо него и по Escape
-  useEffect(() => {
-    if (!menu) return;
-    const onDown = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (menuRef.current?.contains(target) || volumeBtnRef.current?.contains(target)) return;
-      setMenu(null);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMenu(null);
-    };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [menu]);
+  // Меню громкости закрываем по щелчку мимо него и по Escape
+  useDismiss(menu !== null, closeMenu, menuRef, volumeBtnRef);
 
   // ПКМ по чужой плитке — регулятор громкости голоса собеседника
   function onContextMenu(e: React.MouseEvent) {
