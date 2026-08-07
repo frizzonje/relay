@@ -13,142 +13,54 @@ import { Server, Socket } from 'socket.io';
 import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
 import { sfuHealthy } from '../sfu/sfu-health';
 import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
-import { Attachment, UploadsService } from '../uploads';
-import { Channel, ServerEntry, VoiceMode, loadRegistry, saveRegistry } from './registry';
+import { UploadsService } from '../uploads';
+import { ChatService } from './chat.service';
+import {
+  MAIN_SERVER_ID,
+  MAX_CHANNELS,
+  MAX_SERVERS,
+  RegistryService,
+  slugifyChannel,
+} from './registry.service';
+import { Channel, VoiceMode } from './registry';
 import {
   type PublicChannel,
   type PublicServer,
   normalizeClientId,
   ownedBy,
   publicChannel,
-  publicServer,
 } from './ownership';
 import { UnlockAttempts, clientIp, hashServerPassword, verifyServerPassword } from './unlock';
-
-interface JoinPayload {
-  room?: unknown;
-  name?: unknown;
-  clientId?: unknown;
-  transport?: unknown;
-}
-
-interface SignalPayload {
-  to?: unknown;
-  sdp?: unknown;
-  candidate?: unknown;
-}
-
-interface ChatPayload {
-  room?: unknown;
-  name?: unknown;
-  text?: unknown;
-  uploadId?: unknown;
-  replyTo?: unknown;
-  spoiler?: unknown;
-}
-
-interface ChatEditPayload {
-  id?: unknown;
-  text?: unknown;
-}
-
-interface ChatDeletePayload {
-  id?: unknown;
-}
-
-interface ChatReactPayload {
-  id?: unknown;
-  emoji?: unknown;
-}
-
-type ReactionMap = Record<string, string[]>;
-
-// Реестровые типы (ServerEntry, Channel) живут рядом с их хранилищем — см.
-// ./registry. Оттуда же загрузка и запись файла.
-interface ServerCreatePayload {
-  id?: unknown;
-  name?: unknown;
-  emoji?: unknown;
-  password?: unknown;
-}
-interface ServerDeletePayload {
-  id?: unknown;
-}
-interface ServerStatsPayload {
-  id?: unknown;
-}
-interface ChannelCreatePayload {
-  serverId?: unknown;
-  type?: unknown;
-  name?: unknown;
-  mode?: unknown;
-}
-interface ChannelModePayload {
-  id?: unknown;
-  mode?: unknown;
-}
-interface ChannelDeletePayload {
-  id?: unknown;
-}
-interface ChannelRenamePayload {
-  id?: unknown;
-  name?: unknown;
-}
-interface ChannelStatsPayload {
-  id?: unknown;
-}
-// Ответы-ack действий над каналом (формат совпадает с одноимёнными типами
-// из shared). Отказ обязан быть внятным: интерфейс объясняет, почему канал
-// остался на месте, вместо молчаливого «ничего не произошло».
-type ChannelDeleteResult =
-  | { ok: true }
-  | { ok: false; error: 'not-found' | 'forbidden' | 'occupied' | 'not-owner'; occupants?: number };
-type ChannelRenameResult =
-  | { ok: true }
-  | { ok: false; error: 'not-found' | 'forbidden' | 'bad-name' | 'not-owner' };
-type ChannelStatsResult = { ok: true; occupants: number; messages: number } | { ok: false };
-type ServerDeleteResult =
-  | { ok: true }
-  | {
-      ok: false;
-      error: 'not-found' | 'forbidden' | 'not-owner' | 'occupied';
-      occupants?: number;
-    };
-type ServerStatsResult =
-  | { ok: true; channels: number; messages: number; occupants: number }
-  | { ok: false };
-interface ServerUnlockPayload {
-  id?: unknown;
-  password?: unknown;
-}
-interface InviteCreatePayload {
-  room?: unknown;
-}
-// Ответ invite-create (ack) — формат совпадает с InviteCreateResult из shared.
-type InviteCreateResult =
-  | { ok: true; token: string; exp: number }
-  | { ok: false; error: 'not-found' | 'forbidden' };
-interface SfuTokenPayload {
-  room?: unknown;
-  name?: unknown;
-}
-// Диагностическая веха звонка от клиента — уходит в серверный лог как есть
-// (формат совпадает с VoiceDiagPayload из shared).
-interface VoiceDiagPayload {
-  event?: unknown;
-  detail?: unknown;
-}
-// Участник голосового канала в presence (совпадает с VoicePeer из shared).
-// `transport` называет сам клиент в `join`: разъехавшись в транспортах, люди
-// друг друга не слышат вовсе, и знать об этом должны все.
-interface VoicePresenceEntry {
-  id: string;
-  name: string;
-  micOn: boolean;
-  deafened: boolean;
-  transport: 'p2p' | 'sfu';
-  guest?: boolean;
-}
+import type {
+  ChannelCreatePayload,
+  ChannelDeletePayload,
+  ChannelDeleteResult,
+  ChannelModePayload,
+  ChannelRenamePayload,
+  ChannelRenameResult,
+  ChannelStatsPayload,
+  ChannelStatsResult,
+  ChatDeletePayload,
+  ChatEditPayload,
+  ChatMessage,
+  ChatPayload,
+  ChatReactPayload,
+  InviteCreatePayload,
+  InviteCreateResult,
+  JoinPayload,
+  ReplyRef,
+  ServerCreatePayload,
+  ServerDeletePayload,
+  ServerDeleteResult,
+  ServerStatsPayload,
+  ServerStatsResult,
+  ServerUnlockPayload,
+  SfuTokenPayload,
+  SfuTokenResult,
+  SignalPayload,
+  VoiceDiagPayload,
+  VoicePresenceEntry,
+} from './protocol';
 
 // Строка для лога: без переводов строк (чтобы клиент не подделал чужие записи)
 // и лишних пробелов.
@@ -162,116 +74,6 @@ function oneLine(value: string): string {
 function deviceId(client: Socket): string | undefined {
   return client.data.clientId as string | undefined;
 }
-
-// Ответ sfu-token (ack) — формат совпадает с SfuTokenResult из shared.
-type SfuTokenResult =
-  | { ok: true; token: string; exp: number; url: string }
-  | { ok: false; error: 'forbidden' | 'unavailable' | 'not-in-room' | 'not-sfu' };
-
-// Снимок цитируемого сообщения (reply) — копией, а не ссылкой: исходное могут
-// отредактировать/удалить, цитата остаётся прежней. Совпадает с ReplyRef из shared.
-interface ReplyRef {
-  id: string;
-  name: string;
-  text: string;
-}
-
-interface ChatMessage {
-  id?: string;
-  name: string;
-  text: string;
-  ts: number;
-  attachment?: Attachment;
-  system?: boolean;
-  reactions?: ReactionMap;
-  replyTo?: ReplyRef;
-  editedTs?: number;
-}
-
-const CHAT_PREFIX = 'chat:';
-const HISTORY_LIMIT = 50;
-const MAX_CHANNELS = 50;
-const MAX_SERVERS = 20;
-
-// Главный сервер relay — неудаляем; его id носят все каналы по умолчанию.
-const MAIN_SERVER_ID = 'relay-main';
-
-// Серверы по умолчанию — только главный. Участники добавляют свои через «+» в
-// рейке. Клиент держит такой же сид (lib/constants).
-const DEFAULT_SERVERS: ServerEntry[] = [{ id: MAIN_SERVER_ID, name: 'relay', removable: false }];
-
-// Каналы главного сервера. Набор фиксирован: ровно два голосовых (прямой и
-// через медиасервер — чтобы разницу можно было услышать, не заводя своего
-// сервера) и один текстовый. Ни создать четвёртый, ни удалить, ни
-// переименовать эти нельзя — все запреты держит сам сервер, не интерфейс.
-// Клиент держит такой же сид (lib/constants) — id/slug совпадают.
-const DEFAULT_CHANNELS: Channel[] = [
-  {
-    id: 'text-obshchii',
-    serverId: MAIN_SERVER_ID,
-    type: 'text',
-    name: 'общий',
-    slug: 'obshchii',
-    removable: false,
-  },
-  {
-    id: 'voice-obshchii',
-    serverId: MAIN_SERVER_ID,
-    type: 'voice',
-    name: 'P2P общий',
-    slug: 'voice-obshchii',
-    removable: false,
-  },
-  {
-    id: 'voice-obshchii-sfu',
-    serverId: MAIN_SERVER_ID,
-    type: 'voice',
-    name: 'SFU общий',
-    slug: 'voice-obshchii-sfu',
-    removable: false,
-    // Медиасервер поднят не везде: если его нет, клиент не получит пропуск
-    // (`sfu-token` → not-sfu/unavailable) и штатно позвонит напрямую.
-    mode: 'sfu',
-  },
-];
-
-// Каналы, которые были дефолтными раньше. persist() пишет на диск весь список
-// вместе с дефолтами, поэтому выпавший из DEFAULT_CHANNELS канал вернулся бы
-// из registry.json как «сохранённый пользовательский» — и главный сервер
-// навсегда остался бы с лишней строкой. Вычищаем их по id при загрузке.
-const RETIRED_CHANNEL_IDS = new Set(['text-general']);
-
-// Дефолты — источник правды: копируем их первыми, затем добавляем сохранённые
-// записи с новыми id (созданные пользователями). Так дефолты всегда актуальны,
-// а их изменение между версиями не перетирается старым файлом.
-function mergeById<T extends { id: string }>(defaults: T[], saved: T[] | undefined): T[] {
-  const out = defaults.map((d) => ({ ...d }));
-  const seen = new Set(out.map((d) => d.id));
-  for (const item of saved ?? []) {
-    if (item && typeof item.id === 'string' && !seen.has(item.id)) {
-      out.push(item);
-      seen.add(item.id);
-    }
-  }
-  return out;
-}
-
-// Слаг направления из произвольного ввода: строчные, пробелы → дефис, только
-// буквы/цифры/дефис/подчёркивание (кириллица сохраняется), схлопываем дубли, 32.
-function slugifyChannel(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '-')
-    .replace(/[^\p{L}\p{N}_-]/gu, '')
-    .replace(/-{2,}/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 32);
-}
-
-// Разрешённый набор реакций — дублирует REACTION_EMOJIS из @relay/shared
-// (api намеренно не зависит от пакета, как и прочие константы здесь).
-const REACTION_EMOJIS = new Set(['👍', '👎', '❤️', '😂', '🔥', '🫡', '🤡', '😭']);
 
 @WebSocketGateway({
   // origin: '*' — дефолт для прода (единый origin за Caddy, кука sameSite=lax не
@@ -290,43 +92,11 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   @WebSocketServer()
   server!: Server;
 
-  constructor(private readonly uploads: UploadsService) {
-    // Поднимаем сохранённый реестр и подмешиваем дефолты. Каналы «сирот» (сервер
-    // которых не существует) отбрасываем — иначе повиснут вне рейки.
-    // Битый файл loadRegistry разбирает сам: откладывает исходные байты в
-    // сторону, пробует прошлую копию и кричит в лог. Сюда в худшем случае
-    // придут пустые данные — и это уже осознанный, а не молчаливый худший случай.
-    const saved = loadRegistry().data;
-    this.servers = mergeById(DEFAULT_SERVERS, saved.servers);
-    const serverIds = new Set(this.servers.map((s) => s.id));
-    this.channels = mergeById(DEFAULT_CHANNELS, saved.channels).filter(
-      (c) => serverIds.has(c.serverId) && !RETIRED_CHANNEL_IDS.has(c.id),
-    );
-  }
-
-  // Сохраняем реестр на диск (атомарно, с fsync и прошлой копией — см.
-  // saveRegistry), чтобы рестарт не потерял серверы/каналы пользователей.
-  // Вызываем после каждого изменения. Диск-ошибку не роняем на пользователя —
-  // только логируем: живой реестр в памяти важнее.
-  private persist() {
-    try {
-      saveRegistry({ servers: this.servers, channels: this.channels });
-    } catch (e) {
-      this.logger.error(`не удалось сохранить реестр: ${e}`);
-    }
-  }
-
-  // Последние сообщения по каждому текстовому каналу — новичку показываем контекст
-  private readonly chatHistory = new Map<string, ChatMessage[]>();
-
-  // Реестр серверов (гильдий, общий на весь сервер). Раздаём на подключении и
-  // рассылаем всем при создании/удалении — как серверы в Discord. Наполняется в
-  // конструкторе из сохранённого файла + дефолтов; переживает рестарт.
-  private readonly servers: ServerEntry[];
-
-  // Реестр направлений (общий на весь сервер). Тоже грузится из файла в
-  // конструкторе и сохраняется при каждом изменении.
-  private readonly channels: Channel[];
+  constructor(
+    private readonly uploads: UploadsService,
+    private readonly chat: ChatService,
+    private readonly registry: RegistryService,
+  ) {}
 
   // Отложенный выход из комнат по socket.id: при восстановлении сессии отменяем.
   private readonly pendingLeave = new Map<string, ReturnType<typeof setTimeout>>();
@@ -338,9 +108,6 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // Грейс на восстановление сессии перед уведомлением остальных об уходе. Чуть
   // больше окна connectionStateRecovery — чтобы CSR успел отработать первым.
   private static readonly LEAVE_GRACE_MS = 24_000;
-  // Слаг текстового канала — произвольный ввод клиента; ограничиваем число
-  // каналов, по которым держим историю, чтобы реестр не рос без предела.
-  private static readonly MAX_CHAT_ROOMS = 200;
 
   // ── Токен-бакет на сокет ────────────────────────────────────────────────
   // Гасим флуд событий, каждое из которых иначе вызывает рассылку на весь
@@ -475,8 +242,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // clientId владельца: рассылать id значило бы раздавать всем то единственное,
   // чем правило владения и держится (см. ./ownership).
   private publicServersFor(client: Socket): PublicServer[] {
-    const clientId = deviceId(client);
-    return this.servers.map((s) => publicServer(s, clientId));
+    return this.registry.publicServers(deviceId(client));
   }
 
   // Каналы, видимые сокету: из закрытых серверов — только если он их разблокировал.
@@ -484,16 +250,19 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // «непрочитано» сразу после загрузки, не дожидаясь живого `chat-activity`.
   private channelsFor(client: Socket): PublicChannel[] {
     const clientId = deviceId(client);
-    return this.channels
+    return this.registry.channels
       .filter((c) => this.canSee(client, c))
-      .map((c) => publicChannel(c, clientId, c.type === 'text' ? this.lastChatTs(c.slug) : 0));
+      .map((c) => publicChannel(c, clientId, c.type === 'text' ? this.chat.lastTs(c.slug) : 0));
+  }
+
+  // Разблокировки этого сокета — набор id закрытых серверов, чьи пароли он ввёл.
+  private unlockedOf(client: Socket): Set<string> | undefined {
+    return client.data.unlocked as Set<string> | undefined;
   }
 
   // Видит ли сокет этот канал: закрытый сервер — только после ввода пароля.
   private canSee(client: Socket, channel: Channel): boolean {
-    const srv = this.servers.find((s) => s.id === channel.serverId);
-    if (!srv?.passwordHash) return true;
-    return (client.data.unlocked as Set<string>)?.has(srv.id) === true;
+    return this.registry.canSee(this.unlockedOf(client), channel);
   }
 
   /**
@@ -504,7 +273,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
    * обходится одной строкой, даже когда сам канал в списке не показан.
    */
   private mayEnter(client: Socket, room: string): boolean {
-    const channel = this.channels.find((c) => c.type === 'voice' && c.slug === room);
+    const channel = this.registry.channels.find((c) => c.type === 'voice' && c.slug === room);
     return !channel || this.canSee(client, channel);
   }
 
@@ -524,24 +293,12 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   ): Record<string, VoicePresenceEntry[]> {
     const own = typeof client.data.room === 'string' ? client.data.room : null;
     const visible = new Set<string>();
-    for (const c of this.channels) {
+    for (const c of this.registry.channels) {
       if (c.type === 'voice' && this.canSee(client, c)) visible.add(c.slug);
     }
     return Object.fromEntries(
       Object.entries(presence).filter(([room]) => room === own || visible.has(room)),
     );
-  }
-
-  // Время последней НЕсистемной реплики канала (0 — писать ещё не начинали).
-  // Системные строки активностью не считаем: точку зажигают только сообщения,
-  // ровно те же, что рассылают `chat-activity`.
-  private lastChatTs(slug: string): number {
-    const history = this.chatHistory.get(CHAT_PREFIX + slug);
-    if (!history) return 0;
-    for (let i = history.length - 1; i >= 0; i -= 1) {
-      if (!history[i].system) return history[i].ts;
-    }
-    return 0;
   }
 
   /**
@@ -558,7 +315,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
    * активности чата, где он и разгонялся до квадрата — см. S4).
    */
   private broadcastServers() {
-    const owners = this.ownerIds(this.servers);
+    const owners = this.registry.ownerIds(this.registry.servers);
     const byOwner = new Map<string, PublicServer[]>();
     for (const sock of this.server.sockets.sockets.values()) {
       if (sock.data.guest === true) continue;
@@ -570,15 +327,6 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       }
       sock.emit('servers', payload);
     }
-  }
-
-  // Кто из создателей вообще встречается в этих записях. Сокет, чьего id здесь
-  // нет, ничем не владеет — а значит, его payload совпадает с payload любого
-  // другого такого же, и собирать его во второй раз незачем.
-  private ownerIds(entries: { creatorId?: string }[]): Set<string> {
-    const ids = new Set<string>();
-    for (const e of entries) if (e.creatorId) ids.add(e.creatorId);
-    return ids;
   }
 
   // Чем этот сокет отличается от прочих с точки зрения владения: ничем, если
@@ -605,11 +353,14 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (this.channelsTimer) return;
     this.channelsTimer = setTimeout(() => {
       this.channelsTimer = null;
-      const owners = this.ownerIds(this.channels);
+      const owners = this.registry.ownerIds(this.registry.channels);
       const byGroup = new Map<string, PublicChannel[]>();
       for (const sock of this.server.sockets.sockets.values()) {
         if (sock.data.guest === true) continue;
-        const key = this.visibilityKey(sock) + '\u0001' + this.ownerKey(sock, owners);
+        const key =
+          this.registry.visibilityKey(this.unlockedOf(sock)) +
+          '\u0001' +
+          this.ownerKey(sock, owners);
         let payload = byGroup.get(key);
         if (!payload) {
           payload = this.channelsFor(sock);
@@ -619,19 +370,6 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       }
     }, SignalingGateway.REGISTRY_DEBOUNCE_MS);
     this.channelsTimer.unref?.();
-  }
-
-  // Чем один сокет отличается от другого с точки зрения видимости каналов:
-  // списком разблокированных ЗАКРЫТЫХ серверов. Открытые видны всем и в ключ
-  // не идут.
-  private visibilityKey(client: Socket): string {
-    const unlocked = client.data.unlocked as Set<string> | undefined;
-    if (!unlocked?.size) return '';
-    const ids: string[] = [];
-    for (const s of this.servers) {
-      if (s.passwordHash && unlocked.has(s.id)) ids.push(s.id);
-    }
-    return ids.join('\0');
   }
 
   // ===== Реестр серверов =====
@@ -647,9 +385,9 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const id = typeof payload?.id === 'string' ? payload.id.trim().slice(0, 64) : '';
     const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 32) : '';
     if (!id || !name) return;
-    if (this.servers.length >= MAX_SERVERS) return;
+    if (this.registry.servers.length >= MAX_SERVERS) return;
     // Повторный create с тем же id — не плодим дубликаты (напр. ретрай сокета).
-    if (this.servers.some((s) => s.id === id)) return;
+    if (this.registry.servers.some((s) => s.id === id)) return;
     const emoji =
       typeof payload?.emoji === 'string' && payload.emoji.trim()
         ? payload.emoji.trim().slice(0, 8)
@@ -663,14 +401,14 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const passwordHash = password ? await hashServerPassword(password) : undefined;
     // Пока считался хэш, реестр мог измениться: тот же id мог занять другой
     // сокет, а свободное место — кончиться.
-    if (this.servers.length >= MAX_SERVERS) return;
-    if (this.servers.some((s) => s.id === id)) return;
+    if (this.registry.servers.length >= MAX_SERVERS) return;
+    if (this.registry.servers.some((s) => s.id === id)) return;
 
     // Владелец — то устройство, с которого сервер создали (clientId из
     // handshake). Личности оно не удостоверяет (см. ./ownership): это заслон
     // от случайного и ленивого сноса чужого сервера, не от атаки. Настоящие
     // права придут со слоями 2–3 плана 1.0.
-    this.servers.push({
+    this.registry.servers.push({
       id,
       name,
       emoji,
@@ -683,7 +421,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     this.broadcastServers();
     // Раздаём каналы заново: у создателя новый сервер уже разблокирован.
     this.broadcastChannels();
-    this.persist();
+    this.registry.persist();
   }
 
   @SubscribeMessage('server-unlock')
@@ -694,7 +432,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!this.allow(client) || this.isGuest(client)) return;
     const id = typeof payload?.id === 'string' ? payload.id : '';
     const password = typeof payload?.password === 'string' ? payload.password : '';
-    const srv = this.servers.find((s) => s.id === id);
+    const srv = this.registry.servers.find((s) => s.id === id);
     if (!srv) {
       client.emit('server-unlock-result', { id, ok: false });
       return;
@@ -717,7 +455,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       ? true
       : await verifyServerPassword(password, srv.passwordHash);
     // Пока считался хэш, сервер могли удалить — тогда разблокировать нечего.
-    if (!this.servers.some((s) => s.id === id)) {
+    if (!this.registry.servers.some((s) => s.id === id)) {
       client.emit('server-unlock-result', { id, ok: false });
       return;
     }
@@ -759,10 +497,10 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
     const id = typeof payload?.id === 'string' ? payload.id : '';
     if (!id) return { ok: false, error: 'not-found' };
-    const idx = this.servers.findIndex((s) => s.id === id && s.removable);
+    const idx = this.registry.servers.findIndex((s) => s.id === id && s.removable);
     if (idx === -1) return { ok: false, error: 'not-found' };
     // Закрытый сервер удалить может только тот, кто ввёл пароль (разблокировал).
-    const srv = this.servers[idx];
+    const srv = this.registry.servers[idx];
     if (srv.passwordHash && !(client.data.unlocked as Set<string>)?.has(id)) {
       return { ok: false, error: 'forbidden' };
     }
@@ -782,7 +520,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // бы из разговора сразу всех. Ждём, пока эфир опустеет.
     const occupants = this.voiceOccupantsOfServer(id);
     if (occupants > 0) return { ok: false, error: 'occupied', occupants };
-    this.servers.splice(idx, 1);
+    this.registry.servers.splice(idx, 1);
     // Простой за неудачи вязался к этому id — новому серверу с тем же id он
     // достаться не должен.
     this.unlockAttempts.forgetServer(id);
@@ -791,17 +529,17 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // Каналы удалённого сервера уходят вместе с ним — иначе повиснут сиротами.
     // Текстовые провожаем так же, как в channel-delete: стираем историю и
     // распускаем комнату, чтобы у читателей не осталось канала-призрака.
-    const before = this.channels.length;
-    for (let i = this.channels.length - 1; i >= 0; i--) {
-      const channel = this.channels[i];
+    const before = this.registry.channels.length;
+    for (let i = this.registry.channels.length - 1; i >= 0; i--) {
+      const channel = this.registry.channels[i];
       if (channel.serverId !== id) continue;
-      this.channels.splice(i, 1);
+      this.registry.channels.splice(i, 1);
       if (channel.type !== 'text') continue;
-      this.chatHistory.delete(CHAT_PREFIX + channel.slug);
+      this.chat.forget(channel.slug);
       this.closeChatRoom(channel.slug);
     }
-    if (this.channels.length !== before) this.broadcastChannels();
-    this.persist();
+    if (this.registry.channels.length !== before) this.broadcastChannels();
+    this.registry.persist();
     return { ok: true };
   }
 
@@ -818,17 +556,17 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   ): ServerStatsResult {
     if (!this.allow(client) || this.isGuest(client)) return { ok: false };
     const id = typeof payload?.id === 'string' ? payload.id : '';
-    const srv = this.servers.find((s) => s.id === id);
+    const srv = this.registry.servers.find((s) => s.id === id);
     if (!srv || !srv.removable) return { ok: false };
     if (srv.passwordHash && !(client.data.unlocked as Set<string>)?.has(id)) return { ok: false };
     if (!ownedBy(srv, deviceId(client))) return { ok: false };
     let channels = 0;
     let messages = 0;
-    for (const c of this.channels) {
+    for (const c of this.registry.channels) {
       if (c.serverId !== id) continue;
       channels++;
       if (c.type === 'text') {
-        messages += this.chatHistory.get(CHAT_PREFIX + c.slug)?.length ?? 0;
+        messages += this.chat.count(c.slug);
       }
     }
     return { ok: true, channels, messages, occupants: this.voiceOccupantsOfServer(id) };
@@ -839,7 +577,9 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // может быть десяток.
   private voiceOccupantsOfServer(serverId: string): number {
     const rooms = new Set(
-      this.channels.filter((c) => c.serverId === serverId && c.type === 'voice').map((c) => c.slug),
+      this.registry.channels
+        .filter((c) => c.serverId === serverId && c.type === 'voice')
+        .map((c) => c.slug),
     );
     if (!rooms.size) return 0;
     let count = 0;
@@ -862,7 +602,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!type) return;
     // Сервер-владелец должен существовать (иначе канал повиснет вне рейки).
     const serverId = typeof payload?.serverId === 'string' ? payload.serverId : MAIN_SERVER_ID;
-    const srv = this.servers.find((s) => s.id === serverId);
+    const srv = this.registry.servers.find((s) => s.id === serverId);
     if (!srv) return;
     // Главный сервер — витрина с фиксированным набором каналов (см.
     // DEFAULT_CHANNELS). Свои каналы заводят в своих серверах; интерфейс тут
@@ -873,10 +613,10 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const rawName = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 32) : '';
     const slug = slugifyChannel(rawName);
     if (!slug) return;
-    if (this.channels.length >= MAX_CHANNELS) return;
+    if (this.registry.channels.length >= MAX_CHANNELS) return;
     // Слаг уникален глобально (комнаты голоса/чата ключуются по нему) — один слаг
     // на тип по всем серверам, повторное создание не плодит дубликаты.
-    if (this.channels.some((c) => c.type === type && c.slug === slug)) return;
+    if (this.registry.channels.some((c) => c.type === type && c.slug === slug)) return;
 
     const channel: Channel = {
       id: randomUUID(),
@@ -892,9 +632,9 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       // и есть p2p (реестр не распухает, старые записи читаются одинаково).
       ...(type === 'voice' && payload?.mode === 'sfu' ? { mode: 'sfu' as const } : {}),
     };
-    this.channels.push(channel);
+    this.registry.channels.push(channel);
     this.broadcastChannels();
-    this.persist();
+    this.registry.persist();
   }
 
   // Смена транспорта голосового канала. Права те же, что у channel-delete:
@@ -920,7 +660,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // другой транспорт. Реестра каналов для этого мало — гость по инвайту его
     // не получает, а переезжать обязан вместе со всеми.
     this.server.to(channel.slug).emit('voice-mode', { room: channel.slug, mode });
-    this.persist();
+    this.registry.persist();
   }
 
   /**
@@ -928,7 +668,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
    * текстового — у кого он открыт (socket.io-комната `chat:<slug>`).
    */
   private occupantsOf(channel: Channel): number {
-    const target = channel.type === 'voice' ? channel.slug : CHAT_PREFIX + channel.slug;
+    const target = channel.type === 'voice' ? channel.slug : this.chat.room(channel.slug);
     let count = 0;
     for (const sock of this.server.sockets.sockets.values()) {
       const where = (channel.type === 'voice' ? sock.data.room : sock.data.chatRoom) as
@@ -940,33 +680,12 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   /**
-   * Канал, который этому сокету разрешено менять: существующий, не дефолтный,
-   * свой (создан с этого устройства — clientId из handshake) и — если лежит в
-   * закрытом сервере — в разблокированном им. Пароль сервера это и есть право
-   * на его каналы (как в handleChannelCreate).
-   *
-   * У каналов без creatorId (созданы до правила владения) права прежние —
-   * владельца не существует, и менять их может любой участник, как раньше.
-   *
-   * Порядок проверок не случаен: пароль закрытого сервера идёт ПЕРЕД владением.
-   * Канал закрытого сервера для непосвящённого не существует вовсе, и разные
-   * коды отказа («не твой» против «нет доступа») рассказывали бы по одному id,
-   * есть ли у скрытого канала владелец.
+   * Канал, который этому сокету разрешено менять. Само правило — в реестре
+   * (RegistryService.editable); здесь только распаковка сокета: чьи пароли
+   * введены и с какого устройства пришли.
    */
-  private editableChannel(
-    client: Socket,
-    id: string,
-  ): { channel: Channel; index: number } | { error: 'not-found' | 'forbidden' | 'not-owner' } {
-    const index = this.channels.findIndex((c) => c.id === id);
-    if (index === -1) return { error: 'not-found' };
-    const channel = this.channels[index];
-    if (!channel.removable) return { error: 'forbidden' };
-    const srv = this.servers.find((s) => s.id === channel.serverId);
-    if (srv?.passwordHash && !(client.data.unlocked as Set<string>)?.has(srv.id)) {
-      return { error: 'forbidden' };
-    }
-    if (!ownedBy(channel, deviceId(client))) return { error: 'not-owner' };
-    return { channel, index };
+  private editableChannel(client: Socket, id: string) {
+    return this.registry.editable(id, this.unlockedOf(client), deviceId(client));
   }
 
   // Живой срез канала для диалога подтверждения (сколько человек внутри,
@@ -986,10 +705,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     return {
       ok: true,
       occupants: this.occupantsOf(channel),
-      messages:
-        channel.type === 'text'
-          ? (this.chatHistory.get(CHAT_PREFIX + channel.slug)?.length ?? 0)
-          : 0,
+      messages: channel.type === 'text' ? this.chat.count(channel.slug) : 0,
     };
   }
 
@@ -1012,7 +728,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (found.channel.name === name) return { ok: true };
     found.channel.name = name;
     this.broadcastChannels();
-    this.persist();
+    this.registry.persist();
     return { ok: true };
   }
 
@@ -1037,18 +753,18 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       if (occupants > 0) return { ok: false, error: 'occupied', occupants };
     }
 
-    this.channels.splice(index, 1);
+    this.registry.channels.splice(index, 1);
     // История удалённого канала больше никому не принадлежит: держать её в
     // памяти незачем, а канал с тем же слагом иначе унаследовал бы чужую ленту.
     // Читателей выписываем сами: их клиент мог бы и не заметить пропажу канала
     // в новом реестре, а остаться в комнате — значит продолжать писать в канал,
     // которого больше нет ни у кого (и заново набивать только что стёртую ленту).
     if (channel.type === 'text') {
-      this.chatHistory.delete(CHAT_PREFIX + channel.slug);
+      this.chat.forget(channel.slug);
       this.closeChatRoom(channel.slug);
     }
     this.broadcastChannels();
-    this.persist();
+    this.registry.persist();
     return { ok: true };
   }
 
@@ -1108,7 +824,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // Пропуск — только в видимый канал: закрытый сервер запирает и медиасервер,
     // иначе пароль обходится одним слагом. Гость идёт по своей комнате: реестра
     // у него нет, а к каналу он уже пришит проверкой выше.
-    const channel = (this.isGuest(client) ? this.channels : this.channelsFor(client)).find(
+    const channel = (this.isGuest(client) ? this.registry.channels : this.channelsFor(client)).find(
       (c) => c.type === 'voice' && c.slug === room,
     );
     if (!channel || channel.mode !== 'sfu') return { ok: false, error: 'not-sfu' };
@@ -1334,7 +1050,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // ещё не введён) — молча не пускаем: вводить пароль никто не запрещал, и
     // выгонять из ленты тут не за что. Проверяем ДО выхода из прежней комнаты —
     // неудачный вход не должен выбрасывать из той, где человек уже сидит.
-    const known = this.channels.some((c) => c.type === 'text' && c.slug === slug);
+    const known = this.registry.channels.some((c) => c.type === 'text' && c.slug === slug);
     const visible =
       known && this.channelsFor(client).some((c) => c.type === 'text' && c.slug === slug);
     if (!visible) {
@@ -1345,13 +1061,13 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // Уже сидел в другом текстовом канале — сначала выходим
     this.leaveChatRoom(client);
 
-    const room = CHAT_PREFIX + slug;
+    const room = this.chat.room(slug);
     client.join(room);
     client.data.chatRoom = room;
     client.data.chatName = name || 'Аноним';
 
     // Новичку — история канала.
-    client.emit('chat-history', this.chatHistory.get(room) ?? []);
+    client.emit('chat-history', this.chat.messages(room));
     this.emitRoster(room);
   }
 
@@ -1376,7 +1092,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // Пустое сообщение без вложения — игнорируем
     if (!text && !attachment) return;
 
-    const history = this.chatHistory.get(room) ?? [];
+    const history = this.chat.messages(room);
 
     // Ответ: снимок цитируемого сообщения того же канала (усечённый текст). Само
     // сообщение могут потом отредактировать/удалить — цитата останется прежней.
@@ -1395,18 +1111,16 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       ...(replyTo ? { replyTo } : {}),
     };
 
-    history.push(msg);
-    if (history.length > HISTORY_LIMIT) history.shift();
-    this.rememberHistory(room, history);
+    this.chat.add(room, msg);
 
     this.server.to(room).emit('chat', msg);
     // Лёгкий пинг активности: сайдбар зажигает «непрочитано» на закрытых сейчас
     // каналах. Только слаг и время, без содержимого. Рассылаем не всем подряд, а
     // тем, кому канал виден: слаг канала закрытого сервера — часть секрета, и
     // «в тайном канале сейчас пишут» посторонним знать неоткуда.
-    const slug = room.slice(CHAT_PREFIX.length);
-    const channel = this.channels.find((c) => c.type === 'text' && c.slug === slug);
-    const srv = channel ? this.servers.find((s) => s.id === channel.serverId) : undefined;
+    const slug = this.chat.slug(room);
+    const channel = this.registry.channels.find((c) => c.type === 'text' && c.slug === slug);
+    const srv = channel ? this.registry.servers.find((s) => s.id === channel.serverId) : undefined;
     this.queueChatActivity(slug, msg.ts, srv?.passwordHash ? srv.id : null);
   }
 
@@ -1447,7 +1161,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const text = typeof payload?.text === 'string' ? payload.text.trim().slice(0, 500) : '';
     if (!id || !text) return;
 
-    const msg = this.chatHistory.get(room)?.find((m) => m.id === id && !m.system);
+    const msg = this.chat.find(room, id);
     if (!msg) return;
     const name = (client.data.chatName as string) || 'Аноним';
     if (msg.name !== name) return;
@@ -1468,14 +1182,12 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const id = typeof payload?.id === 'string' ? payload.id : '';
     if (!id) return;
 
-    const history = this.chatHistory.get(room);
-    const idx = history?.findIndex((m) => m.id === id && !m.system) ?? -1;
-    if (!history || idx === -1) return;
+    const msg = this.chat.find(room, id);
+    if (!msg) return;
     const name = (client.data.chatName as string) || 'Аноним';
-    if (history[idx].name !== name) return;
+    if (msg.name !== name) return;
 
-    history.splice(idx, 1);
-    this.rememberHistory(room, history);
+    if (!this.chat.remove(room, msg)) return;
     this.server.to(room).emit('chat-deleted', { id });
   }
 
@@ -1499,35 +1211,15 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!room) return;
     const id = typeof payload?.id === 'string' ? payload.id : '';
     const emoji = typeof payload?.emoji === 'string' ? payload.emoji : '';
-    if (!id || !REACTION_EMOJIS.has(emoji)) return;
+    if (!id || !this.chat.knownReaction(emoji)) return;
 
-    const msg = this.chatHistory.get(room)?.find((m) => m.id === id);
+    const msg = this.chat.findAny(room, id);
     if (!msg) return;
 
     const name = (client.data.chatName as string) || 'Аноним';
-    const reactions: ReactionMap = msg.reactions ?? (msg.reactions = {});
-    const list = reactions[emoji] ?? [];
-    if (list.includes(name)) {
-      const next = list.filter((n) => n !== name);
-      if (next.length) reactions[emoji] = next;
-      else delete reactions[emoji];
-    } else {
-      reactions[emoji] = [...list, name];
-    }
+    const reactions = this.chat.toggleReaction(msg, name, emoji);
 
-    this.server.to(room).emit('chat-reaction', { id, reactions: msg.reactions });
-  }
-
-  // Кладём историю канала, удерживая число каналов в пределах MAX_CHAT_ROOMS: слаг
-  // задаёт клиент, поэтому самые старые каналы вытесняем (кроме текущего).
-  private rememberHistory(room: string, history: ChatMessage[]) {
-    this.chatHistory.set(room, history);
-    if (this.chatHistory.size <= SignalingGateway.MAX_CHAT_ROOMS) return;
-    for (const key of this.chatHistory.keys()) {
-      if (key === room) continue;
-      this.chatHistory.delete(key);
-      if (this.chatHistory.size <= SignalingGateway.MAX_CHAT_ROOMS) break;
-    }
+    this.server.to(room).emit('chat-reaction', { id, reactions });
   }
 
   handleDisconnect(client: Socket) {
@@ -1653,7 +1345,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
    * `chat-message` смотрит на `client.data.chatRoom`.
    */
   private closeChatRoom(slug: string) {
-    const room = CHAT_PREFIX + slug;
+    const room = this.chat.room(slug);
     const ids = this.server.sockets.adapter.rooms.get(room);
     if (!ids) return;
     for (const id of [...ids]) {

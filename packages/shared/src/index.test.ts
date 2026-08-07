@@ -63,22 +63,22 @@ describe('константы совпадают с копией в api', () => {
   });
 
   it('глубина истории и потолок каналов — те же', () => {
-    expect(apiSource('gateway/signaling.gateway.ts')).toContain(
+    expect(apiSource('gateway/chat.service.ts')).toContain(
       `const HISTORY_LIMIT = ${CHAT_HISTORY_LIMIT};`,
     );
-    expect(apiSource('gateway/signaling.gateway.ts')).toContain(
-      `const MAX_CHANNELS = ${MAX_CHANNELS};`,
+    expect(apiSource('gateway/registry.service.ts')).toContain(
+      `export const MAX_CHANNELS = ${MAX_CHANNELS};`,
     );
   });
 
   it('префикс комнаты чата тот же — по нему сервер и клиент находят одну ленту', () => {
-    expect(apiSource('gateway/signaling.gateway.ts')).toContain(
-      `const CHAT_PREFIX = '${CHAT_PREFIX}';`,
+    expect(apiSource('gateway/chat.service.ts')).toContain(
+      `export const CHAT_PREFIX = '${CHAT_PREFIX}';`,
     );
   });
 
   it('набор реакций совпадает: сервер валидирует по нему, клиент рисует его же', () => {
-    const line = apiSource('gateway/signaling.gateway.ts')
+    const line = apiSource('gateway/chat.service.ts')
       .split('\n')
       .find((l) => l.includes('const REACTION_EMOJIS'))!;
     for (const emoji of REACTION_EMOJIS) expect(line, emoji).toContain(emoji);

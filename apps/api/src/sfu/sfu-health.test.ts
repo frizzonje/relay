@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 /**
  * Живость медиасервера. Тут два обязательства: короткий общий кэш (клиентские

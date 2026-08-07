@@ -12,13 +12,7 @@ import { ConfigController } from './config.controller';
  * которого нет. Всё это видно только в бою, поэтому проверяем на столе.
  */
 
-const ENV = [
-  'TURN_CREDENTIAL',
-  'TURN_USERNAME',
-  'TURN_URLS',
-  'STUN_URLS',
-  'SERVER_HOST',
-] as const;
+const ENV = ['TURN_CREDENTIAL', 'TURN_USERNAME', 'TURN_URLS', 'STUN_URLS', 'SERVER_HOST'] as const;
 
 beforeEach(() => {
   for (const key of ENV) delete process.env[key];

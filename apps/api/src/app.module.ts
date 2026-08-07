@@ -5,6 +5,8 @@ import { HealthController } from './health.controller';
 import { MetricsController } from './metrics.controller';
 import { UploadController } from './upload.controller';
 import { SignalingGateway } from './gateway/signaling.gateway';
+import { ChatService } from './gateway/chat.service';
+import { RegistryService } from './gateway/registry.service';
 import { MetricsService } from './metrics';
 import { UploadsService } from './uploads';
 
@@ -16,6 +18,6 @@ import { UploadsService } from './uploads';
     MetricsController,
     UploadController,
   ],
-  providers: [SignalingGateway, MetricsService, UploadsService],
+  providers: [SignalingGateway, ChatService, RegistryService, MetricsService, UploadsService],
 })
 export class AppModule {}

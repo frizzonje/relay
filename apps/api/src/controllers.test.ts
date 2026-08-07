@@ -39,10 +39,10 @@ describe('GET /api/metrics', () => {
 
   it('помечен no-store: живые цифры прокси кэшировать нельзя', () => {
     // Заголовок навешивает декоратор @Header — читаем его метаданные Nest.
-    const meta = Reflect.getMetadata(
-      '__headers__',
-      MetricsController.prototype.read,
-    ) as { name: string; value: string }[];
+    const meta = Reflect.getMetadata('__headers__', MetricsController.prototype.read) as {
+      name: string;
+      value: string;
+    }[];
     expect(meta).toContainEqual({ name: 'Cache-Control', value: 'no-store' });
   });
 });
