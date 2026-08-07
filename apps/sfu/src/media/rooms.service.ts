@@ -62,14 +62,19 @@ export class RoomsService {
     // Переподключение с тем же id (перезагрузка вкладки, реконнект) — старую
     // сессию закрываем, иначе её producer'ы останутся висеть немым дублем.
     const stale = room.peers.get(peer.id);
-    if (stale) this.leave(stale);
     const full: Peer = {
       ...peer,
       transports: new Map(),
       producers: new Map(),
       consumers: new Map(),
     };
+    // Место занимаем ДО уборки прошлой сессии, и порядок здесь не косметика:
+    // leave() закрывает опустевшую комнату вместе с роутером, а при
+    // перезагрузке вкладки единственного участника комната ровно на этот миг и
+    // оказывается пустой. Убрав сначала, мы отдали бы вернувшемуся уже мёртвый
+    // роутер — и его медиа не пошло бы вовсе, хотя снаружи он «в канале».
     room.peers.set(full.id, full);
+    if (stale) this.leave(stale);
     return { router: room.router, peer: full };
   }
 
