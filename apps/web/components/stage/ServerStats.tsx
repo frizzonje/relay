@@ -180,7 +180,7 @@ export function ServerStats() {
         className="glass glass-2 flex w-full max-w-[420px] animate-lobby-rise flex-col items-stretch px-7 py-8 sm:px-8"
       >
         <div className="flex flex-col items-center">
-          <Logo size={52} animate nodeBg="#0d0f12" />
+          <Logo size={52} animate nodeBg="var(--color-bg-panel)" />
           <div className="mt-4 flex items-center gap-2">
             <span
               aria-hidden

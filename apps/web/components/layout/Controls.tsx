@@ -88,8 +88,8 @@ function MicControl({ micOn }: { micOn: boolean }) {
       const el = fillRef.current;
       if (el) {
         el.style.width = `${shown * 100}%`;
-        // выше порога — открыто (зелёный), иначе приглушённый серо-синий
-        el.style.background = shown >= thr && (thr > 0 || shown > 0.12) ? '#23a55a' : '#4e5d7a';
+        // выше порога — гейт открыт, тебя слышно (цвета у .mic-meter в globals.css)
+        el.classList.toggle('is-open', shown >= thr && (thr > 0 || shown > 0.12));
       }
       raf = requestAnimationFrame(tick);
     };
@@ -199,11 +199,7 @@ function MicControl({ micOn }: { micOn: boolean }) {
 
             <div className="relative h-2.5 w-full rounded-full bg-black/45">
               {/* живой уровень микрофона (ширину/цвет гонит rAF) */}
-              <div
-                ref={fillRef}
-                className="absolute inset-y-0 left-0 rounded-full"
-                style={{ width: '0%', background: '#4e5d7a' }}
-              />
+              <div ref={fillRef} className="mic-meter absolute inset-y-0 left-0 rounded-full" />
               {/* метка порога */}
               <div
                 className="pointer-events-none absolute inset-y-[-2px] z-[1] w-[3px] -translate-x-1/2 rounded-full bg-white shadow-[0_0_4px_rgba(0,0,0,0.65)]"
@@ -386,7 +382,7 @@ export function Controls() {
             className={cn(
               'font-mono text-[11px] tabular-nums',
               ping.grade === 'good' && 'text-text-muted',
-              ping.grade === 'mid' && 'text-[#d8a32a]',
+              ping.grade === 'mid' && 'text-warn',
               ping.grade === 'bad' && 'text-danger',
             )}
           >

@@ -90,7 +90,7 @@ export function MessageAttachment({ att }: { att: Attachment }) {
             src={att.url}
             alt={att.name}
             loading="lazy"
-            className="block max-h-[340px] max-w-full rounded-[10px] border border-bg-active bg-[#1e1f22] transition-[filter] hover:brightness-105"
+            className="block max-h-[340px] max-w-full rounded-[10px] border border-bg-active bg-media transition-[filter] hover:brightness-105"
           />
         </button>
         <ImageLightbox

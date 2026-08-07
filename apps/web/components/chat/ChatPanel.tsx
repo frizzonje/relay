@@ -713,10 +713,7 @@ function Message({
           )}
           <div className="flex items-baseline gap-2">
             <span
-              className={cn(
-                'text-[15px] font-semibold',
-                mine ? 'text-[#79a6ff]' : 'text-text-header',
-              )}
+              className={cn('text-[15px] font-semibold', mine ? 'text-link' : 'text-text-header')}
             >
               {msg.name}
             </span>

@@ -118,7 +118,7 @@ function RailTooltip({ label, serverId }: { label: string; serverId?: string }) 
               <span
                 key={m.id}
                 title={m.name}
-                className="h-[18px] w-[18px] rounded-full bg-cover bg-center ring-2 ring-[#101216]"
+                className="h-[18px] w-[18px] rounded-full bg-cover bg-center ring-2 ring-bg-elev"
                 style={avatarStyle(m.name)}
               />
             ))}
@@ -128,7 +128,7 @@ function RailTooltip({ label, serverId }: { label: string; serverId?: string }) 
           )}
         </span>
       )}
-      <span className="absolute right-full top-1/2 -mr-px h-2 w-2 -translate-y-1/2 rotate-45 bg-[#101216]" />
+      <span className="absolute right-full top-1/2 -mr-px h-2 w-2 -translate-y-1/2 rotate-45 bg-bg-elev" />
     </div>
   );
 }
@@ -186,7 +186,7 @@ export function ServerRail() {
           aria-label={main?.name ?? 'relay'}
           className="relative grid h-12 w-12 place-items-center rounded-2xl bg-bg-elev ring-1 ring-inset ring-white/10 outline-none transition-[box-shadow,background-color] duration-200 hover:bg-bg-active hover:ring-white/15 focus-visible:ring-2 focus-visible:ring-line-strong"
         >
-          <Logo size={28} animate nodeBg="#111418" />
+          <Logo size={28} animate nodeBg="var(--color-bg-elev)" />
         </button>
         <RailTooltip label={main?.name ?? 'relay'} serverId={main?.id ?? MAIN_SERVER_ID} />
       </div>

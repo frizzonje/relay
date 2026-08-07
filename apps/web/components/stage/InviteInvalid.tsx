@@ -12,7 +12,7 @@ export async function InviteInvalid() {
     <main className="relative z-10 grid min-h-dvh place-items-center p-4">
       <div className="panel flex w-full max-w-[420px] flex-col items-center gap-3 rounded-2xl border border-line px-7 py-8 text-center">
         <span className="grid h-14 w-14 place-items-center rounded-2xl bg-bg-elev ring-1 ring-inset ring-white/10">
-          <Logo size={32} nodeBg="#111418" />
+          <Logo size={32} nodeBg="var(--color-bg-elev)" />
         </span>
         <h1 className="text-xl font-bold text-text-header">{t('invite.invalid.title')}</h1>
         <p className="max-w-[320px] text-[13px] leading-relaxed text-text-muted">

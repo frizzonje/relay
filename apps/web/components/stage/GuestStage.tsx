@@ -75,7 +75,7 @@ export function GuestStage({ slug, label, exp }: { slug: string; label: string; 
         {/* Тонкая шапка вместо топбара: лого, канал, бейдж гостя */}
         <header className="flex h-[52px] shrink-0 items-center gap-2.5 border-b border-line px-4 shadow-[0_1px_2px_rgba(0,0,0,0.2)]">
           <span className="grid h-7 w-7 place-items-center rounded-lg bg-bg-elev ring-1 ring-inset ring-white/10">
-            <Logo size={18} nodeBg="#111418" />
+            <Logo size={18} nodeBg="var(--color-bg-elev)" />
           </span>
           <Icon name="volume-2" className="text-[18px] text-text-muted" />
           <span className="truncate font-bold text-text-header">{label}</span>
@@ -99,7 +99,7 @@ export function GuestStage({ slug, label, exp }: { slug: string; label: string; 
         className="panel flex w-full max-w-[420px] flex-col items-center gap-1 rounded-2xl border border-line px-7 py-8 text-center"
       >
         <span className="mb-2 grid h-14 w-14 place-items-center rounded-2xl bg-bg-elev ring-1 ring-inset ring-white/10">
-          <Logo size={32} animate nodeBg="#111418" />
+          <Logo size={32} animate nodeBg="var(--color-bg-elev)" />
         </span>
 
         {wasInCall ? (

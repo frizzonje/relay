@@ -344,7 +344,7 @@ export function Sidebar() {
             className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-bg-elev ring-1 ring-inset ring-white/10"
             aria-hidden
           >
-            <Logo size={16} nodeBg="#111418" />
+            <Logo size={16} nodeBg="var(--color-bg-elev)" />
           </span>
         ) : (
           <span
@@ -500,7 +500,7 @@ export function Sidebar() {
                     className={cn(
                       'font-bold',
                       ping.grade === 'good' && 'text-ok',
-                      ping.grade === 'mid' && 'text-[#d8a32a]',
+                      ping.grade === 'mid' && 'text-warn',
                       ping.grade === 'bad' && 'text-danger',
                     )}
                   >
