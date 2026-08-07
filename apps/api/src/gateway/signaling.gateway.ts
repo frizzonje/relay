@@ -22,7 +22,7 @@ import {
   RegistryService,
   slugifyChannel,
 } from './registry.service';
-import { Channel, VoiceMode } from './registry';
+import { Channel, ServerEntry, VoiceMode } from './registry';
 import {
   type PublicChannel,
   type PublicServer,
@@ -256,8 +256,23 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   // Разблокировки этого сокета — набор id закрытых серверов, чьи пароли он ввёл.
+  // Набор заводится на подключении (handleConnection, рядом с остальными полями
+  // сокета), а читают и пополняют его ТОЛЬКО методы ниже: сырой доступ к
+  // нетипизированному client.data расползался по обработчикам, и каждая копия
+  // сама решала, что делать с его отсутствием.
   private unlockedOf(client: Socket): Set<string> | undefined {
     return client.data.unlocked as Set<string> | undefined;
+  }
+
+  // Пароль сервера принят — запоминаем разблокировку на этом сокете.
+  private markUnlocked(client: Socket, serverId: string) {
+    this.unlockedOf(client)?.add(serverId);
+  }
+
+  // Открыт ли сервер этому сокету: открытый — всем, закрытый — только тому,
+  // кто ввёл пароль. Право на сам сервер, не на его каналы (те — canSee).
+  private isOpenTo(client: Socket, server: ServerEntry): boolean {
+    return !server.passwordHash || this.unlockedOf(client)?.has(server.id) === true;
   }
 
   // Видит ли сокет этот канал: закрытый сервер — только после ввода пароля.
@@ -417,7 +432,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       creatorId: deviceId(client),
     });
     // Создатель знает пароль — сразу разблокируем сервер для его сокета.
-    if (passwordHash) (client.data.unlocked as Set<string>)?.add(id);
+    if (passwordHash) this.markUnlocked(client, id);
     this.broadcastServers();
     // Раздаём каналы заново: у создателя новый сервер уже разблокирован.
     this.broadcastChannels();
@@ -478,7 +493,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
         }
         this.unlockCache.set(cacheKey, true);
       }
-      (client.data.unlocked as Set<string>)?.add(id);
+      this.markUnlocked(client, id);
       // Пароль подошёл — теперь этому сокету видны каналы сервера…
       client.emit('channels', this.channelsFor(client));
       // …и состав их эфиров. Без этого строки каналов стоят пустыми до первого
@@ -501,9 +516,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (idx === -1) return { ok: false, error: 'not-found' };
     // Закрытый сервер удалить может только тот, кто ввёл пароль (разблокировал).
     const srv = this.registry.servers[idx];
-    if (srv.passwordHash && !(client.data.unlocked as Set<string>)?.has(id)) {
-      return { ok: false, error: 'forbidden' };
-    }
+    if (!this.isOpenTo(client, srv)) return { ok: false, error: 'forbidden' };
     // Владелец — создатель сервера (clientId из handshake). У записей без
     // creatorId (созданы до этого правила) владельца не существует: права
     // прежние. Заблокировать их удаление навсегда было бы хуже — чужой не
@@ -558,7 +571,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const id = typeof payload?.id === 'string' ? payload.id : '';
     const srv = this.registry.servers.find((s) => s.id === id);
     if (!srv || !srv.removable) return { ok: false };
-    if (srv.passwordHash && !(client.data.unlocked as Set<string>)?.has(id)) return { ok: false };
+    if (!this.isOpenTo(client, srv)) return { ok: false };
     if (!ownedBy(srv, deviceId(client))) return { ok: false };
     let channels = 0;
     let messages = 0;
@@ -609,7 +622,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // «+» и не показывает, но запрет держим на сервере, а не на кнопке.
     if (serverId === MAIN_SERVER_ID) return;
     // В закрытый сервер канал создаёт только разблокировавший его сокет.
-    if (srv.passwordHash && !(client.data.unlocked as Set<string>)?.has(serverId)) return;
+    if (!this.isOpenTo(client, srv)) return;
     const rawName = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 32) : '';
     const slug = slugifyChannel(rawName);
     if (!slug) return;
