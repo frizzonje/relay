@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { cpuUsageBetween, meminfoKb } from './metrics';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MetricsService, cpuSample, cpuUsageBetween, meminfoKb } from './metrics';
 
 /**
  * Считающая часть метрик — без /proc и без statfs. Проверяем именно те два
@@ -51,5 +51,57 @@ describe('meminfoKb', () => {
 
   it('поля нет (старое ядро без MemAvailable) — null', () => {
     expect(meminfoKb('MemTotal:        8129412 kB', 'MemAvailable')).toBeNull();
+  });
+});
+
+describe('cpuSample', () => {
+  it('складывает тики всех ядер, и простой не больше общего времени', () => {
+    const s = cpuSample();
+    expect(s.total).toBeGreaterThan(0);
+    expect(s.idle).toBeGreaterThanOrEqual(0);
+    expect(s.idle).toBeLessThanOrEqual(s.total);
+  });
+});
+
+describe('MetricsService', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('первый запрос успевает раньше фонового такта — меряет коротко сам', async () => {
+    const m = await new MetricsService().read();
+    // Прочерка вместо загрузки на главном экране быть не должно.
+    expect(m.cpu.usage).not.toBeNull();
+    expect(m.cpu.cores).toBeGreaterThan(0);
+    expect(m.mem.total).toBeGreaterThan(0);
+    expect(m.mem.used).toBeGreaterThanOrEqual(0);
+    expect(m.uptimeSec).toBeGreaterThan(0);
+  });
+
+  it('второй запрос в пределах секунды приходит из кэша — /proc не трогаем', async () => {
+    const service = new MetricsService();
+    const first = await service.read();
+    const second = await service.read();
+    expect(second).toBe(first);
+  });
+
+  it('фоновый такт заводится и не держит процесс живым', () => {
+    const service = new MetricsService();
+    const unref = vi.fn();
+    const setIntervalSpy = vi
+      .spyOn(globalThis, 'setInterval')
+      .mockReturnValue({ unref } as unknown as NodeJS.Timeout);
+    service.onModuleInit();
+    expect(setIntervalSpy).toHaveBeenCalled();
+    expect(unref).toHaveBeenCalled();
+  });
+
+  it('диск отдаётся прочерком, а не нулями, когда его не измерить', async () => {
+    const m = await new MetricsService().read();
+    // Тома может не быть (или не быть прав) — но тогда именно null, не {0,0}.
+    if (m.disk !== null) {
+      expect(m.disk.total).toBeGreaterThan(0);
+      expect(m.disk.used).toBeGreaterThanOrEqual(0);
+    }
   });
 });

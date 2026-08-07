@@ -20,3 +20,11 @@ e2e/playwright-report
 # с ним бессмысленно: он перепишет файл обратно при первой же правке ассетов,
 # и формат-чек снова покраснеет на ровном месте.
 clients/ios/**/*.xcassets/**/Contents.json
+
+# То же самое с cargo и самим Tauri: собранный десктоп оставляет тысячи json'ов
+# в target/, а `tauri build` дописывает свои схемы в gen/schemas. В git нет ни
+# тех, ни других (clients/desktop/.gitignore), поэтому CI их и не видел, — а
+# локально `pnpm format:check` из-за них краснел навсегда у любого, кто собирал
+# клиент. Вечно красная проверка учит не смотреть на проверки.
+clients/desktop/src-tauri/target
+clients/desktop/src-tauri/gen/schemas
