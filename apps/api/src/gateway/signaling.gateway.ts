@@ -31,35 +31,39 @@ import {
   publicChannel,
 } from './ownership';
 import { UnlockAttempts, clientIp, hashServerPassword, verifyServerPassword } from './unlock';
-import type {
-  ChannelCreatePayload,
-  ChannelDeletePayload,
-  ChannelDeleteResult,
-  ChannelModePayload,
-  ChannelRenamePayload,
-  ChannelRenameResult,
-  ChannelStatsPayload,
-  ChannelStatsResult,
-  ChatDeletePayload,
-  ChatEditPayload,
-  ChatMessage,
-  ChatPayload,
-  ChatReactPayload,
-  InviteCreatePayload,
-  InviteCreateResult,
-  JoinPayload,
-  ReplyRef,
-  ServerCreatePayload,
-  ServerDeletePayload,
-  ServerDeleteResult,
-  ServerStatsPayload,
-  ServerStatsResult,
-  ServerUnlockPayload,
-  SfuTokenPayload,
-  SfuTokenResult,
-  SignalPayload,
-  VoiceDiagPayload,
-  VoicePresenceEntry,
+import {
+  LIMIT,
+  optional,
+  str,
+  trimmed,
+  type ChannelCreatePayload,
+  type ChannelDeletePayload,
+  type ChannelDeleteResult,
+  type ChannelModePayload,
+  type ChannelRenamePayload,
+  type ChannelRenameResult,
+  type ChannelStatsPayload,
+  type ChannelStatsResult,
+  type ChatDeletePayload,
+  type ChatEditPayload,
+  type ChatMessage,
+  type ChatPayload,
+  type ChatReactPayload,
+  type InviteCreatePayload,
+  type InviteCreateResult,
+  type JoinPayload,
+  type ReplyRef,
+  type ServerCreatePayload,
+  type ServerDeletePayload,
+  type ServerDeleteResult,
+  type ServerStatsPayload,
+  type ServerStatsResult,
+  type ServerUnlockPayload,
+  type SfuTokenPayload,
+  type SfuTokenResult,
+  type SignalPayload,
+  type VoiceDiagPayload,
+  type VoicePresenceEntry,
 } from './protocol';
 
 // Строка для лога: без переводов строк (чтобы клиент не подделал чужие записи)
@@ -397,22 +401,19 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!this.allow(client) || this.isGuest(client)) return;
     // id генерирует клиент — принимаем как есть (санитизируем длину), чтобы он мог
     // сразу открыть новый сервер и создавать в нём каналы, не дожидаясь ответа.
-    const id = typeof payload?.id === 'string' ? payload.id.trim().slice(0, 64) : '';
-    const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 32) : '';
+    const id = trimmed(payload?.id, LIMIT.id);
+    const name = trimmed(payload?.name, LIMIT.name);
     if (!id || !name) return;
     if (this.registry.servers.length >= MAX_SERVERS) return;
     // Повторный create с тем же id — не плодим дубликаты (напр. ретрай сокета).
     if (this.registry.servers.some((s) => s.id === id)) return;
-    const emoji =
-      typeof payload?.emoji === 'string' && payload.emoji.trim()
-        ? payload.emoji.trim().slice(0, 8)
-        : undefined;
+    const emoji = trimmed(payload?.emoji, LIMIT.emoji) || undefined;
     // Пароль (если задан) → сервер закрытый. Хэшируем, храним только хэш.
     // Хэширование асинхронное и через тот же семафор, что и проверка: в
     // синхронном виде оно стоит десятки миллисекунд ПОЛНОЙ остановки — не пула,
     // а цикла событий, — и цикл «создать закрытый сервер, удалить, повторить»
     // укладывал бы сигналинг с одного сокета.
-    const password = typeof payload?.password === 'string' ? payload.password : '';
+    const password = str(payload?.password);
     const passwordHash = password ? await hashServerPassword(password) : undefined;
     // Пока считался хэш, реестр мог измениться: тот же id мог занять другой
     // сокет, а свободное место — кончиться.
@@ -445,8 +446,8 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @MessageBody() payload: ServerUnlockPayload,
   ) {
     if (!this.allow(client) || this.isGuest(client)) return;
-    const id = typeof payload?.id === 'string' ? payload.id : '';
-    const password = typeof payload?.password === 'string' ? payload.password : '';
+    const id = str(payload?.id);
+    const password = str(payload?.password);
     const srv = this.registry.servers.find((s) => s.id === id);
     if (!srv) {
       client.emit('server-unlock-result', { id, ok: false });
@@ -510,7 +511,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @MessageBody() payload: ServerDeletePayload,
   ): ServerDeleteResult {
     if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
-    const id = typeof payload?.id === 'string' ? payload.id : '';
+    const id = str(payload?.id);
     if (!id) return { ok: false, error: 'not-found' };
     const idx = this.registry.servers.findIndex((s) => s.id === id && s.removable);
     if (idx === -1) return { ok: false, error: 'not-found' };
@@ -568,7 +569,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @MessageBody() payload: ServerStatsPayload,
   ): ServerStatsResult {
     if (!this.allow(client) || this.isGuest(client)) return { ok: false };
-    const id = typeof payload?.id === 'string' ? payload.id : '';
+    const id = str(payload?.id);
     const srv = this.registry.servers.find((s) => s.id === id);
     if (!srv || !srv.removable) return { ok: false };
     if (!this.isOpenTo(client, srv)) return { ok: false };
@@ -614,7 +615,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const type = payload?.type === 'voice' ? 'voice' : payload?.type === 'text' ? 'text' : null;
     if (!type) return;
     // Сервер-владелец должен существовать (иначе канал повиснет вне рейки).
-    const serverId = typeof payload?.serverId === 'string' ? payload.serverId : MAIN_SERVER_ID;
+    const serverId = str(payload?.serverId) || MAIN_SERVER_ID;
     const srv = this.registry.servers.find((s) => s.id === serverId);
     if (!srv) return;
     // Главный сервер — витрина с фиксированным набором каналов (см.
@@ -623,7 +624,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (serverId === MAIN_SERVER_ID) return;
     // В закрытый сервер канал создаёт только разблокировавший его сокет.
     if (!this.isOpenTo(client, srv)) return;
-    const rawName = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 32) : '';
+    const rawName = trimmed(payload?.name, LIMIT.name);
     const slug = slugifyChannel(rawName);
     if (!slug) return;
     if (this.registry.channels.length >= MAX_CHANNELS) return;
@@ -656,7 +657,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   @SubscribeMessage('channel-mode')
   handleChannelMode(@ConnectedSocket() client: Socket, @MessageBody() payload: ChannelModePayload) {
     if (!this.allow(client) || this.isGuest(client)) return;
-    const id = typeof payload?.id === 'string' ? payload.id : '';
+    const id = str(payload?.id);
     const mode: VoiceMode | null =
       payload?.mode === 'sfu' ? 'sfu' : payload?.mode === 'p2p' ? 'p2p' : null;
     if (!id || !mode) return;
@@ -711,7 +712,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @MessageBody() payload: ChannelStatsPayload,
   ): ChannelStatsResult {
     if (!this.allow(client) || this.isGuest(client)) return { ok: false };
-    const id = typeof payload?.id === 'string' ? payload.id : '';
+    const id = str(payload?.id);
     const found = this.editableChannel(client, id);
     if ('error' in found) return { ok: false };
     const channel = found.channel;
@@ -732,8 +733,8 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @MessageBody() payload: ChannelRenamePayload,
   ): ChannelRenameResult {
     if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
-    const id = typeof payload?.id === 'string' ? payload.id : '';
-    const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 32) : '';
+    const id = str(payload?.id);
+    const name = trimmed(payload?.name, LIMIT.name);
     if (!id) return { ok: false, error: 'not-found' };
     if (!name) return { ok: false, error: 'bad-name' };
     const found = this.editableChannel(client, id);
@@ -751,7 +752,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @MessageBody() payload: ChannelDeletePayload,
   ): ChannelDeleteResult {
     if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
-    const id = typeof payload?.id === 'string' ? payload.id : '';
+    const id = str(payload?.id);
     if (!id) return { ok: false, error: 'not-found' };
     const found = this.editableChannel(client, id);
     if ('error' in found) return { ok: false, error: found.error };
@@ -792,7 +793,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @MessageBody() payload: InviteCreatePayload,
   ): InviteCreateResult {
     if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
-    const slug = typeof payload?.room === 'string' ? payload.room.trim().slice(0, 32) : '';
+    const slug = trimmed(payload?.room, LIMIT.slug);
     // Канал должен существовать, быть голосовым и быть видимым этому сокету
     // (каналы закрытых серверов — только после ввода пароля).
     const channel = this.channelsFor(client).find((c) => c.type === 'voice' && c.slug === slug);
@@ -825,7 +826,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // иначе он пропустит ответный `peers`. Секрета в ней нет — войти в любой
     // голосовой канал он и так вправе, а `peerId` по-прежнему берётся из
     // сокета, так что назваться чужим id нельзя.
-    const asked = typeof payload?.room === 'string' ? payload.room.trim().slice(0, 32) : '';
+    const asked = trimmed(payload?.room, LIMIT.slug);
     const room = asked || (typeof client.data.room === 'string' ? client.data.room : '');
     if (!room) return { ok: false, error: 'not-in-room' };
     // Гость «пришит» к своему каналу — чужую комнату не спросит.
@@ -844,7 +845,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // Имя берём из запроса: пропуск спрашивают ДО `join`, и client.data.name в
     // этот момент ещё пуст (заполнен он только при пере-выдаче во время звонка).
     // Лимит — тот же, что у `join`.
-    const askedName = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 20) : '';
+    const askedName = trimmed(payload?.name, LIMIT.tag);
     const name = askedName || (typeof client.data.name === 'string' ? client.data.name : '');
     const { token, exp } = issueSfuToken({ room, peerId: client.id, name });
     // Запоминаем выдачу: клиент, не умеющий сообщать транспорт в `join` (бандл
@@ -866,18 +867,17 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   @SubscribeMessage('voice-diag')
   handleVoiceDiag(@ConnectedSocket() client: Socket, @MessageBody() payload: VoiceDiagPayload) {
     if (!this.allow(client)) return;
-    const event = typeof payload?.event === 'string' ? oneLine(payload.event).slice(0, 48) : '';
+    const event = oneLine(str(payload?.event)).slice(0, LIMIT.diagEvent);
     if (!event) return;
-    const detail =
-      typeof payload?.detail === 'string' ? ` ${oneLine(payload.detail).slice(0, 200)}` : '';
+    const detail = oneLine(str(payload?.detail)).slice(0, LIMIT.diagDetail);
     const name = (client.data.name as string) || '?';
-    this.logger.log(`diag ${name} (${client.id}): ${event}${detail}`);
+    this.logger.log(`diag ${name} (${client.id}): ${event}${detail ? ` ${detail}` : ''}`);
   }
 
   @SubscribeMessage('join')
   handleJoin(@ConnectedSocket() client: Socket, @MessageBody() payload: JoinPayload) {
     if (!this.allow(client)) return;
-    const room = typeof payload?.room === 'string' ? payload.room.trim().slice(0, 32) : '';
+    const room = trimmed(payload?.room, LIMIT.slug);
     if (!room) return;
     // Гость «пришит» к каналу из своего токена — другие комнаты недоступны.
     if (this.isGuest(client) && room !== client.data.guestRoom) return;
@@ -888,7 +888,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       this.logger.warn(`voice: join to locked room "${room}" refused for ${client.id}`);
       return;
     }
-    const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 20) : undefined;
+    const name = optional(payload?.name, LIMIT.tag);
     // Устройство: сначала handshake (см. handleConnection), и только если там
     // пусто — поле payload. Порядок именно такой, и он важен: по этому же id
     // решается владение серверами и каналами, а `??` не даёт перебить уже
@@ -1030,7 +1030,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   @SubscribeMessage('rename')
   handleRename(@ConnectedSocket() client: Socket, @MessageBody() payload: { name?: unknown }) {
     if (!this.allow(client)) return;
-    const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 20) : '';
+    const name = trimmed(payload?.name, LIMIT.tag);
     if (!name) return;
 
     const room = client.data.room as string | undefined;
@@ -1052,9 +1052,9 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   @SubscribeMessage('chat-join')
   handleChatJoin(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatPayload) {
     if (!this.allow(client) || this.isGuest(client)) return;
-    const slug = typeof payload?.room === 'string' ? payload.room.trim().slice(0, 32) : '';
+    const slug = trimmed(payload?.room, LIMIT.slug);
     if (!slug) return;
-    const name = typeof payload?.name === 'string' ? payload.name.trim().slice(0, 20) : '';
+    const name = trimmed(payload?.name, LIMIT.tag);
 
     // В несуществующий канал не пускаем: комната-призрак принимала бы сообщения
     // и заново копила историю под удалённым слагом. Случая два, и они разные.
@@ -1094,12 +1094,11 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!this.allow(client) || this.isGuest(client)) return;
     const room = client.data.chatRoom as string | undefined;
     if (!room) return;
-    const text = typeof payload?.text === 'string' ? payload.text.trim().slice(0, 500) : '';
+    const text = trimmed(payload?.text, LIMIT.message);
 
     // Вложение берём из доверенного реестра по id (клиент не задаёт url/mime сам).
     // Спойлер — метка сообщения: копируем вложение, чтобы не мутировать общий реестр.
-    const uploadId = typeof payload?.uploadId === 'string' ? payload.uploadId : undefined;
-    const stored = this.uploads.get(uploadId);
+    const stored = this.uploads.get(str(payload?.uploadId));
     const attachment = stored && payload?.spoiler === true ? { ...stored, spoiler: true } : stored;
 
     // Пустое сообщение без вложения — игнорируем
@@ -1109,7 +1108,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
     // Ответ: снимок цитируемого сообщения того же канала (усечённый текст). Само
     // сообщение могут потом отредактировать/удалить — цитата останется прежней.
-    const replyToId = typeof payload?.replyTo === 'string' ? payload.replyTo : '';
+    const replyToId = str(payload?.replyTo);
     const src = replyToId ? history.find((m) => m.id === replyToId && !m.system) : undefined;
     const replyTo: ReplyRef | undefined = src
       ? { id: src.id!, name: src.name, text: src.text.slice(0, 140) }
@@ -1170,8 +1169,8 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!this.allow(client) || this.isGuest(client)) return;
     const room = client.data.chatRoom as string | undefined;
     if (!room) return;
-    const id = typeof payload?.id === 'string' ? payload.id : '';
-    const text = typeof payload?.text === 'string' ? payload.text.trim().slice(0, 500) : '';
+    const id = str(payload?.id);
+    const text = trimmed(payload?.text, LIMIT.message);
     if (!id || !text) return;
 
     const msg = this.chat.find(room, id);
@@ -1192,7 +1191,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!this.allow(client) || this.isGuest(client)) return;
     const room = client.data.chatRoom as string | undefined;
     if (!room) return;
-    const id = typeof payload?.id === 'string' ? payload.id : '';
+    const id = str(payload?.id);
     if (!id) return;
 
     const msg = this.chat.find(room, id);
@@ -1222,8 +1221,8 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!this.allow(client) || this.isGuest(client)) return;
     const room = client.data.chatRoom as string | undefined;
     if (!room) return;
-    const id = typeof payload?.id === 'string' ? payload.id : '';
-    const emoji = typeof payload?.emoji === 'string' ? payload.emoji : '';
+    const id = str(payload?.id);
+    const emoji = str(payload?.emoji);
     if (!id || !this.chat.knownReaction(emoji)) return;
 
     const msg = this.chat.findAny(room, id);
