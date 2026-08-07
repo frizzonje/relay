@@ -169,10 +169,26 @@ jobs:
   # вовсе: матрица пушит три образа независимо, и падение третьего после двух
   # успешных перевело бы живые инсталляции (`pull_policy: always`) на разъехавшийся
   # набор служб. Перевод отложен в promote, до которого доходят только все трое.
+  # Инсталлятор и CLI не попадают ни в один образ — они скачиваются с этого
+  # самого тега. Значит, тег со сломанным `relay update` ломает обновление всем,
+  # у кого оно уже настроено, и никакая проверка образов этого не поймает.
+  # Идёт параллельно gate и e2e, ко времени релиза не добавляет.
+  shell:
+    name: installer + relay CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          docker run --rm -v "$PWD":/mnt -w /mnt koalaman/shellcheck:stable -S warning \
+            install.sh infra/relay-cli.sh infra/coturn-entrypoint.sh infra/api-entrypoint.sh infra/tests/*.sh
+      - name: Test
+        run: bash infra/tests/run.sh
+
   build:
     name: build · push (${{ matrix.app }})
     runs-on: ubuntu-latest
-    needs: [meta, gate, e2e, sfu-smoke]
+    needs: [meta, gate, e2e, sfu-smoke, shell]
     strategy:
       matrix:
         include:

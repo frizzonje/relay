@@ -26,6 +26,24 @@ jobs:
       - run: pnpm format:check
       - run: pnpm turbo run typecheck test build
 
+  # The installer and the `relay` CLI: the part of the product that runs on
+  # other people's servers, and until now the part nothing tested. No unit test
+  # imports a bash script and e2e drives the app, not the machine it sits on —
+  # so `relay update`, which rewrites the compose file and the CLI itself on a
+  # live installation, could only be found wrong by someone's server.
+  # Network and docker are stubbed; nothing here reaches GitHub or GHCR.
+  shell:
+    name: installer + relay CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          docker run --rm -v "$PWD":/mnt -w /mnt koalaman/shellcheck:stable -S warning \
+            install.sh infra/relay-cli.sh infra/coturn-entrypoint.sh infra/api-entrypoint.sh infra/tests/*.sh
+      - name: Test
+        run: bash infra/tests/run.sh
+
   docker:
     name: docker build (api + web + sfu)
     runs-on: ubuntu-latest
