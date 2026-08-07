@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Icon } from '@/components/ui/icon';
 import { cn } from '@/lib/utils';
@@ -278,7 +278,16 @@ function AmbientWash({ videoRef }: { videoRef: React.RefObject<HTMLVideoElement 
  * крупным планом не выкидывает зрителя рывком: сначала шторка с объяснением,
  * потом плитка сама уезжает обратно в сетку.
  */
-export function VideoTile({
+/**
+ * Плитка участника звонка.
+ *
+ * `memo` — по той же причине, что у строки чата: опрос качества связи идёт раз
+ * в три секунды на каждого собеседника, и каждый замер подменял массив плиток
+ * целиком — то есть перерисовывал всю сетку ради цифры на одной. Объекты плиток
+ * в сторе личность сохраняют (меняется только та, что изменилась), поэтому
+ * теперь перерисовывается ровно она.
+ */
+export const VideoTile = memo(function VideoTile({
   tile,
   focused,
   hidden,
@@ -793,4 +802,4 @@ export function VideoTile({
       </AnimatePresence>
     </motion.div>
   );
-}
+});

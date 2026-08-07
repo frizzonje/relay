@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
@@ -478,8 +478,16 @@ function ActionBtn({
   );
 }
 
-/** Одно сообщение ленты: системное (вход/выход) или обычное. */
-function Message({
+/**
+ * Одно сообщение ленты: системное (вход/выход) или обычное.
+ *
+ * `memo` здесь не микрооптимизация: лента перерисовывалась целиком на каждое
+ * входящее, на каждую реакцию и на каждый тик «печатает…», а каждая строка —
+ * это своя капсула действий, разметка markdown и анимация framer. Все пропсы
+ * стабильны (обработчики — useCallback у родителя), объекты сообщений в сторе
+ * личность сохраняют, поэтому перерисовывается ровно та строка, что менялась.
+ */
+const Message = memo(function Message({
   msg,
   mine,
   me,
@@ -655,7 +663,7 @@ function Message({
       )}
     </motion.div>
   );
-}
+});
 
 /** Разделитель «новые сообщения» перед первой непрочитанной репликой. */
 function UnreadDivider() {
@@ -771,29 +779,34 @@ export function ChatPanel() {
   }
 
   // Прокрутить к оригиналу цитаты и коротко подсветить его.
-  function jumpTo(id: string) {
+  const jumpTo = useCallback((id: string) => {
     const el = scrollRef.current?.querySelector<HTMLElement>(`[data-mid="${id}"]`);
     if (!el) return;
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     el.classList.add('msg-flash');
     setTimeout(() => el.classList.remove('msg-flash'), 1200);
-  }
+  }, []);
 
-  function startReply(m: ChatMessage) {
+  // Обработчики строки сообщения — стабильные (useCallback): ими живёт memo у
+  // Message. Новая реплика меняет лишь свои пропсы, а не пропсы всей ленты.
+  const startReply = useCallback((m: ChatMessage) => {
     if (!m.id || !m.name) return;
     setReply({ id: m.id, name: m.name, text: m.text.slice(0, 140) });
     setEditingId(null);
     inputRef.current?.focus();
-  }
+  }, []);
 
-  function submitEdit(id: string, newText: string) {
+  const submitEdit = useCallback((id: string, newText: string) => {
     getSocket().emit('chat-edit', { id, text: newText });
     setEditingId(null);
-  }
+  }, []);
 
-  function deleteMessage(m: ChatMessage) {
+  const deleteMessage = useCallback((m: ChatMessage) => {
     if (m.id) setPendingDelete(m);
-  }
+  }, []);
+
+  const startEdit = useCallback((m: ChatMessage) => setEditingId(m.id ?? null), []);
+  const cancelEdit = useCallback(() => setEditingId(null), []);
 
   async function send(e: React.FormEvent) {
     e.preventDefault();
@@ -957,9 +970,9 @@ export function ChatPanel() {
               enter={enterAnim}
               editing={editingId === m.id}
               onReply={startReply}
-              onStartEdit={(mm) => setEditingId(mm.id ?? null)}
+              onStartEdit={startEdit}
               onSubmitEdit={submitEdit}
-              onCancelEdit={() => setEditingId(null)}
+              onCancelEdit={cancelEdit}
               onDelete={deleteMessage}
               onJumpTo={jumpTo}
             />
