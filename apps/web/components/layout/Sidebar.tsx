@@ -24,7 +24,6 @@ import {
   toggleMic,
   toggleSpeakers,
 } from '@/lib/voice';
-import { setChannelMode } from '@/lib/channels';
 import { channelMenuEntries } from '@/lib/channel-menu';
 import { openContextMenu } from '@/lib/context-menu';
 import { useSfuAvailable } from '@/lib/use-sfu';
@@ -44,6 +43,7 @@ import {
   DeleteServerDialog,
   type DeleteServerTarget,
 } from '@/components/layout/DeleteServerDialog';
+import { ChannelModeDialog, type ChannelModeTarget } from '@/components/layout/ChannelModeDialog';
 
 /**
  * Подпись текстового канала с точкой «непрочитано». Открытый канал считается
@@ -265,6 +265,9 @@ export function Sidebar() {
   // Правка канала из меню: null — соответствующая модалка закрыта.
   const [renameTarget, setRenameTarget] = useState<RenameChannelTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteChannelTarget | null>(null);
+  // Смена транспорта канала: null — диалог закрыт. Спрашиваем всегда — переезд
+  // обрывает разговор у всех, кто в эфире.
+  const [modeTarget, setModeTarget] = useState<ChannelModeTarget | null>(null);
   // Подтверждение удаления сервера (спрашиваем — уносит с собой все каналы).
   const [serverDeleteTarget, setServerDeleteTarget] = useState<DeleteServerTarget | null>(null);
 
@@ -439,7 +442,13 @@ export function Sidebar() {
                 mode={c.removable && c.mine ? (c.mode ?? 'p2p') : undefined}
                 onToggleMode={
                   c.removable && c.mine
-                    ? () => setChannelMode(c.id, c.mode === 'sfu' ? 'p2p' : 'sfu')
+                    ? () =>
+                        setModeTarget({
+                          id: c.id,
+                          name: c.name,
+                          next: c.mode === 'sfu' ? 'p2p' : 'sfu',
+                          occupants: presence[c.slug]?.length ?? 0,
+                        })
                     : undefined
                 }
                 sfuAvailable={sfuAvailable}
@@ -581,6 +590,12 @@ export function Sidebar() {
         target={serverDeleteTarget}
         onOpenChange={(open) => {
           if (!open) setServerDeleteTarget(null);
+        }}
+      />
+      <ChannelModeDialog
+        target={modeTarget}
+        onOpenChange={(open) => {
+          if (!open) setModeTarget(null);
         }}
       />
       <InviteDialog

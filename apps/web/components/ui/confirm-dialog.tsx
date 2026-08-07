@@ -29,6 +29,7 @@ export function ConfirmDialog({
   description,
   details,
   confirmLabel,
+  confirmVariant = 'danger',
   busy,
   confirmDisabled,
   onConfirm,
@@ -40,6 +41,13 @@ export function ConfirmDialog({
   /** Живые подробности под описанием (счётчики, предупреждения). */
   details?: ReactNode;
   confirmLabel?: string;
+  /**
+   * Красная кнопка — про необратимость, а не про «внимание»: заливкой цветом
+   * останавливают руку там, где отменить будет нечем. Действие обратимое, но
+   * дорогое (обрыв разговора на переключении транспорта) спрашивает тем же
+   * диалогом, но обычной кнопкой — иначе красное перестанет что-либо значить.
+   */
+  confirmVariant?: 'danger' | 'primary';
   /** Ждём ответа сервера — кнопки заблокированы, чтобы не жать дважды. */
   busy?: boolean;
   /** Подтверждать пока нельзя (данные ещё грузятся, действие запрещено).
@@ -66,7 +74,7 @@ export function ConfirmDialog({
               Enter сразу после открытия ничего не сносит. */}
           <Button
             type="button"
-            variant="danger"
+            variant={confirmVariant}
             onClick={onConfirm}
             disabled={busy || confirmDisabled}
           >

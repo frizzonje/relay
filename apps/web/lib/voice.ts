@@ -1111,12 +1111,23 @@ function dropRemoteTiles() {
 }
 
 /**
+ * Номер текущего переезда. Между «отцепиться от старого транспорта» и
+ * «объявиться на новом» есть await (запрос пропуска, загрузка чанка mediasoup), и
+ * за это время вполне прилетает второй переезд: владелец щёлкнул режим канала
+ * дважды, следом упал медиасервер. Обгонять себя тут нельзя — старый переезд
+ * доехал бы уже после нового и оставил бы позади живой сокет медиасервера при
+ * mesh-плитках, то есть звонок без звука и без пути назад. Каждый переезд берёт
+ * номер и сходит с дистанции, увидев, что появился следующий.
+ */
+let migration = 0;
+
+/**
  * Подключить транспорт к комнате и объявиться на сигналинге. Пропуск = выбор
  * транспорта: он есть — идём в SFU, нет — в mesh.
  */
-async function enterRoom(target: string, ticket: VoiceTicket | null) {
+async function enterRoom(target: string, ticket: VoiceTicket | null, gen = ++migration) {
   const next = ticket ? await sfu() : mesh();
-  if (room !== target) return; // пока грузился чанк, успели уйти в другой канал
+  if (room !== target || gen !== migration) return; // ушли в другой канал/переезд
   transport = next;
   next.join(target, ticket ?? undefined);
   socket().emit('join', {
@@ -1143,13 +1154,19 @@ async function enterRoom(target: string, ticket: VoiceTicket | null) {
 async function remigrate(force?: 'mesh') {
   const target = room;
   if (!target) return;
+  const gen = ++migration;
+  holdSplitChecks();
   cancelSfuRetry();
   tx().leave();
   transport = null;
   dropRemoteTiles();
   const ticket = force === 'mesh' ? null : await requestSfuTicket(target);
-  if (room !== target) return;
-  await enterRoom(target, ticket);
+  if (room !== target || gen !== migration) return; // нас обогнал следующий переезд
+  await enterRoom(target, ticket, gen);
+  if (gen !== migration) return;
+  // Осадку считаем от СВОЕГО приезда: остальные едут своим ходом, и тот, у кого
+  // пропуск выписывался дольше всех, ещё в дороге.
+  holdSplitChecks();
 }
 
 function cancelSfuRetry() {
@@ -1172,10 +1189,14 @@ function scheduleSfuRetry() {
         return;
       }
       diag('sfu-retry', 'ok — moving back to sfu');
+      const gen = ++migration;
+      holdSplitChecks();
       tx().leave();
       transport = null;
       dropRemoteTiles();
-      await enterRoom(target, ticket);
+      await enterRoom(target, ticket, gen);
+      if (gen !== migration) return;
+      holdSplitChecks();
       toast.success(msg('voice.toast.sfuBack'));
     })();
   }, SFU_RETRY_MS);
@@ -1190,14 +1211,65 @@ function scheduleSfuRetry() {
 // и заводился, там честнее сказать правду и оставить как есть.
 let splitHandled = false;
 
+// Комната переезжает не мгновенно и не у всех разом: пока идёт переезд,
+// участники НЕИЗБЕЖНО оказываются на разных транспортах — один уже в
+// медиасервере, другой ещё ждёт пропуск (до трёх секунд). Это середина переезда,
+// а не расщепление, и фолбэк на него — та самая кнопка «оборвать звонок»: первый
+// переехавший тут же тащил себя обратно в mesh, за ним второй, и комната
+// расходилась по транспортам уже всерьёз, без пути назад. Поэтому на время
+// переезда разбор расщепления откладываем — но именно откладываем, а не
+// пропускаем: осевшее расщепление обязано быть замечено, даже если нового
+// presence больше не придёт.
+const MIGRATION_SETTLE_MS = 6000;
+let settleUntil = 0;
+let splitTimer: ReturnType<typeof setTimeout> | null = null;
+let lastPresence: VoicePresence = {};
+
+/** Отложить разбор расщепления: комната сейчас переезжает. */
+function holdSplitChecks() {
+  settleUntil = Math.max(settleUntil, Date.now() + MIGRATION_SETTLE_MS);
+}
+
+function cancelSplitCheck() {
+  if (splitTimer) clearTimeout(splitTimer);
+  splitTimer = null;
+}
+
+/** Вернуться к разбору расщепления, когда комната осядет. */
+function scheduleSplitCheck(ms: number) {
+  cancelSplitCheck();
+  splitTimer = setTimeout(() => {
+    splitTimer = null;
+    if (!room) return;
+    const wait = settleUntil - Date.now();
+    if (wait > 0) {
+      scheduleSplitCheck(wait); // переезд успел продлиться — ждём дальше
+      return;
+    }
+    evaluateSplit();
+  }, ms);
+}
+
 function onPresence(presence: VoicePresence) {
   useVoiceStore.getState().setPresence(presence);
+  lastPresence = presence;
   if (!room) {
     splitHandled = false;
+    cancelSplitCheck();
     return;
   }
+  const wait = settleUntil - Date.now();
+  if (wait > 0) {
+    scheduleSplitCheck(wait);
+    return;
+  }
+  evaluateSplit();
+}
+
+function evaluateSplit() {
+  if (!room) return;
   const myId = socket().id;
-  const others = (presence[room] ?? []).filter((p) => p.id !== myId);
+  const others = (lastPresence[room] ?? []).filter((p) => p.id !== myId);
   const mine = transport === sfuTransport ? 'sfu' : 'p2p';
   const apart = others.filter((p) => (p.transport ?? 'p2p') !== mine);
   if (apart.length === 0) {
@@ -1314,6 +1386,12 @@ export function leaveVoice(hard = true) {
   if (hard && room) sfx().play('leave'); // покидаем звонок (не при смене канала)
   cancelSfuRetry();
   splitHandled = false;
+  // Незавершённый переезд обязан сойти с дистанции вместе с нами: доехав уже
+  // после выхода, он объявился бы в покинутой комнате.
+  migration++;
+  cancelSplitCheck();
+  settleUntil = 0;
+  lastPresence = {};
   if (room) socket().emit('leave');
   tx().leave();
   transport = null; // следующий вход выберет транспорт заново
@@ -1844,10 +1922,13 @@ export function initVoice() {
     if (!room) return;
     // Сессия восстановлена после кратковременного обрыва (socket.io connection
     // state recovery): id и комнаты те же, сервер не выкидывал нас из канала,
-    // P2P-медиа всё это время текло. Ничего не пересобираем — иначе живой звонок
-    // дёргался бы на каждое моргание сети.
+    // P2P-медиа всё это время могло течь. Звонок не пересобираем — иначе он
+    // дёргался бы на каждое моргание сети, — но и «всё само» тут неверно: то же
+    // моргание рвёт ICE, а лестница восстановления без сигналинга стоит на паузе.
+    // Пусть транспорт догонит тех, кто с связи всё-таки слетел.
     if (s.recovered) {
       setStatus('voice.status.connected', { room });
+      tx().resync?.();
       return;
     }
     // Полноценный реконнект: у сокета новый id — все старые соединения мертвы,
