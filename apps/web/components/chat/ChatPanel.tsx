@@ -1163,7 +1163,9 @@ export function ChatPanel() {
         )}
       </AnimatePresence>
 
-      <div className="shrink-0 px-4 pb-5 pt-1">
+      {/* Композер. На мобиле прижат к нижнему краю (навигация уехала в шапку):
+          отступ снизу — только под домашнюю полоску iPhone. */}
+      <div className="shrink-0 px-4 pb-5 pt-1 max-md:px-2 max-md:pb-[max(0.5rem,env(safe-area-inset-bottom))]">
         {/* «Печатает…» — тонкая строка над композером (высоту резервируем всегда) */}
         <div className="h-5 truncate px-2 text-[12px] leading-5 text-text-muted">
           {typing.length > 0 && (

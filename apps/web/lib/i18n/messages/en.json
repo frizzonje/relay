@@ -233,6 +233,8 @@
   "members.state.live": "on air",
   "members.state.muted": "muted",
   "members.state.speaking": "speaking",
+  "members.title.inChannel": "In channel",
+  "members.title.online": "Online",
   "menu.clipboardBlocked.copy": "The engine will not copy from a menu — the keyboard works ({shortcut}).",
   "menu.clipboardBlocked.paste": "The engine will not paste from a menu — the keyboard works ({shortcut}).",
   "menu.copy": "Copy",
@@ -245,10 +247,19 @@
   "menu.saveImage": "Save image",
   "menu.selectAll": "Select all",
   "menu.settings": "Settings…",
+  "mobile.back": "Back",
   "mobile.backToCall": "Back to the call",
-  "mobile.tab.channels": "Channels",
-  "mobile.tab.people": "People",
-  "mobile.tab.stage": "Stage",
+  "mobile.people": "Channel members",
+  "mobile.sub.inChannel": {
+    "one": "{count} in the channel",
+    "other": "{count} in the channel"
+  },
+  "mobile.sub.online": {
+    "one": "{count} online",
+    "other": "{count} online"
+  },
+  "mobile.sub.typing": "typing…",
+  "mobile.title.server": "Server status",
   "net.aria": "Connection: {grade}",
   "net.aria.relayed": "Connection: {grade}, relayed",
   "net.bitrate": "Bitrate",

@@ -26,7 +26,8 @@ export function OnlineMembers() {
 
   return (
     <aside className="panel panel-sidebar flex w-[232px] shrink-0 flex-col overflow-hidden border-l border-line max-md:grow max-md:border-l-0">
-      <h3 className="flex h-[52px] shrink-0 items-center gap-1 border-b border-line px-4 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-text-faint shadow-[0_1px_2px_rgba(0,0,0,0.2)]">
+      {/* На мобиле заголовок с тем же счётчиком уже стоит в шапке — не дублируем */}
+      <h3 className="flex h-[52px] shrink-0 items-center gap-1 border-b border-line px-4 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-text-faint shadow-[0_1px_2px_rgba(0,0,0,0.2)] max-md:hidden">
         {rt('members.online', { count: <AnimatedCount value={roster.length} /> })}
       </h3>
       <div className="flex-1 overflow-y-auto px-2 py-3">

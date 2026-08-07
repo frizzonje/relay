@@ -27,3 +27,28 @@ export const chatMessage: Variants = {
   hidden: { opacity: 0, y: 10 },
   show: { opacity: 1, y: 0, transition: { duration: 0.24, ease: [0.2, 0.8, 0.3, 1] } },
 };
+
+/**
+ * «Едущая» подложка активной вкладки (общий `layoutId` на всех вкладках группы).
+ * Жёстче springLayout: индикатор должен догонять палец, а не догонять с оттяжкой.
+ */
+export const springTab: Transition = { type: 'spring', stiffness: 520, damping: 42 };
+
+/** Смена содержимого вкладки: старое гаснет, новое приезжает снизу. */
+export const tabPanel: Variants = {
+  hidden: { opacity: 0, y: 6 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.18, ease: [0.2, 0.8, 0.3, 1] } },
+  exit: { opacity: 0, y: -4, transition: { duration: 0.12 } },
+};
+
+/**
+ * Заголовок мобильной шапки при переходе между экранами. `custom` — направление
+ * хода стопки: +1 вглубь (каналы → канал → состав), −1 назад по стрелке. Новый
+ * заголовок въезжает со стороны хода, старый уходит в противоположную — как в
+ * навигации нативных мессенджеров.
+ */
+export const navTitle: Variants = {
+  hidden: (dir: number) => ({ opacity: 0, x: dir * 18 }),
+  show: { opacity: 1, x: 0, transition: { duration: 0.22, ease: [0.2, 0.8, 0.3, 1] } },
+  exit: (dir: number) => ({ opacity: 0, x: dir * -18, transition: { duration: 0.14 } }),
+};

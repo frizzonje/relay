@@ -1,8 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { motion } from 'framer-motion';
 import { Icon, type IconName } from '@/components/ui/icon';
 import { cn } from '@/lib/utils';
+import { springTab } from '@/lib/motion';
 import { useUiStore } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import {
@@ -362,7 +364,7 @@ export function Controls() {
   if (view !== 'voice') return null;
 
   return (
-    <div className="relative flex h-16 shrink-0 items-center justify-center gap-2 border-t border-line bg-bg-main px-4">
+    <div className="relative flex h-16 shrink-0 items-center justify-center gap-2 border-t border-line bg-bg-main px-4 max-md:h-auto max-md:py-2.5 max-md:pb-[max(0.625rem,env(safe-area-inset-bottom))]">
       {/* Слева: живой эквалайзер «я говорю» + RTT-метка (раздел 02 референса) */}
       <div className="pointer-events-none absolute left-4 flex items-center gap-3">
         {micOn && (
@@ -415,12 +417,21 @@ export function Controls() {
               aria-pressed={screenMode === mode}
               onClick={() => setScreenMode(mode)}
               className={cn(
-                'rounded-[23px] px-4 py-[9px] text-xs font-bold uppercase tracking-[0.04em] text-text-muted outline-none transition hover:text-text-header focus-visible:ring-2 focus-visible:ring-line-strong active:scale-[0.94]',
-                screenMode === mode &&
-                  '!bg-accent-strong !text-bg-app shadow-[0_1px_4px_rgba(0,0,0,0.35)]',
+                'relative rounded-[23px] px-4 py-[9px] text-xs font-bold uppercase tracking-[0.04em] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong active:scale-[0.94]',
+                screenMode === mode ? 'text-bg-app' : 'text-text-muted hover:text-text-header',
               )}
             >
-              {t(mode === 'quality' ? 'controls.screen.quality' : 'controls.screen.fps')}
+              {/* Подложка выбранного режима переезжает между половинками */}
+              {screenMode === mode && (
+                <motion.span
+                  layoutId="screen-mode"
+                  transition={springTab}
+                  className="absolute inset-0 rounded-[23px] bg-accent-strong shadow-[0_1px_4px_rgba(0,0,0,0.35)]"
+                />
+              )}
+              <span className="relative">
+                {t(mode === 'quality' ? 'controls.screen.quality' : 'controls.screen.fps')}
+              </span>
             </button>
           ))}
         </SegToggle>
