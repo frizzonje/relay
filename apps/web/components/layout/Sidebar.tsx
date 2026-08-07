@@ -24,7 +24,6 @@ import {
   toggleMic,
   toggleSpeakers,
 } from '@/lib/voice';
-import { setChannelMode } from '@/lib/channels';
 import { channelMenuEntries } from '@/lib/channel-menu';
 import { openContextMenu } from '@/lib/context-menu';
 import { useSfuAvailable } from '@/lib/use-sfu';
@@ -40,6 +39,7 @@ import {
   RenameChannelDialog,
   type RenameChannelTarget,
 } from '@/components/layout/RenameChannelDialog';
+import { ChannelModeDialog, type ChannelModeTarget } from '@/components/layout/ChannelModeDialog';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { InviteDialog, LinkIcon } from '@/components/layout/InviteDialog';
 
@@ -273,6 +273,9 @@ export function Sidebar() {
   // Правка канала из меню: null — соответствующая модалка закрыта.
   const [renameTarget, setRenameTarget] = useState<RenameChannelTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteChannelTarget | null>(null);
+  // Смена транспорта канала: null — диалог закрыт. Спрашиваем всегда — переезд
+  // обрывает разговор у всех, кто в эфире.
+  const [modeTarget, setModeTarget] = useState<ChannelModeTarget | null>(null);
   // Подтверждение удаления сервера (спрашиваем — уносит с собой все каналы).
   const [confirmServerDelete, setConfirmServerDelete] = useState(false);
 
@@ -441,7 +444,13 @@ export function Sidebar() {
                 mode={c.removable ? (c.mode ?? 'p2p') : undefined}
                 onToggleMode={
                   c.removable
-                    ? () => setChannelMode(c.id, c.mode === 'sfu' ? 'p2p' : 'sfu')
+                    ? () =>
+                        setModeTarget({
+                          id: c.id,
+                          name: c.name,
+                          next: c.mode === 'sfu' ? 'p2p' : 'sfu',
+                          occupants: presence[c.slug]?.length ?? 0,
+                        })
                     : undefined
                 }
                 sfuAvailable={sfuAvailable}
@@ -577,6 +586,12 @@ export function Sidebar() {
         target={deleteTarget}
         onOpenChange={(open) => {
           if (!open) setDeleteTarget(null);
+        }}
+      />
+      <ChannelModeDialog
+        target={modeTarget}
+        onOpenChange={(open) => {
+          if (!open) setModeTarget(null);
         }}
       />
       <ConfirmDialog

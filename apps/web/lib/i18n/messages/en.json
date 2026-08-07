@@ -12,6 +12,16 @@
   "audio.unlock": "Your browser muted the sound — tap to turn it on",
   "channel.actions": "Channel actions",
   "channel.invite": "Invite by link",
+  "channel.mode.confirm.body.p2p": "Voice in this channel goes back to direct connections between participants, with no media server in between.",
+  "channel.mode.confirm.body.sfu": "Voice in this channel starts going through the media server: everyone sends their audio once instead of once per participant — that is what carries a call of four and up with video.",
+  "channel.mode.confirm.occupied": {
+    "one": "{count} person is on air right now — the break happens in front of them.",
+    "other": "{count} people are on air right now — the break happens in front of them."
+  },
+  "channel.mode.confirm.submit": "Switch",
+  "channel.mode.confirm.title.p2p": "Switch “{name}” to direct calls?",
+  "channel.mode.confirm.title.sfu": "Route “{name}” through the media server?",
+  "channel.mode.confirm.warning": "The call breaks for a couple of seconds: everyone in the channel reconnects over the new transport.",
   "channel.mode.locked": "The media server is not running — direct calls only",
   "channel.mode.p2p": "Direct between participants. Click to route through the media server",
   "channel.mode.sfu": "Routed through the media server. Click to call directly",
