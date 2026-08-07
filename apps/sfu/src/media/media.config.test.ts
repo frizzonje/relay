@@ -1,10 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  MEDIA_CODECS,
-  announcedIp,
-  webRtcTransportOptions,
-  workerSettings,
-} from './media.config';
+import { MEDIA_CODECS, announcedIp, webRtcTransportOptions, workerSettings } from './media.config';
 
 /**
  * Настройки медиа. Каждая проверка здесь стоит за конкретным «слышно, но не

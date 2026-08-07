@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import type { Socket } from 'socket.io';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,7 +19,6 @@ const SECRET = 'секрет-медиасервера';
 
 /** Пропуск в том виде, в каком его выдаёт api (формат байт-в-байт). */
 function issue(claims: { room: string; peerId: string; name?: string }, ttlMs = 60_000) {
-  const { createHmac } = require('node:crypto') as typeof import('node:crypto');
   const body = Buffer.from(
     JSON.stringify({ name: '', ...claims, exp: Date.now() + ttlMs }),
     'utf8',
@@ -88,9 +88,9 @@ describe('подключение', () => {
     const a = await connect('эфир', 'a', 'Аня');
     a.clear();
     const b = await connect('эфир', 'b', 'Боря');
-    expect((b.last('welcome') as { peers: { peerId: string }[] }).peers.map((p) => p.peerId)).toEqual(
-      ['a'],
-    );
+    expect(
+      (b.last('welcome') as { peers: { peerId: string }[] }).peers.map((p) => p.peerId),
+    ).toEqual(['a']);
     expect(a.last('peer-joined')).toEqual({ peerId: 'b', name: 'Боря' });
   });
 
@@ -263,9 +263,9 @@ describe('дорожки', () => {
       ok: false,
       error: 'bad-kind',
     });
-    expect(await gw.handleProduce(sock(s), { transportId, kind: 'audio', source: 'радио' })).toEqual(
-      { ok: false, error: 'bad-source' },
-    );
+    expect(
+      await gw.handleProduce(sock(s), { transportId, kind: 'audio', source: 'радио' }),
+    ).toEqual({ ok: false, error: 'bad-source' });
   });
 
   it('потолок в шесть дорожек на участника', async () => {
@@ -279,17 +279,19 @@ describe('дорожки', () => {
       });
       expect(ack.ok, `#${i}`).toBe(true);
     }
-    expect(
-      await gw.handleProduce(sock(s), { transportId, kind: 'audio', source: 'mic' }),
-    ).toEqual({ ok: false, error: 'too-many-producers' });
+    expect(await gw.handleProduce(sock(s), { transportId, kind: 'audio', source: 'mic' })).toEqual({
+      ok: false,
+      error: 'too-many-producers',
+    });
   });
 
   it('сбой produce — отказ, а не исключение', async () => {
     const { s, transportId } = await withTransport('эфир', 'a');
     workers.routers[0].transports[0].failProduce = true;
-    expect(
-      await gw.handleProduce(sock(s), { transportId, kind: 'audio', source: 'mic' }),
-    ).toEqual({ ok: false, error: 'produce-failed' });
+    expect(await gw.handleProduce(sock(s), { transportId, kind: 'audio', source: 'mic' })).toEqual({
+      ok: false,
+      error: 'produce-failed',
+    });
   });
 
   it('закрытие транспорта снимает его дорожки с участника', async () => {

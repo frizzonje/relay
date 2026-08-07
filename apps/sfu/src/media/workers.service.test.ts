@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { cpus } from 'node:os';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 /**
  * Пул воркеров. Настоящий mediasoup.createWorker поднимает C++-процесс и
