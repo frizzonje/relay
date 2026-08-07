@@ -32,6 +32,7 @@ import {
 } from './ownership';
 import { UnlockAttempts, clientIp, hashServerPassword, verifyServerPassword } from './unlock';
 import {
+  ANON_NAME,
   LIMIT,
   optional,
   str,
@@ -277,6 +278,13 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // кто ввёл пароль. Право на сам сервер, не на его каналы (те — canSee).
   private isOpenTo(client: Socket, server: ServerEntry): boolean {
     return !server.passwordHash || this.unlockedOf(client)?.has(server.id) === true;
+  }
+
+  // Подпись этого сокета в текстовом канале. Имя самоназванное (см. S1 ревизии),
+  // но по нему же сверяется авторство правки и удаления, поэтому читается оно
+  // в одном месте и с одним запасным вариантом.
+  private chatNameOf(client: Socket): string {
+    return (client.data.chatName as string) || ANON_NAME;
   }
 
   // Видит ли сокет этот канал: закрытый сервер — только после ввода пароля.
@@ -1077,7 +1085,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const room = this.chat.room(slug);
     client.join(room);
     client.data.chatRoom = room;
-    client.data.chatName = name || 'Аноним';
+    client.data.chatName = name || ANON_NAME;
 
     // Новичку — история канала.
     client.emit('chat-history', this.chat.messages(room));
@@ -1116,7 +1124,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
     const msg: ChatMessage = {
       id: randomUUID(),
-      name: (client.data.chatName as string) || 'Аноним',
+      name: this.chatNameOf(client),
       text,
       ts: Date.now(),
       ...(attachment ? { attachment } : {}),
@@ -1175,7 +1183,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
     const msg = this.chat.find(room, id);
     if (!msg) return;
-    const name = (client.data.chatName as string) || 'Аноним';
+    const name = this.chatNameOf(client);
     if (msg.name !== name) return;
 
     msg.text = text;
@@ -1196,7 +1204,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
     const msg = this.chat.find(room, id);
     if (!msg) return;
-    const name = (client.data.chatName as string) || 'Аноним';
+    const name = this.chatNameOf(client);
     if (msg.name !== name) return;
 
     if (!this.chat.remove(room, msg)) return;
@@ -1210,7 +1218,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!this.allow(client) || this.isGuest(client)) return;
     const room = client.data.chatRoom as string | undefined;
     if (!room) return;
-    const name = (client.data.chatName as string) || 'Аноним';
+    const name = this.chatNameOf(client);
     client.to(room).emit('chat-typing', { name });
   }
 
@@ -1228,7 +1236,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const msg = this.chat.findAny(room, id);
     if (!msg) return;
 
-    const name = (client.data.chatName as string) || 'Аноним';
+    const name = this.chatNameOf(client);
     const reactions = this.chat.toggleReaction(msg, name, emoji);
 
     this.server.to(room).emit('chat-reaction', { id, reactions });
@@ -1318,7 +1326,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       if (!room) continue;
       (presence[room] ??= []).push({
         id,
-        name: (sock.data.name as string) || 'Аноним',
+        name: (sock.data.name as string) || ANON_NAME,
         micOn: sock.data.micOn !== false,
         deafened: sock.data.deafened === true,
         transport: sock.data.transport === 'sfu' ? 'sfu' : 'p2p',
