@@ -52,6 +52,15 @@ final class CallEngine: NSObject, ObservableObject {
         var deafened = false
         var state: CallParticipant.State = .connecting
         var failWork: DispatchWorkItem?
+        // Ступень лестницы восстановления: 0 — ничего, 1 — сделан ICE-restart,
+        // 2 — идут пересборки соединения. Сбрасывается при выходе на связь.
+        var recoverStage = 0
+        // Сколько раз пересобирали: задаёт паузу и политику ICE следующей попытки.
+        var rebuilds = 0
+        // Отпечаток DTLS собеседника. Сменился — за тем же id уже ДРУГОЙ pc
+        // (он пересобрал связь), и наш надо выбрасывать, а не доводить
+        // ренеготиацией: чужой отпечаток на живой транспорт не встаёт.
+        var fingerprint: String?
 
         init(id: String, name: String, pc: RTCPeerConnection, polite: Bool) {
             self.id = id
@@ -242,9 +251,26 @@ final class CallEngine: NSObject, ObservableObject {
 
     private func handleRemoteOffer(_ msg: SdpMessage) {
         guard room != nil, localAudioTrack != nil else { return }
+        let remoteFp = Self.fingerprint(of: msg.sdp)
+
+        // Собеседник пересобрал связь (его лестница дошла до пересборки) или наш
+        // pc уже труп — принимать offer на него нельзя, связь так не поднимется.
+        // Плитку участника при этом сохраняем: он никуда не уходил.
+        if let old = peers[msg.from] {
+            let rebuilt = old.fingerprint != nil && remoteFp != nil && old.fingerprint != remoteFp
+            let dead = old.pc.connectionState == .failed || old.pc.signalingState == .closed
+            if rebuilt || dead {
+                NSLog("[relay] peer \(old.name) rebuilt (\(rebuilt ? "new fingerprint" : "dead pc"))")
+                old.failWork?.cancel()
+                old.pc.close()
+                peers.removeValue(forKey: msg.from)
+            }
+        }
+
         let fresh = peers[msg.from] == nil
         if fresh { createPeer(id: msg.from, name: msg.name ?? "Участник", initiator: false) }
         guard let peer = peers[msg.from] else { return }
+        peer.fingerprint = remoteFp ?? peer.fingerprint
         let pc = peer.pc
 
         // Perfect negotiation: невежливая сторона при коллизии игнорирует offer.
@@ -278,6 +304,9 @@ final class CallEngine: NSObject, ObservableObject {
 
     private func handleRemoteAnswer(_ msg: SdpMessage) {
         guard let peer = peers[msg.from], peer.pc.signalingState == .haveLocalOffer else { return }
+        // Отпечаток запоминаем и с answer'а: когда инициаторы мы, offer'ов от
+        // собеседника может не быть вовсе — а сравнивать при его пересборке надо.
+        peer.fingerprint = Self.fingerprint(of: msg.sdp) ?? peer.fingerprint
         let remote = RTCSessionDescription(type: .answer, sdp: msg.sdp)
         peer.pc.setRemoteDescription(remote) { [weak self] err in
             self?.main {
@@ -316,12 +345,15 @@ final class CallEngine: NSObject, ObservableObject {
     // Peer lifecycle
     // ─────────────────────────────────────────────────────────────────────────
 
-    private func createPeer(id: String, name: String, initiator: Bool) {
+    private func createPeer(id: String, name: String, initiator: Bool, relayOnly: Bool = false) {
         let config = RTCConfiguration()
         config.iceServers = iceServers
         config.sdpSemantics = .unifiedPlan
         config.continualGatheringPolicy = .gatherContinually
         config.iceCandidatePoolSize = 4
+        // relay-only включаем на пересборке после провала прямого пути (см.
+        // rebuildPeer); обычно .all — host + srflx + relay.
+        config.iceTransportPolicy = relayOnly ? .relay : .all
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         guard
             let pc = Self.factory.peerConnection(with: config, constraints: constraints, delegate: nil)
@@ -338,6 +370,11 @@ final class CallEngine: NSObject, ObservableObject {
         // Инициатор (мы — новичок) сразу шлёт offer; отвечающая сторона своё аудио
         // унесёт в answer, встречный offer не нужен.
         if initiator { makeOffer(peer) }
+
+        // Сторож и на ПЕРВОЕ соединение: offer мог не доехать, ICE — не собраться,
+        // а сам по себе такой pc из .connecting не выйдет никогда. Окно шире
+        // обычного — холодный старт через TURN бывает небыстрым.
+        armRecovery(peer, delay: Self.recoverWindow * 2)
     }
 
     private func makeOffer(_ peer: Peer) {
@@ -430,26 +467,124 @@ final class CallEngine: NSObject, ObservableObject {
         }
         guard peer.state != state else { return }
         peer.state = state
-        peer.failWork?.cancel()
-        peer.failWork = nil
         switch state {
         case .connected:
+            peer.failWork?.cancel()
+            peer.failWork = nil
+            peer.recoverStage = 0
+            peer.rebuilds = 0
             tuneAudioSenders(peer)
         case .reconnecting:
-            // >8с в disconnected → restartIce (protocol.md §7.2.4).
-            let work = DispatchWorkItem { [weak peer] in peer?.pc.restartIce() }
-            peer.failWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
+            // disconnected нередко поднимается сам — даём паузу и идём по лестнице.
+            // Если лестница уже идёт, её сторож главнее: он считает окно ступени.
+            if peer.recoverStage == 0 { armRecovery(peer, delay: Self.recoverGrace) }
         case .failed:
-            peer.pc.restartIce()
-            let id = peer.id
-            let work = DispatchWorkItem { [weak self] in self?.removePeer(id) }
-            peer.failWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: work)
+            recover(peer)
         case .connecting:
+            // Промежуточное состояние, в том числе сразу после restartIce. Сторож
+            // ступени здесь НЕ снимаем: раньше он на этом переходе гасился, и
+            // связь, не дошедшая до connected, застревала здесь навсегда.
             break
         }
         syncParticipants()
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Лестница восстановления связи с собеседником (та же, что в web: см.
+    // apps/web/lib/voice/mesh.ts). Ступень 1 — ICE-restart, ступень 2 — пересборка
+    // соединения с нуля, через раз только через TURN. Пересборки повторяются с
+    // растущей паузой и не кончаются: снять собеседника — дело сервера
+    // (`peer-left`). Раньше лестница сдавалась и убирала участника через 15 с, и
+    // звонок оставался молчать до перезахода.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private static let recoverGrace: TimeInterval = 4
+    private static let recoverWindow: TimeInterval = 7
+    private static let politeLag: TimeInterval = 2.5
+    private static let rebuildMaxDelay: TimeInterval = 30
+
+    private func rebuildDelay(_ rebuilds: Int) -> TimeInterval {
+        min(Self.recoverWindow * TimeInterval(max(1, rebuilds)), Self.rebuildMaxDelay)
+    }
+
+    /// Сторож следующей ступени. «Вежливая» сторона ждёт чуть дольше: пересборку
+    /// должен вести кто-то один, иначе оба выбрасывают живые pc навстречу.
+    private func armRecovery(_ peer: Peer, delay: TimeInterval) {
+        peer.failWork?.cancel()
+        let id = peer.id
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let peer = self.peers[id] else { return }
+            peer.failWork = nil
+            self.recover(peer)
+        }
+        peer.failWork = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + delay + (peer.polite ? Self.politeLag : 0), execute: work)
+    }
+
+    private func recover(_ peer: Peer) {
+        peer.failWork?.cancel()
+        peer.failWork = nil
+        guard peer.state != .connected else {
+            peer.recoverStage = 0
+            return
+        }
+        // Без сигналинга ни одна ступень не доедет до собеседника — держим паузу.
+        guard signaling.state == .connected else {
+            armRecovery(peer, delay: Self.recoverWindow)
+            return
+        }
+        if peer.recoverStage == 0 {
+            peer.recoverStage = 1
+            NSLog("[relay] recover \(peer.name): stage 1 restart-ice")
+            peer.pc.restartIce()
+            armRecovery(peer, delay: Self.recoverWindow)
+            return
+        }
+        rebuildPeer(peer)
+    }
+
+    /// Ступень 2: закрыть мёртвый pc и поднять новый инициатором. Удалённая сторона
+    /// узнает пересборку по сменившемуся отпечатку DTLS (см. handleRemoteOffer).
+    private func rebuildPeer(_ peer: Peer) {
+        guard localAudioTrack != nil else { return }
+        let rebuilds = peer.rebuilds + 1
+        // Нечётная попытка — только через TURN (спасает симметричный NAT/DPI),
+        // чётная — обычным путём: сеть могла и починиться, а реле лишний крюк.
+        let relayOnly = hasTurn && rebuilds % 2 == 1
+        let (id, name) = (peer.id, peer.name)
+        NSLog("[relay] recover \(name): stage 2 rebuild #\(rebuilds)\(relayOnly ? " relay-only" : "")")
+
+        peer.failWork?.cancel()
+        peer.pc.close()
+        peers.removeValue(forKey: id)
+        createPeer(id: id, name: name, initiator: true, relayOnly: relayOnly)
+
+        guard let fresh = peers[id] else { return }
+        fresh.recoverStage = 2
+        fresh.rebuilds = rebuilds
+        // Пауза растёт: сеть, не давшая связь третий раз подряд, не починится от
+        // того, что мы будем долбиться в неё каждые семь секунд.
+        armRecovery(fresh, delay: rebuildDelay(rebuilds))
+        syncParticipants()
+    }
+
+    private var hasTurn: Bool {
+        iceServers.contains { server in
+            server.urlStrings.contains { $0.lowercased().hasPrefix("turn") }
+        }
+    }
+
+    /// Отпечаток DTLS из SDP (`a=fingerprint:sha-256 AB:CD:…`) — единственный
+    /// признак, по которому видно, что за тем же id стоит уже другой pc.
+    private static func fingerprint(of sdp: String) -> String? {
+        for line in sdp.split(separator: "\n") {
+            let l = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard l.hasPrefix("a=fingerprint:") else { continue }
+            let parts = l.dropFirst("a=fingerprint:".count).split(separator: " ")
+            if parts.count >= 2 { return String(parts[1]) }
+        }
+        return nil
     }
 
     // Потолок битрейта голосового sender'а (SDP задаёт предел кодеку, а это —
