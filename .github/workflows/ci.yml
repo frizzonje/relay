@@ -3,9 +3,12 @@
 # production stack (infra/docker-compose.e2e.yml).
 name: CI
 
+# `fix/**` рядом с `refactor/**` не для симметрии: длинная ветка без PR не
+# запускала здесь ничего, и гонка typecheck/build прожила в ней 48 коммитов —
+# на машине разработчика её не видно, там `.next` лежит с прошлого раза.
 on:
   push:
-    branches: [main, 'refactor/**']
+    branches: [main, 'refactor/**', 'fix/**']
   pull_request:
 
 jobs:
