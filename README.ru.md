@@ -72,8 +72,8 @@ curl -fsSL https://raw.githubusercontent.com/frizzonje/relay/main/install.sh | b
 ```
 apps/
   web/        Next.js 15 (App Router, React 19, Tailwind, Zustand, i18n en/ru)
-  api/        NestJS 10 + Socket.io (сигналинг, чат, реестр, загрузки)
-  sfu/        NestJS 10 + mediasoup (опциональный медиасервер для больших звонков)
+  api/        NestJS 11 + Socket.io (сигналинг, чат, реестр, загрузки)
+  sfu/        NestJS 11 + mediasoup (опциональный медиасервер для больших звонков)
 packages/
   shared/     @relay/shared — общий контракт: типы, socket-события, HMAC-auth
 clients/

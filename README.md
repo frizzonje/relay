@@ -72,8 +72,8 @@ Native clients implement one contract — [docs/protocol.md](docs/protocol.md) �
 ```
 apps/
   web/        Next.js 15 (App Router, React 19, Tailwind, Zustand, i18n en/ru)
-  api/        NestJS 10 + Socket.io (signaling, chat, registry, uploads)
-  sfu/        NestJS 10 + mediasoup (optional media server for large calls)
+  api/        NestJS 11 + Socket.io (signaling, chat, registry, uploads)
+  sfu/        NestJS 11 + mediasoup (optional media server for large calls)
 packages/
   shared/     @relay/shared — shared contract: types, socket events, HMAC auth
 clients/

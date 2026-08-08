@@ -2,25 +2,25 @@ import type { Channel, Server } from '@relay/shared';
 
 /**
  * Статические данные shell-а: сиды реестра серверов/каналов.
- * ДОЛЖНЫ совпадать с дефолтами в signaling.gateway.ts.
+ * ДОЛЖНЫ совпадать с дефолтами в registry.service.ts.
  */
 
 /**
  * Главный сервер relay — неудаляем; его id носят каналы по умолчанию.
- * ДОЛЖЕН совпадать с MAIN_SERVER_ID в gateway.
+ * ДОЛЖЕН совпадать с MAIN_SERVER_ID в реестре api.
  */
 export const MAIN_SERVER_ID = 'relay-main';
 
 /**
  * Сид реестра серверов — только главный, до прихода списка с сервера. ДОЛЖЕН
- * совпадать с DEFAULT_SERVERS в apps/api/src/gateway/signaling.gateway.ts.
+ * совпадать с DEFAULT_SERVERS в apps/api/src/gateway/registry.service.ts.
  */
 export const DEFAULT_SERVERS: Server[] = [{ id: MAIN_SERVER_ID, name: 'relay', removable: false }];
 
 /**
  * Сид реестра каналов — им наполняем стор до прихода реального списка с сервера
  * (и он же виден, если API недоступен). ДОЛЖЕН совпадать с DEFAULT_CHANNELS в
- * apps/api/src/gateway/signaling.gateway.ts (тот же id/slug/serverId/removable).
+ * apps/api/src/gateway/registry.service.ts (тот же id/slug/serverId/removable).
  *
  * Набор главного сервера фиксирован: два голосовых канала (напрямую и через
  * медиасервер) и один текстовый. Создавать, удалять и переименовывать каналы
