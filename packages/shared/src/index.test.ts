@@ -87,10 +87,14 @@ describe('константы совпадают с копией в api', () => {
   });
 
   it('лимиты длин — те, на которых сервер режет', () => {
-    const gateway = apiSource('gateway/signaling.gateway.ts');
-    expect(gateway).toContain(`.slice(0, ${LIMITS.room})`); // слаг комнаты
-    expect(gateway).toContain(`.slice(0, ${LIMITS.name})`); // имя участника
-    expect(gateway).toContain(`.slice(0, ${LIMITS.chatText})`); // текст сообщения
+    // Числа переехали: обработчики больше не режут по литералу на месте, все
+    // потолки объявлены один раз в `LIMIT` (apps/api/src/gateway/protocol.ts).
+    // Имена там по смыслу поля, здесь — по смыслу для клиента; совпадать
+    // обязаны значения.
+    const protocol = apiSource('gateway/protocol.ts');
+    expect(protocol).toMatch(new RegExp(`^\\s*slug: ${LIMITS.room},$`, 'm')); // слаг комнаты
+    expect(protocol).toMatch(new RegExp(`^\\s*tag: ${LIMITS.name},$`, 'm')); // тег участника
+    expect(protocol).toMatch(new RegExp(`^\\s*message: ${LIMITS.chatText},$`, 'm')); // текст реплики
   });
 });
 
