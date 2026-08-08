@@ -26,6 +26,31 @@ jobs:
       - run: pnpm format:check
       - run: pnpm turbo run typecheck test build
 
+  # Known-vulnerable dependencies in what we actually ship. `--prod` on purpose:
+  # a bad devDependency is a bad afternoon, a bad runtime dependency is someone
+  # else's server — and `POST /api/upload` is the one public endpoint that takes
+  # a body from a stranger (audit B6).
+  #
+  # This job can go red without a single commit, because advisories are
+  # published against code that did not change. That is the feature, not a
+  # defect: news about what we ship is news whether or not we pushed today. The
+  # answer is a version bump, or `pnpm.overrides` when the fix is upstream of a
+  # pin we do not control — and when there is genuinely no patched version yet,
+  # `pnpm.auditConfig.ignoreCves` in package.json, which is a decision someone
+  # signs in a diff instead of a silence nobody notices.
+  audit:
+    name: prod dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: pnpm audit --prod --audit-level=high
+
   # The installer and the `relay` CLI: the part of the product that runs on
   # other people's servers, and until now the part nothing tested. No unit test
   # imports a bash script and e2e drives the app, not the machine it sits on —

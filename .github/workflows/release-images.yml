@@ -185,10 +185,30 @@ jobs:
       - name: Test
         run: bash infra/tests/run.sh
 
+  # То же, что и в CI веток, и по той же причине, что gate: по тегу CI не бежит.
+  # Разница в цене ошибки — здесь тег уезжает в GHCR, откуда его заберут все
+  # живые инсталляции разом. Заметьте, красным это может стать без единого
+  # коммита: совет опубликовали против кода, который не менялся. Тогда порядок
+  # обратный привычному — сперва подъём зависимости (или `pnpm.overrides`), и
+  # только потом тег. Патча нет вовсе — `pnpm.auditConfig.ignoreCves`: решение,
+  # которое кто-то подписал диффом. Идёт параллельно gate и e2e.
+  audit:
+    name: prod dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: pnpm audit --prod --audit-level=high
+
   build:
     name: build · push (${{ matrix.app }})
     runs-on: ubuntu-latest
-    needs: [meta, gate, e2e, sfu-smoke, shell]
+    needs: [meta, gate, e2e, sfu-smoke, shell, audit]
     strategy:
       matrix:
         include:
