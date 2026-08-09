@@ -66,7 +66,7 @@ export default function LoginPage() {
       >
         <motion.div animate={shake} className="glass glass-2 overflow-hidden">
           <div className="flex flex-col items-center px-7 pb-7 pt-8 text-center">
-            <Logo size={46} animate nodeBg="#0d0f12" />
+            <Logo size={46} animate nodeBg="var(--color-bg-panel)" />
             <h1 className="mt-4 text-2xl font-semibold tracking-tight text-text-header">relay</h1>
             {/* Какая именно инсталляция спрашивает пароль. В браузере это дублирует
                 адресную строку, а в нативном клиенте её нет вовсе — там человек

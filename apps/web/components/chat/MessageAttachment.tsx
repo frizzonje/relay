@@ -2,29 +2,10 @@
 
 import { useState } from 'react';
 import type { Attachment } from '@relay/shared';
+import { Icon } from '@/components/ui/icon';
 import { fmtBytes } from '@/lib/format';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import { useT } from '@/lib/i18n';
-
-/** Глазок-иконка для плашки спойлера (Feather eye). */
-function EyeIcon() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
-      <circle cx="12" cy="12" r="3" />
-    </svg>
-  );
-}
 
 /**
  * Вложение в сообщении: картинка инлайн, mp3 — плеером, прочее — карточкой
@@ -67,7 +48,7 @@ export function MessageAttachment({ att }: { att: Attachment }) {
           )}
           <span className="absolute inset-0 grid place-items-center">
             <span className="flex items-center gap-1.5 whitespace-nowrap rounded-full border border-line-strong bg-bg-app/80 px-3.5 py-1.5 font-mono text-[11px] uppercase tracking-[0.16em] text-text-header backdrop-blur-sm transition-colors group-hover/spoiler:bg-bg-app">
-              <EyeIcon />
+              <Icon name="eye" className="text-[13px]" />
               {t('chat.spoiler.badge')}
             </span>
           </span>
@@ -90,7 +71,7 @@ export function MessageAttachment({ att }: { att: Attachment }) {
             src={att.url}
             alt={att.name}
             loading="lazy"
-            className="block max-h-[340px] max-w-full rounded-[10px] border border-bg-active bg-[#1e1f22] transition-[filter] hover:brightness-105"
+            className="block max-h-[340px] max-w-full rounded-[10px] border border-bg-active bg-media transition-[filter] hover:brightness-105"
           />
         </button>
         <ImageLightbox

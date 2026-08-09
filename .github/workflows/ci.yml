@@ -3,9 +3,12 @@
 # production stack (infra/docker-compose.e2e.yml).
 name: CI
 
+# `fix/**` рядом с `refactor/**` не для симметрии: длинная ветка без PR не
+# запускала здесь ничего, и гонка typecheck/build прожила в ней 48 коммитов —
+# на машине разработчика её не видно, там `.next` лежит с прошлого раза.
 on:
   push:
-    branches: [main, 'refactor/**']
+    branches: [main, 'refactor/**', 'fix/**']
   pull_request:
 
 jobs:
@@ -26,6 +29,49 @@ jobs:
       - run: pnpm format:check
       - run: pnpm turbo run typecheck test build
 
+  # Known-vulnerable dependencies in what we actually ship. `--prod` on purpose:
+  # a bad devDependency is a bad afternoon, a bad runtime dependency is someone
+  # else's server — and `POST /api/upload` is the one public endpoint that takes
+  # a body from a stranger (audit B6).
+  #
+  # This job can go red without a single commit, because advisories are
+  # published against code that did not change. That is the feature, not a
+  # defect: news about what we ship is news whether or not we pushed today. The
+  # answer is a version bump, or `pnpm.overrides` when the fix is upstream of a
+  # pin we do not control — and when there is genuinely no patched version yet,
+  # `pnpm.auditConfig.ignoreCves` in package.json, which is a decision someone
+  # signs in a diff instead of a silence nobody notices.
+  audit:
+    name: prod dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: pnpm audit --prod --audit-level=high
+
+  # The installer and the `relay` CLI: the part of the product that runs on
+  # other people's servers, and until now the part nothing tested. No unit test
+  # imports a bash script and e2e drives the app, not the machine it sits on —
+  # so `relay update`, which rewrites the compose file and the CLI itself on a
+  # live installation, could only be found wrong by someone's server.
+  # Network and docker are stubbed; nothing here reaches GitHub or GHCR.
+  shell:
+    name: installer + relay CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          docker run --rm -v "$PWD":/mnt -w /mnt koalaman/shellcheck:stable -S warning \
+            install.sh infra/relay-cli.sh infra/coturn-entrypoint.sh infra/api-entrypoint.sh infra/tests/*.sh
+      - name: Test
+        run: bash infra/tests/run.sh
+
   docker:
     name: docker build (api + web + sfu)
     runs-on: ubuntu-latest
@@ -39,6 +85,24 @@ jobs:
       # runtime, but a broken image would only surface at `v*` tag time otherwise.
       - name: Build sfu image
         run: docker build -f apps/sfu/Dockerfile -t relay-sfu:ci .
+
+      # api and web are exercised by the e2e stack; sfu is behind a compose
+      # profile and is started by nothing, so nothing would notice that its
+      # image cannot boot. It is the one image that runs a native binary
+      # (mediasoup worker) under a non-root USER — exactly the pair that breaks
+      # quietly. So: start it, ask it, stop it.
+      - name: Smoke-run sfu image
+        run: |
+          docker run -d --name sfu-smoke -e SFU_SECRET=smoke -p 3100:3100 relay-sfu:ci
+          for i in $(seq 30); do
+            if curl -fsS http://localhost:3100/health; then echo; break; fi
+            if [ "$i" = 30 ]; then echo "sfu did not answer /health"; docker logs sfu-smoke; exit 1; fi
+            sleep 1
+          done
+          # The owner of /proc/1 is the user the service actually runs as —
+          # `id` inside exec would only echo the image's USER back at us.
+          test "$(docker exec sfu-smoke stat -c %U /proc/1)" = node
+          docker rm -f sfu-smoke
 
   e2e:
     name: e2e (Playwright)

@@ -18,8 +18,9 @@
 set -euo pipefail
 
 # ── Config (override via env) ────────────────────────────────────────────────
+RELAY_REPO="${RELAY_REPO:-frizzonje/relay}"
 RELAY_REF="${RELAY_REF:-main}"
-RAW_BASE="${RELAY_RAW_BASE:-https://raw.githubusercontent.com/frizzonje/relay/${RELAY_REF}}"
+RAW_BASE="${RELAY_RAW_BASE:-https://raw.githubusercontent.com/${RELAY_REPO}/${RELAY_REF}}"
 INSTALL_DIR="${RELAY_DIR:-/opt/relay}"
 COMPOSE_FILE="docker-compose.prod.yml"
 
@@ -94,6 +95,14 @@ if [ "$(id -u)" -ne 0 ]; then
   die "Please run as root. Re-run with:  curl -fsSL ${RAW_BASE}/install.sh | sudo bash"
 fi
 
+# Newest published release, without jq — a fresh Debian box has curl and nothing
+# else. Prints nothing when GitHub is unreachable or has no releases yet; every
+# caller treats that as "follow :latest" rather than as an error.
+latest_release() {
+  curl -fsSL --max-time 10 "https://api.github.com/repos/${RELAY_REPO}/releases/latest" 2>/dev/null \
+    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p' | head -n1
+}
+
 hr
 printf '%s  relay self-host installer%s\n' "$B" "$N"
 hr
@@ -140,8 +149,12 @@ if ask_yn "Do you have a domain pointed at this server? (needed for a trusted HT
   while :; do
     D="$(ask "  Domain (e.g. relay.example.com):" "")"
     [ -z "$D" ] && { warn "Empty domain."; continue; }
-    # DNS check: does it resolve to our public IP?
-    RES="$(getent ahostsv4 "$D" 2>/dev/null | awk 'NR==1{print $1}')"
+    # DNS check: does it resolve to our public IP? `|| true` because of
+    # `pipefail`: on a host without getent (any non-glibc distro reached through
+    # the "continue anyway?" branch above) the pipeline fails, and `set -e` would
+    # end the installer right here — silently, mid-question. An unanswered DNS
+    # check is meant to be a warning, not the end of the install.
+    RES="$(getent ahostsv4 "$D" 2>/dev/null | awk 'NR==1{print $1}' || true)"
     if [ -n "$PUBIP" ] && [ -n "$RES" ] && [ "$RES" = "$PUBIP" ]; then
       ok "  $D → $RES (matches this server)"
     elif [ -n "$RES" ]; then
@@ -212,36 +225,66 @@ fi
 hr
 info "Installing to $INSTALL_DIR…"
 mkdir -p "$INSTALL_DIR"
-curl -fsSL "${RAW_BASE}/${COMPOSE_FILE}" -o "$INSTALL_DIR/${COMPOSE_FILE}" || die "Failed to download ${COMPOSE_FILE}."
-curl -fsSL "${RAW_BASE}/infra/Caddyfile"  -o "$INSTALL_DIR/Caddyfile"       || die "Failed to download Caddyfile."
-# Both are bind-mounted by the compose file. A missing source would make docker
-# silently create a directory in its place, and both consumers then fail in a
-# way that looks nothing like "the file wasn't downloaded" — so fetch them even
-# when the corresponding feature is off.
-curl -fsSL "${RAW_BASE}/infra/tls-mode.caddy" -o "$INSTALL_DIR/tls-mode.caddy" || die "Failed to download tls-mode.caddy."
-curl -fsSL "${RAW_BASE}/infra/coturn-entrypoint.sh" -o "$INSTALL_DIR/coturn-entrypoint.sh" || die "Failed to download coturn-entrypoint.sh."
-ok "Stack files downloaded"
 
-# ── 7b. TLS mode ─────────────────────────────────────────────────────────────
-# The downloaded tls-mode.caddy is empty (comments only), which is exactly right
-# for a domain or for the internal CA — Caddy picks the issuer by hostname. A
-# bare IP is the one case it can't infer: Let's Encrypt refuses IP identifiers
-# outside the `shortlived` profile, and Caddy won't try ACME for an IP at all
-# unless told to. `issuer internal` behind it is the safety net — if issuance
-# fails (port 80 firewalled, rate limits), the site still comes up self-signed
-# instead of not coming up.
-if [ "$TLS_MODE" = "ip" ]; then
-  cat >"$INSTALL_DIR/tls-mode.caddy" <<'TLSMODE'
-# Written by install.sh — certificate issued for a bare IP address.
-tls {
-	issuer acme {
-		profile shortlived
-	}
-	issuer internal
+# Which TLS switch this installation gets. The repo's tls-mode.caddy is empty
+# (comments only), which is exactly right for a domain or for the internal CA —
+# Caddy picks the issuer by hostname. A bare IP is the one case it can't infer:
+# Let's Encrypt refuses IP identifiers outside the `shortlived` profile, and
+# Caddy won't try ACME for an IP at all unless told to. That variant is a file
+# of its own so `relay update` can refresh it like everything else.
+if [ "$TLS_MODE" = "ip" ]; then TLS_SRC="infra/tls-mode-ip.caddy"; else TLS_SRC="infra/tls-mode.caddy"; fi
+
+# Every file the stack needs, from one ref, all or nothing. Files bind-mounted
+# by compose are fetched even when their feature is off: a missing source makes
+# docker silently create a directory in its place, and the consumer then fails
+# in a way that looks nothing like "the file wasn't downloaded".
+fetch_stack() { # fetch_stack <ref> <dest-dir>
+  local ref="$1" dest="$2" base name path
+  base="https://raw.githubusercontent.com/${RELAY_REPO}/${ref}"
+  # An explicit RELAY_RAW_BASE is how you point the installer at a tree that is
+  # not on GitHub at all; it can only stand in for the branch install.
+  if [ -n "${RELAY_RAW_BASE:-}" ] && [ "$ref" = "$RELAY_REF" ]; then base="$RELAY_RAW_BASE"; fi
+  while read -r name path; do
+    [ -n "$name" ] || continue
+    curl -fsSL --max-time 60 "${base}/${path}" -o "${dest}/${name}" || return 1
+    [ -s "${dest}/${name}" ] || return 1
+  done <<STACK
+${COMPOSE_FILE} ${COMPOSE_FILE}
+Caddyfile infra/Caddyfile
+coturn-entrypoint.sh infra/coturn-entrypoint.sh
+relay-cli.sh infra/relay-cli.sh
+tls-mode.caddy ${TLS_SRC}
+STACK
 }
-TLSMODE
-  ok "TLS mode: Let's Encrypt certificate for $DOMAIN"
+
+# Install a release by number, not `:latest` (audit B7.2). `:latest` moves the
+# day a release is cut, and with `pull_policy` on it, an ordinary `relay up`
+# after a reboot would carry someone across a major version without asking.
+# Stack files come from the matching tag for the same reason images do: a
+# compose file from `main` next to images from a release is how a service
+# acquires an environment variable the running image has never heard of.
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+RELEASE="$(latest_release || true)"
+if [ -n "$RELEASE" ] && fetch_stack "v${RELEASE}" "$STAGE"; then
+  RELAY_VERSION="$RELEASE"
+  ok "Installing release ${RELAY_VERSION}"
+else
+  # No releases yet, GitHub unreachable, or a tag too old to carry these files
+  # — fall back to the branch, and then `:latest` is the honest pin for it.
+  rm -f "$STAGE"/*
+  fetch_stack "$RELAY_REF" "$STAGE" || die "Failed to download the stack files."
+  RELAY_VERSION="latest"
+  if [ -n "$RELEASE" ]; then
+    warn "Release ${RELEASE} predates this installer — installing from ${RELAY_REF} and following :latest."
+  else
+    warn "No published release found — installing from ${RELAY_REF} and following :latest."
+  fi
 fi
+cp -p "$STAGE"/* "$INSTALL_DIR/"
+chmod +x "$INSTALL_DIR/relay-cli.sh" "$INSTALL_DIR/coturn-entrypoint.sh"
+ok "Stack files downloaded"
+if [ "$TLS_MODE" = "ip" ]; then ok "TLS mode: Let's Encrypt certificate for $DOMAIN"; fi
 
 # ── 8. Write .env ────────────────────────────────────────────────────────────
 ENV_FILE="$INSTALL_DIR/.env"
@@ -251,6 +294,15 @@ if [ -f "$ENV_FILE" ]; then
 fi
 {
   echo "# Generated by install.sh on $(date -u +%FT%TZ)"
+  # What this installation is, and where it updates from. `relay update` reads
+  # all four: the version it is moving off, the repo and ref to fetch stack
+  # files from, and which of the two TLS switches to re-fetch. Written here
+  # because the alternative is deciding it at install time and freezing it —
+  # which is the bug this whole section exists to fix (audit B7).
+  echo "RELAY_VERSION=${RELAY_VERSION}"
+  echo "RELAY_REPO=${RELAY_REPO}"
+  echo "RELAY_REF=${RELAY_REF}"
+  echo "RELAY_TLS_MODE=${TLS_MODE}"
   echo "SITE_PASSWORD=${SITE_PASSWORD}"
   echo "DOMAIN=${DOMAIN}"
   echo "SERVER_HOST=${SERVER_HOST}"
@@ -308,43 +360,38 @@ PROFILE_ARGS=""
 if [ "$USE_TURN" = 1 ]; then PROFILE_ARGS="--profile turn"; fi
 if [ "$USE_SFU" = 1 ]; then PROFILE_ARGS="${PROFILE_ARGS:+$PROFILE_ARGS }--profile sfu"; fi
 info "Pulling images and starting the stack…"
-( cd "$INSTALL_DIR" && docker compose -f "$COMPOSE_FILE" $PROFILE_ARGS pull ) || die "docker compose pull failed."
+if ! ( cd "$INSTALL_DIR" && docker compose -f "$COMPOSE_FILE" $PROFILE_ARGS pull ); then
+  # A git tag exists but its images don't — the release job failed halfway, or
+  # the tag was cut by hand. Better an unpinned installation that runs than a
+  # pinned one that doesn't; `relay update` re-pins on the next good release.
+  if [ "$RELAY_VERSION" != "latest" ]; then
+    warn "No images published for ${RELAY_VERSION} — falling back to :latest."
+    sed -i 's/^RELAY_VERSION=.*/RELAY_VERSION=latest/' "$ENV_FILE"
+    RELAY_VERSION="latest"
+    ( cd "$INSTALL_DIR" && docker compose -f "$COMPOSE_FILE" $PROFILE_ARGS pull ) || die "docker compose pull failed."
+  else
+    die "docker compose pull failed."
+  fi
+fi
 ( cd "$INSTALL_DIR" && docker compose -f "$COMPOSE_FILE" $PROFILE_ARGS up -d ) || die "docker compose up failed."
 ok "Stack is up"
 
 # ── 11. relay CLI ────────────────────────────────────────────────────────────
-cat >/usr/local/bin/relay <<RELAYCLI
+# The CLI itself lives in the stack directory and was downloaded with the rest
+# of the stack; this is only a pointer to it. Keeping the logic in a file that
+# `relay update` can replace is the whole reason it is no longer a heredoc:
+# a CLI baked into the installer can never be fixed on a machine that already
+# ran the installer, and the command that fixes things was the CLI (audit B7).
+cat >/usr/local/bin/relay <<RELAYSHIM
 #!/usr/bin/env bash
-# relay control CLI — installed by install.sh
-set -euo pipefail
-DIR="${INSTALL_DIR}"
-CF="${COMPOSE_FILE}"
-PROFILES="${PROFILE_ARGS}"
-cd "\$DIR"
-dc() { docker compose -f "\$CF" \$PROFILES "\$@"; }
-case "\${1:-}" in
-  up)      dc up -d ;;
-  down)    dc down ;;
-  restart) dc restart ;;
-  logs)    shift; dc logs -f --tail=100 "\$@" ;;
-  ps)      dc ps ;;
-  pull)    dc pull ;;
-  update)  dc pull && dc up -d && echo "Updated." ;;
-  config)  \${EDITOR:-nano} "\$DIR/.env" && echo "Run: relay up   (to apply)" ;;
-  backup)  T="\$DIR/relay-backup-\$(date +%Y%m%d-%H%M%S).tar.gz"
-           docker run --rm -v relay_uploads:/u -v relay_caddy_data:/c -v "\$DIR":/out alpine \
-             tar czf "/out/\$(basename "\$T")" -C / u c && echo "Backup: \$T" ;;
-  *) cat <<USAGE
-relay — control CLI (stack in \$DIR)
-  relay up | down | restart | ps
-  relay logs [service]   follow logs
-  relay update           pull latest images and restart
-  relay config           edit .env, then 'relay up' to apply
-  relay backup           snapshot uploads + certs to a tarball
-USAGE
-     ;;
-esac
-RELAYCLI
+# relay — shim. The CLI is ${INSTALL_DIR}/relay-cli.sh; this file only says where.
+export RELAY_DIR="${INSTALL_DIR}"
+if [ ! -r "\$RELAY_DIR/relay-cli.sh" ]; then
+  echo "relay: \$RELAY_DIR/relay-cli.sh is missing — re-run the installer." >&2
+  exit 1
+fi
+exec bash "\$RELAY_DIR/relay-cli.sh" "\$@"
+RELAYSHIM
 chmod +x /usr/local/bin/relay
 ok "Installed 'relay' CLI (try: relay logs)"
 

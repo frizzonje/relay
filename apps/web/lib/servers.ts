@@ -1,10 +1,19 @@
+import type { ServerDeleteResult, ServerStatsResult } from '@relay/shared';
+import { toast } from 'sonner';
 import { getSocket } from '@/lib/socket';
+import { ask } from '@/lib/channels';
+import { tx } from '@/lib/i18n';
 
 /**
  * Действия над реестром серверов. Как и каналы — сервер единственный источник
  * правды: шлём намерение, обновлённый список прилетает событием `servers` всем
  * сразу. id генерируем на клиенте (crypto.randomUUID), чтобы тут же открыть
  * новый сервер и создать в нём первый канал, не дожидаясь ответа сокета.
+ *
+ * Владение считает сервер: устройство называет себя один раз в handshake
+ * сокета (см. lib/socket), и сервер, созданный этим браузером, удалить может
+ * только он — каналы внутри тоже. Заслон от случайного сноса, не личность
+ * (см. audit B2); в самих сообщениях id устройства не ездит.
  */
 export function createServer(server: {
   id: string;
@@ -22,9 +31,43 @@ export function createServer(server: {
   });
 }
 
-export function deleteServer(id: string): void {
-  if (!id) return;
-  getSocket().emit('server-delete', { id });
+/**
+ * Удалить сервер. Возвращает true, если сервер согласился; при отказе сам
+ * показывает тост с причиной. Удаление уносит каналы и переписку — спрашивает
+ * отдельный диалог (DeleteServerDialog), сюда приходит уже подтверждённое.
+ */
+export async function deleteServer(id: string): Promise<boolean> {
+  if (!id) return false;
+  const res = await ask<ServerDeleteResult>('server-delete', { id });
+  if (res?.ok) return true;
+  toast(res ? serverRefusalText(res.error, res.occupants) : tx('server.noAnswer'));
+  return false;
+}
+
+function serverRefusalText(error: string, occupants?: number): string {
+  if (error === 'not-owner') return tx('server.refusal.notOwner');
+  if (error === 'occupied') {
+    return occupants
+      ? tx('server.refusal.occupiedCount', { count: occupants })
+      : tx('server.refusal.occupied');
+  }
+  if (error === 'forbidden') return tx('server.refusal.forbidden');
+  return tx('server.refusal.gone');
+}
+
+/**
+ * Живой срез сервера для диалога удаления: сколько каналов и сообщений
+ * исчезнет вместе с ним и сколько человек сидит в его эфирах. null — сервер
+ * не ответил или это не наше владение.
+ */
+export async function serverStats(
+  id: string,
+): Promise<{ channels: number; messages: number; occupants: number } | null> {
+  if (!id) return null;
+  const res = await ask<ServerStatsResult>('server-stats', { id });
+  return res?.ok
+    ? { channels: res.channels, messages: res.messages, occupants: res.occupants }
+    : null;
 }
 
 /** Попытка разблокировать закрытый сервер паролем (ответ придёт server-unlock-result). */

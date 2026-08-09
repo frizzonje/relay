@@ -5,8 +5,8 @@ import { isSeparator, type MenuAction, type MenuEntry } from '@/stores/context-m
 /**
  * Правила меню канала. Проверяем именно их, а не разметку: это те же запреты,
  * что держит сервер (дефолтные каналы неприкосновенны, занятый эфир не
- * удаляется), и разъехаться они не должны — иначе интерфейс будет предлагать
- * действие, которое сервер молча отклонит.
+ * удаляется, чужие каналы не трогаются), и разъехаться они не должны — иначе
+ * интерфейс будет предлагать действие, которое сервер молча отклонит.
  */
 
 const ids = (entries: MenuEntry[]) => entries.map((e) => e.id);
@@ -15,12 +15,22 @@ const action = (entries: MenuEntry[], id: string) =>
 
 const noop = { onRename: () => {}, onDelete: () => {} };
 
+// `mine` проставляет сервер под каждый сокет: это его ответ на вопрос «твоя ли
+// эта запись» (см. audit B2). Клиент id владельца не видит и сам ничего не
+// сравнивает — только рисует по флагу.
 function target(
   over: Partial<ChannelMenuTarget['channel']> = {},
   occupants = 0,
 ): ChannelMenuTarget {
   return {
-    channel: { id: 'c1', type: 'voice', name: 'переговорка', removable: true, ...over },
+    channel: {
+      id: 'c1',
+      type: 'voice',
+      name: 'переговорка',
+      removable: true,
+      mine: true,
+      ...over,
+    },
     occupants,
   };
 }
@@ -37,7 +47,10 @@ describe('channelMenuEntries', () => {
   });
 
   it('в своём текстовом канале приглашения нет — только правка', () => {
-    const entries = channelMenuEntries(target({ type: 'text' }), { ...noop, onInvite: () => {} });
+    const entries = channelMenuEntries(target({ type: 'text' }), {
+      ...noop,
+      onInvite: () => {},
+    });
     expect(ids(entries)).toEqual(['channel-rename', 'channel-sep', 'channel-delete']);
   });
 
@@ -51,6 +64,18 @@ describe('channelMenuEntries', () => {
 
   it('у дефолтного текстового канала пунктов нет вовсе — своё меню не показываем', () => {
     expect(channelMenuEntries(target({ type: 'text', removable: false }), noop)).toEqual([]);
+  });
+
+  it('чужой голосовой канал: позвать можно, менять — нет', () => {
+    const entries = channelMenuEntries(target({ mine: undefined }), {
+      ...noop,
+      onInvite: () => {},
+    });
+    expect(ids(entries)).toEqual(['channel-invite']);
+  });
+
+  it('чужой текстовый канал: меню пусто — своё меню не показываем', () => {
+    expect(channelMenuEntries(target({ type: 'text', mine: undefined }), noop)).toEqual([]);
   });
 
   it('пока в эфире кто-то есть, удаление отключено и объясняет причину', () => {

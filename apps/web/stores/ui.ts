@@ -61,14 +61,20 @@ export const useUiStore = create<UiState>((set, get) => ({
   setMobilePanel: (panel) => set({ mobilePanel: panel }),
   settingsOpen: false,
   setSettingsOpen: (open) => set({ settingsOpen: open }),
-  openText: (slug, label) => set({ view: 'text', textRoom: slug, textLabel: label }),
+  // mobilePanel здесь же: открыть канал — значит смотреть его. Без этого тап по
+  // уже открытому каналу на мобиле не делал ничего (состояние не менялось —
+  // значит, и переключать панель было некому), и с экрана каналов было не
+  // вернуться в ленту. На десктопе поле игнорируется.
+  openText: (slug, label) =>
+    set({ view: 'text', textRoom: slug, textLabel: label, mobilePanel: 'stage' }),
   leaveText: () =>
     set({
       textRoom: null,
       textLabel: '',
       view: get().voiceRoom ? 'voice' : 'lobby',
     }),
-  openVoice: (room, label) => set({ view: 'voice', voiceRoom: room, voiceLabel: label }),
+  openVoice: (room, label) =>
+    set({ view: 'voice', voiceRoom: room, voiceLabel: label, mobilePanel: 'stage' }),
   goLobby: () => set({ view: 'lobby' }),
 }));
 

@@ -27,7 +27,6 @@ import {
 import { channelMenuEntries } from '@/lib/channel-menu';
 import { openContextMenu } from '@/lib/context-menu';
 import { useSfuAvailable } from '@/lib/use-sfu';
-import { deleteServer } from '@/lib/servers';
 import { useVoiceStore } from '@/stores/voice';
 import { VoiceMembers } from '@/components/layout/VoiceMembers';
 import { CreateChannelDialog } from '@/components/layout/CreateChannelDialog';
@@ -39,9 +38,12 @@ import {
   RenameChannelDialog,
   type RenameChannelTarget,
 } from '@/components/layout/RenameChannelDialog';
+import { InviteDialog } from '@/components/layout/InviteDialog';
+import {
+  DeleteServerDialog,
+  type DeleteServerTarget,
+} from '@/components/layout/DeleteServerDialog';
 import { ChannelModeDialog, type ChannelModeTarget } from '@/components/layout/ChannelModeDialog';
-import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { InviteDialog, LinkIcon } from '@/components/layout/InviteDialog';
 
 /**
  * Подпись текстового канала с точкой «непрочитано». Открытый канал считается
@@ -95,16 +97,6 @@ function Category({
 }
 
 /** Три точки — вход в меню канала (тот же набор, что по правой кнопке). */
-function MoreIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <circle cx="5" cy="12" r="1.7" />
-      <circle cx="12" cy="12" r="1.7" />
-      <circle cx="19" cy="12" r="1.7" />
-    </svg>
-  );
-}
-
 function ChannelRow({
   active,
   connected,
@@ -207,7 +199,7 @@ function ChannelRow({
               aria-label={t('channel.invite')}
               className="grid h-5 w-5 shrink-0 place-items-center rounded text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-text-header focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100 max-md:opacity-100"
             >
-              <LinkIcon size={13} />
+              <Icon name="link" className="text-[13px]" />
             </button>
           )}
           {onMenu && (
@@ -221,7 +213,7 @@ function ChannelRow({
               aria-haspopup="menu"
               className="grid h-5 w-5 shrink-0 place-items-center rounded text-text-muted opacity-0 outline-none transition-[opacity,color] hover:text-text-header focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/row:opacity-100 max-md:opacity-100"
             >
-              <MoreIcon />
+              <Icon name="more-horizontal" className="text-[15px]" />
             </button>
           )}
         </span>
@@ -277,7 +269,12 @@ export function Sidebar() {
   // обрывает разговор у всех, кто в эфире.
   const [modeTarget, setModeTarget] = useState<ChannelModeTarget | null>(null);
   // Подтверждение удаления сервера (спрашиваем — уносит с собой все каналы).
-  const [confirmServerDelete, setConfirmServerDelete] = useState(false);
+  const [serverDeleteTarget, setServerDeleteTarget] = useState<DeleteServerTarget | null>(null);
+
+  // Управление реестровой записью — по флагу `mine`: сервер считает его под
+  // наш сокет и присылает вместе с реестром (audit B2). Id владельца клиенту
+  // не показывают и сравнивать его не с чем — кнопки рисуем ровно там, где
+  // сервер уже сказал «твоё».
 
   // Занятые эфиры, которых нет ни в одном сервере реестра (напр. канал удалили,
   // пока в нём сидят) — не роняем из виду. Слаги считаем глобально (не по активному
@@ -340,7 +337,7 @@ export function Sidebar() {
             className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-bg-elev ring-1 ring-inset ring-white/10"
             aria-hidden
           >
-            <Logo size={16} nodeBg="#111418" />
+            <Logo size={16} nodeBg="var(--color-bg-elev)" />
           </span>
         ) : (
           <span
@@ -354,12 +351,13 @@ export function Sidebar() {
         <span className="truncate font-bold text-text-header">
           {isMain ? 'relay' : (activeServer?.name ?? t('sidebar.server.fallback'))}
         </span>
-        {!isMain && activeServer?.removable && (
+        {!isMain && activeServer?.removable && activeServer.mine && (
           <button
             // Удаление необратимо и видно всем — спрашиваем своим диалогом,
             // тем же, что и у каналов (window.confirm в нативной оболочке
-            // выдаёт себя системным окном браузера).
-            onClick={() => setConfirmServerDelete(true)}
+            // выдаёт себя системным окном браузера). Только создатель может
+            // удалить сервер — диалог покажет цену: каналы и сообщения.
+            onClick={() => setServerDeleteTarget({ id: activeServerId, name: activeServer.name })}
             title={t('sidebar.server.delete')}
             aria-label={t('sidebar.server.delete')}
             className="ml-auto grid h-6 w-6 shrink-0 place-items-center rounded text-lg leading-none text-text-muted outline-none transition-colors hover:text-danger focus-visible:ring-2 focus-visible:ring-accent"
@@ -439,11 +437,11 @@ export function Sidebar() {
                 onClick={() => void joinVoice(c.slug, c.name)}
                 onInvite={() => setInviteTarget({ slug: c.slug, label: c.name })}
                 onMenu={channelMenu(c)}
-                // Режим правим только у созданных участниками каналов — у
-                // дефолтных он всегда p2p (см. handleChannelMode на бэке).
-                mode={c.removable ? (c.mode ?? 'p2p') : undefined}
+                // Режим правим только у своих каналов — у дефолтных он всегда
+                // p2p, чужие трогает владелец (см. handleChannelMode на бэке).
+                mode={c.removable && c.mine ? (c.mode ?? 'p2p') : undefined}
                 onToggleMode={
-                  c.removable
+                  c.removable && c.mine
                     ? () =>
                         setModeTarget({
                           id: c.id,
@@ -501,7 +499,7 @@ export function Sidebar() {
                     className={cn(
                       'font-bold',
                       ping.grade === 'good' && 'text-ok',
-                      ping.grade === 'mid' && 'text-[#d8a32a]',
+                      ping.grade === 'mid' && 'text-warn',
                       ping.grade === 'bad' && 'text-danger',
                     )}
                   >
@@ -588,21 +586,16 @@ export function Sidebar() {
           if (!open) setDeleteTarget(null);
         }}
       />
+      <DeleteServerDialog
+        target={serverDeleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setServerDeleteTarget(null);
+        }}
+      />
       <ChannelModeDialog
         target={modeTarget}
         onOpenChange={(open) => {
           if (!open) setModeTarget(null);
-        }}
-      />
-      <ConfirmDialog
-        open={confirmServerDelete}
-        onOpenChange={setConfirmServerDelete}
-        title={t('server.delete.title', { name: activeServer?.name ?? '' })}
-        description={t('server.delete.body')}
-        confirmLabel={t('sidebar.server.delete')}
-        onConfirm={() => {
-          setConfirmServerDelete(false);
-          deleteServer(activeServerId);
         }}
       />
       <InviteDialog

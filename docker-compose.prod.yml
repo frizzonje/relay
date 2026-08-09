@@ -9,8 +9,12 @@
 #   docker compose -f docker-compose.prod.yml --profile turn up -d   # with TURN
 #   docker compose -f docker-compose.prod.yml --profile sfu up -d    # + media server
 #
-# Pin a release by exporting RELAY_VERSION (defaults to :latest):
+# The release is pinned in .env — install.sh writes RELAY_VERSION there and
+# `relay update` moves it. Driving compose by hand, set it yourself:
 #   RELAY_VERSION=0.4.0 docker compose -f docker-compose.prod.yml up -d
+# Unset means :latest, which moves under you on every release — fine for a test
+# box, not for anything people rely on. Images are pulled on demand, so ask for
+# new ones explicitly: `relay update`, or `docker compose pull`.
 #
 # Config comes from .env in the same directory (SITE_PASSWORD, DOMAIN,
 # SERVER_HOST, TURN_CREDENTIAL, TURN_EXTERNAL_IP, SFU_SECRET). See .env.example.
@@ -20,7 +24,16 @@ name: relay
 services:
   api:
     image: ghcr.io/frizzonje/relay-api:${RELAY_VERSION:-latest}
-    pull_policy: always
+    # `missing`, not `always`. install.sh pins RELAY_VERSION to a release number
+    # and `relay update` is the one command that moves it — so there is nothing
+    # for a re-pull to discover, and `always` only bought two things: a registry
+    # round trip on every `up`, and a stack that refuses to start after a reboot
+    # while GHCR is down. Paired with the pin it also closes the older half of
+    # the same problem: on `:latest` an ordinary `relay up` was an unannounced
+    # upgrade, and on release day it would have carried people across a major
+    # version without a word (audit B7.2). Fetching new images is now `relay
+    # update`, or a plain `docker compose pull` if you drive compose yourself.
+    pull_policy: missing
     restart: unless-stopped
     environment:
       - PORT=3000
@@ -46,6 +59,21 @@ services:
       - SFU_INTERNAL_URL=${SFU_INTERNAL_URL:-http://host.docker.internal:3100}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Зависший (не упавший) процесс `restart: unless-stopped` не замечает:
+    # повисший цикл событий в HTTP не отвечает. Healthcheck делает это
+    # зависание видимым (`docker ps` → unhealthy, внешний мониторинг) —
+    # перезапуск повисшего остаётся за оркестратором, сам compose его не
+    # лечит. /api/health публичен (без куки), версии не отдаёт (audit S7).
+    #
+    # Адрес числом, а не `localhost`: busybox-wget (это он в alpine) сначала
+    # пробует ::1, и служба, слушающая только IPv4, для пробы не существует.
+    # api слушает :: и уцелел бы, web — нет; одинаково пишем 127.0.0.1.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     volumes:
       - uploads:/app/uploads
     expose:
@@ -53,12 +81,22 @@ services:
 
   web:
     image: ghcr.io/frizzonje/relay-web:${RELAY_VERSION:-latest}
-    pull_policy: always
+    pull_policy: missing # see api
     restart: unless-stopped
     environment:
       - SITE_PASSWORD=${SITE_PASSWORD:-}
     expose:
       - "3001"
+    # Как у api: /login отдаётся без авторизации (сама страница входа) —
+    # это и есть доступный health-пробе web (audit S7). Next standalone
+    # слушает 0.0.0.0 (HOSTNAME в образе), то есть только IPv4, — адрес
+    # числом здесь не педантизм, а условие того, что проба достучится.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/login"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   # Media server (profile: sfu) — calls of 4+ with video: everyone uploads their
   # video once to the server instead of once per peer. Without it everything
@@ -67,7 +105,7 @@ services:
   sfu:
     image: ghcr.io/frizzonje/relay-sfu:${RELAY_VERSION:-latest}
     profiles: ["sfu"]
-    pull_policy: always
+    pull_policy: missing # see api
     # Host network instead of publishing the port range: for ~100 RTC ports
     # docker would spawn hundreds of userland proxies and push every RTP packet
     # through DNAT — real CPU cost on a small VM and one more way for media to

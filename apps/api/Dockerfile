@@ -26,5 +26,11 @@ FROM node:20-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production PORT=3000
 COPY --from=pruner /deploy .
+# Приложение — не root (audit S6). su-exec — то, чем точка входа опускается с
+# root после того, как отдала том uploads пользователю node: named volume
+# монтируется docker'ом от root, и без этой отдачи api снова писал бы как root.
+RUN apk add --no-cache su-exec
+COPY infra/api-entrypoint.sh /usr/local/bin/api-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/api-entrypoint.sh"]
 EXPOSE 3000
 CMD ["node", "dist/main.js"]

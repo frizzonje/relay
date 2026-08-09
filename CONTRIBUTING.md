@@ -25,8 +25,18 @@ docker run --rm -v "$PWD":/mono -w /mono node:20-alpine \
   sh -c 'corepack enable && pnpm install --frozen-lockfile && pnpm turbo run typecheck test build'
 ```
 
+Второй прогон подряд может упасть россыпью `TS6053: File
+'.next/types/…' not found` — это не ваша правка. `typecheck` веба включает
+`.next/types/**`, а идущий рядом `build` эту папку пересоздаёт: список файлов
+успевает устареть. В CI не воспроизводится (там чекаут чистый, `.next` нет);
+локально лечится `rm -rf apps/web/.next` перед прогоном или запуском `build`
+отдельной командой.
+
 E2e (Playwright) гоняются в CI на каждый push; локально — по схеме из
-`infra/docker-compose.e2e.yml`.
+`infra/docker-compose.e2e.yml`. Учтите: проект compose называется `relay`, тот
+же, что и у прод-стека из корневого `docker-compose.yml`, — то есть `down -v`
+после e2e сносит тома `relay_uploads` и `relay_caddy_data` вашей локальной
+установки. Если она вам нужна, гоняйте e2e с отдельным `-p`.
 
 Форматирование и линт:
 
@@ -35,13 +45,29 @@ pnpm format:check   # prettier
 pnpm lint           # eslint
 ```
 
+Зависимости — отдельным гейтом, он тоже стоит в CI:
+
+```bash
+pnpm audit --prod --audit-level=high
+```
+
+`--prod` намеренно: плохая dev-зависимость — испорченный вечер, плохая
+рантайм-зависимость уезжает на чужой сервер. Гейт может стать красным без
+вашей правки — совет опубликовали против кода, который не менялся; чинится это
+подъёмом версии. Когда исправление выше по дереву, за пином, который мы не
+контролируем, — `pnpm.overrides` в корневом `package.json` (сейчас там два:
+`postcss` и `sharp`, оба зажаты пинами Next; почему — в
+[docs/plans/pre-1.0-audit.md](docs/plans/pre-1.0-audit.md), раздел B6). Когда
+патча нет вовсе — `pnpm.auditConfig.ignoreCves`, но это решение, которое видно
+в диффе.
+
 ## Стиль и соглашения
 
 - **Контракт клиент↔сервер** живёт в `packages/shared` (типы, socket-события,
   HMAC-auth) и в [docs/protocol.md](docs/protocol.md). Меняете формат сообщений —
   правьте оба места и держите web-клиент референс-реализацией.
 - **Сиды серверов/каналов** дублируются во фронте (`apps/web/lib/constants.ts`) и
-  в gateway (`apps/api/src/gateway/signaling.gateway.ts`) — id и slug обязаны
+  в реестре api (`apps/api/src/gateway/registry.service.ts`) — id и slug обязаны
   совпадать байт-в-байт.
 - Комментарии и UI — на русском, в тон существующему коду; нейтральная лексика,
   без внутренних шуток.

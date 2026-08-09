@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Icon } from '@/components/ui/icon';
 import { cn } from '@/lib/utils';
@@ -8,6 +8,7 @@ import { avatarGradient } from '@/lib/avatar';
 import { clearFocus, toggleFocus, setPeerVolume, setPeerScreenVolume } from '@/lib/voice';
 import { useAudioUnlockStore } from '@/stores/audio-unlock';
 import { useVoiceStore, type TileNet, type VoiceTile } from '@/stores/voice';
+import { useDismiss } from '@/lib/use-dismiss';
 import { useT } from '@/lib/i18n';
 import type { MessageKey } from '@/lib/i18n';
 
@@ -82,7 +83,7 @@ const NET_ACTIVE: Record<TileNet['grade'], number> = { strong: 4, good: 3, weak:
 const NET_TONE: Record<TileNet['grade'], string> = {
   strong: 'bg-ok',
   good: 'bg-ok',
-  weak: 'bg-[#e0b23a]',
+  weak: 'bg-warn',
   bad: 'bg-danger',
 };
 const NET_LABEL: Record<TileNet['grade'], MessageKey> = {
@@ -139,7 +140,7 @@ function SignalBars({ net }: { net: TileNet }) {
           (через TURN) — маленькая янтарная «R». Полная строка — в тултипе ниже. */}
       {net.relay && (
         <span
-          className="ml-0.5 grid h-3.5 w-3.5 place-items-center self-center rounded-[3px] bg-[#e0b23a]/20 text-[9px] font-bold leading-none text-[#e0b23a]"
+          className="ml-0.5 grid h-3.5 w-3.5 place-items-center self-center rounded-[3px] bg-warn/20 text-[9px] font-bold leading-none text-warn"
           aria-hidden
         >
           R
@@ -148,7 +149,7 @@ function SignalBars({ net }: { net: TileNet }) {
 
       {/* Тултип со статами — над палочками, по наведению. Открывается вправо от
           палочек (left-0), чтобы не упираться в левый край плитки (overflow-hidden). */}
-      <span className="pointer-events-none absolute bottom-[calc(100%+8px)] left-0 z-[8] w-max origin-bottom-left scale-95 rounded-lg border border-white/10 bg-[#1e1f22]/95 px-2.5 py-2 text-left opacity-0 shadow-[0_10px_30px_rgba(0,0,0,0.6)] backdrop-blur transition-[opacity,transform] duration-150 group-hover/net:scale-100 group-hover/net:opacity-100">
+      <span className="pointer-events-none absolute bottom-[calc(100%+8px)] left-0 z-[8] w-max origin-bottom-left scale-95 rounded-lg border border-white/10 bg-bg-elev/95 px-2.5 py-2 text-left opacity-0 shadow-[0_10px_30px_rgba(0,0,0,0.6)] backdrop-blur transition-[opacity,transform] duration-150 group-hover/net:scale-100 group-hover/net:opacity-100">
         <span className="mb-1 flex items-center gap-1.5 text-[12px] font-bold text-white">
           <span className={cn('h-2 w-2 rounded-full', tone)} />
           {t('net.title', { grade: t(NET_LABEL[net.grade]) })}
@@ -277,7 +278,16 @@ function AmbientWash({ videoRef }: { videoRef: React.RefObject<HTMLVideoElement 
  * крупным планом не выкидывает зрителя рывком: сначала шторка с объяснением,
  * потом плитка сама уезжает обратно в сетку.
  */
-export function VideoTile({
+/**
+ * Плитка участника звонка.
+ *
+ * `memo` — по той же причине, что у строки чата: опрос качества связи идёт раз
+ * в три секунды на каждого собеседника, и каждый замер подменял массив плиток
+ * целиком — то есть перерисовывал всю сетку ради цифры на одной. Объекты плиток
+ * в сторе личность сохраняют (меняется только та, что изменилась), поэтому
+ * теперь перерисовывается ровно она.
+ */
+export const VideoTile = memo(function VideoTile({
   tile,
   focused,
   hidden,
@@ -319,6 +329,7 @@ export function VideoTile({
   // Открытое меню громкости: 'voice' (ПКМ по плитке) | 'screen' (иконка снизу)
   const [menu, setMenu] = useState<'voice' | 'screen' | null>(null);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
+  const closeMenu = useCallback(() => setMenu(null), []);
   // Идут проводы из демонстрации: показ кончился, пока мы смотрели его крупно.
   const [outro, setOutro] = useState(false);
   // Пропорции живого кадра и самой плитки — по расхождению видно чёрные поля.
@@ -511,24 +522,8 @@ export function VideoTile({
     if (!immersive) setOutro(false);
   }, [immersive]);
 
-  // Меню громкости закрываем по клику мимо него и по Escape
-  useEffect(() => {
-    if (!menu) return;
-    const onDown = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (menuRef.current?.contains(target) || volumeBtnRef.current?.contains(target)) return;
-      setMenu(null);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMenu(null);
-    };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [menu]);
+  // Меню громкости закрываем по щелчку мимо него и по Escape
+  useDismiss(menu !== null, closeMenu, menuRef, volumeBtnRef);
 
   // ПКМ по чужой плитке — регулятор громкости голоса собеседника
   function onContextMenu(e: React.MouseEvent) {
@@ -597,7 +592,7 @@ export function VideoTile({
       tabIndex={0}
       aria-label={t(focused ? 'tile.collapse' : 'tile.expand', { name: tile.name })}
       className={cn(
-        'group relative aspect-video cursor-zoom-in overflow-hidden rounded-[11px] border border-line bg-[#18191c] outline-none transition-[border-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-line-strong',
+        'group relative aspect-video cursor-zoom-in overflow-hidden rounded-[11px] border border-line bg-media outline-none transition-[border-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-line-strong',
         // Своя плитка — чуть более светлая рамка (раздел 02 референса).
         tile.isLocal && !speaking && 'border-[1.5px] border-[rgba(215,219,224,0.35)]',
         // «Говорит сейчас» — обводка в наш зелёный (--color-ok, #46c17f) с мягким
@@ -693,7 +688,7 @@ export function VideoTile({
       {tile.isLocal && uplink !== 'ok' && (
         <div
           title={t(UPLINK_PILL[uplink].title)}
-          className="absolute bottom-2 right-2 z-[3] flex items-center gap-1 rounded-[8px] bg-[#e0b23a]/90 px-2 py-1 text-[11px] font-bold text-black backdrop-blur-[6px]"
+          className="absolute bottom-2 right-2 z-[3] flex items-center gap-1 rounded-[8px] bg-warn/90 px-2 py-1 text-[11px] font-bold text-black backdrop-blur-[6px]"
         >
           <span className="grid h-3.5 w-3.5 place-items-center rounded-full bg-black/25 text-[10px] leading-none text-black">
             !
@@ -735,7 +730,7 @@ export function VideoTile({
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.preventDefault()}
           style={menu === 'voice' ? { left: menuPos.x, top: menuPos.y } : { right: 8, bottom: 44 }}
-          className="absolute z-[6] w-56 rounded-lg border border-white/10 bg-[#1e1f22]/95 p-3 shadow-[0_12px_40px_rgba(0,0,0,0.6)] backdrop-blur"
+          className="absolute z-[6] w-56 rounded-lg border border-white/10 bg-bg-elev/95 p-3 shadow-[0_12px_40px_rgba(0,0,0,0.6)] backdrop-blur"
         >
           {menu === 'voice' ? (
             <VolumeSlider
@@ -807,4 +802,4 @@ export function VideoTile({
       </AnimatePresence>
     </motion.div>
   );
-}
+});

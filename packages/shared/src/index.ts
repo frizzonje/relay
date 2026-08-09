@@ -134,6 +134,17 @@ export interface Server {
    * только этот флаг.
    */
   locked?: boolean;
+  /**
+   * Запись под управлением ЭТОГО клиента: её создало это устройство (clientId
+   * из handshake) либо у неё нет владельца вовсе (создана до правила владения).
+   * Ровно то условие, которое проверяет сервер, — клиент рисует по нему кнопки
+   * и не предлагает действий, которые получат отказ.
+   *
+   * Считается на сервере для каждого сокета отдельно; сам clientId владельца
+   * наружу не уходит никогда — иначе выдать себя за него стоило бы одной
+   * копипасты (audit B2).
+   */
+  mine?: boolean;
 }
 
 export interface ServerCreatePayload {
@@ -148,6 +159,23 @@ export interface ServerCreatePayload {
 export interface ServerDeletePayload {
   id: string;
 }
+
+/**
+ * Итог удаления сервера (ack), по образцу ChannelDeleteResult:
+ * - `not-owner` — сервер создан другим устройством (владелец — по clientId из
+ *   handshake, см. `Server.mine`);
+ * - `occupied` — в голосовых каналах сервера кто-то есть; `occupants` — сколько
+ *   именно. Удаление сервера уносит его каналы, а выбрасывать людей из
+ *   разговора нельзя и здесь — правило то же, что у `channel-delete`;
+ * - `forbidden` — сервер по умолчанию либо закрытый без введённого пароля.
+ */
+export type ServerDeleteResult =
+  | { ok: true }
+  | {
+      ok: false;
+      error: 'not-found' | 'forbidden' | 'not-owner' | 'occupied';
+      occupants?: number;
+    };
 
 /** Ввод пароля для доступа к закрытому серверу. */
 export interface ServerUnlockPayload {
@@ -203,6 +231,12 @@ export interface Channel {
    */
   mode?: VoiceMode;
   /**
+   * Канал под управлением ЭТОГО клиента — переименовать, удалить и сменить
+   * транспорт может только он. Считается на сервере под каждый сокет, как у
+   * `Server.mine`; id владельца наружу не уходит.
+   */
+  mine?: boolean;
+  /**
    * Время последнего сообщения текстового канала — снимок активности для
    * «непрочитано». Только для `type: 'text'` и только если в канале вообще
    * что-то писали. Клиент сравнивает его с сохранённой отметкой чтения, поэтому
@@ -233,11 +267,12 @@ export interface ChannelDeletePayload {
  * Итог удаления (ack). Отказ — не «ничего не произошло»: интерфейс обязан
  * сказать, почему канал остался на месте.
  * - `occupied` — в голосовом канале кто-то есть; `occupants` — сколько именно;
+ * - `not-owner` — канал создан другим устройством;
  * - `forbidden` — канал по умолчанию (или сервер под паролем не разблокирован).
  */
 export type ChannelDeleteResult =
   | { ok: true }
-  | { ok: false; error: 'not-found' | 'forbidden' | 'occupied'; occupants?: number };
+  | { ok: false; error: 'not-found' | 'forbidden' | 'occupied' | 'not-owner'; occupants?: number };
 
 /**
  * Переименование канала. Меняется только отображаемое имя — `slug` остаётся
@@ -251,9 +286,9 @@ export interface ChannelRenamePayload {
 
 export type ChannelRenameResult =
   | { ok: true }
-  | { ok: false; error: 'not-found' | 'forbidden' | 'bad-name' };
+  | { ok: false; error: 'not-found' | 'forbidden' | 'bad-name' | 'not-owner' };
 
-/** Смена транспорта голосового канала (только `removable`). */
+/** Смена транспорта голосового канала (только своего `removable`). */
 export interface ChannelModePayload {
   id: string;
   mode: VoiceMode;
@@ -269,6 +304,20 @@ export interface ChannelStatsPayload {
  * диалога — рассылать это всем постоянно незачем.
  */
 export type ChannelStatsResult = { ok: true; occupants: number; messages: number } | { ok: false };
+
+export interface ServerStatsPayload {
+  id: string;
+}
+
+/**
+ * Живой срез сервера для подтверждения удаления: сколько каналов и сколько
+ * сообщений во всех его текстовых каналах исчезнет вместе с ним и сколько
+ * человек прямо сейчас сидит в его эфирах (пока сидят — сервер не удаляется,
+ * как и занятый канал).
+ */
+export type ServerStatsResult =
+  | { ok: true; channels: number; messages: number; occupants: number }
+  | { ok: false };
 
 // ─────────────────────────────────────────────────────────────────────────
 // ICE / конфиг
@@ -377,6 +426,12 @@ export interface JoinPayload {
   name?: string;
   // Стабильный id устройства (localStorage). По нему сервер выгоняет «призрака» —
   // прошлый сокет того же клиента, ещё висящий в комнате после перезагрузки.
+  //
+  // Место этого id — `auth`-поле handshake (см. Server.mine): там он объявляется
+  // один раз и оттуда же решает владение записями реестра. Здесь он оставлен
+  // ради клиентов, которые в handshake молчат, — им иначе нечем опознать свою
+  // же прошлую вкладку. Названное в handshake сильнее: перебить его join'ом
+  // нельзя.
   clientId?: string;
   /**
    * Транспорт, которым мы фактически звоним. Сервер раздаёт его остальным в
@@ -516,7 +571,8 @@ export interface ClientToServerEvents {
   'media-update': (payload: MediaUpdatePayload) => void;
   rename: (payload: RenamePayload) => void;
   'server-create': (payload: ServerCreatePayload) => void;
-  'server-delete': (payload: ServerDeletePayload) => void;
+  'server-delete': (payload: ServerDeletePayload, cb: (res: ServerDeleteResult) => void) => void;
+  'server-stats': (payload: ServerStatsPayload, cb: (res: ServerStatsResult) => void) => void;
   'server-unlock': (payload: ServerUnlockPayload) => void;
   'channel-create': (payload: ChannelCreatePayload) => void;
   'channel-delete': (payload: ChannelDeletePayload, cb: (res: ChannelDeleteResult) => void) => void;

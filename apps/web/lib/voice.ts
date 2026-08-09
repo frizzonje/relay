@@ -1483,10 +1483,14 @@ export function renameSelf(name: string) {
   socket().emit('rename', { name });
 }
 
-/** Клик по статусу в панели голоса — вернуться к видеосетке. */
+/**
+ * Клик по статусу в панели голоса — вернуться к видеосетке. На мобиле это ещё и
+ * переход на экран сцены: сама панель голоса живёт в сайдбаре, то есть жмут её
+ * с экрана каналов.
+ */
 export function showVoiceStage() {
   if (!room) return;
-  useUiStore.setState({ view: 'voice' });
+  useUiStore.setState({ view: 'voice', mobilePanel: 'stage' });
 }
 
 // ─────────────────────────────────────────────────────────────────────────

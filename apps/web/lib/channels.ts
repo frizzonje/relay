@@ -18,8 +18,8 @@ import { tx } from '@/lib/i18n';
  * Канал создаётся в активном сервере (открытом в рейке).
  *
  * Удаление и переименование возвращают ack: отказ сервера («в канале люди»,
- * «канал по умолчанию») человек должен увидеть, а не гадать, почему строка
- * осталась на месте.
+ * «канал по умолчанию», «это не ваш канал») человек должен увидеть, а не
+ * гадать, почему строка осталась на месте.
  */
 
 /** Ack может не прийти вовсе (обрыв) — не ждём вечно. */
@@ -35,6 +35,8 @@ export function createChannel(type: ChannelType, name: string, mode?: VoiceMode)
     toast(tx('channels.mainFixed'));
     return;
   }
+  // Владельцем канала сервер запишет устройство, назвавшееся в handshake
+  // (см. lib/socket) — менять канал сможет только оно.
   getSocket().emit('channel-create', { serverId, type, name: trimmed, ...(mode ? { mode } : {}) });
 }
 
@@ -46,6 +48,7 @@ function refusalText(error: string, occupants?: number): string {
       : tx('channels.refusal.occupied');
   }
   if (error === 'forbidden') return tx('channels.refusal.forbidden');
+  if (error === 'not-owner') return tx('channels.refusal.notOwner');
   if (error === 'bad-name') return tx('channels.refusal.badName');
   return tx('channels.refusal.gone');
 }
@@ -81,8 +84,8 @@ export async function channelStats(
 }
 
 /**
- * Сменить транспорт голосового канала. Сервер пустит только для созданных
- * участниками каналов — у дефолтных режим не меняется (там всегда p2p).
+ * Сменить транспорт голосового канала. Сервер пустит только создателя — у
+ * дефолтных каналов режим не меняется вовсе (там всегда p2p).
  */
 export function setChannelMode(id: string, mode: VoiceMode): void {
   if (!id) return;
@@ -90,7 +93,7 @@ export function setChannelMode(id: string, mode: VoiceMode): void {
 }
 
 /** Событие с ack и тайм-аутом; null — ответа не дождались. */
-function ask<T>(event: string, payload: unknown): Promise<T | null> {
+export function ask<T>(event: string, payload: unknown): Promise<T | null> {
   return new Promise((resolve) => {
     let settled = false;
     const done = (value: T | null) => {

@@ -1,5 +1,6 @@
 import { io, type Socket } from 'socket.io-client';
 import type { ClientToServerEvents, ServerToClientEvents } from '@relay/shared';
+import { loadClientId } from '@/lib/identity';
 
 export type RelaySocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -31,9 +32,15 @@ export function getSocket(): RelaySocket {
       // auth-функция вычисляется на каждый connect (в т.ч. reconnect): на
       // инвайт-странице гость шлёт токен, в остальном приложении — пусто
       // (авторизация по куке relay_pass, как раньше).
+      //
+      // clientId — стабильный id этого браузера. Он не пропуск и никого не
+      // удостоверяет; по нему сервер решает, чьи серверы и каналы показывать
+      // управляемыми (audit B2), и выгоняет «призрака» прошлой вкладки из
+      // эфира. Место ему именно здесь: одно объявление на соединение вместо
+      // поля в каждом сообщении.
       auth: (cb) => {
         const guest = guestTokenFromLocation();
-        cb(guest ? { guest } : {});
+        cb({ clientId: loadClientId(), ...(guest ? { guest } : {}) });
       },
     });
   }

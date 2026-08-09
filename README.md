@@ -12,7 +12,7 @@ Spin up your own relay on a fresh **Debian/Ubuntu** server in one command:
 curl -fsSL https://raw.githubusercontent.com/frizzonje/relay/main/install.sh | bash
 ```
 
-It installs Docker, asks for your domain, login password, TURN and the media server, pulls prebuilt images, opens the firewall, and starts everything — then hands you a `relay` CLI (`relay update`, `relay logs`, `relay config`, `relay backup`). The stack lives in `/opt/relay`.
+It installs Docker, asks for your domain, login password, TURN and the media server, pulls prebuilt images, opens the firewall, and starts everything — then hands you a `relay` CLI (`relay update`, `relay logs`, `relay config`, `relay backup`, `relay restore`, `relay disown`). The stack lives in `/opt/relay`, pinned to the release it installed: `relay up` after a reboot starts what you were running, and moving to a new version is `relay update` and nothing else.
 
 **No domain?** Say so and the installer takes a Let's Encrypt certificate for the server's IP address instead — real HTTPS at `https://<your-ip>`, no browser warnings, nothing to buy. Such certificates are only valid for six days by design, so Caddy renews them every couple of days on its own. If issuance fails (port 80 closed, address behind NAT), the stack still comes up with a self-signed certificate.
 
@@ -30,7 +30,7 @@ Want to build from source or hack on it? See [Quick start](#quick-start-from-sou
 - **Voice and video** — camera, screen sharing (tab/system audio via the browser; on Windows the desktop client captures system audio natively), push-to-talk, voice activity detection, mute/deafen indicators, per-participant volume mixer (0–300 %) with memory
 - **Two call transports** — P2P mesh and a mediasoup SFU, picked per voice channel; see [Call topology](#call-topology)
 - **Text channels** — replies, editing, deletion, typing indicators, reactions, attachments up to 25 MB. Chat is ephemeral: the API keeps the last 50 messages per channel in memory — see [Data and persistence](#data-and-persistence)
-- **Servers and channels** — create/delete on the fly, optional per-server password, shared registry for all members, invite links with guest tokens
+- **Servers and channels** — create/delete on the fly, optional per-server password, shared registry for all members, invite links with guest tokens. Renaming and deleting is limited to the device that created the entry; if that browser is gone, `relay disown` on the host hands the entry back to everyone
 - **Closed perimeter** — single login password (HMAC cookie), one origin behind Caddy, automatic TLS via Let's Encrypt
 - **Interface in English and Russian** — resolved server-side from the browser's `Accept-Language` on the first visit (so the first paint is already right), remembered in a cookie, switchable in Settings → Appearance. Adding a language is one JSON file — see [Localization](#localization)
 - **TURN profile** — coturn for calls behind strict NAT (mobile networks, CGNAT), including TURN over TLS on 5349
@@ -38,7 +38,7 @@ Want to build from source or hack on it? See [Quick start](#quick-start-from-sou
 
 ## Call topology
 
-Voice channels created by members carry a `mode` that any member can flip from the sidebar (the channels seeded with a new server are always `p2p`). Both transports live side by side — neither is legacy.
+Voice channels created by members carry a `mode` that its creator can flip from the sidebar (the channels seeded with a new server are always `p2p`). Both transports live side by side — neither is legacy.
 
 | | `p2p` (mesh, default) | `sfu` (media server) |
 |---|---|---|
@@ -72,8 +72,8 @@ Native clients implement one contract — [docs/protocol.md](docs/protocol.md) �
 ```
 apps/
   web/        Next.js 15 (App Router, React 19, Tailwind, Zustand, i18n en/ru)
-  api/        NestJS 10 + Socket.io (signaling, chat, registry, uploads)
-  sfu/        NestJS 10 + mediasoup (optional media server for large calls)
+  api/        NestJS 11 + Socket.io (signaling, chat, registry, uploads)
+  sfu/        NestJS 11 + mediasoup (optional media server for large calls)
 packages/
   shared/     @relay/shared — shared contract: types, socket events, HMAC auth
 clients/
@@ -111,7 +111,22 @@ uses under the hood):
 docker compose -f docker-compose.prod.yml up -d          # add --profile turn / --profile sfu
 ```
 
-Pin a version with `RELAY_VERSION` (`latest` by default); published tags are listed on the [GHCR packages](https://github.com/frizzonje?tab=packages&repo_name=relay) page.
+Pin a version with `RELAY_VERSION` (`latest` by default); published tags are listed on the [GHCR packages](https://github.com/frizzonje?tab=packages&repo_name=relay) page. Images are pulled on demand, so `docker compose pull` is how you ask for new ones — `up` alone will not change what is running under you.
+
+### Updating an installation
+
+`relay update` moves the whole stack, not just the images: it re-fetches `docker-compose.prod.yml`, the Caddy config, coturn's entry point and the CLI itself from the tag it is moving to, then pulls and restarts. The previous files are kept under `/opt/relay/backups/`, and an update that fails to come up rolls itself back.
+
+```bash
+relay version           # installed, newest available, active profiles
+relay update            # go to the newest release
+relay update 0.7.0      # go to a specific one — this is also how you roll back
+relay backup            # volumes AND config (including .env) into one tarball
+relay restore <file>    # put that tarball back
+```
+
+> [!IMPORTANT]
+> Installations made before this existed have a `relay` CLI that only pulls images and can therefore never update itself. Re-run the installer once on those; it keeps your `.env`, backing up the old one beside it.
 
 ## Run and test locally
 
@@ -187,7 +202,9 @@ CI (`.github/workflows/ci.yml`) runs the same three groups on pushes to `main`/`
 | `SFU_URL` | `/` | Public address of the SFU signaling handed to clients. `/` means "same origin, path `/sfu/`" |
 | `SFU_INTERNAL_URL` | `http://host.docker.internal:3100` | Where api health-checks the SFU from inside the network (dev: `http://sfu:3100`) |
 | `PORT` | `3000` | Port the NestJS app listens on inside the container |
-| `RELAY_VERSION` | `latest` | Image tag used by `docker-compose.prod.yml` |
+| `RELAY_VERSION` | `latest` | Image tag used by `docker-compose.prod.yml`. `install.sh` pins the installed release here and `relay update` moves it |
+| `RELAY_REPO` / `RELAY_REF` | `frizzonje/relay` / `main` | Where `relay update` fetches stack files from. The ref follows `RELAY_VERSION` when it is pinned; `RELAY_REF` is only used by an installation following `latest` |
+| `RELAY_TLS_MODE` | _(empty)_ | `domain`, `ip` or `selfsigned` — which `tls-mode.caddy` `relay update` re-fetches |
 
 ### Firewall
 
@@ -213,7 +230,7 @@ There is no database. What survives a restart and what doesn't:
 | Chat messages | api process memory — last 50 per channel, 200 channels max | **no** |
 | Your `@`-tag, volume levels, unread state | browser `localStorage` | yes, per browser |
 
-So `relay update`, `docker compose up` or any api restart wipes the message history while keeping servers, channels and files. `relay backup` snapshots the `uploads` and `caddy_data` volumes — that is, everything that is persisted at all. Accounts don't exist either: access is one shared `SITE_PASSWORD`, and identity is the `@`-tag a visitor picks after entering it.
+So `relay update`, `docker compose up` or any api restart wipes the message history while keeping servers, channels and files. `relay backup` snapshots both volumes **and** the configuration next to them (`.env` with all its secrets, the compose file, the Caddy config) — a machine rebuilt from one of these tarballs comes back as it was, which was not true of the volumes alone. Accounts don't exist either: access is one shared `SITE_PASSWORD`, and identity is the `@`-tag a visitor picks after entering it.
 
 ## Localization
 

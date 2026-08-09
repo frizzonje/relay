@@ -36,7 +36,7 @@ function linkify(text: string, keyBase: string): ReactNode[] {
         href={url}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-[#79a6ff] underline decoration-[#79a6ff]/40 underline-offset-2 hover:decoration-[#79a6ff]"
+        className="text-link underline decoration-link/40 underline-offset-2 hover:decoration-link"
       >
         {url}
       </a>,

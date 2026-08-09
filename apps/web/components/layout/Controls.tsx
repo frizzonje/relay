@@ -1,8 +1,11 @@
 'use client';
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { motion } from 'framer-motion';
 import { Icon, type IconName } from '@/components/ui/icon';
 import { cn } from '@/lib/utils';
+import { springTab } from '@/lib/motion';
+import { useDismiss } from '@/lib/use-dismiss';
 import { useUiStore } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import {
@@ -56,27 +59,124 @@ function CtlBtn({
 }
 
 /**
- * Кнопка микрофона с кареткой: сам тумблер вкл/выкл + маленькая «▲» снизу,
- * открывающая список микрофонов. Выбор горячо подменяет дорожку у всех
- * собеседников (lib/voice.setMic) и запоминается в localStorage.
+ * Кнопка с кареткой: сам тумблер (микрофон, динамики) плюс маленькая «▲» снизу,
+ * открывающая меню устройств. Одна обёртка на оба контрола — у них совпадало
+ * всё, кроме подписей и содержимого меню.
+ *
+ * `onOpen` дёргается на каждом раскрытии: список устройств браузер обновляет
+ * лениво, и метки появляются только после выданного доступа.
  */
-function MicControl({ micOn }: { micOn: boolean }) {
-  const t = useT();
-  const mics = useVoiceStore((s) => s.mics);
-  const currentMicId = useVoiceStore((s) => s.currentMicId);
-  const currentMicLabel = useVoiceStore((s) => s.currentMicLabel);
-  const micThreshold = useVoiceStore((s) => s.micThreshold);
+function DeviceMenu({
+  title,
+  icon,
+  off,
+  onToggle,
+  pickLabel,
+  menuTitle,
+  onOpen,
+  children,
+}: {
+  title: string;
+  icon: IconName;
+  off: boolean;
+  onToggle: () => void;
+  pickLabel: string;
+  menuTitle: string;
+  onOpen: () => void;
+  /** Содержимое меню; `close` закрывает его после выбора. */
+  children: (close: () => void) => ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDismiss(open, close, wrapRef);
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <CtlBtn title={title} icon={icon} off={off} onClick={onToggle} />
+      <button
+        type="button"
+        title={pickLabel}
+        aria-label={pickLabel}
+        aria-expanded={open}
+        onClick={() => {
+          if (!open) onOpen();
+          setOpen((o) => !o);
+        }}
+        className="absolute -bottom-1 -right-1 grid h-[17px] w-[17px] place-items-center rounded-full bg-bg-elev text-text outline-none ring-2 ring-bg-main transition hover:bg-line-strong focus-visible:ring-2 focus-visible:ring-line-strong active:scale-90"
+      >
+        <Icon name="chevron-up" className="text-[11px]" />
+      </button>
+
+      {open && (
+        <div className="absolute bottom-[52px] left-1/2 z-20 max-h-[50vh] w-72 -translate-x-1/2 overflow-y-auto rounded-xl border border-line bg-bg-panel/95 p-1.5 shadow-[0_16px_50px_rgba(0,0,0,0.65)] backdrop-blur">
+          <div className="px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.04em] text-text-muted">
+            {menuTitle}
+          </div>
+          {children(close)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Список устройств в меню: галочка у активного, запасная подпись у безымянных. */
+function DeviceList({
+  devices,
+  icon,
+  isActive,
+  numbered,
+  onPick,
+}: {
+  devices: MediaDeviceInfo[];
+  icon: IconName;
+  isActive: (device: MediaDeviceInfo) => boolean;
+  /** Подпись устройства, у которого браузер не отдал метку (нет доступа). */
+  numbered: (n: number) => string;
+  onPick: (deviceId: string) => void;
+}) {
+  const t = useT();
+  if (devices.length === 0)
+    return <div className="px-2.5 py-2 text-xs text-text-muted">{t('controls.devices.empty')}</div>;
+  return devices.map((device, i) => {
+    const active = isActive(device);
+    return (
+      <button
+        key={device.deviceId || i}
+        type="button"
+        onClick={() => !active && onPick(device.deviceId)}
+        className={cn(
+          'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-text outline-none transition hover:bg-white/10 focus-visible:bg-white/10',
+          active && 'bg-bg-active',
+        )}
+      >
+        <Icon
+          name={icon}
+          className={cn('h-4 w-4 shrink-0', active ? 'text-ok' : 'text-text-muted')}
+        />
+        <span className="flex-1 truncate">{device.label || numbered(i + 1)}</span>
+        {active && <span className="shrink-0 text-ok">✓</span>}
+      </button>
+    );
+  });
+}
+
+/**
+ * Порог срабатывания микрофона — шумовой гейт, как в Discord. Тихий блок в
+ * подвале меню микрофона. Полоска — живой уровень микрофона; белая метка —
+ * порог (тяни её или кликай по полоске). Уровень выше метки = микрофон открыт,
+ * тебя слышно (заливка зеленеет). Метка слева = слышно всегда.
+ */
+function MicThreshold() {
+  const t = useT();
+  const micThreshold = useVoiceStore((s) => s.micThreshold);
   const fillRef = useRef<HTMLDivElement>(null);
   const thrPct = Math.round(micThreshold * 100);
 
-  // Живой метр уровня микрофона (как в Discord). Крутим rAF только пока меню
-  // открыто и пишем ширину/цвет заливки прямо в DOM — без ре-рендера на кадр.
-  // Заливка зелёная, когда уровень выше порога (микрофон открыт = тебя слышно),
-  // и приглушённая, когда ниже (гейт закрыт). Порог читаем из стора на лету.
+  // Живой метр: крутим rAF, пока блок на экране, и пишем ширину прямо в DOM —
+  // кадр без ре-рендера. Порог читаем из стора на лету, состояние гейта отдаём
+  // классом (цвета — у .mic-meter в globals.css).
   useEffect(() => {
-    if (!open) return;
     let raf = 0;
     let shown = 0; // сглаживание: быстрый подъём, плавный спад — как у VU-метра
     const tick = () => {
@@ -86,249 +186,140 @@ function MicControl({ micOn }: { micOn: boolean }) {
       const el = fillRef.current;
       if (el) {
         el.style.width = `${shown * 100}%`;
-        // выше порога — открыто (зелёный), иначе приглушённый серо-синий
-        el.style.background = shown >= thr && (thr > 0 || shown > 0.12) ? '#23a55a' : '#4e5d7a';
+        el.classList.toggle('is-open', shown >= thr && (thr > 0 || shown > 0.12));
       }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
-  function toggleMenu(e: React.MouseEvent) {
-    e.stopPropagation();
-    const next = !open;
-    setOpen(next);
-    if (next) refreshMics(); // перечитываем список на каждом открытии
-  }
+  }, []);
 
   return (
-    <div ref={wrapRef} className="relative">
-      <CtlBtn
-        title={
-          currentMicLabel ? t('controls.mic.named', { device: currentMicLabel }) : t('controls.mic')
-        }
-        icon={micOn ? 'mic' : 'mic-off'}
-        off={!micOn}
-        onClick={toggleMic}
-      />
-      <button
-        type="button"
-        title={t('controls.mic.pick')}
-        aria-label={t('controls.mic.pick')}
-        aria-expanded={open}
-        onClick={toggleMenu}
-        className="absolute -bottom-1 -right-1 grid h-[17px] w-[17px] place-items-center rounded-full bg-bg-elev text-text outline-none ring-2 ring-bg-main transition hover:bg-line-strong focus-visible:ring-2 focus-visible:ring-line-strong active:scale-90"
-      >
-        <Icon name="chevron-up" className="text-[11px]" />
-      </button>
-
-      {open && (
-        <div className="absolute bottom-[52px] left-1/2 z-20 max-h-[50vh] w-72 -translate-x-1/2 overflow-y-auto rounded-xl border border-line bg-bg-panel/95 p-1.5 shadow-[0_16px_50px_rgba(0,0,0,0.65)] backdrop-blur">
-          <div className="px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.04em] text-text-muted">
-            {t('controls.mic')}
-          </div>
-          {mics.length === 0 ? (
-            <div className="px-2.5 py-2 text-xs text-text-muted">{t('controls.devices.empty')}</div>
-          ) : (
-            mics.map((m, i) => {
-              const active = m.deviceId === currentMicId;
-              return (
-                <button
-                  key={m.deviceId || i}
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setOpen(false);
-                    if (!active) void setMic(m.deviceId);
-                  }}
-                  className={cn(
-                    'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-white outline-none transition hover:bg-white/10 focus-visible:bg-white/10',
-                    active && 'bg-white/[0.06]',
-                  )}
-                >
-                  <Icon
-                    name="mic"
-                    className={cn('h-4 w-4 shrink-0', active ? 'text-ok' : 'text-text-muted')}
-                  />
-                  <span className="flex-1 truncate">
-                    {m.label || t('controls.mic.numbered', { n: i + 1 })}
-                  </span>
-                  {active && <span className="shrink-0 text-ok">✓</span>}
-                </button>
-              );
-            })
+    <div className="mt-1 border-t border-line-strong px-2.5 pb-2 pt-2.5">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-[11px] font-bold uppercase tracking-[0.04em] text-text-muted">
+          {t('controls.threshold')}
+        </span>
+        <span
+          className={cn(
+            'text-[11px] font-semibold tabular-nums',
+            thrPct === 0 ? 'text-text-muted' : 'text-ok',
           )}
+        >
+          {thrPct === 0 ? t('controls.threshold.off') : `${thrPct}%`}
+        </span>
+      </div>
 
-          {/* Порог срабатывания микрофона — шумовой гейт, как в Discord. Тихий
-              блок в подвале меню. Полоска — живой уровень микрофона; белая метка —
-              порог (тяни её или кликай по полоске). Уровень выше метки = микрофон
-              открыт, тебя слышно (заливка зеленеет). Метка слева = слышно всегда. */}
-          <div className="mt-1 border-t border-white/10 px-2.5 pb-2 pt-2.5">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-[11px] font-bold uppercase tracking-[0.04em] text-text-muted">
-                {t('controls.threshold')}
-              </span>
-              <span
-                className={cn(
-                  'text-[11px] font-semibold tabular-nums',
-                  thrPct === 0 ? 'text-text-muted' : 'text-ok',
-                )}
-              >
-                {thrPct === 0 ? t('controls.threshold.off') : `${thrPct}%`}
-              </span>
-            </div>
+      <div className="relative h-2.5 w-full rounded-full bg-black/45">
+        {/* живой уровень микрофона (ширину гонит rAF) */}
+        <div ref={fillRef} className="mic-meter absolute inset-y-0 left-0 rounded-full" />
+        {/* метка порога */}
+        <div
+          className="pointer-events-none absolute inset-y-[-2px] z-[1] w-[3px] -translate-x-1/2 rounded-full bg-white shadow-[0_0_4px_rgba(0,0,0,0.65)]"
+          style={{ left: `${thrPct}%` }}
+        />
+        {/* прозрачный range поверх — задаёт порог кликом/перетаскиванием/клавишами */}
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={thrPct}
+          aria-label={t('controls.threshold.aria')}
+          onChange={(e) => setMicThreshold(Number(e.target.value) / 100)}
+          className="absolute inset-0 z-[2] m-0 h-full w-full cursor-pointer opacity-0"
+        />
+      </div>
 
-            <div className="relative h-2.5 w-full rounded-full bg-black/45">
-              {/* живой уровень микрофона (ширину/цвет гонит rAF) */}
-              <div
-                ref={fillRef}
-                className="absolute inset-y-0 left-0 rounded-full"
-                style={{ width: '0%', background: '#4e5d7a' }}
-              />
-              {/* метка порога */}
-              <div
-                className="pointer-events-none absolute inset-y-[-2px] z-[1] w-[3px] -translate-x-1/2 rounded-full bg-white shadow-[0_0_4px_rgba(0,0,0,0.65)]"
-                style={{ left: `${thrPct}%` }}
-              />
-              {/* прозрачный range поверх — задаёт порог кликом/перетаскиванием/клавишами */}
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={1}
-                value={thrPct}
-                aria-label={t('controls.threshold.aria')}
-                onChange={(e) => setMicThreshold(Number(e.target.value) / 100)}
-                onClick={(e) => e.stopPropagation()}
-                className="absolute inset-0 z-[2] m-0 h-full w-full cursor-pointer opacity-0"
-              />
-            </div>
-
-            <p className="mt-1.5 text-[11px] leading-snug text-text-muted">
-              {t(thrPct === 0 ? 'controls.threshold.hint.off' : 'controls.threshold.hint.on')}
-            </p>
-          </div>
-        </div>
-      )}
+      <p className="mt-1.5 text-[11px] leading-snug text-text-muted">
+        {t(thrPct === 0 ? 'controls.threshold.hint.off' : 'controls.threshold.hint.on')}
+      </p>
     </div>
   );
 }
 
 /**
- * Кнопка динамиков с кареткой: тумблер мута всех звуков сайта + маленькая «▲»
- * для выбора устройства вывода. Аналог MicControl для входящего аудио.
+ * Микрофон: тумблер вкл/выкл, выбор устройства и порог гейта. Выбор горячо
+ * подменяет дорожку у всех собеседников (lib/voice.setMic) и запоминается.
+ */
+function MicControl({ micOn }: { micOn: boolean }) {
+  const t = useT();
+  const mics = useVoiceStore((s) => s.mics);
+  const currentMicId = useVoiceStore((s) => s.currentMicId);
+  const currentMicLabel = useVoiceStore((s) => s.currentMicLabel);
+
+  return (
+    <DeviceMenu
+      title={
+        currentMicLabel ? t('controls.mic.named', { device: currentMicLabel }) : t('controls.mic')
+      }
+      icon={micOn ? 'mic' : 'mic-off'}
+      off={!micOn}
+      onToggle={toggleMic}
+      pickLabel={t('controls.mic.pick')}
+      menuTitle={t('controls.mic')}
+      onOpen={refreshMics}
+    >
+      {(close) => (
+        <>
+          <DeviceList
+            devices={mics}
+            icon="mic"
+            isActive={(m) => m.deviceId === currentMicId}
+            numbered={(n) => t('controls.mic.numbered', { n })}
+            onPick={(id) => {
+              close();
+              void setMic(id);
+            }}
+          />
+          <MicThreshold />
+        </>
+      )}
+    </DeviceMenu>
+  );
+}
+
+/**
+ * Динамики: тумблер мута всех звуков сайта и выбор устройства вывода.
+ * Аналог MicControl для входящего аудио.
  */
 function SpeakerControl({ speakersOn }: { speakersOn: boolean }) {
   const t = useT();
   const speakers = useVoiceStore((s) => s.speakers);
   const currentSpeakerId = useVoiceStore((s) => s.currentSpeakerId);
   const currentSpeakerLabel = useVoiceStore((s) => s.currentSpeakerLabel);
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
-  function toggleMenu(e: React.MouseEvent) {
-    e.stopPropagation();
-    const next = !open;
-    setOpen(next);
-    if (next) refreshSpeakers();
-  }
 
   return (
-    <div ref={wrapRef} className="relative">
-      <CtlBtn
-        title={
-          t(speakersOn ? 'controls.speakers.off' : 'controls.speakers.on') +
-          (currentSpeakerLabel ? ' · ' + currentSpeakerLabel : '')
-        }
-        icon={speakersOn ? 'headphones' : 'headphone-off'}
-        off={!speakersOn}
-        onClick={toggleSpeakers}
-      />
-      <button
-        type="button"
-        title={t('controls.speakers.pick')}
-        aria-label={t('controls.speakers.pick')}
-        aria-expanded={open}
-        onClick={toggleMenu}
-        className="absolute -bottom-1 -right-1 grid h-[17px] w-[17px] place-items-center rounded-full bg-bg-elev text-text outline-none ring-2 ring-bg-main transition hover:bg-line-strong focus-visible:ring-2 focus-visible:ring-line-strong active:scale-90"
-      >
-        <Icon name="chevron-up" className="text-[11px]" />
-      </button>
-
-      {open && (
-        <div className="absolute bottom-[52px] left-1/2 z-20 max-h-[50vh] w-72 -translate-x-1/2 overflow-y-auto rounded-xl border border-line bg-bg-panel/95 p-1.5 shadow-[0_16px_50px_rgba(0,0,0,0.65)] backdrop-blur">
-          <div className="px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.04em] text-text-muted">
-            {t('controls.speakers.title')}
-          </div>
-          {speakers.length === 0 ? (
-            <div className="px-2.5 py-2 text-xs text-text-muted">{t('controls.devices.empty')}</div>
-          ) : (
-            speakers.map((sp, i) => {
-              const active = currentSpeakerId
-                ? sp.deviceId === currentSpeakerId
-                : sp.deviceId === 'default' || sp.deviceId === '';
-              return (
-                <button
-                  key={sp.deviceId || i}
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setOpen(false);
-                    if (!active) void setSpeaker(sp.deviceId);
-                  }}
-                  className={cn(
-                    'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-white outline-none transition hover:bg-white/10 focus-visible:bg-white/10',
-                    active && 'bg-white/[0.06]',
-                  )}
-                >
-                  <Icon
-                    name="volume-2"
-                    className={cn('h-4 w-4 shrink-0', active ? 'text-ok' : 'text-text-muted')}
-                  />
-                  <span className="flex-1 truncate">
-                    {sp.label || t('controls.speakers.numbered', { n: i + 1 })}
-                  </span>
-                  {active && <span className="shrink-0 text-ok">✓</span>}
-                </button>
-              );
-            })
-          )}
-        </div>
+    <DeviceMenu
+      title={
+        t(speakersOn ? 'controls.speakers.off' : 'controls.speakers.on') +
+        (currentSpeakerLabel ? ' · ' + currentSpeakerLabel : '')
+      }
+      icon={speakersOn ? 'headphones' : 'headphone-off'}
+      off={!speakersOn}
+      onToggle={toggleSpeakers}
+      pickLabel={t('controls.speakers.pick')}
+      menuTitle={t('controls.speakers.title')}
+      onOpen={refreshSpeakers}
+    >
+      {(close) => (
+        <DeviceList
+          devices={speakers}
+          icon="volume-2"
+          // Пустой выбор — системный по умолчанию: он и подсвечен.
+          isActive={(sp) =>
+            currentSpeakerId
+              ? sp.deviceId === currentSpeakerId
+              : sp.deviceId === 'default' || sp.deviceId === ''
+          }
+          numbered={(n) => t('controls.speakers.numbered', { n })}
+          onPick={(id) => {
+            close();
+            void setSpeaker(id);
+          }}
+        />
       )}
-    </div>
+    </DeviceMenu>
   );
 }
 
@@ -362,7 +353,7 @@ export function Controls() {
   if (view !== 'voice') return null;
 
   return (
-    <div className="relative flex h-16 shrink-0 items-center justify-center gap-2 border-t border-line bg-bg-main px-4">
+    <div className="relative flex h-16 shrink-0 items-center justify-center gap-2 border-t border-line bg-bg-main px-4 max-md:h-auto max-md:py-2.5 max-md:pb-[max(0.625rem,env(safe-area-inset-bottom))]">
       {/* Слева: живой эквалайзер «я говорю» + RTT-метка (раздел 02 референса) */}
       <div className="pointer-events-none absolute left-4 flex items-center gap-3">
         {micOn && (
@@ -384,7 +375,7 @@ export function Controls() {
             className={cn(
               'font-mono text-[11px] tabular-nums',
               ping.grade === 'good' && 'text-text-muted',
-              ping.grade === 'mid' && 'text-[#d8a32a]',
+              ping.grade === 'mid' && 'text-warn',
               ping.grade === 'bad' && 'text-danger',
             )}
           >
@@ -415,12 +406,21 @@ export function Controls() {
               aria-pressed={screenMode === mode}
               onClick={() => setScreenMode(mode)}
               className={cn(
-                'rounded-[23px] px-4 py-[9px] text-xs font-bold uppercase tracking-[0.04em] text-text-muted outline-none transition hover:text-text-header focus-visible:ring-2 focus-visible:ring-line-strong active:scale-[0.94]',
-                screenMode === mode &&
-                  '!bg-accent-strong !text-bg-app shadow-[0_1px_4px_rgba(0,0,0,0.35)]',
+                'relative rounded-[23px] px-4 py-[9px] text-xs font-bold uppercase tracking-[0.04em] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong active:scale-[0.94]',
+                screenMode === mode ? 'text-bg-app' : 'text-text-muted hover:text-text-header',
               )}
             >
-              {t(mode === 'quality' ? 'controls.screen.quality' : 'controls.screen.fps')}
+              {/* Подложка выбранного режима переезжает между половинками */}
+              {screenMode === mode && (
+                <motion.span
+                  layoutId="screen-mode"
+                  transition={springTab}
+                  className="absolute inset-0 rounded-[23px] bg-accent-strong shadow-[0_1px_4px_rgba(0,0,0,0.35)]"
+                />
+              )}
+              <span className="relative">
+                {t(mode === 'quality' ? 'controls.screen.quality' : 'controls.screen.fps')}
+              </span>
             </button>
           ))}
         </SegToggle>

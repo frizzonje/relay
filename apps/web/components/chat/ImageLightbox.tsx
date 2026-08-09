@@ -11,6 +11,7 @@ import {
 } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { cn } from '@/lib/utils';
+import { Icon } from '@/components/ui/icon';
 import { useT } from '@/lib/i18n';
 
 const MIN_SCALE = 1;
@@ -217,22 +218,7 @@ export function ImageLightbox({
 
           {/* Подпись слева сверху: имя файла + размеры/вес (моно, как таймстампы). */}
           <div className="lbx-chrome pointer-events-none absolute left-4 top-4 flex max-w-[46vw] items-center gap-2.5 rounded-[10px] border border-line bg-bg-panel/90 px-3 py-2 shadow-[0_16px_50px_rgba(0,0,0,0.6)] backdrop-blur">
-            <svg
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="shrink-0 text-text-faint"
-              aria-hidden="true"
-            >
-              <rect x="3" y="3" width="18" height="18" rx="2.5" />
-              <circle cx="8.5" cy="8.5" r="1.6" />
-              <path d="m21 15-5-5L5 21" />
-            </svg>
+            <Icon name="image" className="shrink-0 text-[16px] text-text-faint" />
             <span className="truncate font-mono text-[12px] text-text">
               {alt || t('lightbox.image')}
             </span>
@@ -252,20 +238,7 @@ export function ImageLightbox({
               onClick={() => centerZoom(-STEP)}
               disabled={!zoomed}
             >
-              <svg
-                viewBox="0 0 24 24"
-                width="18"
-                height="18"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <circle cx="11" cy="11" r="7" />
-                <path d="m20 20-3.5-3.5M8 11h6" />
-              </svg>
+              <Icon name="zoom-out" className="text-[18px]" />
             </ToolBtn>
             <span className="min-w-[3.4rem] select-none text-center font-mono text-[11px] tabular-nums text-text-muted">
               {pct}%
@@ -275,36 +248,10 @@ export function ImageLightbox({
               onClick={() => centerZoom(STEP)}
               disabled={scale >= MAX_SCALE}
             >
-              <svg
-                viewBox="0 0 24 24"
-                width="18"
-                height="18"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <circle cx="11" cy="11" r="7" />
-                <path d="m20 20-3.5-3.5M11 8v6M8 11h6" />
-              </svg>
+              <Icon name="zoom-in" className="text-[18px]" />
             </ToolBtn>
             <ToolBtn label={t('lightbox.zoomReset')} onClick={reset} disabled={!zoomed}>
-              <svg
-                viewBox="0 0 24 24"
-                width="18"
-                height="18"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
-                <path d="M3 3v5h5" />
-              </svg>
+              <Icon name="rotate-ccw" className="text-[18px]" />
             </ToolBtn>
             <span className="mx-1 h-5 w-px bg-line-strong" />
             <a
@@ -316,34 +263,10 @@ export function ImageLightbox({
               title={t('lightbox.download')}
               className="grid h-9 w-9 place-items-center rounded-[10px] text-text-muted outline-none transition-colors hover:bg-bg-active hover:text-text focus-visible:ring-2 focus-visible:ring-line-strong"
             >
-              <svg
-                viewBox="0 0 24 24"
-                width="18"
-                height="18"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-              </svg>
+              <Icon name="download" className="text-[18px]" />
             </a>
             <ToolBtn label={t('common.close')} onClick={() => onOpenChange(false)} danger>
-              <svg
-                viewBox="0 0 24 24"
-                width="18"
-                height="18"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M18 6 6 18M6 6l12 12" />
-              </svg>
+              <Icon name="x" className="text-[18px]" />
             </ToolBtn>
           </div>
 

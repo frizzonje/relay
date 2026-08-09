@@ -35,6 +35,7 @@
   "channels.refusal.badName": "An empty name will not do for a channel.",
   "channels.refusal.forbidden": "This channel is off limits.",
   "channels.refusal.gone": "The channel is gone — the list has already caught up.",
+  "channels.refusal.notOwner": "Only the person who created this channel can change it.",
   "channels.refusal.occupied": "There are people in the channel — let them leave first.",
   "channels.refusal.occupiedCount": {
     "one": "{count} person is in the channel right now — let them leave first.",
@@ -50,6 +51,7 @@
   "chat.attachment.remove": "Drop from the message",
   "chat.composer.placeholder": "message #{channel}",
   "chat.delete.confirm": "Delete this message?",
+  "chat.delete.body": "The message disappears for everyone in the channel. This cannot be undone.",
   "chat.drop": "Drop the files to attach them",
   "chat.edit.aria": "Editing a message",
   "chat.edit.cancel": "Cancel editing",
@@ -150,6 +152,21 @@
   "deleteChannel.text.body": "The channel and all of its history disappear for everyone. This cannot be undone.",
   "deleteChannel.title": "Delete channel “{name}”?",
   "deleteChannel.voice.body": "The channel disappears for everyone on the server. This cannot be undone.",
+  "deleteServer.channels": {
+    "one": "The server holds {count} channel — it disappears with it.",
+    "other": "The server holds {count} channels — they all disappear."
+  },
+  "deleteServer.busy": "Server in use",
+  "deleteServer.counting": "Checking what the server holds…",
+  "deleteServer.messages": {
+    "one": "In it, {count} message goes with it.",
+    "other": "In them, {count} messages go with them."
+  },
+  "deleteServer.occupied": {
+    "one": "{count} person is on air in this server — it cannot be deleted while the conversation is going. Wait until everyone leaves.",
+    "other": "{count} people are on air in this server — it cannot be deleted while the conversation is going. Wait until everyone leaves."
+  },
+  "deleteServer.submit": "Delete server",
   "desktop.update.noAnswer": "no answer — try again",
   "desktop.update.unknownError": "unknown error",
   "grid.alone": "you are alone in the channel — invite the others",
@@ -227,6 +244,8 @@
   "members.state.live": "on air",
   "members.state.muted": "muted",
   "members.state.speaking": "speaking",
+  "members.title.inChannel": "In channel",
+  "members.title.online": "Online",
   "menu.clipboardBlocked.copy": "The engine will not copy from a menu — the keyboard works ({shortcut}).",
   "menu.clipboardBlocked.paste": "The engine will not paste from a menu — the keyboard works ({shortcut}).",
   "menu.copy": "Copy",
@@ -239,10 +258,19 @@
   "menu.saveImage": "Save image",
   "menu.selectAll": "Select all",
   "menu.settings": "Settings…",
+  "mobile.back": "Back",
   "mobile.backToCall": "Back to the call",
-  "mobile.tab.channels": "Channels",
-  "mobile.tab.people": "People",
-  "mobile.tab.stage": "Stage",
+  "mobile.people": "Channel members",
+  "mobile.sub.inChannel": {
+    "one": "{count} in the channel",
+    "other": "{count} in the channel"
+  },
+  "mobile.sub.online": {
+    "one": "{count} online",
+    "other": "{count} online"
+  },
+  "mobile.sub.typing": "typing…",
+  "mobile.title.server": "Server status",
   "net.aria": "Connection: {grade}",
   "net.aria.relayed": "Connection: {grade}, relayed",
   "net.bitrate": "Bitrate",
@@ -274,6 +302,7 @@
   "rail.host.goto": "Go to {name}",
   "rail.host.here": "{name} — you are here",
   "rail.host.remove": "Remove host",
+  "rail.host.removeBody": "Only your own list changes — the host itself and everything on it stay as they are. To bring it back you will need its address again.",
   "rail.host.removeConfirm": "Remove host “{name}” from the list?",
   "rail.host.removeNamed": "Remove host {name}",
   "rail.server.create": "Create a server",
@@ -283,6 +312,15 @@
   "renameChannel.title": "Rename the channel",
   "server.delete.body": "The server and every channel in it disappear for everyone, history included. This cannot be undone.",
   "server.delete.title": "Delete server “{name}”?",
+  "server.noAnswer": "The server did not answer — try again.",
+  "server.refusal.forbidden": "This server cannot be deleted.",
+  "server.refusal.occupied": "Someone is on air in this server — it cannot be deleted while the conversation is going.",
+  "server.refusal.occupiedCount": {
+    "one": "{count} person is on air in this server — it cannot be deleted while the conversation is going.",
+    "other": "{count} people are on air in this server — it cannot be deleted while the conversation is going."
+  },
+  "server.refusal.gone": "The server is gone — the list has already caught up.",
+  "server.refusal.notOwner": "Only the person who created this server can delete it.",
   "settings.autostart": "Launch at login",
   "settings.autostart.failed": "Could not change the autostart setting: {reason}",
   "settings.autostart.hint": "relay starts minimised to the tray — no window opens.",

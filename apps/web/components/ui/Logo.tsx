@@ -16,7 +16,9 @@ import { useEffect, useState, type CSSProperties } from 'react';
  *                  чтобы знак не проигрывал одну и ту же анимацию каждый раз.
  *
  * Узлы-основания заливаются цветом фона поверхности (`nodeBg`), чтобы «прорезать»
- * рёбра — по умолчанию корневой фон приложения.
+ * рёбра — по умолчанию корневой фон приложения. Передавать сюда стоит токен
+ * (`var(--color-bg-elev)`), а не хекс: знак лежит на поверхности, и «прорезь»
+ * обязана менять цвет вместе с ней.
  */
 type Variant = 'draw' | 'pulse' | 'onair' | 'handshake';
 type VariantProp = Variant | 'random';
@@ -27,7 +29,7 @@ export function Logo({
   size = 48,
   animate = false,
   variant = 'random',
-  nodeBg = '#08090b',
+  nodeBg = 'var(--color-bg-app)',
   className,
   style,
 }: {

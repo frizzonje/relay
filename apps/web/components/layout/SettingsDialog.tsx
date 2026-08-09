@@ -1,8 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { Icon } from '@/components/ui/icon';
+import { springTab, tabPanel } from '@/lib/motion';
 import {
   checkForUpdates,
   installUpdate,
@@ -51,25 +54,6 @@ const TABS: { id: Tab; label: MessageKey; desktopOnly?: boolean }[] = [
   { id: 'account', label: 'settings.tab.account' },
 ];
 
-function Chevron() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-text-muted"
-      aria-hidden="true"
-    >
-      <path d="m6 9 6 6 6-6" />
-    </svg>
-  );
-}
-
 /** Стилизованный native <select> с шевроном — общая обёртка для селектов настроек. */
 function SelectField({
   label,
@@ -95,7 +79,7 @@ function SelectField({
         >
           {children}
         </select>
-        <Chevron />
+        <Icon name="chevron-down" className="text-[16px]" />
       </div>
     </label>
   );
@@ -567,6 +551,16 @@ export function SettingsDialog({
   // Отражаем реально применённую тему (её ставит скрипт в <head> до отрисовки).
   useEffect(() => setThemeVal(getTheme()), []);
 
+  // На мобиле вкладки — горизонтальная лента, и выбранная легко оказывается за
+  // краем. Подтягиваем её в поле зрения; на десктопе колонка не прокручивается,
+  // и вызов ничего не делает.
+  const navRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    navRef.current
+      ?.querySelector('[aria-current="true"]')
+      ?.scrollIntoView({ block: 'nearest', inline: 'center' });
+  }, [tab]);
+
   function toggleTheme(light: boolean) {
     const next: Theme = light ? 'light' : 'dark';
     setTheme(next);
@@ -611,6 +605,7 @@ export function SettingsDialog({
         {/* Левая колонка — навигация; на мобиле это горизонтальная лента вкладок
             сверху (полосу прокрутки прячем — листается пальцем). */}
         <nav
+          ref={navRef}
           className={cn(
             'flex w-[220px] shrink-0 flex-col border-r border-line bg-bg-deep/60 p-3',
             'max-md:w-full max-md:flex-row max-md:gap-1 max-md:overflow-x-auto',
@@ -628,14 +623,23 @@ export function SettingsDialog({
               onClick={() => setTab(item.id)}
               aria-current={tab === item.id}
               className={cn(
-                'rounded-[8px] px-3 py-2 text-left text-[14px] outline-none transition-colors',
+                'relative rounded-[8px] px-3 py-2 text-left text-[14px] outline-none transition-colors',
                 'max-md:shrink-0 max-md:whitespace-nowrap',
                 tab === item.id
-                  ? 'bg-bg-active text-text-header'
+                  ? 'text-text-header'
                   : 'text-text-muted hover:bg-bg-hover hover:text-text',
               )}
             >
-              {t(item.label)}
+              {/* Подложка активной вкладки одна на всю группу: общий layoutId —
+                  и она переезжает к выбранной, а не мигает на новом месте. */}
+              {tab === item.id && (
+                <motion.span
+                  layoutId="settings-tab"
+                  transition={springTab}
+                  className="absolute inset-0 rounded-[8px] bg-bg-active"
+                />
+              )}
+              <span className="relative">{t(item.label)}</span>
             </button>
           ))}
           {/* В ленте вкладок подвалу места нет — на мобиле он отдельной строкой внизу. */}
@@ -654,11 +658,22 @@ export function SettingsDialog({
         {/* Правая колонка — контент вкладки */}
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex h-[52px] shrink-0 items-center justify-between border-b border-line px-5 max-md:px-4">
-            <h2 className="text-[15px] font-semibold text-text-header">
-              {(() => {
-                const current = tabs.find((item) => item.id === tab);
-                return current ? t(current.label) : null;
-              })()}
+            <h2 className="overflow-hidden text-[15px] font-semibold text-text-header">
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.span
+                  key={tab}
+                  variants={tabPanel}
+                  initial="hidden"
+                  animate="show"
+                  exit="exit"
+                  className="block"
+                >
+                  {(() => {
+                    const current = tabs.find((item) => item.id === tab);
+                    return current ? t(current.label) : null;
+                  })()}
+                </motion.span>
+              </AnimatePresence>
             </h2>
             <button
               type="button"
@@ -670,72 +685,83 @@ export function SettingsDialog({
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-5 max-md:p-4">
-            {tab === 'av' ? (
-              <div className="flex flex-col gap-5">
-                <DeviceSelect
-                  label={t('settings.mic')}
-                  value={currentMicId ?? ''}
-                  devices={mics}
-                  fallback={t('settings.mic.noAccess')}
-                  onChange={(id) => void setMic(id)}
-                />
-                <DeviceSelect
-                  label={t('settings.camera')}
-                  value={currentCamId ?? ''}
-                  devices={cameras}
-                  fallback={t('settings.camera.noAccess')}
-                  onChange={(id) => void setCamera(id)}
-                />
-                <DeviceSelect
-                  label={t('settings.output')}
-                  value={currentSpeakerId ?? ''}
-                  devices={speakers}
-                  fallback={t('settings.output.default')}
-                  onChange={(id) => void setSpeaker(id)}
-                />
-                <InputLevel active={open && tab === 'av'} />
-                <div className="flex flex-col gap-2.5">
-                  <Toggle
-                    checked={pushToTalk}
-                    onChange={setPushToTalk}
-                    title={t('settings.pushToTalk')}
-                    hint={t('settings.pushToTalk.hint')}
+          {/* mode="wait": прежний раздел гаснет, затем приезжает новый — иначе
+              два разных набора полей встали бы стопкой и дёрнули прокрутку. */}
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={tab}
+              variants={tabPanel}
+              initial="hidden"
+              animate="show"
+              exit="exit"
+              className="flex-1 overflow-y-auto p-5 max-md:p-4"
+            >
+              {tab === 'av' ? (
+                <div className="flex flex-col gap-5">
+                  <DeviceSelect
+                    label={t('settings.mic')}
+                    value={currentMicId ?? ''}
+                    devices={mics}
+                    fallback={t('settings.mic.noAccess')}
+                    onChange={(id) => void setMic(id)}
                   />
+                  <DeviceSelect
+                    label={t('settings.camera')}
+                    value={currentCamId ?? ''}
+                    devices={cameras}
+                    fallback={t('settings.camera.noAccess')}
+                    onChange={(id) => void setCamera(id)}
+                  />
+                  <DeviceSelect
+                    label={t('settings.output')}
+                    value={currentSpeakerId ?? ''}
+                    devices={speakers}
+                    fallback={t('settings.output.default')}
+                    onChange={(id) => void setSpeaker(id)}
+                  />
+                  <InputLevel active={open && tab === 'av'} />
+                  <div className="flex flex-col gap-2.5">
+                    <Toggle
+                      checked={pushToTalk}
+                      onChange={setPushToTalk}
+                      title={t('settings.pushToTalk')}
+                      hint={t('settings.pushToTalk.hint')}
+                    />
+                    <Toggle
+                      checked={noiseSuppression}
+                      onChange={(v) => void setNoiseSuppression(v)}
+                      title={t('settings.noiseSuppression')}
+                      hint={t('settings.noiseSuppression.hint')}
+                    />
+                  </div>
+                </div>
+              ) : tab === 'appearance' ? (
+                <div className="flex flex-col gap-5">
+                  <LanguageSelect />
                   <Toggle
-                    checked={noiseSuppression}
-                    onChange={(v) => void setNoiseSuppression(v)}
-                    title={t('settings.noiseSuppression')}
-                    hint={t('settings.noiseSuppression.hint')}
+                    checked={theme === 'light'}
+                    onChange={toggleTheme}
+                    title={t('settings.lightTheme')}
+                    hint={t('settings.lightTheme.hint')}
                   />
                 </div>
-              </div>
-            ) : tab === 'appearance' ? (
-              <div className="flex flex-col gap-5">
-                <LanguageSelect />
-                <Toggle
-                  checked={theme === 'light'}
-                  onChange={toggleTheme}
-                  title={t('settings.lightTheme')}
-                  hint={t('settings.lightTheme.hint')}
-                />
-              </div>
-            ) : tab === 'hotkeys' ? (
-              <div className="flex flex-col gap-2.5">
-                <p className="text-[12.5px] leading-relaxed text-text-muted">
-                  {t('settings.hotkeys.intro')}
-                </p>
-                {HOTKEY_ACTIONS.map((a) => (
-                  <VoiceKeybindRow key={a.id} action={a.id} label={t(a.label)} hint={t(a.hint)} />
-                ))}
-                <PttKeybindRow />
-              </div>
-            ) : tab === 'app' ? (
-              <AppTab />
-            ) : (
-              <Placeholder>{t('settings.placeholder')}</Placeholder>
-            )}
-          </div>
+              ) : tab === 'hotkeys' ? (
+                <div className="flex flex-col gap-2.5">
+                  <p className="text-[12.5px] leading-relaxed text-text-muted">
+                    {t('settings.hotkeys.intro')}
+                  </p>
+                  {HOTKEY_ACTIONS.map((a) => (
+                    <VoiceKeybindRow key={a.id} action={a.id} label={t(a.label)} hint={t(a.hint)} />
+                  ))}
+                  <PttKeybindRow />
+                </div>
+              ) : tab === 'app' ? (
+                <AppTab />
+              ) : (
+                <Placeholder>{t('settings.placeholder')}</Placeholder>
+              )}
+            </motion.div>
+          </AnimatePresence>
         </div>
 
         {/* Подвал только для мобилы: на десктопе эти кнопки живут внизу колонки

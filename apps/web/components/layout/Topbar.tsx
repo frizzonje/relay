@@ -6,6 +6,8 @@ import { useT } from '@/lib/i18n';
 
 /**
  * Шапка сцены: название открытого канала (голос/текст) или подсказка в лобби.
+ * Только десктоп: на узком экране то же самое — и со стрелкой назад — показывает
+ * MobileNav, а две шапки подряд съедали бы треть экрана телефона.
  */
 export function Topbar() {
   const t = useT();
@@ -14,7 +16,7 @@ export function Topbar() {
   const textLabel = useUiStore((s) => s.textLabel);
 
   return (
-    <div className="panel flex h-[52px] shrink-0 items-center gap-2.5 overflow-hidden border-b border-line px-4 shadow-[0_1px_2px_rgba(0,0,0,0.2)]">
+    <div className="panel flex h-[52px] shrink-0 items-center gap-2.5 overflow-hidden border-b border-line px-4 shadow-[0_1px_2px_rgba(0,0,0,0.2)] max-md:hidden">
       <span className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap font-bold text-text-header">
         {view === 'voice' ? (
           <>
