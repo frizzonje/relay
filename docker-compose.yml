@@ -10,6 +10,7 @@
 #
 # .env в корне репо:
 #   SITE_PASSWORD=секрет          # пароль на вход
+#   POSTGRES_PASSWORD=секрет      # обязателен: база — часть стека, дефолта нет
 #   DOMAIN=example.com            # пусто → localhost (internal CA Caddy)
 #   SERVER_HOST=example.com       # для ICE-конфига и realm coturn
 #   TURN_CREDENTIAL=...           # обязателен при --profile turn
@@ -21,17 +22,91 @@
 name: relay
 
 services:
+  # Postgres — постоянное хранилище: история чата, реестр серверов и каналов,
+  # личности. Обязательный сервис стека, а не профиль: api без базы не работает.
+  #
+  # Настройки подобраны под самую маленькую VM, на какой relay реально стоит
+  # (1 ядро, ~1 ГБ, и эту память делят Caddy, api, web, sfu и coturn). Дефолты
+  # postgres рассчитаны на машину, где база — единственный жилец.
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=relay
+      - POSTGRES_DB=relay
+      # Дефолта нет намеренно: дефолтный пароль в прод-стеке — это один и тот же
+      # пароль у всех. Порт наружу не публикуется, но сеть compose видят все
+      # контейнеры стека, и «изнутри и так свои» — не рубеж.
+      #
+      # ВАЖНО: initdb читает пароль ровно один раз, при создании тома. Смена
+      # значения в .env потом ничего не меняет в базе — только ломает вход api.
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD не задан. Допишите в .env длинную случайную строку (openssl rand -hex 24). На установленном relay это делает relay update.}
+    command:
+      - postgres
+      # Кэш страниц базы. Дефолт 128 МБ — восьмая часть всей памяти машины,
+      # отданная одному сервису из шести.
+      - -c
+      - shared_buffers=64MB
+      # Сколько всего кэша (своего и файлового) планировщик считает доступным.
+      # Не выделяет память, только влияет на выбор индексного плана.
+      - -c
+      - effective_cache_size=192MB
+      - -c
+      - maintenance_work_mem=32MB
+      # api — один процесс с пулом; остаток запаса на relay backup и psql руками.
+      # Каждое соединение стоит памяти, поэтому сотня по умолчанию здесь лишняя.
+      - -c
+      - max_connections=30
+      # Одно ядро: параллельный план не ускоряет, а добавляет процессов и
+      # трафика через разделяемую память (её в контейнере всего 64 МБ).
+      - -c
+      - max_parallel_workers_per_gather=0
+      # Потолок WAL между контрольными точками. Дефолт 1 ГБ на диске, который
+      # делится с загрузками и образами docker, — это гигабайт, отложенный молча.
+      - -c
+      - max_wal_size=512MB
+      - -c
+      - min_wal_size=80MB
+      # VM с SSD: случайное чтение почти не дороже последовательного.
+      - -c
+      - random_page_cost=1.1
+    # -h 127.0.0.1, а не сокет: initdb поднимает временный сервер с
+    # listen_addresses='', и проба по unix-сокету скажет «готов» посреди
+    # инициализации — api пойдёт в базу, которой ещё нет, и упадёт на старте.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U relay -d relay"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    volumes:
+      # Том на весь /var/lib/postgresql, а не на .../data: у образов 18+ PGDATA
+      # лежит в версионном подкаталоге (/var/lib/postgresql/18/docker), и это же
+      # разделение делает будущий мажорный pg_upgrade возможным на месте.
+      - pgdata:/var/lib/postgresql
+    expose:
+      - "5432"
+
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
       - PORT=3000
       - UPLOAD_DIR=/app/uploads
       # Реестр серверов/каналов — на persistent-том uploads (подпапка state/),
       # чтобы серверы пользователей переживали рестарт/пересборку контейнера.
       - DATA_DIR=/app/uploads/state
+      # Строка подключения к базе. Собирается из пароля выше — задавать её
+      # целиком нужно только если база вынесена наружу стека или если пароль
+      # выбран руками и содержит символы, которые в URL значат другое (@ / : ?).
+      - DATABASE_URL=${DATABASE_URL:-postgresql://relay:${POSTGRES_PASSWORD}@db:5432/relay}
+      # Сколько дней живут сообщения и их вложения. 0 — не хранить вовсе.
+      - RETENTION_DAYS=${RETENTION_DAYS:-14}
       # Потолок на весь каталог загрузок; пусто — встроенный дефолт (2 ГиБ).
       # За потолком вытесняются самые старые вложения: том общий с реестром и
       # сертификатами, и кончиться он не должен. Принимает 2G / 512M / байты.
@@ -188,5 +263,6 @@ services:
 
 volumes:
   uploads:
+  pgdata:
   caddy_data:
   caddy_config:

@@ -59,6 +59,13 @@ DOCKER
 chmod +x /stub/curl /stub/docker
 export PATH=/stub:$PATH
 cp /repo/install.sh /tmp/install.sh
+# A machine that already runs relay. The database password is the one value the
+# installer must not regenerate: Postgres baked it into the data directory when
+# initdb ran, and a fresh one would lock api out of a volume it still has.
+if [ -n "${STUB_REINSTALL:-}" ]; then
+  mkdir -p /opt/relay
+  printf 'SITE_PASSWORD=old\nPOSTGRES_PASSWORD=the-one-initdb-baked-in\n' >/opt/relay/.env
+fi
 # Answers: domain? y / which? relay.test / not resolving, use anyway? y /
 # set password? n(generate) / TURN? y / SFU? y
 # The sleep keeps the pty's write end open: util-linux `script` tears the
@@ -87,6 +94,15 @@ has  "the shim points at it" 'exec bash "$RELAY_DIR/relay-cli.sh"' "$OUT"
 has  "the shim knows the directory" 'RELAY_DIR="/opt/relay"' "$OUT"
 has  "TURN answered yes -> credential written" "TURN_CREDENTIAL=" "$OUT"
 has  "SFU answered yes -> secret written" "SFU_SECRET=" "$OUT"
+has  "a database password was generated without asking" "POSTGRES_PASSWORD=" "$OUT"
+
+echo
+echo "── re-installing over a live installation keeps the database password"
+OUT="$(run -e STUB_LATEST=9.9.9 -e STUB_REINSTALL=1)"
+check "installer finished cleanly" "INSTALLER_EXIT=0" "$(echo "$OUT" | grep -o 'INSTALLER_EXIT=[0-9]*')"
+has  "the password initdb baked in survives" "POSTGRES_PASSWORD=the-one-initdb-baked-in" "$OUT"
+has  "and says so" "Keeping the existing database password" "$OUT"
+check "exactly one of them in .env" "1" "$(echo "$OUT" | grep -c '^POSTGRES_PASSWORD=' | tr -d ' ')"
 
 echo
 echo "── a release too old to carry the new files falls back to the branch"

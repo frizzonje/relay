@@ -114,6 +114,43 @@ CONFIG_FILES=".env docker-compose.prod.yml Caddyfile tls-mode.caddy coturn-entry
 # exercised against scratch volumes instead of a live installation's data.
 VOL_UPLOADS="${RELAY_VOL_UPLOADS:-relay_uploads}"
 VOL_CADDY="${RELAY_VOL_CADDY:-relay_caddy_data}"
+VOL_PGDATA="${RELAY_VOL_PGDATA:-relay_pgdata}"
+
+# Database identity, fixed by the compose file. Not read out of DATABASE_URL:
+# that variable may point at a database outside this stack, and none of the
+# commands below (which all reach in through `docker compose exec db`) would
+# mean anything if it did.
+PG_USER=relay
+PG_DB=relay
+
+# Secrets the stack cannot start without, generated on demand rather than
+# demanded of the user. `relay update` calls this before it validates the new
+# compose file: an installation from before the database existed has no
+# POSTGRES_PASSWORD in .env, and the 1.0 compose file refuses to interpolate
+# without one — so the upgrade would fail at the validation step with a message
+# about parsing, which is true and useless.
+ensure_secret() {
+  local key="$1"
+  if [ -n "$(env_get "$key")" ]; then return 0; fi
+  local val
+  if command -v openssl >/dev/null 2>&1; then val="$(openssl rand -hex 24)"
+  else val="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"; fi
+  [ -n "$val" ] || die "Could not generate $key (no openssl and no /dev/urandom?)."
+  env_set "$key" "$val"
+  info "Generated ${key} (new in this version)."
+}
+
+# Wait for the database to accept connections. initdb on a first start takes a
+# few seconds, and a restore that runs psql one second too early fails in a way
+# that looks like a corrupt backup.
+wait_for_db() {
+  local i
+  for i in $(seq 1 60); do
+    if dc exec -T db pg_isready -h 127.0.0.1 -U "$PG_USER" -d "$PG_DB" >/dev/null 2>&1; then return 0; fi
+    sleep 2
+  done
+  return 1
+}
 
 # ── update ───────────────────────────────────────────────────────────────────
 cmd_update() {
@@ -156,6 +193,11 @@ cmd_update() {
   if [ "$(env_get RELAY_TLS_MODE)" = "ip" ]; then tls_src="infra/tls-mode-ip.caddy"; else tls_src="infra/tls-mode.caddy"; fi
   curl -fsSL --max-time 60 "$(raw_url "$want" "$tls_src")" -o "$stage/tls-mode.caddy" \
     || die "Cannot download $tls_src from ${want}. Nothing has been changed."
+
+  # Before validation, not after: the check below runs the downloaded compose
+  # file against this installation's .env, and a file that needs a secret the
+  # .env has never had would be reported as unparseable.
+  ensure_secret POSTGRES_PASSWORD
 
   # A truncated compose file passes the non-empty check and fails at `up`, by
   # which point the old one is already gone. Ask compose itself instead.
@@ -211,7 +253,9 @@ _rollback() {
 # What has to be in there is decided by one question: after `rm -rf /opt/relay`
 # on a fresh machine, does this tarball bring the site back? The old backup held
 # the two volumes and none of the configuration — so the answer was no, and the
-# secrets in .env were unrecoverable (audit B7.3).
+# secrets in .env were unrecoverable (audit B7.3). Since 1.0 the same question
+# has a third part: the conversation lives in Postgres, so the archive carries a
+# dump of it too.
 cmd_backup() {
   local out stage name
   mkdir -p "$DIR/backups"
@@ -223,12 +267,24 @@ cmd_backup() {
   for name in $CONFIG_FILES; do
     if [ -f "$DIR/$name" ]; then cp -p "$DIR/$name" "$stage/cfg/"; fi
   done
+
+  # The database goes in as a dump, not as a copy of its volume. Copying the
+  # data directory of a *running* cluster gives a torn snapshot — files written
+  # while the copy walks them — and the result restores, starts, and is wrong.
+  # pg_dump reads inside one transaction, so it is consistent by construction.
+  info "Dumping the database…"
+  dc exec -T db pg_dump -U "$PG_USER" -d "$PG_DB" --clean --if-exists >"$stage/db.sql" 2>"$stage/db.err" \
+    || die "Could not dump the database: $(tr -d '\r' <"$stage/db.err" | tail -n1). Is the stack up? ('relay up')"
+  [ -s "$stage/db.sql" ] || die "The database dump came back empty. Nothing was written."
+  rm -f "$stage/db.err"
+
   # Everything is mounted under one root so the archive needs a single -C:
   # busybox tar (this is alpine) does not take -C between file arguments.
   docker run --rm \
     -v "$VOL_UPLOADS":/snap/u:ro \
     -v "$VOL_CADDY":/snap/c:ro \
     -v "$stage/cfg":/snap/cfg:ro \
+    -v "$stage/db.sql":/snap/db.sql:ro \
     -v "$DIR/backups":/out \
     alpine tar czf "/out/$out" -C /snap . \
     || die "Backup failed."
@@ -280,6 +336,14 @@ cmd_restore() {
       sh -c 'find /dst -mindepth 1 -delete; cp -a /src/. /dst/' || die "Restoring certificates failed."
   fi
 
+  # The database volume is emptied rather than refilled: the dump is the only
+  # copy of the data, and an empty directory is what makes the next start run
+  # initdb. That matters beyond tidiness — initdb is what applies the password
+  # from the .env being restored, so a cluster left over from this machine's
+  # previous life cannot end up with a password api no longer knows.
+  docker run --rm -v "$VOL_PGDATA":/dst alpine \
+    sh -c 'find /dst -mindepth 1 -delete' || die "Clearing the database volume failed."
+
   info "Restoring configuration…"
   local name
   for name in $CONFIG_FILES; do
@@ -287,6 +351,17 @@ cmd_restore() {
   done
   chmod 600 "$ENV_FILE" 2>/dev/null || true
   chmod +x "$DIR/relay-cli.sh" "$DIR/coturn-entrypoint.sh" 2>/dev/null || true
+
+  # An archive without db.sql predates the database entirely (0.x), and there is
+  # nothing to load — the empty volume above is already the right answer.
+  if [ -f "$tmp/db.sql" ]; then
+    info "Starting the database…"
+    dc up -d db || die "Restored the files, but the database did not start. Check 'relay logs db'."
+    wait_for_db || die "The database did not become ready. Check 'relay logs db'."
+    info "Loading the database…"
+    dc exec -T db psql -U "$PG_USER" -d "$PG_DB" -q -v ON_ERROR_STOP=1 <"$tmp/db.sql" >/dev/null \
+      || die "Loading the dump failed. The stack is down; the archive is untouched."
+  fi
 
   info "Starting…"
   dc up -d --remove-orphans || die "Restored, but the stack did not start. Check 'relay logs'."

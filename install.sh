@@ -115,6 +115,23 @@ case "${ID:-}:${ID_LIKE:-}" in
      ask_yn "Continue anyway?" "N" || die "Aborted." ;;
 esac
 
+# ── 1b. Resources ────────────────────────────────────────────────────────────
+# Said out loud rather than enforced. relay runs on a 1 GB single-core VM — the
+# database is configured for exactly that (see docker-compose.prod.yml) — but it
+# runs there *with swap*. Without it, the box does not refuse to install; it
+# installs, and then the kernel picks one container to kill on the first busy
+# evening, which reads as "relay randomly restarts" and never as "add swap".
+MEM_MB="$(awk '/^MemTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
+SWAP_MB="$(awk '/^SwapTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
+DISK_MB="$(df -Pm "$(dirname "$INSTALL_DIR")" 2>/dev/null | awk 'NR==2{print $4}' || echo 0)"
+if [ "${MEM_MB:-0}" -gt 0 ] && [ "$MEM_MB" -lt 1500 ] && [ "${SWAP_MB:-0}" -lt 1024 ]; then
+  warn "${MEM_MB} MB of RAM and ${SWAP_MB} MB of swap. relay fits, but with no room to spare —"
+  warn "  add swap before you rely on it:  fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile"
+fi
+if [ "${DISK_MB:-0}" -gt 0 ] && [ "$DISK_MB" -lt 3072 ]; then
+  warn "Only $((DISK_MB / 1024)) GB free on $(dirname "$INSTALL_DIR"). Images, uploads and the database share it."
+fi
+
 # ── 2. Docker ────────────────────────────────────────────────────────────────
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   ok "Docker + compose plugin present"
@@ -195,6 +212,25 @@ if ask_yn "Set the login password now? (No = generate a strong one)" "N"; then
 else
   SITE_PASSWORD="$(gen_secret)"
   ok "  Generated login password."
+fi
+
+# ── 5b. Database password ────────────────────────────────────────────────────
+# Never asked, only generated: nobody types this, and it is not a password in
+# the sense the previous question was — it is a secret between two containers.
+#
+# Re-running the installer on a machine that already has relay MUST keep the old
+# one. Postgres reads the password exactly once, when initdb creates the data
+# directory; a fresh value here would leave the existing volume answering to a
+# password api no longer has, and the failure would show up as "the site is
+# down after a re-install" with nothing in the logs to connect it to this line.
+POSTGRES_PASSWORD=""
+if [ -f "$INSTALL_DIR/.env" ]; then
+  POSTGRES_PASSWORD="$(sed -n 's/^[[:space:]]*POSTGRES_PASSWORD=//p' "$INSTALL_DIR/.env" | tail -n1)"
+fi
+if [ -n "$POSTGRES_PASSWORD" ]; then
+  ok "  Keeping the existing database password."
+else
+  POSTGRES_PASSWORD="$(gen_secret)$(gen_secret)"
 fi
 
 # ── 6. TURN ──────────────────────────────────────────────────────────────────
@@ -304,6 +340,9 @@ fi
   echo "RELAY_REF=${RELAY_REF}"
   echo "RELAY_TLS_MODE=${TLS_MODE}"
   echo "SITE_PASSWORD=${SITE_PASSWORD}"
+  # Between api and Postgres, never typed by a person. Kept across re-installs
+  # because initdb baked it into the existing data directory (see step 5b).
+  echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
   echo "DOMAIN=${DOMAIN}"
   echo "SERVER_HOST=${SERVER_HOST}"
   echo "TURN_USERNAME=webrtc"

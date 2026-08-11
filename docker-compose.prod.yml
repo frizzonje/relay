@@ -16,12 +16,80 @@
 # box, not for anything people rely on. Images are pulled on demand, so ask for
 # new ones explicitly: `relay update`, or `docker compose pull`.
 #
-# Config comes from .env in the same directory (SITE_PASSWORD, DOMAIN,
-# SERVER_HOST, TURN_CREDENTIAL, TURN_EXTERNAL_IP, SFU_SECRET). See .env.example.
+# Config comes from .env in the same directory (SITE_PASSWORD, POSTGRES_PASSWORD,
+# DOMAIN, SERVER_HOST, TURN_CREDENTIAL, TURN_EXTERNAL_IP, SFU_SECRET).
 
 name: relay
 
 services:
+  # Postgres — the persistent store: chat history, the server/channel registry,
+  # identities. A required service, not a profile: api does not run without it.
+  #
+  # Tuned for the smallest VM relay actually gets installed on (1 core, ~1 GB,
+  # shared with Caddy, api, web, sfu and coturn). Postgres ships defaults for a
+  # machine where the database is the only tenant.
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=relay
+      - POSTGRES_DB=relay
+      # No default on purpose: a default password in a production stack is the
+      # same password on every installation. The port is never published, but
+      # every container on the compose network can reach it, so "we're all
+      # inside anyway" is not a boundary.
+      #
+      # NOTE: initdb reads this exactly once, when the volume is created.
+      # Changing it later does not change the database — it only breaks api's
+      # login. To rotate it: ALTER USER relay PASSWORD, then update .env.
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set. Add a long random string to .env (openssl rand -hex 24), or run `relay update`, which generates one.}
+    command:
+      - postgres
+      # Page cache. The 128 MB default is an eighth of the whole machine handed
+      # to one service out of six.
+      - -c
+      - shared_buffers=64MB
+      # How much cache (its own plus the OS page cache) the planner assumes is
+      # available. Allocates nothing; it only steers index-vs-scan choices.
+      - -c
+      - effective_cache_size=192MB
+      - -c
+      - maintenance_work_mem=32MB
+      # api is a single process with a pool; the rest is headroom for `relay
+      # backup` and a psql session. Connections cost memory, so the default 100
+      # is nothing but a way to run out of it.
+      - -c
+      - max_connections=30
+      # One core: a parallel plan buys no speed and costs processes plus traffic
+      # through shared memory (64 MB in a container by default).
+      - -c
+      - max_parallel_workers_per_gather=0
+      # WAL ceiling between checkpoints. The 1 GB default is a gigabyte quietly
+      # reserved on a disk shared with uploads and docker images.
+      - -c
+      - max_wal_size=512MB
+      - -c
+      - min_wal_size=80MB
+      # SSD-backed VM: a random read costs about as much as a sequential one.
+      - -c
+      - random_page_cost=1.1
+    # -h 127.0.0.1 rather than the socket: initdb starts a temporary server with
+    # listen_addresses='', so a unix-socket probe reports "ready" in the middle
+    # of initialisation — api then connects to a database that isn't there yet.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U relay -d relay"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    volumes:
+      # The whole /var/lib/postgresql, not .../data: on 18+ images PGDATA lives
+      # in a version subdirectory (/var/lib/postgresql/18/docker), and that same
+      # split is what makes a future major pg_upgrade possible in place.
+      - pgdata:/var/lib/postgresql
+    expose:
+      - "5432"
+
   api:
     image: ghcr.io/frizzonje/relay-api:${RELAY_VERSION:-latest}
     # `missing`, not `always`. install.sh pins RELAY_VERSION to a release number
@@ -35,10 +103,19 @@ services:
     # update`, or a plain `docker compose pull` if you drive compose yourself.
     pull_policy: missing
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
       - PORT=3000
       - UPLOAD_DIR=/app/uploads
       - DATA_DIR=/app/uploads/state
+      # Connection string, assembled from the password above. Set it whole only
+      # when the database lives outside this stack, or when a hand-picked
+      # password contains characters that mean something else in a URL (@ / : ?).
+      - DATABASE_URL=${DATABASE_URL:-postgresql://relay:${POSTGRES_PASSWORD}@db:5432/relay}
+      # How many days messages and their attachments live. 0 keeps nothing.
+      - RETENTION_DAYS=${RETENTION_DAYS:-14}
       # Ceiling on the whole uploads directory; empty means the built-in default
       # (2 GiB). Past it the oldest attachments are evicted, so the volume — which
       # also holds the registry and Caddy's certificates — cannot be filled up.
@@ -179,5 +256,6 @@ services:
 
 volumes:
   uploads:
+  pgdata:
   caddy_data:
   caddy_config:

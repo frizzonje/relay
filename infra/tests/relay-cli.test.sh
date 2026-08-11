@@ -112,6 +112,23 @@ check "old files kept" "1" "$(ls -d "$D"/backups/stack-* 2>/dev/null | wc -l | t
 contains "images pulled and stack restarted" "up -d --remove-orphans" "$(cat "$WORK/docker.log")"
 
 echo
+echo "── update fills in secrets a 0.x .env never had"
+# The 1.0 compose file will not interpolate without POSTGRES_PASSWORD, and every
+# installation predating the database has no such line. Without this the upgrade
+# would abort at the validation step, blaming the downloaded file for not
+# parsing — true, useless, and the same for everyone on that day.
+D="$WORK/pg1"; mkinstall "$D" "RELAY_VERSION=0.8.0"
+OUT="$(STUB_LATEST=9.9.9 relay "$D" update)"
+PG="$(sed -n 's/^POSTGRES_PASSWORD=//p' "$D/.env")"
+check "a database password appears" "yes" "$([ -n "$PG" ] && echo yes || echo no)"
+check "and it is not a short one" "yes" "$([ "${#PG}" -ge 32 ] && echo yes || echo no)"
+contains "the new secret is announced, not silent" "Generated POSTGRES_PASSWORD" "$OUT"
+# Second run: regenerating it would lock api out of the cluster initdb built.
+OUT="$(STUB_LATEST=9.9.9 relay "$D" update)"
+check "a second update leaves it alone" "$PG" "$(sed -n 's/^POSTGRES_PASSWORD=//p' "$D/.env")"
+check "and does not duplicate the line" "1" "$(grep -c '^POSTGRES_PASSWORD=' "$D/.env" | tr -d ' ')"
+
+echo
 echo "── update picks the TLS file this installation actually uses"
 D="$WORK/u2"; mkinstall "$D" "RELAY_VERSION=0.8.0" "RELAY_TLS_MODE=ip"
 : >"$WORK/curl.log"; STUB_LATEST=9.9.9 relay "$D" update >/dev/null

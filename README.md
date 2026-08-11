@@ -173,7 +173,7 @@ docker run --rm -v "$PWD":/mono -w /mono node:20-alpine \
 End-to-end (Playwright) runs against the production stack, not the dev one:
 
 ```bash
-SITE_PASSWORD=testpass123 docker compose -f docker-compose.yml -f infra/docker-compose.e2e.yml up -d --build
+SITE_PASSWORD=testpass123 POSTGRES_PASSWORD=testpass123 docker compose -f docker-compose.yml -f infra/docker-compose.e2e.yml up -d --build
 CADDY_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' relay-caddy-1)
 docker run --rm --network relay_default --add-host "relay.test:$CADDY_IP" \
   -v "$PWD":/work -w /work/e2e \
@@ -190,6 +190,9 @@ CI (`.github/workflows/ci.yml`) runs the same three groups on pushes to `main`/`
 | Variable | Default | Description |
 |---|---|---|
 | `SITE_PASSWORD` | _(empty)_ | Login password. Shared by api and web. Empty → auth disabled |
+| `POSTGRES_PASSWORD` | — | **Required.** Between api and Postgres, never typed by a person — `install.sh` and `relay update` generate it. `initdb` reads it once, when the volume is created: changing it later only breaks api's login |
+| `DATABASE_URL` | assembled from `POSTGRES_PASSWORD` | Set it whole only for a database outside this stack, or for a hand-picked password containing `@ / : ?` |
+| `RETENTION_DAYS` | `14` | How long messages and their attachments live. `0` keeps nothing |
 | `DOMAIN` | `localhost` | Host for Caddy. `localhost` → self-signed CA, real domain → Let's Encrypt. A public IP also gets a Let's Encrypt certificate, but needs the issuer block `install.sh` writes into `tls-mode.caddy` |
 | `SERVER_HOST` | `localhost` | Host for the ICE config and coturn realm |
 | `TURN_USERNAME` | `webrtc` | TURN user |

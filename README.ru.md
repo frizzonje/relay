@@ -173,7 +173,7 @@ docker run --rm -v "$PWD":/mono -w /mono node:20-alpine \
 E2e (Playwright) гоняются против прод-стека, не против dev:
 
 ```bash
-SITE_PASSWORD=testpass123 docker compose -f docker-compose.yml -f infra/docker-compose.e2e.yml up -d --build
+SITE_PASSWORD=testpass123 POSTGRES_PASSWORD=testpass123 docker compose -f docker-compose.yml -f infra/docker-compose.e2e.yml up -d --build
 CADDY_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' relay-caddy-1)
 docker run --rm --network relay_default --add-host "relay.test:$CADDY_IP" \
   -v "$PWD":/work -w /work/e2e \
@@ -190,6 +190,9 @@ CI (`.github/workflows/ci.yml`) гоняет те же три группы на 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
 | `SITE_PASSWORD` | _(пусто)_ | Пароль входа. Общий для api и web. Пусто → авторизация выключена |
+| `POSTGRES_PASSWORD` | — | **Обязателен.** Секрет между api и Postgres, руками его никто не вводит — генерят `install.sh` и `relay update`. `initdb` читает его один раз, при создании тома: смена значения потом только ломает вход api |
+| `DATABASE_URL` | собирается из `POSTGRES_PASSWORD` | Задавать целиком нужно только для базы вне стека или для выбранного руками пароля с символами `@ / : ?` |
+| `RETENTION_DAYS` | `14` | Сколько живут сообщения и их вложения. `0` — не хранить вовсе |
 | `DOMAIN` | `localhost` | Хост для Caddy. `localhost` → self-signed CA, реальный домен → Let's Encrypt. Публичный IP тоже получает сертификат Let's Encrypt, но требует issuer-блока, который `install.sh` пишет в `tls-mode.caddy` |
 | `SERVER_HOST` | `localhost` | Хост для ICE-конфига и realm coturn |
 | `TURN_USERNAME` | `webrtc` | Пользователь TURN |

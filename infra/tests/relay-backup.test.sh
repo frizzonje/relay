@@ -5,8 +5,8 @@
 set -uo pipefail
 REPO_ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 WORK="$(mktemp -d)"
-VU=relaytest_uploads; VC=relaytest_caddy_data
-cleanup() { docker volume rm -f "$VU" "$VC" >/dev/null 2>&1; rm -rf "$WORK"; }
+VU=relaytest_uploads; VC=relaytest_caddy_data; VP=relaytest_pgdata
+cleanup() { docker volume rm -f "$VU" "$VC" "$VP" >/dev/null 2>&1; rm -rf "$WORK"; }
 trap cleanup EXIT
 PASS=0; FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); printf '  ok   %s\n' "$1"
@@ -14,9 +14,20 @@ check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); printf '  ok   %s\n' "$1"
 
 BIN="$WORK/bin"; mkdir -p "$BIN"
 REAL_DOCKER="$(command -v docker)"
+# The stub answers for the database too. pg_dump has to produce something that
+# looks like a dump, because backup refuses to write an archive around an empty
+# one — that check is the point of it, and a stub that returned nothing would
+# make the test pass by never reaching the code under test.
 cat >"$BIN/docker" <<STUB
 #!/usr/bin/env bash
-if [ "\${1:-}" = "compose" ]; then echo "\$*" >>"$WORK/compose.log"; exit 0; fi
+if [ "\${1:-}" = "compose" ]; then
+  echo "\$*" >>"$WORK/compose.log"
+  case "\$*" in
+    *pg_dump*) echo "-- relay dump"; echo "CREATE TABLE messages (id int);" ;;
+    *psql*)    cat >"$WORK/loaded.sql" ;;
+  esac
+  exit 0
+fi
 exec "$REAL_DOCKER" "\$@"
 STUB
 chmod +x "$BIN/docker"
@@ -30,14 +41,15 @@ for f in docker-compose.prod.yml:docker-compose.prod.yml Caddyfile:infra/Caddyfi
 done
 printf 'SITE_PASSWORD=s3cret-that-exists-nowhere-else\nRELAY_VERSION=0.8.0\nDOMAIN=example.test\n' >"$D/.env"
 chmod 600 "$D/.env"
-relay() { RELAY_DIR="$D" RELAY_VOL_UPLOADS="$VU" RELAY_VOL_CADDY="$VC" bash "$D/relay-cli.sh" "$@" 2>&1; }
+relay() { RELAY_DIR="$D" RELAY_VOL_UPLOADS="$VU" RELAY_VOL_CADDY="$VC" RELAY_VOL_PGDATA="$VP" bash "$D/relay-cli.sh" "$@" 2>&1; }
 
 seed() { # put known content into the scratch volumes
-  docker run --rm -v "$VU":/u -v "$VC":/c alpine sh -c '
-    mkdir -p /u/state /c/certs
+  docker run --rm -v "$VU":/u -v "$VC":/c -v "$VP":/p alpine sh -c '
+    mkdir -p /u/state /c/certs /p/18/docker
     echo "an uploaded file" >/u/photo.jpg
     echo "{\"servers\":[{\"id\":\"s1\"}]}" >/u/state/registry.json
-    echo "PEM" >/c/certs/site.crt' >/dev/null
+    echo "PEM" >/c/certs/site.crt
+    echo "cluster" >/p/18/docker/PG_VERSION' >/dev/null
 }
 
 echo "── backup carries everything a rebuild needs (B7.3)"
@@ -48,14 +60,29 @@ check "a tarball was produced" "yes" "$([ -n "$TAR" ] && echo yes || echo no)"
 LIST="$(tar tzf "$TAR" 2>/dev/null)"
 for want in ./u/photo.jpg ./u/state/registry.json ./c/certs/site.crt ./cfg/.env \
             ./cfg/docker-compose.prod.yml ./cfg/Caddyfile ./cfg/tls-mode.caddy \
-            ./cfg/coturn-entrypoint.sh ./cfg/relay-cli.sh; do
+            ./cfg/coturn-entrypoint.sh ./cfg/relay-cli.sh ./db.sql; do
   check "contains $want" "yes" "$(echo "$LIST" | grep -qxF "$want" && echo yes || echo no)"
 done
 check "the tarball is not world-readable (.env is in it)" "600" "$(stat -f '%Lp' "$TAR" 2>/dev/null || stat -c '%a' "$TAR")"
+# A dump, not a copy of the data directory: the volume must never be read here.
+check "the database was dumped, not copied" "yes" "$(grep -q 'pg_dump' "$WORK/compose.log" && echo yes || echo no)"
+check "and the data directory stayed out of the archive" "no" "$(echo "$LIST" | grep -q 'PG_VERSION' && echo yes || echo no)"
+
+echo
+echo "── backup refuses to write an archive without the database"
+mv "$BIN/docker" "$BIN/docker.real-stub"
+printf '#!/usr/bin/env bash\nif [ "${1:-}" = "compose" ]; then exit 1; fi\nexec %s "$@"\n' "$REAL_DOCKER" >"$BIN/docker"
+chmod +x "$BIN/docker"
+OUT="$(relay backup)"
+check "a dead database stops the backup" "yes" "$(echo "$OUT" | grep -q 'Could not dump the database' && echo yes || echo no)"
+check "and no half-backup was left behind" "1" "$(ls "$D"/backups/relay-backup-*.tar.gz 2>/dev/null | wc -l | tr -d ' ')"
+mv "$BIN/docker.real-stub" "$BIN/docker"
 
 echo
 echo "── restore puts it back, config included"
-# Destroy everything the way a dead machine would.
+# Destroy everything the way a dead machine would — except the data directory,
+# which is left behind on purpose: a restore has to clear it, or the cluster
+# from this machine's previous life keeps the password the restored .env lost.
 docker run --rm -v "$VU":/u -v "$VC":/c alpine sh -c 'find /u /c -mindepth 1 -delete' >/dev/null
 echo "SITE_PASSWORD=wrong" >"$D/.env"
 echo "# clobbered" >"$D/Caddyfile"
@@ -69,6 +96,9 @@ check "Caddyfile un-clobbered" "0" "$(grep -c 'clobbered' "$D/Caddyfile" | tr -d
 check ".env is 0600 after restore" "600" "$(stat -f '%Lp' "$D/.env" 2>/dev/null || stat -c '%a' "$D/.env")"
 check "the CLI is executable after restore" "yes" "$([ -x "$D/relay-cli.sh" ] && echo yes || echo no)"
 check "the stack was stopped and started" "yes" "$(grep -q 'down' "$WORK/compose.log" && grep -q 'up -d --remove-orphans' "$WORK/compose.log" && echo yes || echo no)"
+check "the old cluster was cleared, not merged into" "" "$(docker run --rm -v "$VP":/p alpine sh -c 'ls -A /p' 2>/dev/null)"
+check "the dump was loaded back" "CREATE TABLE messages (id int);" "$(grep 'CREATE TABLE' "$WORK/loaded.sql" 2>/dev/null)"
+check "and the database was started before psql ran" "yes" "$(grep -q 'up -d db' "$WORK/compose.log" && echo yes || echo no)"
 
 echo
 echo "── restore refuses what it should"
