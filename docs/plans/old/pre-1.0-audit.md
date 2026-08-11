@@ -67,7 +67,7 @@ B2, S6, S7 и S9 — сессия DeepSeek (2026-08-03); из тогдашних
 
 ### B1. `server-unlock`: перебор пароля и остановка сигналинга — ✅ СДЕЛАНО
 
-[`signaling.gateway.ts:645`](../../apps/api/src/gateway/signaling.gateway.ts)
+[`signaling.gateway.ts:645`](../../../apps/api/src/gateway/signaling.gateway.ts)
 
 Счётчик неудач живёт в `client.data.unlockFails` — **на сокете**. Переподключение
 даёт чистый счётчик, а переподключиться стоит один round-trip. Комментарий в коде
@@ -102,8 +102,8 @@ B2, S6, S7 и S9 — сессия DeepSeek (2026-08-03); из тогдашних
 
 ### B2. Любой участник удаляет любой сервер и любой канал вместе с историей — ✅ СДЕЛАНО (DeepSeek)
 
-[`signaling.gateway.ts:712`](../../apps/api/src/gateway/signaling.gateway.ts) (`server-delete`),
-[`:833`](../../apps/api/src/gateway/signaling.gateway.ts) (`editableChannel`)
+[`signaling.gateway.ts:712`](../../../apps/api/src/gateway/signaling.gateway.ts) (`server-delete`),
+[`:833`](../../../apps/api/src/gateway/signaling.gateway.ts) (`editableChannel`)
 
 Единственные проверки — `removable` и пароль, если сервер закрытый. Владения нет
 ни у сервера, ни у канала. Значит любой, кто вошёл, может снести чужой открытый
@@ -209,8 +209,8 @@ localStorage и подделывается — это заслон от случ
 
 ### B3. Битый `registry.json` = тихая потеря всех серверов и каналов — ✅ СДЕЛАНО
 
-[`signaling.gateway.ts:301`](../../apps/api/src/gateway/signaling.gateway.ts) (`loadRegistry`),
-[`:373`](../../apps/api/src/gateway/signaling.gateway.ts) (`persist`)
+[`signaling.gateway.ts:301`](../../../apps/api/src/gateway/signaling.gateway.ts) (`loadRegistry`),
+[`:373`](../../../apps/api/src/gateway/signaling.gateway.ts) (`persist`)
 
 `loadRegistry` глотает любую ошибку разбора и возвращает `{}` — без строчки в
 лог. Конструктор поднимается на одних дефолтах, интерфейс показывает чистую
@@ -239,8 +239,8 @@ localStorage и подделывается — это заслон от случ
 
 ### B4. Загрузки: ни квоты, ни лимита — диск кончается — ✅ СДЕЛАНО
 
-[`upload.controller.ts:34`](../../apps/api/src/upload.controller.ts),
-[`uploads.ts:13`](../../apps/api/src/uploads.ts)
+[`upload.controller.ts:34`](../../../apps/api/src/upload.controller.ts),
+[`uploads.ts:13`](../../../apps/api/src/uploads.ts)
 
 25 МБ на файл — единственное ограничение. Ни числа файлов, ни скорости, ни
 потолка на каталог. Подметание — по mtime и только через 7 суток. Один
@@ -269,8 +269,8 @@ localStorage и подделывается — это заслон от случ
 
 ### B5. TURN-ретранслятор: вечные общие учётки и путь до метаданных облака — ⚠️ СДЕЛАНО НАПОЛОВИНУ
 
-[`coturn-entrypoint.sh:96`](../../infra/coturn-entrypoint.sh),
-[`config.controller.ts:57`](../../apps/api/src/config.controller.ts)
+[`coturn-entrypoint.sh:96`](../../../infra/coturn-entrypoint.sh),
+[`config.controller.ts:57`](../../../apps/api/src/config.controller.ts)
 
 coturn поднят с `--lt-cred-mech --user=webrtc:$TURN_CREDENTIAL` — одна статическая
 пара на всех, бессрочная, и `/api/config` отдаёт её любому вошедшему открытым
@@ -394,7 +394,7 @@ mediasoup 3.22 → 3.24 — медиасервер, менять его ради
 
 ### B7. Путь обновления живых инсталляций — ✅ СДЕЛАНО (ревизия 2026-08-08)
 
-[`install.sh:332`](../../install.sh) (`relay update`), [`:334`](../../install.sh) (`relay backup`)
+[`install.sh:332`](../../../install.sh) (`relay update`), [`:334`](../../../install.sh) (`relay backup`)
 
 План 1.0 верно называет это самым рискованным местом; ревизия добавляет к
 известному ещё три пункта.
@@ -417,7 +417,7 @@ mediasoup 3.22 → 3.24 — медиасервер, менять его ради
 
 **Сделано.** Все четыре пункта, и в основании — одна структурная правка, без
 которой первый неразрешим: **CLI перестал быть heredoc'ом внутри инсталлятора**
-и стал файлом [`infra/relay-cli.sh`](../../infra/relay-cli.sh), который лежит
+и стал файлом [`infra/relay-cli.sh`](../../../infra/relay-cli.sh), который лежит
 рядом со стеком и качается вместе с ним. В `/usr/local/bin/relay` — шим на три
 строки. Смысл ровно один: команду, которая чинит, теперь можно починить.
 Раньше `relay update` мог обновить что угодно, кроме самого себя, — а он и был
@@ -456,7 +456,7 @@ mediasoup 3.22 → 3.24 — медиасервер, менять его ради
    действительно включает медиасервер.
 
 **Проверено прогоном, а не чтением** — 74 теста в
-[`infra/tests/`](../../infra/tests/), гоняются в CI и в релизном гейте
+[`infra/tests/`](../../../infra/tests/), гоняются в CI и в релизном гейте
 (`bash infra/tests/run.sh`; сеть и docker застаблены, тома — черновые имена):
 инсталлятор целиком в контейнере через pty (три сценария: релиз есть, релиз
 старше инсталлятора, образов под тег нет), лестница `update` со всеми откатами,
@@ -478,7 +478,7 @@ mediasoup 3.22 → 3.24 — медиасервер, менять его ради
 
 ### S1. Авторство в чате — по самоназначенному тегу — ❌ НЕ СДЕЛАНО
 
-`chat-edit` ([:1283](../../apps/api/src/gateway/signaling.gateway.ts)),
+`chat-edit` ([:1283](../../../apps/api/src/gateway/signaling.gateway.ts)),
 `chat-delete` (:1305), `chat-react` (:1337) сверяют `client.data.chatName`.
 Переименовался в чужой тег — правишь и удаляешь чужие сообщения и голосуешь от
 чужого имени. Слой 2 плана (личность на ключах) это закрывает; 1.0 без него
@@ -520,7 +520,7 @@ mediasoup 3.22 → 3.24 — медиасервер, менять его ради
 
 ### S5. Пароли закрытых серверов — открытым текстом в localStorage — ❌ НЕ СДЕЛАНО
 
-[`lib/servers.ts:44`](../../apps/web/lib/servers.ts). Сохраняются **оптимистично,
+[`lib/servers.ts:44`](../../../apps/web/lib/servers.ts). Сохраняются **оптимистично,
 до проверки** (:34). Любой XSS или чужой браузер — и пароли всех закрытых
 серверов уехали. Как минимум стоит хранить не пароль, а выданный сервером
 короткоживущий unlock-токен.
@@ -602,7 +602,7 @@ api уцелел случайно: Nest слушает `::`.
 
 ### S8. Один e2e-тест на весь продукт — ⚠️ СДЕЛАНО НАПОЛОВИНУ
 
-[`e2e/tests/smoke.spec.ts`](../../e2e/tests/smoke.spec.ts) — «логин → канал →
+[`e2e/tests/smoke.spec.ts`](../../../e2e/tests/smoke.spec.ts) — «логин → канал →
 сообщение → upload». Не покрыты: звонок, реконнект, закрытый сервер, инвайт,
 удаление канала под живым читателем, смена транспорта. Для релиза, который
 обязан «работать идеально», это единственная линия обороны против регрессий, и
@@ -620,7 +620,7 @@ api уцелел случайно: Nest слушает `::`.
 Плюс сами прогоны хрупки, и это проверено, а не предположено:
 
 - `sleep 15` вместо ожидания готовности Caddy
-  ([`ci.yml`](../../.github/workflows/ci.yml));
+  ([`ci.yml`](../../../.github/workflows/ci.yml));
 - **unit-тесты голоса флакают под нагрузкой.** `peer-manager.test.ts` (≈2,5 с) и
   `voice-fallback.test.ts` (≈3,4 с) держатся на таймерах. При
   `turbo run typecheck test build` в параллель со сборкой Next оба падают, а по
@@ -637,7 +637,7 @@ api уцелел случайно: Nest слушает `::`.
 
 **Один слой из недостающих положен** (2026-08-08, вместе с B7): шелл-часть —
 `install.sh` и CLI `relay` — покрыта 74 тестами в
-[`infra/tests/`](../../infra/tests/), они же стоят в CI и в релизном гейте.
+[`infra/tests/`](../../../infra/tests/), они же стоят в CI и в релизном гейте.
 Это был не пробел в покрытии, а его отсутствие: юнит-тесты не импортируют bash,
 e2e гоняет приложение, а не машину, на которую его поставили, — то есть весь
 код, исполняющийся на чужих серверах, не проверял никто. Прогон сразу же нашёл
@@ -646,7 +646,7 @@ e2e гоняет приложение, а не машину, на которую
 
 **Второе — найдено попутно в B6 (2026-08-08) и хуже отсутствия теста: тест,
 который отвечал «passed», будучи сломанным.** Контрактный тест
-[`packages/shared/src/index.test.ts`](../../packages/shared/src/index.test.ts)
+[`packages/shared/src/index.test.ts`](../../../packages/shared/src/index.test.ts)
 сверяет константы пакета с их копией в исходниках api — api намеренно не
 импортирует `@relay/shared`, и держатся числа совпадением, а не общим типом.
 Читает он файлы **за пределами своего пакета**, а хэш задачи у turbo по
@@ -672,7 +672,7 @@ e2e гоняет приложение, а не машину, на которую
 
 ### S9. Публикация образов не зависит от зелёного CI — ✅ СДЕЛАНО (DeepSeek)
 
-[`release-images.yml`](../../.github/workflows/release-images.yml) стартует по
+[`release-images.yml`](../../../.github/workflows/release-images.yml) стартует по
 тегу `v*` сам по себе — `needs:` на job сборки/тестов нет. Тег на сломанном
 коммите уезжает в GHCR и оттуда, через `:latest`, ко всем. `workflow_dispatch` по
 умолчанию тоже публикует `latest`.
@@ -733,7 +733,7 @@ e2e гоняет приложение, а не машину, на которую
 
 ### S10. Ни одного заголовка безопасности — ✅ СДЕЛАНО (ревизия 2026-08-07)
 
-Ни [`Caddyfile`](../../infra/Caddyfile), ни [`next.config.mjs`](../../apps/web/next.config.mjs)
+Ни [`Caddyfile`](../../../infra/Caddyfile), ни [`next.config.mjs`](../../../apps/web/next.config.mjs)
 не ставили ничего: сайт открывался в чужом фрейме без единого возражения.
 
 До B2 это стоило немного. После — нет: права на реестровые записи вязаны к
@@ -770,15 +770,15 @@ e2e гоняет приложение, а не машину, на которую
 
 - ~~**`infra/Caddyfile.http` — пустой каталог**, не в git.~~ В дереве его уже
   нет — отпало само.
-- **`/api/config` кэшируется на сессию** ([`lib/config.ts:14`](../../apps/web/lib/config.ts)).
+- **`/api/config` кэшируется на сессию** ([`lib/config.ts:14`](../../../apps/web/lib/config.ts)).
   Медиасервер, поднявшийся после открытия вкладки, остаётся выключенным в
   интерфейсе до перезагрузки. Сама выдача пропусков здоровье проверяет — врёт
   только переключатель.
 - **Rate-limit логина живёт в памяти процесса**
-  ([`auth.controller.ts:19`](../../apps/api/src/auth/auth.controller.ts)) — рестарт
+  ([`auth.controller.ts:19`](../../../apps/api/src/auth/auth.controller.ts)) — рестарт
   api обнуляет счётчики.
 - **Гостевой инвайт многоразовый на 24 часа и неотзываемый** (`issueGuestToken`,
-  [`auth.ts:53`](../../apps/api/src/auth/auth.ts)) — подпись завязана только на
+  [`auth.ts:53`](../../../apps/api/src/auth/auth.ts)) — подпись завязана только на
   `SITE_PASSWORD`. Утёкшая ссылка живёт сутки, и сделать с этим нельзя ничего.
 - ~~**Гонка в `server-unlock`**~~ — закрыта вместе с B1 (`e652015`).
 - **`handleSfuToken` пускает по `room` из запроса** (:973) — обосновано в
@@ -792,13 +792,13 @@ e2e гоняет приложение, а не машину, на которую
 Отмечаю намеренно — при большой чистке это первое, что ломают:
 
 - **Путь загрузок закрыт правильно.** `flatUploadsOnly`
-  ([`main.ts:33`](../../apps/api/src/main.ts)) декодирует сам, до `express.static`,
+  ([`main.ts:33`](../../../apps/api/src/main.ts)) декодирует сам, до `express.static`,
   и режет `%2f`, `..` и точку в начале; `nosniff` + `Content-Disposition:
   attachment` на всё, кроме картинок и mp3. Обход не нашёлся.
 - **Разметка сообщений без `dangerouslySetInnerHTML`**
-  ([`markdown.tsx`](../../apps/web/lib/markdown.tsx)) — разбор в React-узлы,
+  ([`markdown.tsx`](../../../apps/web/lib/markdown.tsx)) — разбор в React-узлы,
   ссылки только `https?:`. XSS в чат не заносится.
-- **`trust proxy: 1`, а не `true`** ([`main.ts:65`](../../apps/api/src/main.ts)) —
+- **`trust proxy: 1`, а не `true`** ([`main.ts:65`](../../../apps/api/src/main.ts)) —
   подделать `X-Forwarded-For` и обойти лимит логина нельзя.
 - **Разделение секретов api и sfu**: утечка `SFU_SECRET` даёт медиа, но не чат и
   не пропуск на сайт.

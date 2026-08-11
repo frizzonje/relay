@@ -57,7 +57,7 @@ pnpm audit --prod --audit-level=high
 подъёмом версии. Когда исправление выше по дереву, за пином, который мы не
 контролируем, — `pnpm.overrides` в корневом `package.json` (сейчас там два:
 `postcss` и `sharp`, оба зажаты пинами Next; почему — в
-[docs/plans/pre-1.0-audit.md](docs/plans/pre-1.0-audit.md), раздел B6). Когда
+[docs/plans/old/pre-1.0-audit.md](docs/plans/old/pre-1.0-audit.md), раздел B6). Когда
 патча нет вовсе — `pnpm.auditConfig.ignoreCves`, но это решение, которое видно
 в диффе.
 
