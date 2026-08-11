@@ -12,6 +12,7 @@ import { useUnreadStore, LAST_READ_KEY } from '@/stores/unread';
 import { useChannelsStore } from '@/stores/channels';
 import { useServersStore } from '@/stores/servers';
 import { forgetServerPassword, storedServerPasswords, unlockServer } from '@/lib/servers';
+import { notifyMessage } from '@/lib/notify';
 import { tx } from '@/lib/i18n';
 
 /**
@@ -106,6 +107,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       chat().addMessage(msg);
       // Автор прислал сообщение — печатать он закончил.
       if (msg.name) stopTyping(msg.name);
+      // Звук открытого канала берём отсюда, а не из `chat-activity`: только тут
+      // видно автора. Своя же реплика звенеть не должна — её только что
+      // отправили с этой клавиатуры; служебные строки «вошёл/вышел» — тоже.
+      if (!msg.system && msg.name !== myName()) notifyMessage(slug);
       // «Прочитано» не трогаем: следом прилетит `chat-activity` про это же
       // сообщение — там одна общая ветка для открытого канала и всех прочих.
     });
@@ -138,7 +143,13 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     socket.on('chat-activity', ({ slug, ts }) => {
       if (!slug || typeof ts !== 'number') return;
       unread().noteActivity(slug, ts);
-      if (slug === openSlug() && watching()) unread().readNow(slug);
+      if (slug === openSlug()) {
+        if (watching()) unread().readNow(slug);
+        return; // звук открытого канала уже сыграл обработчик `chat`
+      }
+      // Закрытый сейчас канал: писать в него мы не могли, значит сообщение
+      // чужое — автора для этого спрашивать не у кого и не нужно.
+      notifyMessage(slug);
     });
 
     // Канал закрылся под нами: его удалили (или он не пережил наш реконнект).

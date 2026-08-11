@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Генератор UI-звуков relay.
 
-Оригинальные короткие сигналы эфира (join/leave/peer/error/reconnect/connLost),
-синтезируются процедурно — только stdlib. Сигнальная цепь:
+Оригинальные короткие сигналы эфира (join/leave/peer/error/reconnect/connLost)
+и чата (message), синтезируются процедурно — только stdlib. Сигнальная цепь:
 
   аддитивный синтез (парциалы колокол/малет + unison-detune)
     + короткий шумовой транзиент атаки  →  HPF 110 Гц  →  LPF  →  tanh-сатурация
@@ -11,7 +11,12 @@
 Звуки авторские (CC0). Пишет стерео WAV; при наличии ffmpeg кодирует в MP3
 (320k CBR — для тихих реверб-хвостов важно, иначе слышны артефакты) и убирает WAV.
 
-Запуск:  python3 tools/gen-sfx.py
+Запуск:  python3 tools/gen-sfx.py            — все звуки
+         python3 tools/gen-sfx.py message    — только названные
+
+Имена в аргументах — ключи SOUNDS (они же имена файлов). Фильтр нужен, чтобы
+добавление одного сигнала не перезаписывало остальные семь: кодировщик у каждого
+свой, и версия ffmpeg меняет байты файла, которого никто не трогал.
 """
 
 import math
@@ -20,6 +25,7 @@ import random
 import shutil
 import struct
 import subprocess
+import sys
 import wave
 
 SR = 44100
@@ -42,6 +48,17 @@ PARTIALS = [
 ]
 DETUNE = 0.0016  # ±0.16% unison — тёплый хор без явной расстройки
 
+# Тембр удара: (парциалы, атака сек, доля шумового транзиента).
+BELL = (PARTIALS, 0.008, 0.10)
+# Приглушённый: фундамент и октава, мягкая атака, почти без транзиента. Наверху
+# пусто — именно негармоничные 3.01/4.02 и щелчок атаки заставляют звук
+# «звенеть» и требовать внимания. Остаётся тихий «тук» войлочной колотушки.
+#
+# T60 при этом не режем: ненавязчивость делает тембр, а не краткость. Затухание
+# за четверть секунды слышно не как «коротко», а как обрыв — звук будто
+# выключили на полпути, и вся вещь начинает звучать дёшево. Пусть догорает сам.
+SOFT = ([(1.00, 1.00, 0.80), (2.00, 0.22, 0.40)], 0.016, 0.02)
+
 
 def _transient(amp):
     """Короткий отфильтрованный шумовой «удар» — даёт атаке телесность/чёткость."""
@@ -50,13 +67,14 @@ def _transient(amp):
     return lowpass(raw, 2600.0)
 
 
-def note(freq, dur, amp=0.5):
+def note(freq, dur, amp=0.5, voice=BELL):
     """Малеточный удар: аддитивный синтез + плавная атака + шумовой транзиент."""
+    partials, atk, click = voice
     n = int(SR * dur)
-    attack = int(SR * 0.008)
+    attack = int(SR * atk)
     buf = [0.0] * n
-    norm = sum(a for _, a, _ in PARTIALS)
-    for ratio, pa, t60 in PARTIALS:
+    norm = sum(a for _, a, _ in partials)
+    for ratio, pa, t60 in partials:
         k = math.log(1000.0) / t60
         for det in (1.0 - DETUNE, 1.0 + DETUNE):
             w = TAU * freq * ratio * det / SR
@@ -65,7 +83,7 @@ def note(freq, dur, amp=0.5):
                 if i < attack:
                     env *= 0.5 - 0.5 * math.cos(math.pi * i / attack)
                 buf[i] += amp * (pa / norm) * 0.5 * env * math.sin(w * i)
-    for i, t in enumerate(_transient(amp * 0.10)):
+    for i, t in enumerate(_transient(amp * click)):
         if i < n:
             buf[i] += t
     return buf
@@ -141,18 +159,23 @@ def reverb(x, spread, room=0.82, damp=0.34):
     return acc
 
 
-def mix(events, tail=1.3, wet=0.30, predelay=0.012):
-    """Синтез ударов → HPF/LPF/сатурация → стерео-реверб с pre-delay → нормализация."""
+def mix(events, tail=1.3, wet=0.30, predelay=0.012, level=0.70, voice=BELL, lp=3800.0):
+    """Синтез ударов → HPF/LPF/сатурация → стерео-реверб с pre-delay → нормализация.
+
+    `level` — пик после нормализации. Именно им, а не `amp` события, задаётся
+    громкость сигнала относительно остальных: нормализация приводит любой набор
+    ударов к одному пику, и amp на неё не влияет.
+    """
     dur = max(start + 0.001 for _, _, start, _ in events)
     total = int(SR * (dur + tail))
     dry = [0.0] * total
     for freq, ndur, start, amp in events:
         off = int(SR * start)
-        for i, s in enumerate(note(freq, ndur, amp)):
+        for i, s in enumerate(note(freq, ndur, amp, voice)):
             if off + i < total:
                 dry[off + i] += s
 
-    dry = saturate(lowpass(highpass(dry, 110.0), 3800.0))
+    dry = saturate(lowpass(highpass(dry, 110.0), lp))
 
     # pre-delay: сухая атака идёт первой, реверб «зала» — чуть позже (чище)
     pd = int(SR * predelay)
@@ -164,7 +187,7 @@ def mix(events, tail=1.3, wet=0.30, predelay=0.012):
     out = [(dry[i] * (1 - wet) + left[i] * wet, dry[i] * (1 - wet) + right[i] * wet) for i in range(total)]
 
     peak = max(1e-9, max(max(abs(l), abs(r)) for l, r in out))
-    g = 0.70 / peak
+    g = level / peak
     fade = int(SR * 0.05)
     for i in range(len(out)):
         f = min(1.0, (len(out) - i) / fade)
@@ -202,14 +225,27 @@ SOUNDS = {
     "reconnect":  mix([ev(G3, 0.50, 0.00, 0.38), ev(B3, 0.50, 0.08, 0.38), ev(E4, 0.72, 0.16, 0.42)]),
     # обрыв — нисходящая пара, длинный хвост
     "conn-lost":  mix([ev(G3, 0.55, 0.00, 0.40), ev(D3, 0.85, 0.10, 0.38)], tail=1.5, wet=0.36),
+    # новое сообщение — глухой низкий «тук». Единственный звук не из эфирной
+    # группы: те звучат по разу за сеанс и вправе звенеть, этот — десятки раз за
+    # разговор. Ненавязчивым его делают тембр (SOFT), тёмный срез и низкий пик,
+    # а не длина: хвост и зал тут почти как у остальных, иначе звук выпадает из
+    # набора и слышится обрубком.
+    "message":    mix([ev(G3, 0.80, 0.00, 0.30)], tail=0.90, wet=0.14,
+                      predelay=0.008, level=0.30, voice=SOFT, lp=1100.0),
 }
 
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
     ffmpeg = shutil.which("ffmpeg")
+    only = sys.argv[1:]
+    unknown = [n for n in only if n not in SOUNDS]
+    if unknown:
+        raise SystemExit(f"неизвестные звуки: {', '.join(unknown)}; есть: {', '.join(SOUNDS)}")
     print("Генерация UI-звуков relay →", OUT, "| формат:", "mp3 320k" if ffmpeg else "wav")
     for name, stereo in SOUNDS.items():
+        if only and name not in only:
+            continue
         wav = os.path.join(OUT, name + ".wav")
         write_wav(wav, stereo)
         if ffmpeg:

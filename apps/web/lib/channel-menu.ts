@@ -18,12 +18,18 @@ import { tx } from '@/lib/i18n';
  *     общие);
  *   • голосовой канал, в котором кто-то есть, не удаляется вовсе: удаление
  *     выбросило бы людей из разговора.
+ *
+ * Особняком стоит звук входящих: это настройка не канала, а твоя — сервер о ней
+ * не знает и знать не должен. Поэтому она есть у ЛЮБОГО текстового канала, в том
+ * числе дефолтного и чужого, где править больше нечего.
  */
 
 export interface ChannelMenuTarget {
   channel: Pick<Channel, 'id' | 'type' | 'name' | 'removable' | 'mine'>;
   /** Сколько человек в канале прямо сейчас (для голосовых — из presence). */
   occupants: number;
+  /** Разрешён ли каналу звук входящих (stores/notify). */
+  loud?: boolean;
 }
 
 export interface ChannelMenuActions {
@@ -31,11 +37,13 @@ export interface ChannelMenuActions {
   onDelete: () => void;
   /** Только голосовые: гостевая ссылка в этот эфир. */
   onInvite?: () => void;
+  /** Только текстовые: включить/выключить звук входящих. */
+  onToggleSound?: () => void;
 }
 
 export function channelMenuEntries(
-  { channel, occupants }: ChannelMenuTarget,
-  { onRename, onDelete, onInvite }: ChannelMenuActions,
+  { channel, occupants, loud }: ChannelMenuTarget,
+  { onRename, onDelete, onInvite, onToggleSound }: ChannelMenuActions,
 ): MenuEntry[] {
   const entries: MenuEntry[] = [];
 
@@ -45,6 +53,15 @@ export function channelMenuEntries(
       label: tx('channelMenu.invite'),
       icon: 'link',
       run: onInvite,
+    });
+  }
+
+  if (channel.type === 'text' && onToggleSound) {
+    entries.push({
+      id: 'channel-sound',
+      label: tx(loud ? 'channelMenu.sound.off' : 'channelMenu.sound.on'),
+      icon: loud ? 'bell-off' : 'bell',
+      run: onToggleSound,
     });
   }
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import type { Channel, VoiceMode } from '@relay/shared';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Icon } from '@/components/ui/icon';
@@ -11,6 +11,7 @@ import { useUiStore } from '@/stores/ui';
 import { useChannelsStore } from '@/stores/channels';
 import { useServersStore } from '@/stores/servers';
 import { useUnreadStore, isChannelUnread } from '@/stores/unread';
+import { useNotifyStore, isChannelLoud } from '@/stores/notify';
 import { MAIN_SERVER_ID } from '@/lib/constants';
 import { useRichT, useT } from '@/lib/i18n';
 import { avatarStyle } from '@/lib/avatar';
@@ -25,6 +26,7 @@ import {
   toggleSpeakers,
 } from '@/lib/voice';
 import { channelMenuEntries } from '@/lib/channel-menu';
+import { previewMessageSound } from '@/lib/notify';
 import { openContextMenu } from '@/lib/context-menu';
 import { useSfuAvailable } from '@/lib/use-sfu';
 import { useVoiceStore } from '@/stores/voice';
@@ -46,6 +48,78 @@ import {
 import { ChannelModeDialog, type ChannelModeTarget } from '@/components/layout/ChannelModeDialog';
 
 /**
+ * Вспышка «пришло новое»: контур строки отходит от её краёв наружу и тает.
+ * Ровно один заход, 0.75 с, без сдвига соседей — движение ловится боковым
+ * зрением, но глазу не за что зацепиться, когда смотришь прямо.
+ *
+ * Фигура — та же карточка, что подсвечивает открытый канал: те же края, то же
+ * скругление, только отодвинутые. Круг вокруг точки непрочитанного тут пробовали
+ * первым, и он читался чужим — в строке нет ничего круглого, а в открытом канале
+ * и самой точки нет, так что кольцо расходилось из пустого места.
+ *
+ * Растёт не `scale`, а отступы: строка вчетверо шире своей высоты, и масштаб
+ * растащил бы её вбок сильнее, чем вверх, заодно расплющив скругления. Отступы
+ * дают ровный ореол в BLOOM пикселей со всех сторон; радиус растёт с ними, чтобы
+ * углы шли параллельно исходным.
+ */
+const BLOOM = 5;
+const ROW_RADIUS = 4; // rounded у ChannelRow
+
+const pingAnim = {
+  initial: { top: 0, right: 0, bottom: 0, left: 0, borderRadius: ROW_RADIUS, opacity: 0.5 },
+  animate: {
+    top: -BLOOM,
+    right: -BLOOM,
+    bottom: -BLOOM,
+    left: -BLOOM,
+    borderRadius: ROW_RADIUS + BLOOM,
+    opacity: 0,
+  },
+  transition: {
+    duration: 0.75,
+    ease: [0.2, 0.8, 0.3, 1] as const,
+    // Прозрачность гасим ровно, без замедления в конце. С общей кривой контур
+    // почти всю свою жизнь проводит уже погасшим: она отдаёт начало движению,
+    // и к середине хода от вспышки остаётся неразличимый след.
+    opacity: { duration: 0.75, ease: 'linear' as const },
+  },
+};
+
+/**
+ * Счётчик вспышек канала: локальный, начинается с нуля при монтировании. Прямо
+ * по счётчику из хранилища рисовать нельзя — при первом рендере он уже не ноль
+ * (сообщения приходили, пока сайдбар был на другом сервере), и вспышка сыграла
+ * бы на пустом месте. Возвращённое число годится только как ключ: смена ключа
+ * пересоздаёт элемент, и анимация запускается заново — в том числе на второй
+ * реплике подряд, когда первая ещё не догорела.
+ */
+function useMessagePing(slug: string): number {
+  const pings = useNotifyStore((s) => s.pings[slug] ?? 0);
+  const seen = useRef(pings);
+  const [shown, setShown] = useState(0);
+  useEffect(() => {
+    if (pings === seen.current) return;
+    seen.current = pings;
+    setShown((n) => n + 1);
+  }, [pings]);
+  return shown;
+}
+
+/** Сама вспышка — отдельным компонентом, чтобы подписка на канал жила в нём. */
+function ChannelPing({ slug }: { slug: string }) {
+  const ping = useMessagePing(slug);
+  if (!ping) return null;
+  return (
+    <motion.span
+      key={ping}
+      aria-hidden
+      {...pingAnim}
+      className="pointer-events-none absolute border border-accent-strong"
+    />
+  );
+}
+
+/**
  * Подпись текстового канала с точкой «непрочитано». Открытый канал считается
  * прочитанным (точка гаснет); в остальных она загорается на входящих, пока ты
  * туда не заглянул (см. stores/unread). Непрочитанный канал чуть ярче и жирнее.
@@ -64,6 +138,36 @@ function TextChannelLabel({ slug, name, active }: { slug: string; name: string; 
       <span className={cn('text-text-muted/70', unread && 'text-text/80')}>#</span>
       <span className={cn('truncate', unread && 'font-medium text-text-header')}>{name}</span>
     </>
+  );
+}
+
+/**
+ * Состояние звука текстового канала — у правого края строки, там же, где «⋯».
+ * Стоит у каждой строки, включая молчащие: молчание тут состояние по умолчанию,
+ * и человек, впервые услышавший тик, должен видеть, где он включается, а не
+ * искать по меню. Поэтому именно перечёркнутый колокольчик, а не пустое место.
+ *
+ * Чтобы он при этом не мельтешил, у выключенного канала значок почти прозрачен
+ * — на расстоянии вытянутой руки список читается как обычный, а вблизи видно,
+ * что каждая строка знает про звук. Включённый заметно ярче: разрешённый звук —
+ * это исключение, и его видно сразу.
+ *
+ * Значок не кнопка: рядом такие же по размеру значки-кнопки, но щелчок по
+ * строке открывает канал, и промах по мишени в 20 пикселей менял бы настройку
+ * молча. Переключается звук в меню канала — одним местом для всех правил.
+ */
+function ChannelSoundMark({ slug }: { slug: string }) {
+  const t = useT();
+  const loud = useNotifyStore((s) => isChannelLoud(s, slug));
+  return (
+    <Icon
+      name={loud ? 'bell' : 'bell-off'}
+      title={t(loud ? 'sidebar.channel.loud' : 'sidebar.channel.silent')}
+      className={cn(
+        'text-[13px] transition-opacity',
+        loud ? 'opacity-60' : 'opacity-25 group-hover/row:opacity-45',
+      )}
+    />
   );
 }
 
@@ -106,6 +210,8 @@ function ChannelRow({
   mode,
   onToggleMode,
   sfuAvailable,
+  trailing,
+  flash,
   children,
 }: {
   active?: boolean;
@@ -124,6 +230,17 @@ function ChannelRow({
   mode?: VoiceMode;
   onToggleMode?: () => void;
   sfuAvailable?: boolean;
+  /**
+   * Постоянный значок состояния у правого края — перед кнопками ховера. Те
+   * держат своё место всегда (прячутся прозрачностью, не снятием с потока),
+   * поэтому значок не прыгает под курсором.
+   */
+  trailing?: ReactNode;
+  /**
+   * Разовая вспышка поверх строки — рисуется по её краям, поэтому и живёт
+   * здесь, а не в подписи: там ближайший `relative` обнимает только текст.
+   */
+  flash?: ReactNode;
   children: ReactNode;
 }) {
   const t = useT();
@@ -159,9 +276,11 @@ function ChannelRow({
           className="pointer-events-none absolute inset-0 rounded bg-bg-active"
         />
       )}
+      {flash}
       <span className="relative z-[1] flex min-w-0 items-center gap-1.5">{children}</span>
-      {(onInvite || onMenu || onToggleMode) && (
+      {(trailing || onInvite || onMenu || onToggleMode) && (
         <span className="relative z-[1] ml-auto flex shrink-0 items-center gap-0.5">
+          {trailing}
           {onToggleMode && mode && (
             <button
               onClick={(e) => {
@@ -250,6 +369,11 @@ export function Sidebar() {
 
   const sfuAvailable = useSfuAvailable();
 
+  // Каналы со звуком входящих. Держим список целиком: он же решает, какой пункт
+  // показать в меню («включить» или «заглушить»).
+  const loudChannels = useNotifyStore((s) => s.loud);
+  const toggleChannelSound = useNotifyStore((s) => s.toggleChannel);
+
   const micOn = useVoiceStore((s) => s.micOn);
   const speakersOn = useVoiceStore((s) => s.speakersOn);
   const ping = useVoiceStore((s) => s.ping);
@@ -302,12 +426,25 @@ export function Sidebar() {
    */
   function channelMenu(c: Channel) {
     const entries = channelMenuEntries(
-      { channel: c, occupants: presence[c.slug]?.length ?? 0 },
+      {
+        channel: c,
+        occupants: presence[c.slug]?.length ?? 0,
+        loud: loudChannels.includes(c.slug),
+      },
       {
         onRename: () => setRenameTarget({ id: c.id, name: c.name, type: c.type }),
         onDelete: () => setDeleteTarget({ id: c.id, name: c.name, type: c.type }),
         onInvite:
           c.type === 'voice' ? () => setInviteTarget({ slug: c.slug, label: c.name }) : undefined,
+        // Звук — настройка своя, не канала: она есть у любого текстового,
+        // включая дефолтные и чужие (см. lib/channel-menu). Включили — тут же
+        // проигрываем тик: слышно, что именно включилось.
+        onToggleSound:
+          c.type === 'text'
+            ? () => {
+                if (toggleChannelSound(c.slug)) previewMessageSound();
+              }
+            : undefined,
       },
     );
     if (!entries.length) return undefined;
@@ -403,6 +540,8 @@ export function Sidebar() {
                 active={view === 'text' && textRoom === c.slug}
                 onClick={() => openTextChannel(c.slug, c.name)}
                 onMenu={channelMenu(c)}
+                trailing={<ChannelSoundMark slug={c.slug} />}
+                flash={<ChannelPing slug={c.slug} />}
               >
                 <TextChannelLabel
                   slug={c.slug}

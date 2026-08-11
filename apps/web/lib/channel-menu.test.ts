@@ -92,4 +92,61 @@ describe('channelMenuEntries', () => {
     const entries = channelMenuEntries(target({ type: 'text' }, 3), noop);
     expect(action(entries, 'channel-delete')?.disabled).toBeFalsy();
   });
+
+  // Звук входящих — настройка слушателя, а не канала: сервер о ней не знает,
+  // поэтому запреты на правку канала её не касаются.
+  it('звук предлагается и в дефолтном текстовом канале, где править нечего', () => {
+    const entries = channelMenuEntries(target({ type: 'text', removable: false }), {
+      ...noop,
+      onToggleSound: () => {},
+    });
+    expect(ids(entries)).toEqual(['channel-sound']);
+  });
+
+  it('в чужом текстовом канале звук тоже свой', () => {
+    const entries = channelMenuEntries(target({ type: 'text', mine: undefined }), {
+      ...noop,
+      onToggleSound: () => {},
+    });
+    expect(ids(entries)).toEqual(['channel-sound']);
+  });
+
+  it('в своём текстовом канале звук идёт первым пунктом', () => {
+    const entries = channelMenuEntries(target({ type: 'text' }), {
+      ...noop,
+      onToggleSound: () => {},
+    });
+    expect(ids(entries)).toEqual([
+      'channel-sound',
+      'channel-rename',
+      'channel-sep',
+      'channel-delete',
+    ]);
+  });
+
+  it('пункт звука меняет подпись и значок по текущему состоянию канала', () => {
+    const off = channelMenuEntries(
+      { ...target({ type: 'text' }), loud: false },
+      { ...noop, onToggleSound: () => {} },
+    );
+    // Подпись собирается словарём; в тестах активна база — английская.
+    expect(action(off, 'channel-sound')).toMatchObject({
+      label: 'Sound on new messages',
+      icon: 'bell',
+    });
+
+    const on = channelMenuEntries(
+      { ...target({ type: 'text' }), loud: true },
+      { ...noop, onToggleSound: () => {} },
+    );
+    expect(action(on, 'channel-sound')).toMatchObject({
+      label: 'Mute channel',
+      icon: 'bell-off',
+    });
+  });
+
+  it('голосовому каналу звук сообщений не предлагают — там их нет', () => {
+    const entries = channelMenuEntries(target(), { ...noop, onToggleSound: () => {} });
+    expect(ids(entries)).not.toContain('channel-sound');
+  });
 });

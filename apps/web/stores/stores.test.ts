@@ -5,6 +5,7 @@ import { useAudioUnlockStore } from './audio-unlock';
 import { useChannelsStore } from './channels';
 import { useChatStore } from './chat';
 import { useHostsStore } from './hosts';
+import { CHANNEL_SOUND_KEY, isChannelLoud, useNotifyStore } from './notify';
 import { isServerUnlocked, useServersStore } from './servers';
 import { LAST_READ_KEY, isChannelUnread, useUnreadStore } from './unread';
 
@@ -28,6 +29,7 @@ beforeEach(() => {
   });
   useHostsStore.setState({ hosts: [], hydrated: false });
   useAudioUnlockStore.setState({ shown: false });
+  useNotifyStore.setState({ loud: [], pings: {} });
 });
 
 describe('непрочитанное', () => {
@@ -272,6 +274,41 @@ describe('другие хосты', () => {
     s().removeHost('https://a.example');
     expect(s().hosts).toEqual([]);
     expect(localStorage.getItem('relay-hosts')).toBe('[]');
+  });
+});
+
+describe('звук каналов', () => {
+  const s = () => useNotifyStore.getState();
+
+  it('по умолчанию молчат все каналы — включают их поимённо', () => {
+    expect(isChannelLoud(s(), 'obshchii')).toBe(false);
+    expect(s().toggleChannel('obshchii')).toBe(true);
+    expect(isChannelLoud(s(), 'obshchii')).toBe(true);
+    // Соседний канал включение не задело.
+    expect(isChannelLoud(s(), 'flud')).toBe(false);
+  });
+
+  it('повторное переключение возвращает канал в молчание', () => {
+    s().toggleChannel('obshchii');
+    expect(s().toggleChannel('obshchii')).toBe(false);
+    expect(s().loud).toEqual([]);
+  });
+
+  it('выбор сразу уходит в хранилище', () => {
+    s().toggleChannel('obshchii');
+    expect(JSON.parse(localStorage.getItem(CHANNEL_SOUND_KEY) || '[]')).toEqual(['obshchii']);
+    s().toggleChannel('obshchii');
+    expect(localStorage.getItem(CHANNEL_SOUND_KEY)).toBe('[]');
+  });
+
+  // Счётчик вспышек к разрешению звука отношения не имеет: гасят звук, не строку.
+  it('счётчик вспышек растёт по каналам врозь и мимо localStorage', () => {
+    s().notePing('obshchii');
+    s().notePing('flud');
+    s().notePing('obshchii');
+    s().notePing('');
+    expect(s().pings).toEqual({ obshchii: 2, flud: 1 });
+    expect(localStorage.getItem(CHANNEL_SOUND_KEY)).toBe(null);
   });
 });
 

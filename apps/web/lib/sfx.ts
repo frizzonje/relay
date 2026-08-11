@@ -1,9 +1,9 @@
 'use client';
 
 /**
- * Звуковой API эфира (join/leave/peer/error/reconnect/connLost). Тонкий пул
- * поверх HTMLAudioElement: короткие MP3 из public/sfx (оригинальные, CC0 —
- * см. tools/gen-sfx.py). На сервере (SSR) — безопасный no-op.
+ * Звуковой API эфира (join/leave/peer/error/reconnect/connLost) и чата
+ * (message). Тонкий пул поверх HTMLAudioElement: короткие MP3 из public/sfx
+ * (оригинальные, CC0 — см. tools/gen-sfx.py). На сервере (SSR) — безопасный no-op.
  */
 
 export type SfxName =
@@ -13,7 +13,8 @@ export type SfxName =
   | 'peerLeave'
   | 'error'
   | 'connLost'
-  | 'reconnect';
+  | 'reconnect'
+  | 'message';
 
 export interface SfxHandle {
   onended: (() => void) | null;
@@ -40,6 +41,7 @@ const FILES: Record<SfxName, string> = {
   error: '/sfx/error.mp3',
   connLost: '/sfx/conn-lost.mp3',
   reconnect: '/sfx/reconnect.mp3',
+  message: '/sfx/message.mp3',
 };
 
 /** Общая громкость sfx (звуки эфира должны быть ненавязчивыми). */
