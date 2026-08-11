@@ -401,6 +401,14 @@ export interface VoicePeer {
   /** Гость по инвайт-ссылке (доступ только к этому каналу). */
   guest?: boolean;
   /**
+   * Гость-слушатель: позван в канал закрытого сервера, слышит комнату, но
+   * своего медиа не отдаёт (пароля, на котором держится этот канал, ссылка не
+   * раздаёт). Микрофона у него нет вовсе, поэтому `micOn` у такого участника
+   * всегда false — но «выключил микрофон» и «не вправе говорить» это разные
+   * вещи, и в интерфейсе они подписаны по-разному.
+   */
+  listen?: boolean;
+  /**
    * Каким транспортом участник реально звонит. Сообщает он сам в `join`:
    * сервер этого знать не может — решение принимает клиент, и оно может
    * разойтись с режимом канала (медиасервер не поднялся, старый клиент его
@@ -520,10 +528,23 @@ export interface InviteCreatePayload {
   room: string;
 }
 
-/** Ответ на invite-create (ack): токен для ссылки `/invite/<token>` или отказ. */
+/**
+ * Ответ на invite-create (ack): токен для ссылки `/invite/<token>` или отказ.
+ * `listen` — гость по этой ссылке сможет только слушать (канал закрытого
+ * сервера). Решает это сервер, не клиент: приглашающий раздаёт не больше того,
+ * что имеет сам, а пароля он не отдавал.
+ */
 export type InviteCreateResult =
-  | { ok: true; token: string; exp: number }
+  | { ok: true; token: string; exp: number; listen: boolean }
   | { ok: false; error: 'not-found' | 'forbidden' };
+
+/** Кого выгоняем из эфира: socket-id гостя (он же id его плитки и presence). */
+export interface GuestKickPayload {
+  id: string;
+}
+
+/** Ответ на guest-kick (ack): not-found — гость уже вышел сам. */
+export type GuestKickResult = { ok: true } | { ok: false; error: 'not-found' | 'forbidden' };
 
 /**
  * Запрос пропуска. Комнату спрашивают ДО `join` — иначе транспорт не выбрать.
@@ -580,6 +601,8 @@ export interface ClientToServerEvents {
   'channel-stats': (payload: ChannelStatsPayload, cb: (res: ChannelStatsResult) => void) => void;
   'channel-mode': (payload: ChannelModePayload) => void;
   'invite-create': (payload: InviteCreatePayload, cb: (res: InviteCreateResult) => void) => void;
+  /** Выгнать гостя из эфира — вправе любой НЕ-гость, кому виден этот канал. */
+  'guest-kick': (payload: GuestKickPayload, cb: (res: GuestKickResult) => void) => void;
   'sfu-token': (payload: SfuTokenPayload, cb: (res: SfuTokenResult) => void) => void;
   'voice-diag': (payload: VoiceDiagPayload) => void;
 }
@@ -593,6 +616,8 @@ export interface PeerJoinedPayload {
   name?: string;
   /** Гость по инвайт-ссылке. */
   guest?: boolean;
+  /** Гость-слушатель: своего медиа не отдаёт (см. VoicePeer.listen). */
+  listen?: boolean;
 }
 
 export interface PeerLeftPayload {
@@ -661,6 +686,16 @@ export interface ServerToClientEvents {
    * вместе со всеми, иначе он останется на другом транспорте и без звука.
    */
   'voice-mode': (payload: VoiceModeRelay) => void;
+  /**
+   * Гостя выгнали из эфира (или он пытается вернуться, пока не вышла пауза).
+   * Летит только ему самому: остальные видят обычный уход участника.
+   */
+  kicked: (payload: KickedRelay) => void;
+}
+
+/** Гостя выгнали из этой комнаты. */
+export interface KickedRelay {
+  room: string;
 }
 
 /** Голосовому каналу сменили режим; `room` — его slug. */

@@ -79,6 +79,16 @@ let screenAudioTrack: MediaStreamTrack | null = null;
 let screenMode: ScreenMode = 'quality';
 let focusedTileId: string | null = null;
 
+/**
+ * Слушатель: мы пришли по инвайту в канал закрытого сервера. Слышим комнату,
+ * но своего медиа не отдаём — микрофон не просим вовсе (браузер и не спросит),
+ * камеру и демонстрацию не показываем. Право это выдаёт сервер подписью в
+ * гостевом токене, здесь оно только объявлено: настоящие заслоны стоят на
+ * медиасервере (`produce` получает отказ) и у собеседников (входящий звук
+ * слушателя они отбрасывают). Ставится один раз гостевой сценой до входа.
+ */
+let listenOnly = false;
+
 // ─── Настройки медиа (модалка настроек, раздел 06 референса) ───────────────
 // Шумоподавление — constraint для getUserMedia (по умолчанию вкл); Push-to-talk —
 // микрофон открыт, только пока удерживается пробел (по умолчанию выкл). Оба
@@ -211,6 +221,14 @@ const host: TransportHost = {
 
 const tiles = new Map<string, VoiceTile>();
 
+/**
+ * Роли собеседников в НАШЕЙ комнате — из presence: кто пришёл по инвайту и кто
+ * из них только слушает. Плитка и presence приезжают в непредсказуемом порядке
+ * (плитку заводит транспорт, роли — сигналинг), поэтому карта живёт отдельно:
+ * `addTile` берёт роль из неё, а свежий presence правит уже стоящие плитки.
+ */
+const peerRoles = new Map<string, { guest: boolean; listen: boolean }>();
+
 // ─────────────────────────────────────────────────────────────────────────
 // Персональная громкость собеседников. Ползунок ходит 0–3 (0–300%), значение
 // применяется к GainNode как есть (без урезания). Запоминаем по тегу
@@ -253,6 +271,7 @@ function addTile(id: string, name: string, stream: MediaStream | null, isLocal: 
   if (!existing) {
     // Для собеседника восстанавливаем ранее выкрученную ему громкость по тегу.
     const saved = isLocal ? {} : peerVol(name);
+    const role = isLocal ? undefined : peerRoles.get(id);
     tiles.set(id, {
       id,
       name,
@@ -263,6 +282,8 @@ function addTile(id: string, name: string, stream: MediaStream | null, isLocal: 
       volume: saved.voice ?? 1,
       screenVolume: saved.screen ?? 1,
       hasScreenAudio: false,
+      guest: role?.guest,
+      listen: role?.listen,
     });
   } else if (stream && existing.stream !== stream) {
     tiles.set(id, { ...existing, stream });
@@ -488,6 +509,14 @@ function attachRemoteAudio(
   mid: string | null,
   stream: MediaStream | null,
 ) {
+  // Слушателя не подключаем к микшеру вовсе. В прямых звонках сервера между
+  // нами нет, и «он не вправе говорить» здесь держится только на этой строчке:
+  // клиент у гостя свой, дорожку он может собрать любую — а звучать она будет
+  // ровно там, где её примут. Не примем.
+  if (peerRoles.get(peerId)?.listen) {
+    diag('listener audio dropped', peerId);
+    return;
+  }
   const ctx = getAudioCtx();
   const pa = ensurePeerAudio(peerId, stream);
   const key = mid || `idx-${pa.entries.size}`;
@@ -643,6 +672,39 @@ async function acquireMic(): Promise<MediaStream> {
     }
   }
   return navigator.mediaDevices.getUserMedia({ audio: audioConstraints() });
+}
+
+// Запрос микрофона, который уже летит. Два клика подряд по разным каналам
+// упираются в один и тот же `if (!localStream)`, и без общего запроса устройство
+// открывается ДВАЖДЫ: второй поток становится нашим, а первый остаётся гореть
+// мимо дирижёра — лампочка записи не гаснет до перезагрузки вкладки, и на части
+// систем устройство остаётся занятым.
+let micPending: Promise<MediaStream> | null = null;
+
+/**
+ * Убедиться, что микрофон взят, — ровно один раз на все параллельные заходы.
+ * Опоздавший подхватывает уже принятый поток, а не открывает свой.
+ */
+async function ensureLocalStream(): Promise<void> {
+  if (localStream) return;
+  if (!micPending) {
+    micPending = acquireMic().finally(() => {
+      micPending = null;
+    });
+  }
+  const stream = await micPending;
+  if (localStream) return; // нас опередил другой заход — поток уже принят
+
+  localStream = stream;
+  rawMicTrack = stream.getAudioTracks()[0] ?? null;
+  if (rawMicTrack) rawMicTrack.contentHint = 'speech'; // голос, не музыка
+  // Сохранённый порог > 0 — поднимаем цепочку гейта ДО join, чтобы новые пиры
+  // сразу получили уже затворённую дорожку.
+  if (micThreshold > 0) ensureMicPipeline();
+  setupLocalVad(); // анализатор своего микрофона для обводки и гейта
+  // Доступ выдан — метки устройств теперь видны, наполняем списки
+  void refreshMicInfo();
+  void refreshSpeakerInfo();
 }
 
 /**
@@ -1111,6 +1173,18 @@ function dropRemoteTiles() {
 }
 
 /**
+ * Снять транспорты — ОБА, а не только активный. Активным всегда числится ровно
+ * один, но забытый второй — это не «неиспользуемый объект»: у него живой сокет и
+ * наш микрофон в чужой комнате. Один такой хвост стоит дороже лишнего вызова
+ * `leave()` по пустому транспорту (он идемпотентен).
+ */
+function leaveTransports() {
+  meshTransport?.leave();
+  sfuTransport?.leave();
+  transport = null;
+}
+
+/**
  * Номер текущего переезда. Между «отцепиться от старого транспорта» и
  * «объявиться на новом» есть await (запрос пропуска, загрузка чанка mediasoup), и
  * за это время вполне прилетает второй переезд: владелец щёлкнул режим канала
@@ -1124,22 +1198,44 @@ let migration = 0;
 /**
  * Подключить транспорт к комнате и объявиться на сигналинге. Пропуск = выбор
  * транспорта: он есть — идём в SFU, нет — в mesh.
+ *
+ * `gen` спрашиваем, а не берём сами: номер принадлежит тому заходу или переезду,
+ * который сюда привёл, и взять его здесь — значит объявить себя последним уже
+ * после того, как нас обогнали.
  */
-async function enterRoom(target: string, ticket: VoiceTicket | null, gen = ++migration) {
-  const next = ticket ? await sfu() : mesh();
+async function enterRoom(target: string, ticket: VoiceTicket | null, gen: number) {
+  // Транспорт медиасервера может не подняться у нас самих: чанк
+  // `mediasoup-client` весит заметно и грузится по требованию, а сеть на входе в
+  // канал — та же, что только что моргнула. Бросать на этом весь заход нельзя:
+  // канал у человека уже открыт, и остаться в нём без единого `join` — это
+  // «подключено» с полной тишиной и без пути назад. Едем прямыми звонками, как
+  // при любом другом отказе медиасервера.
+  let pass = ticket;
+  let next: VoiceTransport;
+  try {
+    next = pass ? await sfu() : mesh();
+  } catch (err) {
+    diag('sfu start failed', String((err as Error)?.message ?? err));
+    next = mesh();
+    pass = null;
+  }
   if (room !== target || gen !== migration) return; // ушли в другой канал/переезд
+  // Транспорт, который мы сменяем, обязан уйти сам. Просто перестать на него
+  // смотреть — не то же самое, что выйти: он держит свой сокет, свои дорожки и
+  // наш микрофон, то есть продолжает звонить в комнату, из которой мы ушли.
+  if (transport && transport !== next) transport.leave();
   transport = next;
-  next.join(target, ticket ?? undefined);
+  next.join(target, pass ?? undefined);
   socket().emit('join', {
     room: target,
     name: myName(),
     clientId: loadClientId(),
     // Транспорт — в join: сервер раздаст его остальным в presence. Иначе
     // разъехавшиеся участники видят друг друга в канале и молча не слышат.
-    transport: ticket ? 'sfu' : 'p2p',
+    transport: pass ? 'sfu' : 'p2p',
   });
   // После join: сервер уже знает имя и впишет его в строку лога.
-  diag('transport', `${ticket ? 'sfu' : 'mesh'} room="${target}"`);
+  diag('transport', `${pass ? 'sfu' : 'mesh'} room="${target}"`);
   // Сразу за join — своё медиасостояние: сервер только что сбросил его, а мут/
   // глушилка могли остаться с прошлого канала.
   broadcastMediaState();
@@ -1157,8 +1253,7 @@ async function remigrate(force?: 'mesh') {
   const gen = ++migration;
   holdSplitChecks();
   cancelSfuRetry();
-  tx().leave();
-  transport = null;
+  leaveTransports();
   dropRemoteTiles();
   const ticket = force === 'mesh' ? null : await requestSfuTicket(target);
   if (room !== target || gen !== migration) return; // нас обогнал следующий переезд
@@ -1182,20 +1277,25 @@ function scheduleSfuRetry() {
     void (async () => {
       const target = room;
       if (!target) return;
+      // Круг ожидания принадлежит ТОМУ звонку, в котором начался. Отменить его
+      // после `await` уже нечем (таймер отработал, тело живёт само), а комната
+      // за эти секунды успевает смениться и даже вернуться той же: человек
+      // вышел и зашёл снова. Раньше сходства слага хватало, чтобы запоздавший
+      // круг разобрал заново собранный звонок и пересобрал его поверх себя.
+      const gen = migration;
       const ticket = await requestSfuTicket(target);
-      if (room !== target) return;
+      if (room !== target || gen !== migration) return;
       if (!ticket) {
         scheduleSfuRetry(); // всё ещё лежит — заходим на следующий круг
         return;
       }
       diag('sfu-retry', 'ok — moving back to sfu');
-      const gen = ++migration;
+      const moving = ++migration;
       holdSplitChecks();
-      tx().leave();
-      transport = null;
+      leaveTransports();
       dropRemoteTiles();
-      await enterRoom(target, ticket, gen);
-      if (gen !== migration) return;
+      await enterRoom(target, ticket, moving);
+      if (moving !== migration) return;
       holdSplitChecks();
       toast.success(msg('voice.toast.sfuBack'));
     })();
@@ -1253,6 +1353,7 @@ function scheduleSplitCheck(ms: number) {
 function onPresence(presence: VoicePresence) {
   useVoiceStore.getState().setPresence(presence);
   lastPresence = presence;
+  syncPeerRoles(presence);
   if (!room) {
     splitHandled = false;
     cancelSplitCheck();
@@ -1266,8 +1367,58 @@ function onPresence(presence: VoicePresence) {
   evaluateSplit();
 }
 
+/**
+ * Кто в нашей комнате гость и кто из гостей только слушает. Нужно двум местам:
+ * микшеру (звук слушателя не принимаем вовсе) и плиткам (подпись и «выгнать»).
+ * Роль приезжает с presence, поэтому здесь же правим уже стоящие плитки —
+ * транспорт мог завести их раньше.
+ */
+function syncPeerRoles(presence: VoicePresence) {
+  peerRoles.clear();
+  let changed = false;
+  for (const p of (room && presence[room]) || []) {
+    if (!p.guest) continue;
+    peerRoles.set(p.id, { guest: true, listen: p.listen === true });
+    const t = tiles.get(p.id);
+    if (t && (t.guest !== true || t.listen !== (p.listen === true))) {
+      tiles.set(p.id, { ...t, guest: true, listen: p.listen === true });
+      changed = true;
+    }
+  }
+  // Гостем перестать быть нельзя, а вот уйти — можно: плитка пережившего своего
+  // хозяина флага осталась бы помеченной.
+  for (const t of tiles.values()) {
+    if (t.guest && !peerRoles.has(t.id)) {
+      tiles.set(t.id, { ...t, guest: undefined, listen: undefined });
+      changed = true;
+    }
+  }
+  if (changed) syncTiles();
+}
+
+/**
+ * Выгнать гостя из эфира. Право проверяет сервер (любой НЕ-гость, кому виден
+ * канал); здесь — только отправка и внятный ответ человеку.
+ */
+export function kickGuest(peerId: string, name: string) {
+  socket().emit('guest-kick', { id: peerId }, (res) => {
+    if (res?.ok) toast(msg('members.kick.done', { name }));
+    else if (res?.error === 'not-found') toast(msg('members.kick.gone', { name }));
+    else toast.error(msg('members.kick.failed'));
+  });
+}
+
 function evaluateSplit() {
   if (!room) return;
+  // Транспорт ещё не выбран: идёт заход или переезд, пропуск в пути. «Нет
+  // транспорта» — это не «звоню напрямую», а сравнивать нам пока не с чем.
+  // Раньше это читалось как p2p, и заход в людной SFU-канал встречал человека
+  // красной ошибкой «тебя не слышат» ещё до того, как он куда-либо подключился.
+  // Не бросаем, а откладываем: расщепление обязано быть замечено и после.
+  if (!transport) {
+    scheduleSplitCheck(MIGRATION_SETTLE_MS);
+    return;
+  }
   const myId = socket().id;
   const others = (lastPresence[room] ?? []).filter((p) => p.id !== myId);
   const mine = transport === sfuTransport ? 'sfu' : 'p2p';
@@ -1314,6 +1465,20 @@ function onTransportLost(reason: 'setup' | 'lost') {
   scheduleSfuRetry();
 }
 
+/**
+ * Объявить себя слушателем — гостевая сцена делает это до входа, прочитав
+ * право из подписанного инвайт-токена (см. GuestStage). Меняет ровно две вещи:
+ * микрофон не берём и микрофон считаем выключенным. Всё остальное — обычный
+ * звонок: слушателя видно в составе канала, он слышит всех и уходит как все.
+ */
+export function setListenOnly(on: boolean) {
+  listenOnly = on;
+  if (!on) return;
+  micOn = false;
+  useVoiceStore.getState().setListenOnly(true);
+  syncMediaState();
+}
+
 export async function joinVoice(newRoom: string, label: string) {
   // Уже на связи в этой комнате — значит, мы просто смотрели текст: показываем сетку
   if (newRoom === room) {
@@ -1332,10 +1497,27 @@ export async function joinVoice(newRoom: string, label: string) {
     return;
   }
 
+  // Заход — не одно действие: впереди два ожидания подряд (устройство, пропуск
+  // в медиасервер), и на каждом человек успевает щёлкнуть соседний канал. Заход
+  // берёт номер и сходит с дистанции, увидев, что появился следующий, — тем же
+  // способом, что и переезд (см. `migration`). Сравнения слагов тут мало:
+  // «щёлкнул соседний канал и вернулся» даёт тот же слаг у обоих заходов, и
+  // обогнанный доезжает ПОСЛЕ нового, вставая поверх него — с живым сокетом
+  // второго транспорта за спиной.
+  if (room) leaveVoice(false); // мягко переключаемся между голосовыми — поток живёт
+  const gen = ++migration;
+
+  if (!localStream && listenOnly) {
+    // Слушателю устройство не нужно, и спрашивать его — врать: отдать эту
+    // дорожку всё равно некуда. Пустой поток не заглушка, а честная форма того
+    // же состояния: транспорт спрашивает у дирижёра локальные дорожки и
+    // получает пустой набор (см. mesh: он попросит приём отдельно).
+    localStream = new MediaStream();
+  }
   if (!localStream) {
     setStatus('voice.status.micRequesting');
     try {
-      localStream = await acquireMic();
+      await ensureLocalStream();
     } catch (err) {
       console.error('getUserMedia failed:', err);
       setStatus('voice.status.micDenied');
@@ -1343,18 +1525,9 @@ export async function joinVoice(newRoom: string, label: string) {
       sfx().play('error'); // отказано в доступе к устройству
       return;
     }
-    rawMicTrack = localStream.getAudioTracks()[0] ?? null;
-    if (rawMicTrack) rawMicTrack.contentHint = 'speech'; // голос, не музыка
-    // Сохранённый порог > 0 — поднимаем цепочку гейта ДО join, чтобы новые пиры
-    // сразу получили уже затворённую дорожку.
-    if (micThreshold > 0) ensureMicPipeline();
-    setupLocalVad(); // анализатор своего микрофона для обводки и гейта
-    // Доступ выдан — метки устройств теперь видны, наполняем списки
-    void refreshMicInfo();
-    void refreshSpeakerInfo();
+    if (gen !== migration) return; // пока ждали микрофон, ушли в другой канал
   }
 
-  if (room) leaveVoice(false); // мягко переключаемся между голосовыми — поток живёт
   room = newRoom;
 
   useUiStore.setState({ view: 'voice', voiceRoom: room, voiceLabel: label });
@@ -1367,14 +1540,20 @@ export async function joinVoice(newRoom: string, label: string) {
   // к этому моменту должно быть решено, кто его слушает. Спрашиваем у api — не
   // у своего реестра каналов: гость по инвайту реестра не получает вовсе, а
   // разъехавшись с остальными в транспорте, он останется без звука.
-  const ticket = await requestSfuTicket(room);
-  if (room !== newRoom) return; // пока спрашивали, успели уйти в другой канал
-  await enterRoom(room, ticket);
-  if (room !== newRoom) return;
+  const ticket = await requestSfuTicket(newRoom);
+  if (room !== newRoom || gen !== migration) return; // нас обогнал следующий заход
+  await enterRoom(newRoom, ticket, gen);
+  if (room !== newRoom || gen !== migration) return;
   sfx().play('join'); // вышли на связь
 
-  // Подсказка про смену микрофона — один раз, чтобы знали, где переключить
-  if (typeof localStorage !== 'undefined' && !localStorage.getItem('relay-mic-hint')) {
+  // Подсказка про смену микрофона — один раз, чтобы знали, где переключить.
+  // Слушателю её не показываем: у него нет ни микрофона, ни самой кнопки, на
+  // которую она указывает.
+  if (
+    !listenOnly &&
+    typeof localStorage !== 'undefined' &&
+    !localStorage.getItem('relay-mic-hint')
+  ) {
     localStorage.setItem('relay-mic-hint', '1');
     toast(msg('voice.toast.micHint'), { duration: 7000 });
   }
@@ -1393,8 +1572,7 @@ export function leaveVoice(hard = true) {
   settleUntil = 0;
   lastPresence = {};
   if (room) socket().emit('leave');
-  tx().leave();
-  transport = null; // следующий вход выберет транспорт заново
+  leaveTransports(); // следующий вход выберет транспорт заново
   teardownPeerAudio();
   clearFocus();
   tiles.clear();
@@ -1438,8 +1616,9 @@ export function leaveVoice(hard = true) {
   screenAudioTrack = null;
   screenOn = false;
   // Микрофон к следующему входу включаем, но глушилка переживает выход из эфира —
-  // под ней микрофон остаётся выключенным (не слышишь — не говоришь).
-  micOn = speakersOn;
+  // под ней микрофон остаётся выключенным (не слышишь — не говоришь). Слушателю
+  // включать нечего: права говорить выход из канала ему не добавил.
+  micOn = !listenOnly && speakersOn;
   micWasOnBeforeDeafen = true;
   camOn = false;
   syncMediaState();
@@ -1511,6 +1690,7 @@ function applyMicState() {
 }
 
 export function toggleMic() {
+  if (listenOnly) return; // включать нечего: микрофон мы не брали
   // Включение микрофона под «глушилкой» снимает и её (как в Discord): нелепо
   // говорить, не слыша ответов. toggleSpeakers сам вернёт micOn=true и разошлёт.
   if (!micOn && !speakersOn) {
@@ -1529,7 +1709,7 @@ function currentVideoTrack(): MediaStreamTrack | null {
 }
 
 export async function toggleCamera() {
-  if (!localStream) return;
+  if (!localStream || listenOnly) return; // слушатель своего медиа не отдаёт
   if (camOn) stopCamera();
   else await startCamera();
   broadcastMediaState();
@@ -1583,7 +1763,7 @@ function stopCamera() {
 }
 
 export async function toggleScreen() {
-  if (!localStream) return;
+  if (!localStream || listenOnly) return; // слушатель своего медиа не отдаёт
   if (screenOn) stopScreen();
   else await startScreen();
   broadcastMediaState();
@@ -1914,6 +2094,17 @@ export function initVoice() {
 
   s.on('voice-presence', (p: VoicePresence) => {
     onPresence(p && typeof p === 'object' ? p : {});
+  });
+
+  // Нас выгнали из эфира (только гостевой сценарий: выгоняют гостя). Сервер уже
+  // выписал из комнаты и закрыл вход по той же ссылке на час — сворачиваем
+  // звонок и поднимаем флаг: пропавший без объяснений звук человек читает как
+  // поломку и лезет чинить микрофон.
+  s.on('kicked', () => {
+    useVoiceStore.getState().setKicked(true);
+    if (!room) return;
+    sfx().play('error');
+    leaveVoice();
   });
 
   s.on('connect', () => {

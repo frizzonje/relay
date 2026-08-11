@@ -18,7 +18,10 @@ import { SfuGateway } from './sfu.gateway';
 const SECRET = 'секрет-медиасервера';
 
 /** Пропуск в том виде, в каком его выдаёт api (формат байт-в-байт). */
-function issue(claims: { room: string; peerId: string; name?: string }, ttlMs = 60_000) {
+function issue(
+  claims: { room: string; peerId: string; name?: string; listen?: boolean },
+  ttlMs = 60_000,
+) {
   const body = Buffer.from(
     JSON.stringify({ name: '', ...claims, exp: Date.now() + ttlMs }),
     'utf8',
@@ -255,6 +258,28 @@ describe('дорожки', () => {
       peerId: 'a',
       producer: { id: producerId, kind: 'video', source: 'screen' },
     });
+  });
+
+  it('слушателю отдавать не дают: пропуск с клеймом закрывает produce целиком', async () => {
+    // Гость по инвайту в канал закрытого сервера. Кнопок у него нет, но клиент
+    // у него свой — запрет обязан жить там, где течёт медиа.
+    const s = io.connect({
+      token: issue({ room: 'эфир', peerId: 'гость', listen: true }),
+      id: 'sock-гость',
+    });
+    await gw.handleConnection(sock(s));
+    const ack = await gw.handleCreateTransport(sock(s), { direction: 'send' });
+    if (!ack.ok) throw new Error('транспорт не создался');
+    expect(
+      await gw.handleProduce(sock(s), {
+        transportId: (ack.params as { id: string }).id,
+        kind: 'audio',
+        rtpParameters: {},
+        source: 'mic',
+      }),
+    ).toEqual({ ok: false, error: 'listen-only' });
+    // Слушать при этом он вправе как все — за этим его и звали.
+    expect(ack.ok).toBe(true);
   });
 
   it('неизвестный вид и неизвестное назначение отвергаются порознь', async () => {
@@ -527,5 +552,44 @@ describe('переподключение', () => {
     await connect('эфир', 'a');
     expect(before.closed).toBe(true);
     expect(rooms.peers('эфир')).toHaveLength(1);
+  });
+
+  /**
+   * Прыжки по каналам и круги ожидания вернувшегося сервера открывают новый
+   * сокет под тем же peerId: он берётся из сокета в api, а тот при смене канала
+   * не меняется. Сокеты разные, и порядок их событий ничем не связан — запоздав,
+   * `disconnect` прежнего приходит уже после `welcome` нового.
+   */
+  it('запоздавший дисконнект прежнего сокета не выносит вернувшегося', async () => {
+    const stale = await connect('эфир', 'a');
+    const other = await connect('эфир', 'b');
+    const fresh = io.connect({ token: issue({ room: 'эфир', peerId: 'a' }), id: 'sock-a2' });
+    await gw.handleConnection(sock(fresh));
+    other.clear();
+
+    gw.handleDisconnect(sock(stale));
+
+    // Участник в комнате остался — и остальные об уходе не услышали.
+    expect(other.got('peer-left')).toBe(false);
+    expect(
+      rooms
+        .peers('эфир')
+        .map((p) => p.id)
+        .sort(),
+    ).toEqual(['a', 'b']);
+  });
+
+  it('уход после перезахода всё равно доходит до комнаты', async () => {
+    const stale = await connect('эфир', 'a');
+    const other = await connect('эфир', 'b');
+    const fresh = io.connect({ token: issue({ room: 'эфир', peerId: 'a' }), id: 'sock-a2' });
+    await gw.handleConnection(sock(fresh));
+    gw.handleDisconnect(sock(stale));
+    other.clear();
+
+    gw.handleDisconnect(sock(fresh));
+
+    expect(other.last('peer-left')).toEqual({ peerId: 'a' });
+    expect(rooms.peers('эфир').map((p) => p.id)).toEqual(['b']);
   });
 });

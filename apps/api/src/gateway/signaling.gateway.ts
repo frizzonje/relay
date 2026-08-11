@@ -50,6 +50,8 @@ import {
   type ChatMessage,
   type ChatPayload,
   type ChatReactPayload,
+  type GuestKickPayload,
+  type GuestKickResult,
   type InviteCreatePayload,
   type InviteCreateResult,
   type JoinPayload,
@@ -114,6 +116,15 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // больше окна connectionStateRecovery — чтобы CSR успел отработать первым.
   private static readonly LEAVE_GRACE_MS = 24_000;
 
+  // Выгнанные гости: «комната + устройство» → до какого времени дверь закрыта.
+  // Ссылка многоразовая и живёт сутки, поэтому без этой карты «выгнать» не
+  // значило бы ничего. Час — не наказание, а пауза: он переживает обиду и
+  // перезаход, но не превращает случайный клик в приговор до конца инвайта.
+  // Хранится в памяти процесса: рестарт api прощает всех, и это честно —
+  // серьёзный запрет живёт в пароле сервера, а не здесь.
+  private readonly guestBans = new Map<string, number>();
+  private static readonly GUEST_BAN_MS = 60 * 60 * 1000;
+
   // ── Токен-бакет на сокет ────────────────────────────────────────────────
   // Гасим флуд событий, каждое из которых иначе вызывает рассылку на весь
   // сервер (presence/чат/реестр) — O(n) обход+emit на всех. Живому человеку
@@ -123,6 +134,16 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // она бывает легитимно бурстовой и релеится 1:1, дёшево.
   private static readonly RL_CAPACITY = 40;
   private static readonly RL_REFILL_PER_SEC = 20;
+
+  // Диагностические вехи звонка считаем ОТДЕЛЬНО от действий человека, и это не
+  // щедрость, а разделение: вехи шлёт сам клиент, пачкой и ровно в те секунды,
+  // когда человек прыгает по каналам, — то есть телеметрия занимала место в том
+  // же бакете, из которого через мгновение платит `join`. Не пустить веху в лог
+  // не стоит ничего; не пустить `join` — значит оставить человека в канале,
+  // которого сервер за ним не числит: его не слышно, а ошибки он не увидит,
+  // потому что отказ здесь молчаливый.
+  private static readonly DIAG_CAPACITY = 20;
+  private static readonly DIAG_REFILL_PER_SEC = 5;
 
   // ── Разблокировка закрытых серверов ─────────────────────────────────────
   // Общий бакет (20/с) от перебора пароля не защищает: 20 попыток в секунду с
@@ -169,18 +190,39 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   private readonly logger = new Logger(SignalingGateway.name);
 
   private allow(client: Socket): boolean {
+    return this.spend(
+      client,
+      'rl',
+      SignalingGateway.RL_CAPACITY,
+      SignalingGateway.RL_REFILL_PER_SEC,
+    );
+  }
+
+  /** Бакет диагностических вех — свой, чтобы телеметрия не съедала звонок. */
+  private allowDiag(client: Socket): boolean {
+    return this.spend(
+      client,
+      'rlDiag',
+      SignalingGateway.DIAG_CAPACITY,
+      SignalingGateway.DIAG_REFILL_PER_SEC,
+    );
+  }
+
+  private spend(
+    client: Socket,
+    key: 'rl' | 'rlDiag',
+    capacity: number,
+    refillPerSec: number,
+  ): boolean {
     const now = Date.now();
-    const bucket = (client.data.rl as { tokens: number; ts: number } | undefined) ?? {
-      tokens: SignalingGateway.RL_CAPACITY,
+    const bucket = (client.data[key] as { tokens: number; ts: number } | undefined) ?? {
+      tokens: capacity,
       ts: now,
     };
     const elapsed = (now - bucket.ts) / 1000;
-    bucket.tokens = Math.min(
-      SignalingGateway.RL_CAPACITY,
-      bucket.tokens + elapsed * SignalingGateway.RL_REFILL_PER_SEC,
-    );
+    bucket.tokens = Math.min(capacity, bucket.tokens + elapsed * refillPerSec);
     bucket.ts = now;
-    client.data.rl = bucket;
+    client.data[key] = bucket;
     if (bucket.tokens < 1) return false;
     bucket.tokens -= 1;
     return true;
@@ -218,6 +260,17 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (guest) {
       client.data.guest = true;
       client.data.guestRoom = guest.slug;
+      // Право говорить приезжает подписанным в токене (см. handleInviteCreate):
+      // канал закрытого сервера зовёт слушателем. Сокет запоминает это один раз
+      // и на всю сессию — переспрашивать клиента не о чем.
+      client.data.guestListen = guest.listen;
+      // Выгнанному дверь не открывается заново: без этого «выгнать» значило бы
+      // «подождать пять секунд» — гость возвращается по той же ссылке, она
+      // многоразовая и живёт сутки.
+      if (this.guestBanned(client, guest.slug)) {
+        client.emit('kicked', { room: guest.slug });
+        return;
+      }
       const presence = this.buildVoicePresence();
       client.emit(
         'voice-presence',
@@ -240,6 +293,17 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // media-update/rename) — остальные обработчики выходят на этом гарде.
   private isGuest(client: Socket): boolean {
     return client.data.guest === true;
+  }
+
+  /**
+   * Слушатель: гость, позванный в канал закрытого сервера. Слышит комнату, но
+   * своего медиа не отдаёт. Держится это не на кнопке в интерфейсе — она лишь
+   * не врёт человеку, — а на двух настоящих заслонах: пропуск в медиасервер
+   * уходит с клеймом `listen` (produce получит отказ), а в прямых звонках
+   * входящий звук слушателя отбрасывают сами собеседники по флагу в presence.
+   */
+  private isListener(client: Socket): boolean {
+    return client.data.guestListen === true;
   }
 
   // Публичная форма реестра серверов: без хэша пароля, с флагом `locked` и с
@@ -795,6 +859,12 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // Инвайт на войс-канал: подписанный токен без хранения на сервере (24 часа,
   // многоразовый). Абсолютный URL строит клиент из window.location.origin.
   // Возвращаемое значение = socket.io ack.
+  //
+  // Канал закрытого сервера зовёт гостя СЛУШАТЕЛЕМ. Приглашающий раздаёт по
+  // ссылке ровно то, что имеет сам, — а пароля он не отдавал: голос в закрытом
+  // канале держится на том же пароле, что и всё остальное, и ссылка,
+  // раздающая право говорить, обошла бы его одним сообщением в чужом чате.
+  // Слышать при этом гость должен: за этим его и звали.
   @SubscribeMessage('invite-create')
   handleInviteCreate(
     @ConnectedSocket() client: Socket,
@@ -806,8 +876,74 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // (каналы закрытых серверов — только после ввода пароля).
     const channel = this.channelsFor(client).find((c) => c.type === 'voice' && c.slug === slug);
     if (!channel) return { ok: false, error: 'not-found' };
-    const { token, exp } = issueGuestToken(slug);
-    return { ok: true, token, exp };
+    const listen = this.isLockedChannel(slug);
+    const { token, exp } = issueGuestToken(slug, { listen });
+    return { ok: true, token, exp, listen };
+  }
+
+  /** Канал закрытого сервера: сам канал в реестре и за ним сервер с паролем. */
+  private isLockedChannel(slug: string): boolean {
+    const channel = this.registry.channels.find((c) => c.type === 'voice' && c.slug === slug);
+    return !!channel && !!this.registry.serverOf(channel)?.passwordHash;
+  }
+
+  /**
+   * Выгнать гостя из эфира. Право на это есть у любого НЕ-гостя, кому виден сам
+   * канал: гость в комнате — тот, кого сюда позвали по ссылке, и отвечает за
+   * него вся комната, а не один владелец. Гостю гостя не выгнать — иначе
+   * ссылка, разосланная в чужой чат, становилась бы кнопкой «выгнать всех
+   * остальных».
+   */
+  @SubscribeMessage('guest-kick')
+  handleGuestKick(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: GuestKickPayload,
+  ): GuestKickResult {
+    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
+    const id = trimmed(payload?.id, LIMIT.id);
+    const target = id ? this.server.sockets.sockets.get(id) : undefined;
+    if (!target || target.data.guest !== true) return { ok: false, error: 'not-found' };
+    const room = target.data.room as string | undefined;
+    if (!room) return { ok: false, error: 'not-found' };
+    // Канал закрытого сервера запирает и это: не введя пароль, ты не видишь ни
+    // канала, ни того, кто в нём сидит, — значит и выгонять оттуда некого.
+    if (!this.mayEnter(client, room)) return { ok: false, error: 'forbidden' };
+
+    this.banGuest(target, room);
+    // Сокет не рвём: гость должен УВИДЕТЬ, что произошло, а разорванное
+    // соединение он бы просто переподключил и гадал, куда делся звук. Выписки
+    // из комнаты и закрытой двери на обратный вход довольно.
+    target.emit('kicked', { room });
+    this.leaveRoom(target);
+    this.logger.log(
+      `guest ${(target.data.name as string) || '?'} (${target.id}) kicked from "${room}" by ${client.id}`,
+    );
+    return { ok: true };
+  }
+
+  /** Ключ отлучения: комната + устройство (а если оно не назвалось — адрес). */
+  private banKey(client: Socket, room: string): string {
+    const device = deviceId(client) || `ip:${clientIp(client.handshake)}`;
+    return `${room} ${device}`;
+  }
+
+  private banGuest(client: Socket, room: string) {
+    // Заодно подметаем протухшее: карта живёт всё время работы процесса, а
+    // класть в неё по записи на каждого выгнанного и не убирать — это утечка
+    // размером в историю инсталляции.
+    const now = Date.now();
+    for (const [key, until] of this.guestBans) {
+      if (until <= now) this.guestBans.delete(key);
+    }
+    this.guestBans.set(this.banKey(client, room), now + SignalingGateway.GUEST_BAN_MS);
+  }
+
+  private guestBanned(client: Socket, room: string): boolean {
+    const until = this.guestBans.get(this.banKey(client, room));
+    if (until === undefined) return false;
+    if (until > Date.now()) return true;
+    this.guestBans.delete(this.banKey(client, room));
+    return false;
   }
 
   // ===== Пропуск в медиасервер =====
@@ -855,7 +991,14 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // Лимит — тот же, что у `join`.
     const askedName = trimmed(payload?.name, LIMIT.tag);
     const name = askedName || (typeof client.data.name === 'string' ? client.data.name : '');
-    const { token, exp } = issueSfuToken({ room, peerId: client.id, name });
+    // Слушателю пропуск выдаём тот же, но с клеймом: медиасервер откажет ему в
+    // produce. Клиент у гостя свой — запрет обязан жить там, где течёт медиа.
+    const { token, exp } = issueSfuToken({
+      room,
+      peerId: client.id,
+      name,
+      listen: this.isListener(client),
+    });
     // Запоминаем выдачу: клиент, не умеющий сообщать транспорт в `join` (бандл
     // прошлой версии), иначе сошёл бы за p2p — и остальные съехали бы в прямые
     // звонки, разъехавшись с ним по-настоящему. Пропуск — лучшее, что о таком
@@ -874,7 +1017,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // никакой логики: верить содержимому на слово нельзя.
   @SubscribeMessage('voice-diag')
   handleVoiceDiag(@ConnectedSocket() client: Socket, @MessageBody() payload: VoiceDiagPayload) {
-    if (!this.allow(client)) return;
+    if (!this.allowDiag(client)) return;
     const event = oneLine(str(payload?.event)).slice(0, LIMIT.diagEvent);
     if (!event) return;
     const detail = oneLine(str(payload?.detail)).slice(0, LIMIT.diagDetail);
@@ -889,6 +1032,13 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!room) return;
     // Гость «пришит» к каналу из своего токена — другие комнаты недоступны.
     if (this.isGuest(client) && room !== client.data.guestRoom) return;
+    // Выгнанный не возвращается, пока не истечёт пауза (см. handleGuestKick).
+    // Проверяем и здесь, а не только в handshake: сокет мог быть открыт до
+    // того, как его выгнали, — тогда `join` был бы дверью с другой стороны.
+    if (this.isGuest(client) && this.guestBanned(client, room)) {
+      client.emit('kicked', { room });
+      return;
+    }
     // Канал закрытого сервера — только для тех, кто ввёл пароль. Комнату, которой
     // в реестре нет вовсе, пропускаем: это либо канал, удалённый под живым
     // разговором, либо инвайт-комната, и запирать их не за что.
@@ -942,6 +1092,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
           id,
           name: sock?.data.name as string | undefined,
           ...(sock?.data.guest === true ? { guest: true } : {}),
+          ...(sock?.data.guestListen === true ? { listen: true } : {}),
         };
       });
 
@@ -961,6 +1112,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       id: client.id,
       name,
       ...(this.isGuest(client) ? { guest: true } : {}),
+      ...(this.isListener(client) ? { listen: true } : {}),
     });
     this.broadcastVoicePresence();
     // UA — в лог: «телефон не слышит» первым делом упирается в вопрос, ЧТО это
@@ -1324,13 +1476,18 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     for (const [id, sock] of this.server.sockets.sockets) {
       const room = sock.data.room as string | undefined;
       if (!room) continue;
+      // Слушателю микрофон выставляем сами: он его и не включал, но клиент
+      // прошлой версии по умолчанию считает микрофон включённым, а показать
+      // «говорит» тому, кого физически не слышно, — худшее из вранья.
+      const listen = sock.data.guestListen === true;
       (presence[room] ??= []).push({
         id,
         name: (sock.data.name as string) || ANON_NAME,
-        micOn: sock.data.micOn !== false,
+        micOn: !listen && sock.data.micOn !== false,
         deafened: sock.data.deafened === true,
         transport: sock.data.transport === 'sfu' ? 'sfu' : 'p2p',
         ...(sock.data.guest === true ? { guest: true } : {}),
+        ...(listen ? { listen: true } : {}),
       });
     }
     return presence;

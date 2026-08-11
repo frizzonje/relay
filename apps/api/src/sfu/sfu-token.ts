@@ -27,12 +27,28 @@ export function sfuConfigured(): boolean {
   return !!(process.env.SFU_URL ?? '').trim() && !!sfuSecret();
 }
 
-export function issueSfuToken(claims: { room: string; peerId: string; name: string }): {
+export function issueSfuToken({
+  room,
+  peerId,
+  name,
+  listen,
+}: {
+  room: string;
+  peerId: string;
+  name: string;
+  /** Слушатель: пропуск на приём, но не на отдачу — медиасервер откажет в produce. */
+  listen?: boolean;
+}): {
   token: string;
   exp: number;
 } {
   const exp = Date.now() + SFU_TOKEN_TTL_MS;
-  const body = Buffer.from(JSON.stringify({ ...claims, exp }), 'utf8').toString('base64url');
+  // Клейм пишем только тем, кому он что-то запрещает: поле `listen: false` в
+  // каждом токене — это лишний повод гадать, что значит его отсутствие.
+  const body = Buffer.from(
+    JSON.stringify({ room, peerId, name, ...(listen ? { listen: true } : {}), exp }),
+    'utf8',
+  ).toString('base64url');
   const prefix = `s1.${body}`;
   const sig = createHmac('sha256', KEY_PREFIX + sfuSecret())
     .update(prefix)

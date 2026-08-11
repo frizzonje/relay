@@ -38,11 +38,20 @@ export function verifyToken(token: string | undefined): boolean {
 }
 
 // ── Гостевой инвайт-токен (sync-близнец packages/shared/src/auth.ts) ──────
-// Формат: `g1.<b64url(slug)>.<exp>.<sig>`, sig = HMAC всего префикса на ключе
-// 'relay-guest-v1:'+пароль — отдельный контекст, гостевой токен не пройдёт как
-// relay_pass. Подпись/срок проверяются даже при пустом SITE_PASSWORD: токен
-// несёт scope (какой войс-канал), а не просто «доступ». Байт-в-байт с shared.
+// Формат: `g2.<b64url(slug)>.<режим>.<exp>.<sig>`, sig = HMAC всего префикса на
+// ключе 'relay-guest-v1:'+пароль — отдельный контекст, гостевой токен не пройдёт
+// как relay_pass. Подпись/срок проверяются даже при пустом SITE_PASSWORD: токен
+// несёт scope (какой войс-канал и на каких правах), а не просто «доступ».
+// Байт-в-байт с shared, включая приём ссылок прошлой версии (g1, без режима).
 const GUEST_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Что разрешает гостевой токен: слаг канала, срок и право говорить. */
+export interface GuestClaims {
+  slug: string;
+  exp: number;
+  /** Только слушать: канал под паролем, а пароля гость не вводил. */
+  listen: boolean;
+}
 
 function guestHmac(message: string): string {
   return createHmac('sha256', 'relay-guest-v1:' + sitePassword())
@@ -52,22 +61,32 @@ function guestHmac(message: string): string {
 
 export function issueGuestToken(
   slug: string,
-  ttlMs = GUEST_TOKEN_TTL_MS,
+  opts: { listen?: boolean; ttlMs?: number } = {},
 ): {
   token: string;
   exp: number;
 } {
-  const exp = Date.now() + ttlMs;
-  const prefix = `g1.${Buffer.from(slug, 'utf8').toString('base64url')}.${exp}`;
+  const exp = Date.now() + (opts.ttlMs ?? GUEST_TOKEN_TTL_MS);
+  const mode = opts.listen ? 'listen' : 'talk';
+  const prefix = `g2.${Buffer.from(slug, 'utf8').toString('base64url')}.${mode}.${exp}`;
   return { token: `${prefix}.${guestHmac(prefix)}`, exp };
 }
 
-export function verifyGuestToken(token: string | undefined): { slug: string; exp: number } | null {
+export function verifyGuestToken(token: string | undefined): GuestClaims | null {
   if (!token) return null;
   const parts = token.split('.');
-  if (parts.length !== 4 || parts[0] !== 'g1') return null;
-  const [version, b64slug, expRaw, sig] = parts;
-  const exp = Number(expRaw);
+  // g2 — с режимом, g1 — ссылки прошлого формата (всегда с правом говорить).
+  let listen = false;
+  if (parts.length === 5) {
+    if (parts[0] !== 'g2') return null;
+    if (parts[2] !== 'listen' && parts[2] !== 'talk') return null;
+    listen = parts[2] === 'listen';
+  } else if (parts.length !== 4 || parts[0] !== 'g1') {
+    return null;
+  }
+  const b64slug = parts[1];
+  const sig = parts[parts.length - 1];
+  const exp = Number(parts[parts.length - 2]);
   if (!Number.isFinite(exp) || exp < Date.now()) return null;
   let slug: string;
   try {
@@ -76,10 +95,10 @@ export function verifyGuestToken(token: string | undefined): { slug: string; exp
     return null;
   }
   if (!slug || slug.includes('�')) return null;
-  const expected = Buffer.from(guestHmac(`${version}.${b64slug}.${expRaw}`));
+  const expected = Buffer.from(guestHmac(parts.slice(0, -1).join('.')));
   const actual = Buffer.from(sig);
   if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null;
-  return { slug, exp };
+  return { slug, exp, listen };
 }
 
 // Сравнение паролей за постоянное время — через хэши, чтобы не утекала длина

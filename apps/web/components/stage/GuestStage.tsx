@@ -10,7 +10,7 @@ import { VideoGrid } from '@/components/stage/VideoGrid';
 import { Controls } from '@/components/layout/Controls';
 import { avatarStyle } from '@/lib/avatar';
 import { loadTag, sanitizeTag, saveTag, suggestTag } from '@/lib/identity';
-import { joinVoice } from '@/lib/voice';
+import { joinVoice, setListenOnly } from '@/lib/voice';
 import { useUiStore } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import { useT } from '@/lib/i18n';
@@ -20,11 +20,26 @@ import { useT } from '@/lib/i18n';
  * войс-канала. Реиспользует настоящий стек звонка (lib/voice + VideoGrid +
  * Controls) — форкать mesh не нужно; убраны только рейка/сайдбар/чат, которых
  * у гостя и на сервере нет (гейтвей режет всё, кроме его комнаты).
+ *
+ * `listen` — приглашение в канал закрытого сервера: слышать можно, говорить
+ * нет. Сцена об этом честно предупреждает ДО входа (микрофон у такого гостя
+ * даже не спрашивают) и подписывает эфир иначе — «слушаете».
  */
-export function GuestStage({ slug, label, exp }: { slug: string; label: string; exp: number }) {
+export function GuestStage({
+  slug,
+  label,
+  exp,
+  listen,
+}: {
+  slug: string;
+  label: string;
+  exp: number;
+  listen: boolean;
+}) {
   const t = useT();
   const voiceRoom = useUiStore((s) => s.voiceRoom);
   const status = useVoiceStore((s) => s.status);
+  const kicked = useVoiceStore((s) => s.kicked);
 
   const [draft, setDraft] = useState('');
   const [joining, setJoining] = useState(false);
@@ -37,6 +52,11 @@ export function GuestStage({ slug, label, exp }: { slug: string; label: string; 
     // Своя гидрация вместо IdentityGate: сохранённый тег — сразу в поле.
     setDraft(loadTag() || suggestTag());
   }, []);
+
+  // Права объявляем дирижёру до первого входа: с ними он не берёт микрофон.
+  useEffect(() => {
+    setListenOnly(listen);
+  }, [listen]);
 
   useEffect(() => {
     if (inCall) setWasInCall(true);
@@ -82,6 +102,17 @@ export function GuestStage({ slug, label, exp }: { slug: string; label: string; 
           <span className="rounded-full border border-line bg-bg-elev px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-text-muted">
             {t('guest.badge')}
           </span>
+          {/* Слушателю говорим это прямо в шапке: «микрофона нет» должно
+              читаться как правило канала, а не как поломка устройства. */}
+          {listen && (
+            <span
+              title={t('guest.listen.title')}
+              className="flex items-center gap-1 rounded-full border border-line bg-bg-elev px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-text-muted"
+            >
+              <Icon name="headphones" className="text-[13px]" />
+              {t('guest.listen.badge')}
+            </span>
+          )}
         </header>
         <VideoGrid />
         <Controls />
@@ -102,7 +133,16 @@ export function GuestStage({ slug, label, exp }: { slug: string; label: string; 
           <Logo size={32} animate nodeBg="var(--color-bg-elev)" />
         </span>
 
-        {wasInCall ? (
+        {kicked ? (
+          // Выгнали. Без обиняков и без кнопки «вернуться»: сервер её всё равно
+          // не пустит, а неработающая кнопка обиднее внятного отказа.
+          <>
+            <h1 className="text-xl font-bold text-text-header">{t('guest.kicked.title')}</h1>
+            <p className="mt-1 max-w-[300px] text-[13px] leading-relaxed text-text-muted">
+              {t('guest.kicked.body', { channel: label })}
+            </p>
+          </>
+        ) : wasInCall ? (
           <>
             <h1 className="text-xl font-bold text-text-header">{t('guest.ended.title')}</h1>
             <p className="mt-1 max-w-[300px] text-[13px] leading-relaxed text-text-muted">
@@ -131,7 +171,7 @@ export function GuestStage({ slug, label, exp }: { slug: string; label: string; 
               {label}
             </h1>
             <p className="mt-1 max-w-[300px] text-[13px] leading-relaxed text-text-muted">
-              {t('guest.invite.body')}
+              {t(listen ? 'guest.invite.body.listen' : 'guest.invite.body')}
             </p>
 
             {/* Живой предпросмотр аватара по тегу (как в IdentityGate) */}
@@ -178,8 +218,9 @@ export function GuestStage({ slug, label, exp }: { slug: string; label: string; 
               </Button>
             </form>
 
-            {/* Отказ в микрофоне / прочие сбои joinVoice — его статус + повтор */}
-            {!joining && status?.key === 'voice.status.micDenied' && (
+            {/* Отказ в микрофоне / прочие сбои joinVoice — его статус + повтор.
+                Слушателя это не касается: микрофон у него не спрашивают. */}
+            {!joining && !listen && status?.key === 'voice.status.micDenied' && (
               <p className="mt-2 text-[12px] leading-snug text-danger">{t('guest.mic.denied')}</p>
             )}
             {expired && (
@@ -187,7 +228,7 @@ export function GuestStage({ slug, label, exp }: { slug: string; label: string; 
             )}
 
             <p className="mt-3 text-[10px] leading-snug text-text-muted opacity-70">
-              {t('guest.mic.note')}
+              {t(listen ? 'guest.listen.note' : 'guest.mic.note')}
             </p>
           </>
         )}

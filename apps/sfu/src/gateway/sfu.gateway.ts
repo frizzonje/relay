@@ -117,6 +117,7 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
       name: claims.name,
       socketId: client.id,
       room: claims.room,
+      listen: claims.listen,
     });
     this.peers.set(client.id, peer);
     await client.join(roomKey(claims.room));
@@ -137,7 +138,20 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const peer = this.peers.get(client.id);
     if (!peer) return;
     this.peers.delete(client.id);
-    this.rooms.leave(peer);
+    // Ушёл ли он на самом деле. Быстрый перезаход (прыжки по каналам, круг
+    // ожидания вернувшегося сервера) открывает НОВЫЙ сокет под тем же peerId —
+    // id участника это id его сокета в api, а тот при смене канала не меняется.
+    // Сокеты разные, и очерёдность их событий ничем не связана: `disconnect`
+    // прежнего запросто приходит уже после `welcome` нового. Сказать в этот
+    // момент комнате `peer-left` — значит снять у всех остальных плитку и
+    // consumer'ы ЖИВОГО участника, причём насовсем: второго `peer-joined` не
+    // будет, а сам он о своей пропаже не узнает и переспрашивать не станет.
+    if (!this.rooms.leave(peer)) {
+      // За комнатой он уже не числится: либо вернулся новым сокетом и занял своё
+      // место, либо комната успела закрыться. Сообщать об уходе некому и нечего.
+      this.logger.log(`peer ${peer.id} disconnected in "${peer.room}" (already out of the room)`);
+      return;
+    }
     client.to(roomKey(peer.room)).emit('peer-left', { peerId: peer.id });
     this.logger.log(`peer ${peer.id} left "${peer.room}"`);
   }
@@ -232,6 +246,13 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ): Promise<Ack<{ id: string }>> {
     const peer = this.peers.get(client.id);
     if (!peer) return fail('no-peer');
+    // Слушатель отдавать не вправе — и это единственное место, где такой запрет
+    // вообще что-то стоит: клиент у него свой, и «не показывать кнопку» ничего
+    // не запирает. Комнату он при этом слушает как все.
+    if (peer.listen) {
+      this.logger.warn(`produce refused for ${peer.id}: listen-only pass`);
+      return fail('listen-only');
+    }
     const transport = this.transportOf(peer, payload?.transportId);
     if (!transport) return fail('no-transport');
     const kind = payload?.kind === 'video' ? 'video' : payload?.kind === 'audio' ? 'audio' : null;

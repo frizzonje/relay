@@ -34,5 +34,10 @@ export default async function InvitePage({
   const { l } = await searchParams;
   const label = typeof l === 'string' && l.trim() ? l.trim().slice(0, 32) : payload.slug;
 
-  return <GuestStage slug={payload.slug} label={label} exp={payload.exp} />;
+  // `listen` — часть подписанного токена, а не параметр адреса: приглашение в
+  // канал закрытого сервера даёт слышать, но не говорить (пароля, на котором
+  // этот канал держится, ссылка не раздаёт). Правкой URL это не снимается, а
+  // соврать самому себе клиент может только себе же во вред: медиасервер и
+  // собеседники сверяются с сервером, а не с этой страницей.
+  return <GuestStage slug={payload.slug} label={label} exp={payload.exp} listen={payload.listen} />;
 }

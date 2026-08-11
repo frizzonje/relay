@@ -16,7 +16,10 @@ import { Icon } from '@/components/ui/icon';
 import { getSocket } from '@/lib/socket';
 import { useT } from '@/lib/i18n';
 
-type InviteState = { phase: 'loading' } | { phase: 'ready'; url: string } | { phase: 'error' };
+type InviteState =
+  | { phase: 'loading' }
+  | { phase: 'ready'; url: string; listen: boolean }
+  | { phase: 'error' };
 
 /**
  * Модалка «Пригласить по ссылке»: запрашивает у сервера гостевой токен на
@@ -48,7 +51,7 @@ export function InviteDialog({
       clearTimeout(fallback);
       if (res?.ok) {
         const url = `${window.location.origin}/invite/${res.token}?l=${encodeURIComponent(target.label)}`;
-        setState({ phase: 'ready', url });
+        setState({ phase: 'ready', url, listen: res.listen });
       } else {
         setState({ phase: 'error' });
       }
@@ -105,6 +108,16 @@ export function InviteDialog({
               {t('invite.dialog.copy')}
             </Button>
           </div>
+        )}
+
+        {/* Канал закрытого сервера раздаёт по ссылке только право слушать —
+            сказать об этом надо ДО того, как ссылку отправят, иначе гостя ждёт
+            сюрприз, а пригласившего — вопрос «почему меня не слышно». */}
+        {state.phase === 'ready' && state.listen && (
+          <p className="flex items-start gap-2 rounded-lg border border-line bg-bg-elev px-3 py-2.5 text-[12px] leading-snug text-text-muted">
+            <Icon name="headphones" className="mt-px shrink-0 text-[15px]" />
+            {t('invite.dialog.listen')}
+          </p>
         )}
 
         <p className="text-[11px] leading-snug text-text-muted">{t('invite.dialog.note')}</p>

@@ -5,7 +5,13 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Icon } from '@/components/ui/icon';
 import { cn } from '@/lib/utils';
 import { avatarGradient } from '@/lib/avatar';
-import { clearFocus, toggleFocus, setPeerVolume, setPeerScreenVolume } from '@/lib/voice';
+import {
+  clearFocus,
+  toggleFocus,
+  kickGuest,
+  setPeerVolume,
+  setPeerScreenVolume,
+} from '@/lib/voice';
 import { useAudioUnlockStore } from '@/stores/audio-unlock';
 import { useVoiceStore, type TileNet, type VoiceTile } from '@/stores/voice';
 import { useDismiss } from '@/lib/use-dismiss';
@@ -308,6 +314,9 @@ export const VideoTile = memo(function VideoTile({
   const wasScreen = useRef(false);
   const t = useT();
   const micOn = useVoiceStore((s) => s.micOn);
+  // Мы сами слушатель: своя плитка тогда подписана наушниками, а не молчащим
+  // микрофоном (выключать его было нечем).
+  const listenOnly = useVoiceStore((s) => s.listenOnly);
   // Обводка «говорит сейчас»: булев селектор — плитка перерисуется только на
   // смене состояния, а не на каждый тик опроса уровня.
   const speaking = useVoiceStore((s) => s.speakingIds.includes(tile.id));
@@ -680,7 +689,15 @@ export const VideoTile = memo(function VideoTile({
       <div className="absolute bottom-2 left-2 z-[2] flex items-center gap-1.5 rounded-[8px] bg-black/55 px-2.5 py-1 text-[13px] font-semibold text-white backdrop-blur-[6px]">
         {!tile.isLocal && tile.net && <SignalBars net={tile.net} />}
         {tile.name}
-        {tile.isLocal && !micOn && <Icon name="mic-off" className="h-3.5 w-3.5 text-danger" />}
+        {tile.isLocal && !micOn && !listenOnly && (
+          <Icon name="mic-off" className="h-3.5 w-3.5 text-danger" />
+        )}
+        {/* Слушатель молчит не потому, что выключил микрофон, — говорить в этом
+            канале ему нечем. Наушники вместо перечёркнутого микрофона: свою
+            плитку узнаём по listenOnly, чужую — по флагу из presence. */}
+        {(tile.listen || (tile.isLocal && listenOnly)) && (
+          <Icon name="headphones" className="h-3.5 w-3.5 text-text-dim" title={t('tile.listen')} />
+        )}
       </div>
 
       {/* Предупреждение о своём аплинке: в mesh исходящий канал — частое узкое
@@ -733,11 +750,29 @@ export const VideoTile = memo(function VideoTile({
           className="absolute z-[6] w-56 rounded-lg border border-white/10 bg-bg-elev/95 p-3 shadow-[0_12px_40px_rgba(0,0,0,0.6)] backdrop-blur"
         >
           {menu === 'voice' ? (
-            <VolumeSlider
-              label={t('tile.volume.voice')}
-              value={tile.volume ?? 1}
-              onChange={(v) => setPeerVolume(tile.id, v)}
-            />
+            <>
+              <VolumeSlider
+                label={t('tile.volume.voice')}
+                value={tile.volume ?? 1}
+                onChange={(v) => setPeerVolume(tile.id, v)}
+              />
+              {/* Гостя из этого же меню можно и выгнать: со сцены сайдбар не
+                  виден (а на мобиле и подавно), и искать список участников,
+                  когда надо прямо сейчас, — не то, чем стоит заниматься. */}
+              {tile.guest && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    closeMenu();
+                    kickGuest(tile.id, tile.name);
+                  }}
+                  className="mt-2.5 flex w-full items-center gap-2 rounded-lg border-t border-line-strong px-1 pt-2.5 text-left text-[13px] font-semibold text-text-muted outline-none transition hover:text-danger focus-visible:text-danger"
+                >
+                  <Icon name="user-x" className="text-[15px]" />
+                  {t('tile.kick')}
+                </button>
+              )}
+            </>
           ) : (
             <VolumeSlider
               label={t('tile.volume.screen')}

@@ -176,7 +176,7 @@ describe('подключение', () => {
   it('протухший гостевой токен — не пропуск: при заданном пароле сайта отключают', () => {
     process.env.SITE_PASSWORD = 'секрет';
     const { gw, server } = makeGateway();
-    const { token } = issueGuestToken('voice-obshchii', -1000);
+    const { token } = issueGuestToken('voice-obshchii', { ttlMs: -1000 });
     const sock = server.connect({ auth: { guest: token } });
     gw.handleConnection(asSocket(sock));
     expect(sock.disconnected).toBe(true);
@@ -1005,6 +1005,186 @@ describe('invite-create', () => {
       ok: false,
       error: 'forbidden',
     });
+  });
+
+  it('ссылка в открытый канал раздаёт голос, в закрытый — только слух', async () => {
+    const { gw, server } = makeGateway();
+    const owner = connect(gw, server, { id: 'owner', clientId: 'dev' });
+    await gw.handleServerCreate(asSocket(owner), { id: 'srv', name: 'тайный', password: 'п' });
+    gw.handleChannelCreate(asSocket(owner), {
+      serverId: 'srv',
+      type: 'voice',
+      name: 'тайный эфир',
+    });
+
+    const open = gw.handleInviteCreate(asSocket(owner), { room: 'voice-obshchii' });
+    expect(open).toMatchObject({ ok: true, listen: false });
+    if (open.ok) expect(verifyGuestToken(open.token)?.listen).toBe(false);
+
+    // Пароль запирает и голос: приглашающий раздаёт по ссылке ровно то, что
+    // имеет сам, а пароля он не отдавал.
+    const locked = gw.handleInviteCreate(asSocket(owner), { room: 'тайный-эфир' });
+    expect(locked).toMatchObject({ ok: true, listen: true });
+    if (locked.ok) expect(verifyGuestToken(locked.token)?.listen).toBe(true);
+  });
+});
+
+// ── Слушатель и «выгнать гостя» ───────────────────────────────────────────
+
+describe('гость-слушатель', () => {
+  it('в presence он помечен слушателем, а микрофон у него выключен', () => {
+    const { gw, server } = makeGateway();
+    const a = connect(gw, server, { id: 'a' });
+    const { token } = issueGuestToken('voice-obshchii', { listen: true });
+    const guest = connect(gw, server, { id: 'guest', guest: token });
+    gw.handleJoin(asSocket(a), { room: 'voice-obshchii', name: 'A' });
+    gw.handleJoin(asSocket(guest), { room: 'voice-obshchii', name: 'Гость' });
+    settle();
+
+    expect(a.last('voice-presence')).toMatchObject({
+      'voice-obshchii': [
+        { id: 'a', micOn: true },
+        { id: 'guest', guest: true, listen: true, micOn: false },
+      ],
+    });
+    // Даже если клиент шлёт «микрофон включён»: включать ему нечего, и врать
+    // об этом остальным — худшее, что тут можно сделать.
+    gw.handleMediaUpdate(asSocket(guest), { micOn: true, camOn: false, screenOn: false });
+    settle();
+    expect(
+      (a.last('voice-presence') as Record<string, { micOn: boolean }[]>)['voice-obshchii'][1],
+    ).toMatchObject({ micOn: false });
+  });
+
+  it('остальные узнают о его правах вместе с ним самим', () => {
+    const { gw, server } = makeGateway();
+    const a = connect(gw, server, { id: 'a' });
+    gw.handleJoin(asSocket(a), { room: 'voice-obshchii', name: 'A' });
+    const { token } = issueGuestToken('voice-obshchii', { listen: true });
+    const guest = connect(gw, server, { id: 'guest', guest: token });
+    a.clear();
+    gw.handleJoin(asSocket(guest), { room: 'voice-obshchii', name: 'Гость' });
+    expect(a.last('peer-joined')).toEqual({
+      id: 'guest',
+      name: 'Гость',
+      guest: true,
+      listen: true,
+    });
+  });
+
+  it('пропуск в медиасервер уходит с клеймом: отдавать дорожки ему там не дадут', async () => {
+    process.env.SFU_URL = 'https://relay.example/sfu';
+    process.env.SFU_SECRET = 'секрет-медиасервера';
+    const { gw, server } = makeGateway();
+    const { token } = issueGuestToken('voice-obshchii-sfu', { listen: true });
+    const guest = connect(gw, server, { guest: token });
+    const res = await gw.handleSfuToken(asSocket(guest), { room: 'voice-obshchii-sfu' });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const claims = JSON.parse(
+      Buffer.from(res.token.split('.')[1], 'base64url').toString('utf8'),
+    ) as { listen?: boolean };
+    expect(claims.listen).toBe(true);
+  });
+});
+
+describe('guest-kick', () => {
+  /** Гость в эфире общего канала + обычный участник рядом. */
+  function withGuest(opts: { listen?: boolean } = {}) {
+    const { gw, server } = makeGateway();
+    const a = connect(gw, server, { id: 'a', clientId: 'dev-a' });
+    const { token } = issueGuestToken('voice-obshchii', opts);
+    const guest = connect(gw, server, { id: 'guest', clientId: 'dev-guest', guest: token });
+    gw.handleJoin(asSocket(a), { room: 'voice-obshchii', name: 'A' });
+    gw.handleJoin(asSocket(guest), { room: 'voice-obshchii', name: 'Гость' });
+    settle();
+    server.clearAll();
+    return { gw, server, a, guest, token };
+  }
+
+  it('любой не-гость выгоняет гостя: тому говорят прямо, остальным — как об уходе', () => {
+    const { gw, a, guest } = withGuest();
+    expect(gw.handleGuestKick(asSocket(a), { id: 'guest' })).toEqual({ ok: true });
+    expect(guest.last('kicked')).toEqual({ room: 'voice-obshchii' });
+    expect(a.last('peer-left')).toEqual({ id: 'guest' });
+    expect(guest.rooms.has('voice-obshchii')).toBe(false);
+  });
+
+  it('по той же ссылке он не возвращается, пока не выйдет пауза', () => {
+    const { gw, server, a } = withGuest();
+    gw.handleGuestKick(asSocket(a), { id: 'guest' });
+    const { token } = issueGuestToken('voice-obshchii');
+
+    // Новая вкладка, новый сокет — но то же устройство.
+    const again = server.connect({
+      id: 'guest-2',
+      auth: { clientId: 'dev-guest', guest: token },
+    });
+    gw.handleConnection(asSocket(again));
+    expect(again.last('kicked')).toEqual({ room: 'voice-obshchii' });
+    expect(again.got('voice-presence')).toBe(false);
+    // И дверь с другой стороны: `join` сокетом, открытым до исключения.
+    gw.handleJoin(asSocket(again), { room: 'voice-obshchii', name: 'Гость' });
+    expect(again.rooms.has('voice-obshchii')).toBe(false);
+  });
+
+  it('час прошёл — пускают снова', () => {
+    const { gw, server, a } = withGuest();
+    gw.handleGuestKick(asSocket(a), { id: 'guest' });
+    vi.advanceTimersByTime(60 * 60 * 1000 + 1000);
+    const { token } = issueGuestToken('voice-obshchii');
+    const again = server.connect({ id: 'guest-3', auth: { clientId: 'dev-guest', guest: token } });
+    gw.handleConnection(asSocket(again));
+    expect(again.got('kicked')).toBe(false);
+    expect(again.got('voice-presence')).toBe(true);
+  });
+
+  it('гость гостя не выгоняет', () => {
+    const { gw, server, guest } = withGuest();
+    const { token } = issueGuestToken('voice-obshchii');
+    const other = connect(gw, server, { id: 'guest-b', clientId: 'dev-b', guest: token });
+    gw.handleJoin(asSocket(other), { room: 'voice-obshchii', name: 'Второй' });
+    expect(gw.handleGuestKick(asSocket(other), { id: 'guest' })).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+    expect(guest.got('kicked')).toBe(false);
+  });
+
+  it('не-гостя не выгнать вовсе, а вышедшего — уже не за что', () => {
+    const { gw, a, guest } = withGuest();
+    expect(gw.handleGuestKick(asSocket(a), { id: 'a' })).toEqual({
+      ok: false,
+      error: 'not-found',
+    });
+    gw.handleLeave(asSocket(guest));
+    expect(gw.handleGuestKick(asSocket(a), { id: 'guest' })).toEqual({
+      ok: false,
+      error: 'not-found',
+    });
+  });
+
+  it('из закрытого канала выгоняет только тот, кто ввёл пароль', async () => {
+    const { gw, server } = makeGateway();
+    const owner = connect(gw, server, { id: 'owner', clientId: 'dev-owner' });
+    await gw.handleServerCreate(asSocket(owner), { id: 'srv', name: 'тайный', password: 'п' });
+    gw.handleChannelCreate(asSocket(owner), {
+      serverId: 'srv',
+      type: 'voice',
+      name: 'тайный эфир',
+    });
+    const { token } = issueGuestToken('тайный-эфир', { listen: true });
+    const guest = connect(gw, server, { id: 'guest', clientId: 'dev-guest', guest: token });
+    gw.handleJoin(asSocket(guest), { room: 'тайный-эфир', name: 'Гость' });
+    settle();
+
+    // Канала он не видит — значит и того, кто в нём сидит, для него нет.
+    const stranger = connect(gw, server, { id: 'stranger', clientId: 'dev-x' });
+    expect(gw.handleGuestKick(asSocket(stranger), { id: 'guest' })).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+    expect(gw.handleGuestKick(asSocket(owner), { id: 'guest' })).toEqual({ ok: true });
   });
 });
 

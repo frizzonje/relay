@@ -847,6 +847,10 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
 
     join(_room, ticket) {
       if (!ticket) return; // без пропуска в медиасервер нам нечего делать
+      // Повторный вход без выхода: прежний сокет надо снять самим, иначе он
+      // остаётся жить безымянным — со своими транспортами и нашим микрофоном в
+      // комнате, из которой мы уже ушли, и снять его будет уже нечем.
+      if (sock) teardown();
       // `url === '/'` — медиасервер за тем же Caddy, что и страница; в дев-режиме
       // адрес api задан явно, тогда идём туда же.
       const base =
@@ -919,6 +923,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     },
 
     leave() {
+      if (!sock) return; // в медиасервер мы не ходили — разбирать нечего
       teardown();
       host.setUplink('ok');
     },

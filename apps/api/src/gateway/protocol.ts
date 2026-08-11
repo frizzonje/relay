@@ -157,6 +157,11 @@ export interface InviteCreatePayload {
   room?: unknown;
 }
 
+/** Кого выгоняем: socket-id гостя (он же его id в presence и на плитке). */
+export interface GuestKickPayload {
+  id?: unknown;
+}
+
 export interface SfuTokenPayload {
   room?: unknown;
   name?: unknown;
@@ -195,8 +200,15 @@ export type ServerStatsResult =
   | { ok: false };
 
 export type InviteCreateResult =
-  | { ok: true; token: string; exp: number }
+  | { ok: true; token: string; exp: number; listen: boolean }
   | { ok: false; error: 'not-found' | 'forbidden' };
+
+/**
+ * Отказ в «выгнать» тоже обязан быть внятным: not-found — гость уже вышел сам
+ * (частый случай: кнопку жмут вдогонку), forbidden — канал этому сокету не
+ * виден либо он сам гость.
+ */
+export type GuestKickResult = { ok: true } | { ok: false; error: 'not-found' | 'forbidden' };
 
 export type SfuTokenResult =
   | { ok: true; token: string; exp: number; url: string }
@@ -240,4 +252,6 @@ export interface VoicePresenceEntry {
   deafened: boolean;
   transport: 'p2p' | 'sfu';
   guest?: boolean;
+  /** Гость-слушатель: канал под паролем, право говорить ссылка не раздаёт. */
+  listen?: boolean;
 }

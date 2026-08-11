@@ -270,6 +270,15 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       if (track === screenAudio) return;
       pc.addTrack(track, localStream);
     });
+    // Слушатель (гость закрытого канала) своих дорожек не отдаёт вовсе — а без
+    // единой дорожки соединение не собирается: в offer не окажется ни одной
+    // m-строки, и negotiationneeded не сработает даже разок. Просим приём
+    // явно — двумя recvonly-линиями под голос и картинку. Их же добирает
+    // браузер сам, когда собеседник добавляет вторую дорожку (звук показа).
+    if (localStream.getTracks().length === 0) {
+      pc.addTransceiver('audio', { direction: 'recvonly' });
+      pc.addTransceiver('video', { direction: 'recvonly' });
+    }
     // Камера или демонстрация уже включены — новый собеседник сразу получает
     // картинку. Только когда инициатор МЫ: наш offer унесёт её без доп. круга.
     // Если же мы отвечаем на чужой offer, добавление видео здесь потребовало бы
@@ -909,6 +918,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     },
 
     leave() {
+      if (!room) return; // нас тут и не было — выходить нечего
       peers.forEach((peer) => {
         if (peer.failTimer) clearTimeout(peer.failTimer);
         peer.pc.close();

@@ -18,6 +18,11 @@ export interface Peer {
   name: string;
   socketId: string;
   room: string;
+  /**
+   * Слушатель: принимает чужие дорожки, но своих не отдаёт (`produce` откажет).
+   * Право приезжает клеймом пропуска — см. ../token.ts.
+   */
+  listen: boolean;
   rtpCapabilities?: types.RtpCapabilities;
   transports: Map<string, types.WebRtcTransport>;
   producers: Map<string, types.Producer>;
@@ -78,8 +83,15 @@ export class RoomsService {
     return { router: room.router, peer: full };
   }
 
-  /** Убирает участника и всё, что он держал. Идемпотентно. */
-  leave(peer: Peer): void {
+  /**
+   * Убирает участника и всё, что он держал. Идемпотентно.
+   *
+   * Возвращает, действительно ли комната его лишилась. `false` значит, что
+   * место за этим id уже занято его же новой сессией (быстрый перезаход), и
+   * снаружи это ВАЖНО: сказать в такой момент комнате «он ушёл» — значит
+   * выкинуть у всех остальных живого участника, который только что вошёл.
+   */
+  leave(peer: Peer): boolean {
     const room = this.rooms.get(peer.room);
     // Транспорт при закрытии уносит с собой свои producer'ы и consumer'ы —
     // отдельно их закрывать не нужно, достаточно транспортов.
@@ -87,15 +99,17 @@ export class RoomsService {
     peer.transports.clear();
     peer.producers.clear();
     peer.consumers.clear();
-    if (!room) return;
+    if (!room) return false;
     // Только если это всё ещё он: при быстром реконнекте место мог занять
     // новый объект того же участника, и затирать его нельзя.
-    if (room.peers.get(peer.id) === peer) room.peers.delete(peer.id);
+    if (room.peers.get(peer.id) !== peer) return false;
+    room.peers.delete(peer.id);
     if (room.peers.size === 0) {
       room.router.close();
       this.rooms.delete(room.id);
       this.logger.log(`room "${room.id}" closed (empty)`);
     }
+    return true;
   }
 
   peers(roomId: string): Peer[] {

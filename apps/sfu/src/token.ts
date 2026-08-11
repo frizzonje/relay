@@ -22,6 +22,12 @@ export interface SfuClaims {
   peerId: string;
   /** Отображаемое имя (для presence внутри sfu, не для авторизации). */
   name: string;
+  /**
+   * Слушатель: пропуск даёт право принимать чужие дорожки, но не отдавать свои
+   * (гость по инвайту в канал закрытого сервера). Кто именно слушатель, решает
+   * api — здесь это просто клейм, по которому `produce` получает отказ.
+   */
+  listen: boolean;
   /** Unix-мс, после которых токен мёртв. */
   exp: number;
 }
@@ -55,9 +61,9 @@ export function verifySfuToken(token: unknown): SfuClaims | null {
     return null;
   }
   if (typeof claims !== 'object' || claims === null) return null;
-  const { room, peerId, name, exp } = claims as Record<string, unknown>;
+  const { room, peerId, name, listen, exp } = claims as Record<string, unknown>;
   if (typeof room !== 'string' || !room) return null;
   if (typeof peerId !== 'string' || !peerId) return null;
   if (typeof exp !== 'number' || !Number.isFinite(exp) || exp < Date.now()) return null;
-  return { room, peerId, name: typeof name === 'string' ? name : '', exp };
+  return { room, peerId, name: typeof name === 'string' ? name : '', listen: listen === true, exp };
 }

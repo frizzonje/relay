@@ -91,7 +91,7 @@ describe('authGate', () => {
 
   it('протухший гостевой токен не открывает и конфиг', () => {
     process.env.SITE_PASSWORD = 'секрет';
-    const { token } = issueGuestToken('voice-obshchii', -1000);
+    const { token } = issueGuestToken('voice-obshchii', { ttlMs: -1000 });
     const t = reqres('/api/config', { authorization: `Bearer ${token}` });
     authGate(t.req, t.res, t.next);
     expect(t.passed()).toBe(false);

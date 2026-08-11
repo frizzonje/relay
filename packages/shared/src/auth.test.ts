@@ -59,11 +59,43 @@ describe('issueToken / verifyToken (Web Crypto)', () => {
 describe('issueGuestToken / verifyGuestToken', () => {
   it('round-trip: токен возвращает слаг и срок (в т.ч. кириллица в слаге)', async () => {
     const token = await issueGuestToken('переговорка-1', PASS);
-    expect(token).toMatch(/^g1\.[A-Za-z0-9_-]+\.\d+\.[A-Za-z0-9_-]+$/);
+    expect(token).toMatch(/^g2\.[A-Za-z0-9_-]+\.talk\.\d+\.[A-Za-z0-9_-]+$/);
     const payload = await verifyGuestToken(token, PASS);
     expect(payload?.slug).toBe('переговорка-1');
+    expect(payload?.listen).toBe(false);
     expect(payload?.exp).toBeGreaterThan(Date.now());
     expect(payload!.exp - Date.now()).toBeLessThanOrEqual(GUEST_TOKEN_TTL_MS);
+  });
+
+  it('режим «только слушать» — часть подписанного тела, а не параметр ссылки', async () => {
+    const token = await issueGuestToken('voice-obshchii', PASS, { listen: true });
+    expect((await verifyGuestToken(token, PASS))?.listen).toBe(true);
+    // Подменить режим в готовой ссылке нельзя: подпись накрывает и его.
+    const [, slug, , exp, sig] = token.split('.');
+    expect(await verifyGuestToken(`g2.${slug}.talk.${exp}.${sig}`, PASS)).toBeNull();
+  });
+
+  it('ссылки прошлого формата (g1) продолжают пускать — и всегда с голосом', async () => {
+    // Токен, выданный до появления режима: подпись без него.
+    const exp = Date.now() + 60_000;
+    const slug = btoa('voice-obshchii').replace(/=+$/, '');
+    const prefix = `g1.${slug}.${exp}`;
+    const key = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode('relay-guest-v1:' + PASS),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    );
+    const raw = new Uint8Array(
+      await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(prefix)),
+    );
+    let bin = '';
+    for (const b of raw) bin += String.fromCharCode(b);
+    const sig = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const payload = await verifyGuestToken(`${prefix}.${sig}`, PASS);
+    expect(payload?.slug).toBe('voice-obshchii');
+    expect(payload?.listen).toBe(false);
   });
 
   it('смена пароля отзывает инвайт', async () => {
@@ -72,14 +104,14 @@ describe('issueGuestToken / verifyGuestToken', () => {
   });
 
   it('просроченный токен → null', async () => {
-    const token = await issueGuestToken('voice-obshchii', PASS, -1000);
+    const token = await issueGuestToken('voice-obshchii', PASS, { ttlMs: -1000 });
     expect(await verifyGuestToken(token, PASS)).toBeNull();
   });
 
   it('подмена слага ломает подпись', async () => {
     const token = await issueGuestToken('voice-obshchii', PASS);
-    const [, , exp, sig] = token.split('.');
-    const forged = `g1.${btoa('other-room').replace(/=+$/, '')}.${exp}.${sig}`;
+    const [, , , exp, sig] = token.split('.');
+    const forged = `g2.${btoa('other-room').replace(/=+$/, '')}.talk.${exp}.${sig}`;
     expect(await verifyGuestToken(forged, PASS)).toBeNull();
   });
 

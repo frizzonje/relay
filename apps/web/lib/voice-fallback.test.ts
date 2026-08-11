@@ -43,10 +43,21 @@ vi.mock('sonner', () => ({
 vi.mock('@/lib/voice/sfu', () => ({
   createSfuTransport: (host: TransportHost) => {
     sfuHost = host;
+    // Выход из комнаты, в которую не входили, — no-op, как и у настоящего
+    // транспорта (там разбирать нечего: сокета нет). Иначе журнал показывал бы
+    // выходы, которых транспорт совершить не мог.
+    let inRoom = false;
     return {
       init: () => {},
-      join: () => void sfuCalls.push('join'),
-      leave: () => void sfuCalls.push('leave'),
+      join: () => {
+        inRoom = true;
+        sfuCalls.push('join');
+      },
+      leave: () => {
+        if (!inRoom) return;
+        inRoom = false;
+        sfuCalls.push('leave');
+      },
       publishVideo: () => {},
       unpublishVideo: () => {},
       publishScreen: () => {},

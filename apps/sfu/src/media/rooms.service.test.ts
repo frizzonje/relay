@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 const join = (room: string, id: string, name = id) =>
-  rooms.join(room, { id, name, socketId: `sock-${id}`, room });
+  rooms.join(room, { id, name, socketId: `sock-${id}`, room, listen: false });
 
 describe('комната и роутер', () => {
   it('первый вошедший заводит роутер, второй попадает в тот же', async () => {

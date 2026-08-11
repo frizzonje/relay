@@ -56,6 +56,10 @@ export interface VoiceTile {
    * сырые метрики для тултипа. undefined — пока не измерено / своя плитка.
    */
   net?: TileNet;
+  /** Собеседник пришёл по инвайт-ссылке (его можно выгнать — см. kickGuest). */
+  guest?: boolean;
+  /** Гость-слушатель: слышит канал, но своего медиа не отдаёт (канал под паролем). */
+  listen?: boolean;
 }
 
 /**
@@ -168,6 +172,14 @@ interface VoiceState {
   pushToTalk: boolean;
   /** Здоровье своего аплинка (см. UplinkStatus) — предупреждение на своей плитке. */
   uplink: UplinkStatus;
+  /**
+   * Мы сами — слушатель: пришли по инвайту в канал закрытого сервера. Слышим
+   * всех, но своего медиа не отдаём, поэтому кнопок микрофона/камеры/экрана в
+   * панели нет вовсе — они бы обещали то, чего не будет.
+   */
+  listenOnly: boolean;
+  /** Нас выгнали из эфира — гостевая сцена показывает это вместо формы входа. */
+  kicked: boolean;
 
   setTiles: (tiles: VoiceTile[]) => void;
   setMedia: (m: Partial<Pick<VoiceState, 'micOn' | 'camOn' | 'screenOn' | 'screenMode'>>) => void;
@@ -188,6 +200,8 @@ interface VoiceState {
   setNoiseSuppression: (v: boolean) => void;
   setPushToTalk: (v: boolean) => void;
   setUplink: (v: UplinkStatus) => void;
+  setListenOnly: (v: boolean) => void;
+  setKicked: (v: boolean) => void;
 }
 
 export const useVoiceStore = create<VoiceState>((set) => ({
@@ -216,6 +230,8 @@ export const useVoiceStore = create<VoiceState>((set) => ({
   noiseSuppression: true,
   pushToTalk: false,
   uplink: 'ok',
+  listenOnly: false,
+  kicked: false,
 
   setTiles: (tiles) => set({ tiles }),
   setMedia: (m) => set(m),
@@ -236,4 +252,6 @@ export const useVoiceStore = create<VoiceState>((set) => ({
   setNoiseSuppression: (v) => set({ noiseSuppression: v }),
   setPushToTalk: (v) => set({ pushToTalk: v }),
   setUplink: (v) => set({ uplink: v }),
+  setListenOnly: (v) => set({ listenOnly: v }),
+  setKicked: (v) => set({ kicked: v }),
 }));

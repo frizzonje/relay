@@ -349,6 +349,10 @@ export function Controls() {
   const screenMode = useVoiceStore((s) => s.screenMode);
   const speakersOn = useVoiceStore((s) => s.speakersOn);
   const ping = useVoiceStore((s) => s.ping);
+  // Слушатель (гость закрытого канала): микрофона, камеры и показа экрана у
+  // него нет вовсе — кнопки не прячем «на всякий случай», а убираем: кнопка,
+  // которая ничего не сделает, объясняет хуже, чем её отсутствие с подписью.
+  const listenOnly = useVoiceStore((s) => s.listenOnly);
 
   if (view !== 'voice') return null;
 
@@ -383,20 +387,34 @@ export function Controls() {
           </span>
         )}
       </div>
-      <MicControl micOn={micOn} />
+      {listenOnly ? (
+        <span
+          title={t('controls.listenOnly.title')}
+          className="flex items-center gap-1.5 rounded-[10px] border border-line bg-bg-active px-3 py-2 text-[12px] font-semibold text-text-muted"
+        >
+          <Icon name="headphones" className="text-[16px]" />
+          {t('controls.listenOnly')}
+        </span>
+      ) : (
+        <MicControl micOn={micOn} />
+      )}
       <SpeakerControl speakersOn={speakersOn} />
-      <CtlBtn
-        title={t(camOn ? 'controls.cam.off' : 'controls.cam.on')}
-        icon={camOn ? 'video' : 'video-off'}
-        off={!camOn}
-        onClick={() => void toggleCamera()}
-      />
-      <CtlBtn
-        title={t(screenOn ? 'controls.screen.stop' : 'controls.screen.start')}
-        icon={screenOn ? 'screen-share-off' : 'screen-share'}
-        live={screenOn}
-        onClick={() => void toggleScreen()}
-      />
+      {!listenOnly && (
+        <>
+          <CtlBtn
+            title={t(camOn ? 'controls.cam.off' : 'controls.cam.on')}
+            icon={camOn ? 'video' : 'video-off'}
+            off={!camOn}
+            onClick={() => void toggleCamera()}
+          />
+          <CtlBtn
+            title={t(screenOn ? 'controls.screen.stop' : 'controls.screen.start')}
+            icon={screenOn ? 'screen-share-off' : 'screen-share'}
+            live={screenOn}
+            onClick={() => void toggleScreen()}
+          />
+        </>
+      )}
       {screenOn && (
         <SegToggle>
           {(['quality', 'fps'] as const).map((mode) => (

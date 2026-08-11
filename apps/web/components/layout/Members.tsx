@@ -25,6 +25,7 @@ export function Members() {
   const speakingIds = useVoiceStore((s) => s.speakingIds);
   const micOn = useVoiceStore((s) => s.micOn);
   const myId = useVoiceStore((s) => s.myId);
+  const listenOnly = useVoiceStore((s) => s.listenOnly);
   if (view !== 'voice') return null;
 
   return (
@@ -39,6 +40,9 @@ export function Members() {
             const speaking = speakingIds.includes(tile.id);
             // Мут знаем достоверно только для своей плитки (микрофон в сторе).
             const selfMuted = (tile.isLocal || tile.id === myId) && !micOn;
+            // Гость, позванный в закрытый канал: он не «в эфире молча», он
+            // слушает — говорить в этом канале ему нечем (см. VoicePeer.listen).
+            const listener = tile.listen === true || (tile.isLocal && listenOnly);
             return (
               <motion.div
                 key={tile.id}
@@ -67,20 +71,32 @@ export function Members() {
                     )}
                   >
                     {t(
-                      selfMuted
-                        ? 'members.state.muted'
-                        : speaking
-                          ? 'members.state.speaking'
-                          : 'members.state.live',
+                      listener
+                        ? 'members.state.listening'
+                        : selfMuted
+                          ? 'members.state.muted'
+                          : speaking
+                            ? 'members.state.speaking'
+                            : 'members.state.live',
                     )}
                   </div>
                 </div>
-                {selfMuted && (
+                {/* У слушателя микрофона нет вовсе — красный перечёркнутый
+                    значок обещал бы, что он вот-вот заговорит. */}
+                {listener ? (
                   <Icon
-                    name="mic-off"
-                    className="shrink-0 text-[15px] text-danger/85"
-                    title={t('members.mic.off')}
+                    name="headphones"
+                    className="shrink-0 text-[15px] text-text-muted"
+                    title={t('members.listen.title')}
                   />
+                ) : (
+                  selfMuted && (
+                    <Icon
+                      name="mic-off"
+                      className="shrink-0 text-[15px] text-danger/85"
+                      title={t('members.mic.off')}
+                    />
+                  )
                 )}
               </motion.div>
             );
