@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
 import { serverGradient, serverInitials } from '@/lib/server-visual';
 import { unlockServer } from '@/lib/servers';
 import { useServersStore } from '@/stores/servers';
@@ -57,8 +58,9 @@ export function UnlockServerDialog() {
               {target?.emoji ?? serverInitials(target?.name ?? '')}
             </div>
             <div className="min-w-0">
-              <DialogTitle className="truncate">
-                🔒 {target?.name ?? t('sidebar.server.fallback')}
+              <DialogTitle className="flex items-center gap-1.5 truncate">
+                <Icon name="lock" className="shrink-0 text-[15px] text-text-muted" />
+                <span className="truncate">{target?.name ?? t('sidebar.server.fallback')}</span>
               </DialogTitle>
               <DialogDescription>{t('unlockServer.description')}</DialogDescription>
             </div>
@@ -68,9 +70,7 @@ export function UnlockServerDialog() {
         <form onSubmit={submit} className="flex flex-col gap-3">
           <div>
             <div className="flex items-center gap-2 rounded-lg border border-black/40 bg-bg-deep/70 px-3 focus-within:border-accent focus-within:ring-1 focus-within:ring-accent/60">
-              <span aria-hidden className="text-[15px] leading-none text-text-muted">
-                🔒
-              </span>
+              <Icon name="lock" className="shrink-0 text-[15px] text-text-muted" />
               <input
                 type="password"
                 value={password}

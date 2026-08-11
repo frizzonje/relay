@@ -332,13 +332,14 @@ function ServerIcon({
         label={locked ? t('rail.server.locked', { name: server.name }) : server.name}
         serverId={server.id}
       />
-      {/* Бейдж-замок у закрытых серверов (пока не введён пароль) */}
+      {/* Бейдж-замок у закрытых серверов (пока не введён пароль) — той же формы,
+          что глобус у чужих хостов: оба говорят «сюда просто так не войти». */}
       {locked && (
         <span
           aria-hidden
-          className="pointer-events-none absolute -bottom-0.5 -right-0.5 grid h-[18px] w-[18px] place-items-center rounded-full border-2 border-bg-rail bg-bg-deep text-[9px] leading-none shadow"
+          className="pointer-events-none absolute -bottom-0.5 -right-0.5 grid h-[18px] w-[18px] place-items-center rounded-full border-2 border-bg-rail bg-bg-deep text-text-muted shadow"
         >
-          🔒
+          <Icon name="lock" className="text-[10px]" strokeWidth={2.2} />
         </span>
       )}
     </div>

@@ -182,9 +182,7 @@ export function CreateServerDialog({
               {t('createServer.password')}
             </label>
             <div className="flex items-center gap-2 rounded-lg border border-black/40 bg-bg-deep/70 px-3 focus-within:border-accent focus-within:ring-1 focus-within:ring-accent/60">
-              <span aria-hidden className="text-[15px] leading-none text-text-muted">
-                🔒
-              </span>
+              <Icon name="lock" className="shrink-0 text-[15px] text-text-muted" />
               <input
                 id="server-password"
                 type="password"
