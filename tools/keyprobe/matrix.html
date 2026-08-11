@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>relay key probe — matrix</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; padding: 24px; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 20px; opacity: .7; }
+  table { border-collapse: collapse; width: 100%; max-width: 1000px; }
+  th { text-align: left; font-weight: 600; border-bottom: 2px solid #8886; padding: 6px 12px 6px 0; }
+  td { padding: 6px 12px 6px 0; vertical-align: top; border-bottom: 1px solid #8884; }
+  .ok { color: #0a5; font-weight: 700; }
+  .no { color: #c22; font-weight: 700; }
+</style>
+</head>
+<body>
+<img src="/log?matrix:%20html%20parsed" alt="" width="1" height="1">
+<h1>relay — what this engine will actually store</h1>
+<p class="sub" id="ua"></p>
+<table>
+  <thead><tr><th>case</th><th>result</th><th>detail</th></tr></thead>
+  <tbody id="out"></tbody>
+</table>
+
+<script>
+// Матрица «что этот движок реально хранит». Обычная проба (index.html) отвечает
+// «да» или «зависло»; здесь нужен ответ, КАКОЙ вариант зависает, потому что от
+// него зависит устройство слоя 2.
+//
+// Каждый вариант гоняется в отдельном воркере: в WKWebView зависшая операция
+// IndexedDB блокирует поток вместе с таймерами, так что сторож на самой
+// странице не сработает — а воркер снаружи убивается, и матрица идёт дальше.
+//
+// Второй запуск (?second) ничего не пишет: он читает то, что легло в первый, —
+// это и есть проверка «переживает перезапуск приложения».
+
+const SECOND = location.search.indexOf('second') !== -1;
+// Порядок не случаен: первым идёт вариант, на котором стоит слой 2. Если
+// движок зависает, зависает он вместе с сетью, и следующие варианты уже не
+// отчитаются — значит первым должен идти тот, ответ про который нужен.
+const CASES = [
+  ['nonextractable', 'CryptoKey, NON-extractable, in an object'],
+  ['nonextractable-top', 'CryptoKey, NON-extractable, stored bare'],
+  ['extractable', 'CryptoKey, extractable, in an object'],
+  ['plain', 'plain object'],
+];
+const LIMIT_MS = 8000;
+const results = [];
+
+function beacon(s) { try { fetch('/log?' + encodeURIComponent(s)).catch(() => {}); } catch (e) {} }
+
+function show(name, verdict, detail) {
+  const tr = document.getElementById('out').insertRow();
+  tr.insertCell().textContent = name;
+  const v = tr.insertCell();
+  v.textContent = verdict;
+  v.className = verdict === 'works' ? 'ok' : 'no';
+  tr.insertCell().textContent = detail;
+}
+
+// Один вариант: воркер под сторожем. Сторож живёт на странице, поэтому его
+// таймер не зависает вместе с воркером.
+function runCase(mode, label, dbName) {
+  return new Promise((resolve) => {
+    const w = new Worker('/worker.js');
+    let lastStage = 'not started';
+    const finish = (verdict, detail) => {
+      clearTimeout(timer);
+      w.terminate();
+      beacon('  ' + label + ' -> ' + verdict + ' (' + detail + ')');
+      results.push([label, verdict, detail]);
+      show(label, verdict, detail);
+      resolve();
+    };
+    const timer = setTimeout(
+      () => finish('HANGS', 'no answer in ' + LIMIT_MS + ' ms, stuck at: ' + lastStage),
+      LIMIT_MS
+    );
+    w.onmessage = (e) => {
+      const m = e.data;
+      if (m.stage) { lastStage = m.stage; return; }
+      if (m.done) { finish(m.done.ok ? 'works' : 'wrong', m.done.detail); return; }
+      finish('error', m.error);
+    };
+    w.onerror = (e) => finish('error', 'worker failed: ' + (e.message || e.type));
+    w.postMessage({ db: dbName, mode, expectExisting: SECOND });
+  });
+}
+
+(async () => {
+  document.getElementById('ua').textContent = navigator.userAgent;
+  beacon('matrix start (' + (SECOND ? 'second launch: reading what was stored' : 'first launch: writing') + ')');
+  for (const [mode, label] of CASES) {
+    await runCase(mode, label, 'relay-matrix-' + mode);
+  }
+  beacon('matrix done');
+  fetch('/report', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      verdict: (SECOND ? 'MATRIX, second launch (read back)' : 'MATRIX, first launch (write)') +
+        ' — ' + results.filter((r) => r[1] === 'works').length + ' of ' + results.length + ' work',
+      rows: results.map((r) => [r[0], r[1] + ' — ' + r[2], r[1] === 'works']),
+    }),
+  }).catch(() => {});
+})();
+</script>
+</body>
+</html>

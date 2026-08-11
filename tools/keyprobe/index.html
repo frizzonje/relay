@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>relay key probe</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+         margin: 0; padding: 24px; }
+  h1 { font-size: 16px; margin: 0 0 16px; }
+  .verdict { font-size: 22px; font-weight: 700; padding: 12px 16px; border-radius: 8px;
+             margin-bottom: 16px; }
+  .pass { background: #0a5; color: #fff; }
+  .fail { background: #c22; color: #fff; }
+  table { border-collapse: collapse; width: 100%; max-width: 900px; }
+  td { padding: 4px 10px 4px 0; vertical-align: top; border-bottom: 1px solid #8884; }
+  td:first-child { white-space: nowrap; opacity: .7; }
+  .ok::before { content: "✓ "; color: #0a5; }
+  .no::before { content: "✗ "; color: #c22; }
+</style>
+</head>
+<body>
+<!-- Запрос из разметки, до всякого JS: разделяет «страница не дошла» и
+     «JS не выполнился». Разбор HTML отправляет его сам. -->
+<img src="/log?html%20parsed%20(no%20JS%20involved)" alt="" width="1" height="1">
+<h1>relay — identity key probe (1.0 stage 0)</h1>
+<div class="verdict" id="verdict">running…</div>
+<table id="out"></table>
+
+<script>
+// Проба под этап 0 плана 1.0: доживает ли до второго запуска приватный ключ,
+// который нельзя достать из движка.
+//
+// Слой 2 упирается ровно в это. Ключ обязан быть `extractable: false` —
+// иначе любой XSS уносит личность целиком, — а значит, его нельзя ни
+// сериализовать, ни положить в localStorage: наружу он не выходит по
+// построению. Единственное место, где такой объект живёт, — IndexedDB, куда
+// CryptoKey кладётся структурным клоном. Спецификация это разрешает; вопрос
+// не в ней, а в трёх webview, и нас в этих трёх уже кусали (getUserMedia в
+// WKWebView, профили H264 там же).
+//
+// Что проверяется, по порядку:
+//   1. движок умеет Ed25519 (иначе откат на ECDSA P-256 — он есть везде);
+//   2. неизвлекаемый CryptoKey переживает структурный клон в IndexedDB;
+//   3. после ПОЛНОГО перезапуска приложения ключ читается тот же самый;
+//   4. им можно подписать нонс, и подпись сходится с публичным ключом;
+//   5. вытащить приватный ключ наружу по-прежнему нельзя.
+//
+// Пункт 3 — единственный, ради которого пробу гоняют дважды: счётчик запусков
+// живёт в той же базе, и «run 2 of 2, loaded» означает, что хранилище webview
+// действительно постоянное, а не обнуляется вместе с процессом.
+
+// Параметры опыта. Каждой гипотезе — своя база: `deleteDatabase` в WKWebView
+// сам по себе подозреваемый, и очищать им состояние между опытами значило бы
+// подмешивать подозреваемого в каждый замер.
+//   ?db=NAME    работать с базой relay-keyprobe-NAME
+//   ?nomarker   не трогать обычную запись — только ключ
+//   ?reset      удалить базу перед прогоном
+const PARAMS = new URLSearchParams(location.search);
+const DB = 'relay-keyprobe' + (PARAMS.get('db') ? '-' + PARAMS.get('db') : '');
+const STORE = 'identity';
+const rows = [];
+
+// Маячок на сервер до каждого ожидания. Нужен потому, что провал этой пробы
+// может быть беззвучным: запрос к IndexedDB, не позвавший ни onsuccess, ни
+// onerror, оставляет страницу висеть без единой ошибки, и в логе это выглядит
+// ровно как «скрипт не запускался».
+function beacon(stage) {
+  try { fetch('/log?' + encodeURIComponent(stage)).catch(() => {}); } catch (e) {}
+}
+beacon('script started');
+
+function row(label, value, verdict) {
+  rows.push([label, value, verdict]);
+  const t = document.getElementById('out');
+  const tr = t.insertRow();
+  tr.insertCell().textContent = label;
+  const c = tr.insertCell();
+  c.textContent = value;
+  if (verdict === true) c.className = 'ok';
+  if (verdict === false) c.className = 'no';
+}
+
+function idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(DB, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(STORE);
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+    r.onblocked = () => rej(new Error('open blocked by another connection'));
+  });
+}
+
+// ?reset — начать с пустого места. Нужно не для удобства: приложение, убитое
+// с незавершённой транзакцией, оставляет базу webview в состоянии, из которого
+// следующий запуск её уже не читает, и без сброса эта проба один раз
+// испорченную базу больше не отпустит.
+function resetDb() {
+  return new Promise((res) => {
+    const r = indexedDB.deleteDatabase(DB);
+    r.onsuccess = () => res('deleted');
+    r.onerror = () => res('delete failed');
+    r.onblocked = () => res('delete blocked');
+    setTimeout(() => res('delete did not answer'), 4000);
+  });
+}
+
+// Ответ берётся с самого запроса, а не с транзакции: разница между «запрос не
+// позвал ни один обработчик» и «транзакция откатилась» — это и есть диагноз,
+// когда движок молчит.
+function tx(db, mode, fn) {
+  return new Promise((res, rej) => {
+    let t;
+    try { t = db.transaction(STORE, mode); } catch (e) { rej(e); return; }
+    const req = fn(t.objectStore(STORE));
+    if (req) {
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error || new Error('request failed'));
+    } else {
+      t.oncomplete = () => res(undefined);
+    }
+    t.onerror = () => rej(t.error || new Error('transaction failed'));
+    t.onabort = () => rej(t.error || new Error('transaction aborted'));
+  });
+}
+
+// Сторож. Обещание IndexedDB, которое не разрешается и не отклоняется, —
+// худший исход этой пробы: страница жива, ошибок нет, отчёта нет. Явный отказ
+// по времени превращает тишину в результат.
+function withTimeout(p, ms, what) {
+  return Promise.race([
+    p,
+    new Promise((_, rej) =>
+      setTimeout(() => rej(new Error(what + ': no answer in ' + ms + ' ms (neither success nor error)')), ms)
+    ),
+  ]);
+}
+
+// Ed25519 первым: подпись 64 байта, ключ 32, и ничего не надо выбирать —
+// у ECDSA пришлось бы возить кривую и хэш рядом с каждым ключом.
+const ALGS = [
+  { name: 'Ed25519', gen: { name: 'Ed25519' }, sign: { name: 'Ed25519' } },
+  {
+    name: 'ECDSA P-256',
+    gen: { name: 'ECDSA', namedCurve: 'P-256' },
+    sign: { name: 'ECDSA', hash: 'SHA-256' },
+  },
+];
+
+async function generate() {
+  const unsupported = [];
+  for (const a of ALGS) {
+    try {
+      // extractable: false — весь смысл пробы. Приватный ключ после этого не
+      // достаёт никто, включая нас самих.
+      const pair = await crypto.subtle.generateKey(a.gen, false, ['sign', 'verify']);
+      return { alg: a, pair, unsupported };
+    } catch (e) {
+      unsupported.push(a.name + ' (' + (e && e.name ? e.name : e) + ')');
+    }
+  }
+  throw new Error('no signing algorithm available: ' + unsupported.join(', '));
+}
+
+async function main() {
+  row('user agent', navigator.userAgent);
+  row('database', DB + (PARAMS.has('nomarker') ? ' (key only)' : ''));
+  row('secure context', String(window.isSecureContext), window.isSecureContext === true);
+  if (!window.isSecureContext) {
+    throw new Error('not a secure context — crypto.subtle is unavailable here');
+  }
+  row('crypto.subtle', crypto && crypto.subtle ? 'present' : 'MISSING', !!(crypto && crypto.subtle));
+
+  if (location.search.indexOf('reset') !== -1) {
+    const how = await resetDb();
+    beacon('reset requested: ' + how);
+    row('database reset before this run', how);
+  }
+
+  beacon('opening IndexedDB');
+  const db = await withTimeout(idb(), 5000, 'opening IndexedDB');
+  beacon('IndexedDB open');
+
+  // Обычная запись, рядом с ключом и в той же базе. Она отвечает на вопрос,
+  // который иначе смешивается с главным: хранилище webview вообще переживает
+  // перезапуск — или проблема именно в CryptoKey?
+  if (!PARAMS.has('nomarker')) {
+    const marker = await withTimeout(
+      tx(db, 'readonly', (s) => s.get('marker')), 5000, 'reading a plain value'
+    );
+    beacon('plain value after restart: ' + (marker ? 'read back, launches=' + marker.launches : 'none yet'));
+    const launches = (marker ? marker.launches : 0) + 1;
+    await withTimeout(
+      tx(db, 'readwrite', (s) => s.put({ launches }, 'marker')), 5000, 'writing a plain value'
+    );
+    beacon('plain value written');
+    row('IndexedDB survives a restart', marker ? 'yes, this is launch ' + launches : 'first launch', marker ? true : undefined);
+  }
+
+  let rec = await withTimeout(
+    tx(db, 'readonly', (s) => s.get('key')), 5000, 'reading the stored CryptoKey'
+  );
+  beacon('read existing key: ' + (rec ? 'found' : 'none'));
+  const fresh = !rec;
+
+  let algName;
+  if (fresh) {
+    beacon('generating a key pair');
+    const { alg, pair, unsupported } = await withTimeout(generate(), 5000, 'generating a key pair');
+    beacon('key pair generated');
+    algName = alg.name;
+    if (unsupported.length) row('rejected by this engine', unsupported.join('; '));
+    rec = {
+      alg: alg.name,
+      signParams: alg.sign,
+      privateKey: pair.privateKey,
+      publicKey: pair.publicKey,
+      runs: 0,
+      born: new Date().toISOString(),
+      // Отпечаток нужен, чтобы второй запуск читал ТОТ ЖЕ ключ, а не просто
+      // какой-нибудь. Считается один раз, из публичной половины.
+      fingerprint: await withTimeout(fingerprint(pair.publicKey), 5000, 'fingerprinting the public key'),
+    };
+    // Структурный клон неизвлекаемого CryptoKey — то самое место, где движок
+    // имеет полное право сказать DataCloneError.
+    beacon('writing the CryptoKey to IndexedDB');
+    await withTimeout(
+      tx(db, 'readwrite', (s) => s.put(rec, 'key')), 5000, 'storing the CryptoKey'
+    );
+    beacon('CryptoKey written');
+    row('key store', 'generated and written to IndexedDB', true);
+  } else {
+    algName = rec.alg;
+    row('key store', 'loaded from IndexedDB (born ' + rec.born + ')', true);
+  }
+
+  rec.runs += 1;
+  await withTimeout(
+    tx(db, 'readwrite', (s) => s.put(rec, 'key')), 5000, 'updating the run counter'
+  );
+  beacon('run counter updated');
+
+  row('algorithm', algName, true);
+  // Первый запуск — не провал, а половина пробы: ключу ещё нечего было
+  // пережить. Поэтому вердикт здесь только положительный или никакой.
+  row(
+    'run #',
+    String(rec.runs) + (rec.runs > 1 ? '  ← survived a restart' : '  (quit the app and open this page again)'),
+    rec.runs > 1 ? true : undefined
+  );
+  row('fingerprint', rec.fingerprint);
+  row('key is non-extractable', String(rec.privateKey.extractable === false), rec.privateKey.extractable === false);
+
+  // Подпись восстановленным ключом — единственное доказательство, что из
+  // IndexedDB вернулся рабочий ключ, а не его обломок.
+  const nonce = crypto.getRandomValues(new Uint8Array(32));
+  beacon('signing with the restored key');
+  const sig = await withTimeout(
+    crypto.subtle.sign(rec.signParams, rec.privateKey, nonce), 5000, 'signing'
+  );
+  beacon('signed');
+  row('signature', sig.byteLength + ' bytes', sig.byteLength > 0);
+  const okSig = await crypto.subtle.verify(rec.signParams, rec.publicKey, sig, nonce);
+  row('verifies against the public key', String(okSig), okSig === true);
+
+  const tampered = new Uint8Array(nonce);
+  tampered[0] ^= 1;
+  const okBad = await crypto.subtle.verify(rec.signParams, rec.publicKey, sig, tampered);
+  row('rejects a tampered nonce', String(!okBad), okBad === false);
+
+  // И наоборот: приватный ключ обязан не выходить наружу. Если экспорт вдруг
+  // удался — проба провалена, даже когда всё остальное зелёное.
+  let leaked = false;
+  try {
+    await crypto.subtle.exportKey('pkcs8', rec.privateKey);
+    leaked = true;
+  } catch (e) { /* ожидаемо */ }
+  row('private key cannot be exported', String(!leaked), !leaked);
+
+  // Постоянство хранилища: WKWebView вправе вычистить IndexedDB под давлением
+  // диска. Ответ «false» пробу не валит, но это то, что придётся учесть.
+  let persisted = 'unsupported';
+  try {
+    if (navigator.storage && navigator.storage.persisted) {
+      persisted = String(await navigator.storage.persisted());
+      if (persisted === 'false' && navigator.storage.persist) {
+        persisted += ' → requested: ' + String(await navigator.storage.persist());
+      }
+    }
+  } catch (e) { persisted = 'error: ' + e; }
+  row('storage marked persistent', persisted);
+
+  const failed = rows.filter((r) => r[2] === false);
+  const v = document.getElementById('verdict');
+  if (failed.length) {
+    v.className = 'verdict fail';
+    v.textContent = 'FAIL — ' + failed.map((r) => r[0]).join(', ');
+  } else if (rec.runs === 1) {
+    v.className = 'verdict pass';
+    v.textContent = 'PASS (run 1) — now quit the app completely and open this page again';
+  } else {
+    v.className = 'verdict pass';
+    v.textContent = 'PASS — the key survived ' + rec.runs + ' launches';
+  }
+  return { verdict: v.textContent, alg: algName, runs: rec.runs, rows };
+}
+
+async function fingerprint(pub) {
+  // Публичный ключ извлекаем всегда — неизвлекаемая только приватная половина.
+  const raw = await crypto.subtle.exportKey('spki', pub);
+  const h = await crypto.subtle.digest('SHA-256', raw);
+  return Array.from(new Uint8Array(h).slice(0, 8))
+    .map((b) => b.toString(16).padStart(2, '0')).join(':');
+}
+
+main()
+  .catch((e) => {
+    const v = document.getElementById('verdict');
+    v.className = 'verdict fail';
+    v.textContent = 'FAIL — ' + (e && e.message ? e.message : String(e));
+    row('error', String(e && e.stack ? e.stack : e), false);
+    return { verdict: v.textContent, rows };
+  })
+  .then((report) =>
+    // Обратно на сервер: окно webview может быть некуда посмотреть (headless
+    // прогон, чужая платформа), а вердикт нужен в логе.
+    fetch('/report', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(report),
+    }).catch(() => {})
+  );
+</script>
+</body>
+</html>
