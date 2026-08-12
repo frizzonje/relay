@@ -47,7 +47,8 @@ import {
   type ChannelStatsResult,
   type ChatDeletePayload,
   type ChatEditPayload,
-  type ChatMessage,
+  type ChatHistoryMorePayload,
+  type ChatHistoryMoreResult,
   type ChatPayload,
   type ChatReactPayload,
   type GuestKickPayload,
@@ -55,7 +56,6 @@ import {
   type InviteCreatePayload,
   type InviteCreateResult,
   type JoinPayload,
-  type ReplyRef,
   type ServerCreatePayload,
   type ServerDeletePayload,
   type ServerDeleteResult,
@@ -509,7 +509,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     this.broadcastServers();
     // Раздаём каналы заново: у создателя новый сервер уже разблокирован.
     this.broadcastChannels();
-    this.registry.persist();
+    await this.registry.persist();
   }
 
   @SubscribeMessage('server-unlock')
@@ -578,10 +578,10 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   @SubscribeMessage('server-delete')
-  handleServerDelete(
+  async handleServerDelete(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ServerDeletePayload,
-  ): ServerDeleteResult {
+  ): Promise<ServerDeleteResult> {
     if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
     const id = str(payload?.id);
     if (!id) return { ok: false, error: 'not-found' };
@@ -619,13 +619,16 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     for (let i = this.registry.channels.length - 1; i >= 0; i--) {
       const channel = this.registry.channels[i];
       if (channel.serverId !== id) continue;
+      // Забываем ДО того, как канал исчезнет из реестра: слаг разрешается в
+      // канал по этому же списку, и после splice забывать было бы уже нечего.
+      if (channel.type === 'text') {
+        this.chat.forget(channel.slug);
+        this.closeChatRoom(channel.slug);
+      }
       this.registry.channels.splice(i, 1);
-      if (channel.type !== 'text') continue;
-      this.chat.forget(channel.slug);
-      this.closeChatRoom(channel.slug);
     }
     if (this.registry.channels.length !== before) this.broadcastChannels();
-    this.registry.persist();
+    await this.registry.persist();
     return { ok: true };
   }
 
@@ -636,26 +639,26 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // а раздавать его каждому значило бы рассказывать всем, сколько написано в
   // чужих каналах.
   @SubscribeMessage('server-stats')
-  handleServerStats(
+  async handleServerStats(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ServerStatsPayload,
-  ): ServerStatsResult {
+  ): Promise<ServerStatsResult> {
     if (!this.allow(client) || this.isGuest(client)) return { ok: false };
     const id = str(payload?.id);
     const srv = this.registry.servers.find((s) => s.id === id);
     if (!srv || !srv.removable) return { ok: false };
     if (!this.isOpenTo(client, srv)) return { ok: false };
     if (!ownedBy(srv, deviceId(client))) return { ok: false };
-    let channels = 0;
-    let messages = 0;
-    for (const c of this.registry.channels) {
-      if (c.serverId !== id) continue;
-      channels++;
-      if (c.type === 'text') {
-        messages += this.chat.count(c.slug);
-      }
-    }
-    return { ok: true, channels, messages, occupants: this.voiceOccupantsOfServer(id) };
+    const own = this.registry.channels.filter((c) => c.serverId === id);
+    const counted = await Promise.all(
+      own.filter((c) => c.type === 'text').map((c) => this.chat.count(c.slug)),
+    );
+    return {
+      ok: true,
+      channels: own.length,
+      messages: counted.reduce((sum, n) => sum + n, 0),
+      occupants: this.voiceOccupantsOfServer(id),
+    };
   }
 
   // Сколько человек прямо сейчас в голосовых каналах этого сервера. Один обход
@@ -679,7 +682,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // ===== Реестр каналов =====
 
   @SubscribeMessage('channel-create')
-  handleChannelCreate(
+  async handleChannelCreate(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ChannelCreatePayload,
   ) {
@@ -720,14 +723,17 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     };
     this.registry.channels.push(channel);
     this.broadcastChannels();
-    this.registry.persist();
+    await this.registry.persist();
   }
 
   // Смена транспорта голосового канала. Права те же, что у channel-delete:
   // трогать можно только свои каналы (removable), дефолтные остаются на p2p —
   // они обязаны работать и без поднятого медиасервера.
   @SubscribeMessage('channel-mode')
-  handleChannelMode(@ConnectedSocket() client: Socket, @MessageBody() payload: ChannelModePayload) {
+  async handleChannelMode(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ChannelModePayload,
+  ) {
     if (!this.allow(client) || this.isGuest(client)) return;
     const id = str(payload?.id);
     const mode: VoiceMode | null =
@@ -746,7 +752,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // другой транспорт. Реестра каналов для этого мало — гость по инвайту его
     // не получает, а переезжать обязан вместе со всеми.
     this.server.to(channel.slug).emit('voice-mode', { room: channel.slug, mode });
-    this.registry.persist();
+    await this.registry.persist();
   }
 
   /**
@@ -779,10 +785,10 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // диалога — рассылать это всем постоянно незачем. Права — как у правки:
   // срез канала с людьми и перепиской — это уже данные о нём, их не раздаём.
   @SubscribeMessage('channel-stats')
-  handleChannelStats(
+  async handleChannelStats(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ChannelStatsPayload,
-  ): ChannelStatsResult {
+  ): Promise<ChannelStatsResult> {
     if (!this.allow(client) || this.isGuest(client)) return { ok: false };
     const id = str(payload?.id);
     const found = this.editableChannel(client, id);
@@ -791,7 +797,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     return {
       ok: true,
       occupants: this.occupantsOf(channel),
-      messages: channel.type === 'text' ? this.chat.count(channel.slug) : 0,
+      messages: channel.type === 'text' ? await this.chat.count(channel.slug) : 0,
     };
   }
 
@@ -800,10 +806,10 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // «непрочитано» — смена имени не должна ни рвать живой звонок, ни терять
   // переписку. Права те же, что у удаления: дефолтные каналы неприкосновенны.
   @SubscribeMessage('channel-rename')
-  handleChannelRename(
+  async handleChannelRename(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ChannelRenamePayload,
-  ): ChannelRenameResult {
+  ): Promise<ChannelRenameResult> {
     if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
     const id = str(payload?.id);
     const name = trimmed(payload?.name, LIMIT.name);
@@ -814,15 +820,15 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (found.channel.name === name) return { ok: true };
     found.channel.name = name;
     this.broadcastChannels();
-    this.registry.persist();
+    await this.registry.persist();
     return { ok: true };
   }
 
   @SubscribeMessage('channel-delete')
-  handleChannelDelete(
+  async handleChannelDelete(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ChannelDeletePayload,
-  ): ChannelDeleteResult {
+  ): Promise<ChannelDeleteResult> {
     if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
     const id = str(payload?.id);
     if (!id) return { ok: false, error: 'not-found' };
@@ -839,18 +845,18 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       if (occupants > 0) return { ok: false, error: 'occupied', occupants };
     }
 
-    this.registry.channels.splice(index, 1);
-    // История удалённого канала больше никому не принадлежит: держать её в
-    // памяти незачем, а канал с тем же слагом иначе унаследовал бы чужую ленту.
-    // Читателей выписываем сами: их клиент мог бы и не заметить пропажу канала
+    // История удалённого канала уходит вместе с ним (каскадом в базе), а
+    // читателей выписываем сами: их клиент мог бы и не заметить пропажу канала
     // в новом реестре, а остаться в комнате — значит продолжать писать в канал,
-    // которого больше нет ни у кого (и заново набивать только что стёртую ленту).
+    // которого больше нет ни у кого. Порядок важен: `forget` разрешает слаг по
+    // реестру, поэтому идёт до того, как канал из него исчезнет.
     if (channel.type === 'text') {
       this.chat.forget(channel.slug);
       this.closeChatRoom(channel.slug);
     }
+    this.registry.channels.splice(index, 1);
     this.broadcastChannels();
-    this.registry.persist();
+    await this.registry.persist();
     return { ok: true };
   }
 
@@ -1210,7 +1216,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // ===== Текстовый канал =====
 
   @SubscribeMessage('chat-join')
-  handleChatJoin(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatPayload) {
+  async handleChatJoin(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatPayload) {
     if (!this.allow(client) || this.isGuest(client)) return;
     const slug = trimmed(payload?.room, LIMIT.slug);
     if (!slug) return;
@@ -1239,9 +1245,31 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     client.data.chatRoom = room;
     client.data.chatName = name || ANON_NAME;
 
-    // Новичку — история канала.
-    client.emit('chat-history', this.chat.messages(room));
+    // Новичку — последняя страница канала. Не вся история: она больше не
+    // помещается в один снимок, и остальное он подтянет вверх сам.
+    client.emit('chat-history', { slug, ...(await this.chat.history(slug)) });
     this.emitRoster(room);
+  }
+
+  /**
+   * Страница выше уже показанной. Курсор клиент присылает свой — время и id
+   * самой верхней реплики, которую он держит; сервер по нему ничего не хранит.
+   * Ответ уходит ack'ом, а не событием: страницу ждёт конкретный запрос, и
+   * рассылать её в комнату незачем.
+   */
+  @SubscribeMessage('chat-history-more')
+  async handleChatHistoryMore(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ChatHistoryMorePayload,
+  ): Promise<ChatHistoryMoreResult> {
+    const empty = { ok: true as const, messages: [], more: false };
+    if (!this.allow(client) || this.isGuest(client)) return empty;
+    const room = client.data.chatRoom as string | undefined;
+    if (!room) return empty;
+    const beforeTs = typeof payload?.beforeTs === 'number' ? payload.beforeTs : 0;
+    const beforeId = str(payload?.beforeId);
+    if (!beforeTs || !beforeId) return empty;
+    return { ok: true, ...(await this.chat.older(this.chat.slug(room), beforeTs, beforeId)) };
   }
 
   @SubscribeMessage('chat-leave')
@@ -1250,40 +1278,29 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   @SubscribeMessage('chat-message')
-  handleChatMessage(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatPayload) {
+  async handleChatMessage(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatPayload) {
     if (!this.allow(client) || this.isGuest(client)) return;
     const room = client.data.chatRoom as string | undefined;
     if (!room) return;
     const text = trimmed(payload?.text, LIMIT.message);
 
-    // Вложение берём из доверенного реестра по id (клиент не задаёт url/mime сам).
-    // Спойлер — метка сообщения: копируем вложение, чтобы не мутировать общий реестр.
-    const stored = this.uploads.get(str(payload?.uploadId));
-    const attachment = stored && payload?.spoiler === true ? { ...stored, spoiler: true } : stored;
+    // Вложение называется id'ом загрузки, а не url'ом и не mime: подставить
+    // себе чужой файл или соврать про его тип клиент не может — метаданные
+    // берутся из таблицы вложений (см. chat.service).
+    const uploadId = str(payload?.uploadId);
+    if (!text && !(await this.uploads.exists(uploadId))) return;
 
-    // Пустое сообщение без вложения — игнорируем
-    if (!text && !attachment) return;
-
-    const history = this.chat.messages(room);
-
-    // Ответ: снимок цитируемого сообщения того же канала (усечённый текст). Само
-    // сообщение могут потом отредактировать/удалить — цитата останется прежней.
-    const replyToId = str(payload?.replyTo);
-    const src = replyToId ? history.find((m) => m.id === replyToId && !m.system) : undefined;
-    const replyTo: ReplyRef | undefined = src
-      ? { id: src.id!, name: src.name, text: src.text.slice(0, 140) }
-      : undefined;
-
-    const msg: ChatMessage = {
-      id: randomUUID(),
+    // Снимок цитаты, вложение и время назначает хранилище: время — потому что
+    // по нему же строится курсор ленты, и оно обязано быть одних часов с ней.
+    const msg = await this.chat.add(this.chat.slug(room), {
       name: this.chatNameOf(client),
       text,
-      ts: Date.now(),
-      ...(attachment ? { attachment } : {}),
-      ...(replyTo ? { replyTo } : {}),
-    };
-
-    this.chat.add(room, msg);
+      uploadId,
+      spoiler: payload?.spoiler === true,
+      replyToId: str(payload?.replyTo),
+    });
+    // Канал удалили, пока сообщение шло, — писать его некуда.
+    if (!msg) return;
 
     this.server.to(room).emit('chat', msg);
     // Лёгкий пинг активности: сайдбар зажигает «непрочитано» на закрытых сейчас
@@ -1325,7 +1342,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // доверия, что у реакций: имя самоназначаемое, но менять чужие реплики нельзя.
   // Системные и сообщения-вложения без текста не редактируем.
   @SubscribeMessage('chat-edit')
-  handleChatEdit(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatEditPayload) {
+  async handleChatEdit(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatEditPayload) {
     if (!this.allow(client) || this.isGuest(client)) return;
     const room = client.data.chatRoom as string | undefined;
     if (!room) return;
@@ -1333,33 +1350,35 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const text = trimmed(payload?.text, LIMIT.message);
     if (!id || !text) return;
 
-    const msg = this.chat.find(room, id);
+    const msg = await this.chat.find(this.chat.slug(room), id);
     if (!msg) return;
     const name = this.chatNameOf(client);
     if (msg.name !== name) return;
 
-    msg.text = text;
-    msg.editedTs = Date.now();
-    this.server.to(room).emit('chat-edited', { id, text, editedTs: msg.editedTs });
+    const editedTs = await this.chat.edit(id, text);
+    this.server.to(room).emit('chat-edited', { id, text, editedTs });
   }
 
   // Удаление своего сообщения (автор — по тегу, как в chat-edit). Убираем из
   // истории и просим всех снять из ленты. Цитаты в чужих ответах не трогаем —
   // они хранят собственный снимок.
   @SubscribeMessage('chat-delete')
-  handleChatDelete(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatDeletePayload) {
+  async handleChatDelete(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ChatDeletePayload,
+  ) {
     if (!this.allow(client) || this.isGuest(client)) return;
     const room = client.data.chatRoom as string | undefined;
     if (!room) return;
     const id = str(payload?.id);
     if (!id) return;
 
-    const msg = this.chat.find(room, id);
+    const msg = await this.chat.find(this.chat.slug(room), id);
     if (!msg) return;
     const name = this.chatNameOf(client);
     if (msg.name !== name) return;
 
-    if (!this.chat.remove(room, msg)) return;
+    if (!(await this.chat.remove(id))) return;
     this.server.to(room).emit('chat-deleted', { id });
   }
 
@@ -1377,7 +1396,10 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // Тогл реакции на сообщение: тег добавляется/снимается из набора по эмодзи.
   // Состояние храним в истории канала и рассылаем всем читающим — как и сами сообщения.
   @SubscribeMessage('chat-react')
-  handleChatReact(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatReactPayload) {
+  async handleChatReact(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ChatReactPayload,
+  ) {
     if (!this.allow(client) || this.isGuest(client)) return;
     const room = client.data.chatRoom as string | undefined;
     if (!room) return;
@@ -1385,11 +1407,12 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     const emoji = str(payload?.emoji);
     if (!id || !this.chat.knownReaction(emoji)) return;
 
-    const msg = this.chat.findAny(room, id);
+    const msg = await this.chat.findAny(this.chat.slug(room), id);
     if (!msg) return;
 
     const name = this.chatNameOf(client);
     const reactions = this.chat.toggleReaction(msg, name, emoji);
+    await this.chat.saveReactions(id, reactions);
 
     this.server.to(room).emit('chat-reaction', { id, reactions });
   }

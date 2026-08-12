@@ -214,14 +214,21 @@ export class MessageRow {
   @Column({ type: 'jsonb', name: 'reply_to', nullable: true })
   replyTo!: { id: string; name: string; text: string } | null;
 
+  /**
+   * Время ставит база (`now()` при вставке), а не Node и тем более не клиент.
+   * На нём держится порядок ленты и курсор пагинации, а значит оно обязано
+   * идти из одних часов — тех же, по которым потом сортируется выборка.
+   * Поэтому обычная колонка с дефолтом, а не `@CreateDateColumn`: тот
+   * подставляет время процесса.
+   */
+  @Column({ type: 'timestamptz', name: 'created_at', default: () => 'now()' })
+  createdAt!: Date;
+
   // Дефолт объектом, а не выражением: у jsonb TypeORM сверяет дефолты глубоким
   // сравнением значений, и `() => "'{}'::jsonb"` он бы честно счёл расхождением
   // с тем, что прочитал из базы, — на каждом старте предлагая «починить».
   @Column({ type: 'jsonb', default: {} })
   reactions!: Record<string, string[]>;
-
-  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
-  createdAt!: Date;
 
   @Column({ type: 'timestamptz', name: 'edited_at', nullable: true })
   editedAt!: Date | null;

@@ -51,7 +51,10 @@ export class UploadController {
       limits: { fileSize: MAX_UPLOAD_BYTES },
     }),
   )
-  upload(@Req() req: Request, @UploadedFile() file?: MulterFile): Attachment & { id: string } {
+  async upload(
+    @Req() req: Request,
+    @UploadedFile() file?: MulterFile,
+  ): Promise<Attachment & { id: string }> {
     if (!file) throw new BadRequestException('файл не получен');
     uploadBudget.charge(req.ip ?? 'unknown', file.size);
     return this.uploads.register(file);

@@ -94,6 +94,16 @@ export interface ChatPayload {
   spoiler?: unknown;
 }
 
+/**
+ * Курсор подгрузки ленты вверх: время и id самой верхней реплики, которую
+ * клиент уже держит. Пары достаточно и она честнее «страницы номер N» —
+ * страницы разъезжаются, когда снизу приходит новое.
+ */
+export interface ChatHistoryMorePayload {
+  beforeTs?: unknown;
+  beforeId?: unknown;
+}
+
 export interface ChatEditPayload {
   id?: unknown;
   text?: unknown;
@@ -186,6 +196,18 @@ export type ChannelRenameResult =
   | { ok: false; error: 'not-found' | 'forbidden' | 'bad-name' | 'not-owner' };
 
 export type ChannelStatsResult = { ok: true; occupants: number; messages: number } | { ok: false };
+
+/**
+ * Страница истории. `more` — «выше есть ещё»: без него клиент не отличает
+ * начало истории от её края, срезанного ретенцией, и рисует одно вместо
+ * другого.
+ */
+export interface ChatHistoryPage {
+  messages: ChatMessage[];
+  more: boolean;
+}
+
+export type ChatHistoryMoreResult = { ok: true } & ChatHistoryPage;
 
 export type ServerDeleteResult =
   | { ok: true }

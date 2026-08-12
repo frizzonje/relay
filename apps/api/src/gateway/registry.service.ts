@@ -1,15 +1,24 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Channel, ServerEntry, loadRegistry, saveRegistry } from './registry';
+import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { existsSync, writeFileSync } from 'node:fs';
+import { DataSource, type EntityManager } from 'typeorm';
+import { ChannelRow, ServerRow } from '../db/entities';
+import { Channel, MIGRATED_MARKER, REGISTRY_FILE, ServerEntry, loadRegistry } from './registry';
 import { type PublicServer, ownedBy, publicServer } from './ownership';
 
 /**
  * Реестр серверов и каналов: что вообще существует, кому оно видно и кому
  * позволено это менять.
  *
- * Хранилище (атомарная запись, битый файл, прошлая копия) живёт в `./registry`,
- * права владения — в `./ownership`; здесь то, что между ними: сам список,
- * дефолты, пределы и правила видимости. Гейтвей поверх этого добавляет ровно
- * одно — сокет: кто спрашивает и куда уходит ответ.
+ * Живёт в Postgres, но в памяти держится целиком — и это не кэш «на всякий
+ * случай». Видимость канала спрашивают на каждую рассылку присутствия, на
+ * каждое сообщение и на каждый вход: два десятка серверов и полсотни каналов
+ * стоят килобайты, а поход в базу за ними стоил бы запроса на каждый чих.
+ * База — источник правды при старте и место, куда всё это доезжает; правила
+ * видимости считаются здесь.
+ *
+ * Права владения — в `./ownership`, чтение старого файлового реестра (переезд с
+ * 0.x) — в `./registry`. Гейтвей поверх этого добавляет ровно одно — сокет: кто
+ * спрашивает и куда уходит ответ.
  *
  * Слой ролей плана 1.0 приземляется сюда: «кому позволено» — это `editable` и
  * `canSee`, и больше нигде.
@@ -83,6 +92,55 @@ function mergeById<T extends { id: string }>(defaults: T[], saved: T[] | undefin
 }
 
 /**
+ * Строка базы → запись реестра. Пустые поля выкидываем, а не носим как `null`:
+ * в памяти и в протоколе их форма — «поля нет», и такой она была всегда.
+ */
+function toServerEntry(row: ServerRow): ServerEntry {
+  return {
+    id: row.id,
+    name: row.name,
+    removable: row.removable,
+    ...(row.emoji ? { emoji: row.emoji } : {}),
+    ...(row.passwordHash ? { passwordHash: row.passwordHash } : {}),
+    ...(row.creatorId ? { creatorId: row.creatorId } : {}),
+  };
+}
+
+function toChannel(row: ChannelRow): Channel {
+  return {
+    id: row.id,
+    serverId: row.serverId,
+    type: row.type as Channel['type'],
+    name: row.name,
+    slug: row.slug,
+    removable: row.removable,
+    ...(row.mode ? { mode: row.mode as Channel['mode'] } : {}),
+    ...(row.creatorId ? { creatorId: row.creatorId } : {}),
+  };
+}
+
+/**
+ * Развод одинаковых слагов при переезде. До 1.0 слаг ничем не проверялся, и два
+ * канала одного типа могли получить один и тот же — они молча делили комнату
+ * socket.io и историю на двоих. В базе такая пара просто не поместится
+ * (уникальный индекс), поэтому второму и следующим дописываем номер.
+ *
+ * Переименование заметно человеку, но альтернатива — уронить переезд целиком
+ * или потерять канал, а это хуже.
+ */
+function dedupeSlugs(channels: Channel[]): Channel[] {
+  const taken = new Set<string>();
+  return channels.map((c) => {
+    let slug = c.slug;
+    for (let n = 2; taken.has(c.type + '\0' + slug); n += 1) {
+      slug = `${c.slug}-${n}`.slice(0, 32);
+    }
+    taken.add(c.type + '\0' + slug);
+    return slug === c.slug ? c : { ...c, slug };
+  });
+}
+
+/**
  * Слаг направления из произвольного ввода: строчные, пробелы → дефис, только
  * буквы/цифры/дефис/подчёркивание (кириллица сохраняется), схлопываем дубли, 32.
  */
@@ -97,45 +155,244 @@ export function slugifyChannel(name: string): string {
     .slice(0, 32);
 }
 
+/**
+ * Убрать из таблицы всё, чего нет в этом списке id. Пустой список означает
+ * «не осталось ничего» и обязан очищать таблицу, а не падать.
+ */
+async function deleteMissing(
+  m: EntityManager,
+  entity: typeof ServerRow | typeof ChannelRow,
+  keep: string[],
+): Promise<void> {
+  const qb = m.createQueryBuilder().delete().from(entity);
+  if (keep.length) qb.where('id NOT IN (:...keep)', { keep });
+  await qb.execute();
+}
+
 /** Отказ в правке канала — теми же кодами, что уходят клиенту ack'ом. */
 export type EditError = 'not-found' | 'forbidden' | 'not-owner';
 
 @Injectable()
-export class RegistryService {
+export class RegistryService implements OnModuleInit {
   private readonly logger = new Logger(RegistryService.name);
 
   /** Реестр серверов (гильдий), общий на инсталляцию. Переживает рестарт. */
-  readonly servers: ServerEntry[];
+  readonly servers: ServerEntry[] = [];
 
-  /** Реестр направлений, общий на инсталляцию. Тоже с диска и на диск. */
-  readonly channels: Channel[];
+  /** Реестр направлений, общий на инсталляцию. Тоже из базы и в базу. */
+  readonly channels: Channel[] = [];
 
-  constructor() {
-    // Поднимаем сохранённый реестр и подмешиваем дефолты. Каналы «сирот»
-    // (сервер которых не существует) отбрасываем — иначе повиснут вне рейки.
-    // Битый файл loadRegistry разбирает сам: откладывает исходные байты в
-    // сторону, пробует прошлую копию и кричит в лог. Сюда в худшем случае
-    // придут пустые данные — и это уже осознанный, а не молчаливый худший случай.
-    const saved = loadRegistry().data;
-    this.servers = mergeById(DEFAULT_SERVERS, saved.servers);
-    const serverIds = new Set(this.servers.map((s) => s.id));
-    this.channels = mergeById(DEFAULT_CHANNELS, saved.channels).filter(
-      (c) => serverIds.has(c.serverId) && !RETIRED_CHANNEL_IDS.has(c.id),
-    );
+  /**
+   * Очередь записей. Реестр пишется целиком, и две одновременные записи
+   * означали бы гонку двух полных снимков: кто последний, того и реестр.
+   * Поэтому они выстраиваются в цепочку — а `flush()` позволяет её дождаться
+   * (тестам и выключению).
+   */
+  private queue: Promise<void> = Promise.resolve();
+
+  /**
+   * Пути старого файлового реестра — параметры экземпляра, а не константы
+   * модуля: тесту нужен свой каталог, а перезагружать ради этого модуль
+   * нельзя — вместе с ним перезагрузятся сущности, и открытое соединение
+   * перестанет их узнавать.
+   */
+  constructor(
+    private readonly db: DataSource,
+    private readonly legacyFile: string = REGISTRY_FILE,
+    private readonly migratedMarker: string = MIGRATED_MARKER,
+  ) {}
+
+  /**
+   * Nest ждёт этот метод до того, как поднимется порт: реестр обязан быть в
+   * памяти раньше, чем придёт первый сокет.
+   */
+  async onModuleInit(): Promise<void> {
+    await this.load();
   }
 
   /**
-   * Сохраняем реестр на диск (атомарно, с fsync и прошлой копией — см.
-   * saveRegistry), чтобы рестарт не потерял серверы и каналы пользователей.
-   * Диск-ошибку не роняем на пользователя, только логируем: живой реестр в
-   * памяти важнее.
+   * Поднимаем реестр из базы и подмешиваем дефолты. Каналы «сирот» (сервер
+   * которых не существует) отбрасываем — иначе повиснут вне рейки. Дефолты
+   * первыми: они источник правды, и их изменение между версиями не должно
+   * перетираться сохранённым.
+   *
+   * Перед первым чтением — переезд со старого файлового реестра, если он ещё
+   * не состоялся.
    */
-  persist(): void {
-    try {
-      saveRegistry({ servers: this.servers, channels: this.channels });
-    } catch (e) {
-      this.logger.error(`не удалось сохранить реестр: ${e}`);
-    }
+  async load(): Promise<void> {
+    await this.importLegacy();
+
+    const [servers, channels] = await Promise.all([
+      this.db.getRepository(ServerRow).find({ order: { position: 'ASC' } }),
+      this.db.getRepository(ChannelRow).find({ order: { position: 'ASC' } }),
+    ]);
+
+    this.servers.length = 0;
+    this.servers.push(...mergeById(DEFAULT_SERVERS, servers.map(toServerEntry)));
+    const serverIds = new Set(this.servers.map((s) => s.id));
+    this.channels.length = 0;
+    this.channels.push(
+      ...mergeById(DEFAULT_CHANNELS, channels.map(toChannel)).filter(
+        (c) => serverIds.has(c.serverId) && !RETIRED_CHANNEL_IDS.has(c.id),
+      ),
+    );
+
+    // Дефолты, отсев сирот и вычистка снятых с довольствия каналов — это
+    // изменения реестра, и они обязаны доехать до базы, а не жить до рестарта.
+    this.persist();
+    await this.flush();
+  }
+
+  /**
+   * Сохраняем реестр в базу. Ошибку записи не роняем на пользователя, только
+   * логируем: живой реестр в памяти важнее — ровно как с диском до 1.0.
+   *
+   * Возвращает обещание, и его ЖДУТ: канал должен появиться в базе до того,
+   * как в него напишут. Сообщение ссылается на канал внешним ключом, и
+   * отложенная запись реестра означала бы отказ базы на первой же реплике в
+   * только что созданном канале.
+   */
+  persist(): Promise<void> {
+    this.queue = this.queue.then(() =>
+      this.sync().catch((e) => {
+        this.logger.error(`не удалось сохранить реестр: ${e}`);
+      }),
+    );
+    return this.queue;
+  }
+
+  /** Дождаться, пока всё отправленное в `persist` доедет до базы. */
+  async flush(): Promise<void> {
+    await this.queue;
+  }
+
+  /**
+   * Полный снимок памяти в базу: что есть — обновляем, чего не стало —
+   * удаляем. Именно так вела себя запись файла целиком, и менять эту семантику
+   * на «дельту» нельзя: удаление сервера должно уносить его каналы, а удаление
+   * канала — свою историю (за это отвечает ON DELETE CASCADE).
+   *
+   * Порядок внутри транзакции не случаен: сначала появляются серверы, потом
+   * каналы (внешний ключ), удаляем в обратном порядке.
+   */
+  private async sync(): Promise<void> {
+    await this.db.transaction(async (m: EntityManager) => {
+      const serverIds = this.servers.map((s) => s.id);
+      const channelIds = this.channels.map((c) => c.id);
+
+      if (serverIds.length) {
+        await m.getRepository(ServerRow).upsert(
+          this.servers.map((s, position) => ({
+            id: s.id,
+            name: s.name,
+            emoji: s.emoji ?? null,
+            removable: s.removable,
+            passwordHash: s.passwordHash ?? null,
+            creatorId: s.creatorId ?? null,
+            position,
+          })),
+          ['id'],
+        );
+      }
+      if (channelIds.length) {
+        await m.getRepository(ChannelRow).upsert(
+          this.channels.map((c, position) => ({
+            id: c.id,
+            serverId: c.serverId,
+            type: c.type,
+            name: c.name,
+            slug: c.slug,
+            removable: c.removable,
+            mode: c.mode ?? null,
+            creatorId: c.creatorId ?? null,
+            position,
+          })),
+          ['id'],
+        );
+      }
+      // Удаляем построителем, а не `delete({ id: Not(In(...)) })`: пустой
+      // список — законное состояние (в реестре может не остаться ни одного
+      // канала), а репозиторий на пустом критерии отказывается работать
+      // вовсе — и роняет вместе с собой всю транзакцию.
+      await deleteMissing(m, ChannelRow, channelIds);
+      await deleteMissing(m, ServerRow, serverIds);
+    });
+  }
+
+  /**
+   * Переезд с 0.x: `registry.json` → таблицы. Один раз, в транзакции, и после
+   * него рядом с файлом ложится маркер.
+   *
+   * Сам файл не трогаем — это и есть цена отката: если 1.0 не пошёл,
+   * инсталляция возвращается на 0.x со своими серверами и каналами. Маркер
+   * нужен ровно затем, чтобы второй старт не воскресил то, что человек успел
+   * удалить уже в 1.0.
+   */
+  private async importLegacy(): Promise<void> {
+    if (existsSync(this.migratedMarker) || !existsSync(this.legacyFile)) return;
+
+    // Битый файл loadRegistry разбирает сам: откладывает исходные байты в
+    // сторону, пробует прошлую копию и кричит в лог. Сюда в худшем случае
+    // придут пустые данные — осознанный, а не молчаливый худший случай.
+    const saved = loadRegistry(this.legacyFile);
+    const servers = (saved.data.servers ?? []).filter((s) => s && typeof s.id === 'string');
+    const serverIds = new Set(servers.map((s) => s.id));
+    const channels = dedupeSlugs(
+      (saved.data.channels ?? []).filter(
+        (c) => c && typeof c.id === 'string' && serverIds.has(c.serverId),
+      ),
+    );
+
+    await this.db.transaction(async (m: EntityManager) => {
+      // ON CONFLICT DO NOTHING: переезд обязан быть идемпотентным, а дефолтные
+      // записи в базе уже могут быть — они старше любого файла.
+      if (servers.length) {
+        await m
+          .getRepository(ServerRow)
+          .createQueryBuilder()
+          .insert()
+          .values(
+            servers.map((s, position) => ({
+              id: s.id,
+              name: s.name,
+              emoji: s.emoji ?? null,
+              removable: s.removable !== false,
+              passwordHash: s.passwordHash ?? null,
+              creatorId: s.creatorId ?? null,
+              position,
+            })),
+          )
+          .orIgnore()
+          .execute();
+      }
+      if (channels.length) {
+        await m
+          .getRepository(ChannelRow)
+          .createQueryBuilder()
+          .insert()
+          .values(
+            channels.map((c, position) => ({
+              id: c.id,
+              serverId: c.serverId,
+              type: c.type,
+              name: c.name,
+              slug: c.slug,
+              removable: c.removable !== false,
+              mode: c.mode ?? null,
+              creatorId: c.creatorId ?? null,
+              position,
+            })),
+          )
+          .orIgnore()
+          .execute();
+      }
+    });
+
+    writeFileSync(this.migratedMarker, new Date().toISOString() + '\n');
+    this.logger.log(
+      `реестр переехал в базу: серверов ${servers.length}, каналов ${channels.length}. ` +
+        `Исходный ${this.legacyFile} оставлен нетронутым`,
+    );
   }
 
   server(id: string): ServerEntry | undefined {

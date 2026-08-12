@@ -1,25 +1,20 @@
 import { Logger } from '@nestjs/common';
-import {
-  closeSync,
-  copyFileSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readFileSync, renameSync } from 'node:fs';
+import { join } from 'node:path';
 
 /**
- * Реестр серверов и каналов на диске. Единственное, что переживает рестарт api,
- * — и до 1.0 (Postgres) единственное хранилище вообще.
+ * Старый реестр серверов и каналов на диске — тот, что до 1.0 был единственным
+ * хранилищем api вообще. Теперь он умеет только читаться: реестр живёт в
+ * Postgres, а этот файл нужен ровно один раз — чтобы переехать (см.
+ * `registry.service`, importLegacy) — и после переезда остаётся нетронутым.
  *
- * Отсюда требование, которого у обычного кэша не бывает: НИ ОДИН сценарий не
- * должен заканчиваться молчаливой потерей. Битый файл — это не «файла нет»:
- * ответить пустым реестром и записать поверх значит стереть все серверы и все
- * каналы инсталляции без единой строчки в логе и без чего-либо, из чего их
- * можно восстановить.
+ * Нетронутым намеренно: это цена отката. Если 1.0 не пошёл, инсталляция
+ * возвращается на 0.x со своими серверами и каналами, а не с нуля.
+ *
+ * Отсюда же требование, которого у обычного кэша не бывает: НИ ОДИН сценарий
+ * не должен заканчиваться молчаливой потерей. Битый файл — это не «файла нет»:
+ * ответить пустым реестром значит потерять все серверы и все каналы
+ * инсталляции без единой строчки в логе.
  */
 
 // Реестр направлений (api намеренно не тянет @relay/shared — типы дублируем, как и
@@ -69,6 +64,13 @@ export interface PersistedRegistry {
 // В проде DATA_DIR задаём явно на persistent-том uploads (см. docker-compose.yml).
 export const DATA_DIR = process.env.DATA_DIR || join(process.cwd(), 'data');
 export const REGISTRY_FILE = join(DATA_DIR, 'registry.json');
+
+/**
+ * Маркер состоявшегося переезда. Лежит рядом с самим файлом и отвечает на один
+ * вопрос: «этот registry.json уже перелит в базу?» Без него повторный старт
+ * воскрешал бы удалённые после переезда серверы.
+ */
+export const MIGRATED_MARKER = REGISTRY_FILE + '.migrated';
 
 const log = new Logger('registry');
 
@@ -135,7 +137,7 @@ export function loadRegistry(file: string = REGISTRY_FILE): LoadedRegistry {
     corruptCopy = undefined;
   }
 
-  // Прошлая копия — то, ради чего saveRegistry её и держит. Реестр меняется
+  // Прошлая копия — та, что оставляла запись реестра до 1.0. Реестр менялся
   // редко (создали сервер, переименовали канал), так что откат на одну запись
   // назад — это почти всегда откат в ничто.
   const backup = readAndParse(file + '.bak');
@@ -154,51 +156,4 @@ export function loadRegistry(file: string = REGISTRY_FILE): LoadedRegistry {
         : 'Битый файл отложить не удалось'),
   );
   return { data: {}, corruptCopy };
-}
-
-/**
- * Запись реестра. Три обязательства:
- *
- * 1. **Атомарность** — временный файл + rename. Читатель видит либо старое
- *    содержимое целиком, либо новое целиком, но никогда половину.
- * 2. **fsync до rename.** Без него rename фиксирует имя, а содержимое остаётся
- *    в кэше страниц: пропадание питания в этом окне оставляет файл нулевой
- *    длины — и это ровно вход в сценарий из loadRegistry.
- * 3. **Одна прошлая копия.** Дёшево (файл — единицы килобайт) и превращает
- *    порчу файла из «восстанавливать нечем» в «откатились на одну запись».
- */
-export function saveRegistry(data: PersistedRegistry, file: string = REGISTRY_FILE): void {
-  const dir = dirname(file);
-  mkdirSync(dir, { recursive: true });
-
-  const tmp = file + '.tmp';
-  const json = JSON.stringify(data);
-  const fd = openSync(tmp, 'w');
-  try {
-    writeFileSync(fd, json);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-
-  try {
-    copyFileSync(file, file + '.bak');
-  } catch {
-    // Первая запись: копировать ещё нечего.
-  }
-
-  renameSync(tmp, file);
-  // Сам rename тоже живёт в кэше — до fsync каталога он не гарантирован. На
-  // Windows и части сетевых ФС каталог не открывается на чтение; это не повод
-  // считать запись неудавшейся.
-  try {
-    const dirFd = openSync(dir, 'r');
-    try {
-      fsyncSync(dirFd);
-    } finally {
-      closeSync(dirFd);
-    }
-  } catch {
-    // не умеем — значит не умеем
-  }
 }

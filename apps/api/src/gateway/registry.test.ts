@@ -107,33 +107,3 @@ describe('loadRegistry', () => {
     expect(readFileSync(file + '.bak', 'utf8')).toBe('тоже мусор');
   });
 });
-
-describe('saveRegistry', () => {
-  it('пишет то, что потом читается обратно', () => {
-    saveRegistry(SAMPLE, file);
-    expect(loadRegistry(file).data).toEqual(SAMPLE);
-  });
-
-  it('создаёт каталог, которого ещё нет', () => {
-    const deep = join(dir, 'state', 'registry.json');
-    saveRegistry(SAMPLE, deep);
-    expect(loadRegistry(deep).data).toEqual(SAMPLE);
-  });
-
-  it('держит одну прошлую копию — из неё и восстанавливаемся', () => {
-    saveRegistry(SAMPLE, file);
-    const next = { servers: [...SAMPLE.servers, { id: 'srv-2', name: 'ещё', removable: true }] };
-    saveRegistry(next, file);
-
-    expect(JSON.parse(readFileSync(file + '.bak', 'utf8'))).toEqual(SAMPLE);
-
-    // Ровно тот сценарий, ради которого копия и заведена.
-    writeFileSync(file, '');
-    expect(loadRegistry(file).data).toEqual(SAMPLE);
-  });
-
-  it('не оставляет за собой временный файл', () => {
-    saveRegistry(SAMPLE, file);
-    expect(readdirSync(dir)).toEqual(['registry.json']);
-  });
-});

@@ -9,6 +9,7 @@ import { SignalingGateway } from './gateway/signaling.gateway';
 import { ChatService } from './gateway/chat.service';
 import { RegistryService } from './gateway/registry.service';
 import { MetricsService } from './metrics';
+import { RetentionService } from './db/retention.service';
 import { UploadsService } from './uploads';
 
 /**
@@ -37,6 +38,7 @@ export class AppModule {
         ChatService,
         RegistryService,
         MetricsService,
+        RetentionService,
         UploadsService,
       ],
     };
