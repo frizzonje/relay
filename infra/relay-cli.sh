@@ -144,8 +144,8 @@ ensure_secret() {
 # few seconds, and a restore that runs psql one second too early fails in a way
 # that looks like a corrupt backup.
 wait_for_db() {
-  local i
-  for i in $(seq 1 60); do
+  local _
+  for _ in $(seq 1 60); do
     if dc exec -T db pg_isready -h 127.0.0.1 -U "$PG_USER" -d "$PG_DB" >/dev/null 2>&1; then return 0; fi
     sleep 2
   done
@@ -379,45 +379,56 @@ cmd_restore() {
 # записи в общее владение, каким оно было до правила. Дальше их удаляют или
 # переименовывают из интерфейса, как обычно.
 #
-# api на время правки останавливается: реестр он держит в памяти и пишет файл
-# целиком при любом изменении — правка под живым сервисом была бы затёрта
-# следующим же созданием канала.
+# Реестр с 1.0 лежит в Postgres, и правится он там же — раньше эта команда
+# редактировала registry.json, а после переезда тот файл читается ровно один
+# раз в жизни установки. Оставить как было значило бы команду, которая пишет в
+# файл, докладывает об успехе и не меняет ничего.
+#
+# api на время правки останавливается: реестр он держит в памяти и пишет в базу
+# снимком целиком при любом изменении — правка под живым сервисом была бы
+# затёрта следующим же созданием канала.
+# Запрос идёт на вход psql, а не в -c: подстановку переменных (:'target')
+# делает сам psql при разборе ввода, а строку из -c он отправляет серверу как
+# есть — и тот спотыкается о двоеточие.
+psql_q() { dc exec -T db psql -U "$PG_USER" -d "$PG_DB" -At -q -v ON_ERROR_STOP=1 "$@"; }
+
 cmd_disown() {
-  local what="${1:-}"
-  if [ -n "$what" ]; then dc stop api >/dev/null; fi
-  # Скрипт идёт в node из образа api — там же, где лежит том с реестром, и той
-  # же точкой входа, что опускает права до node: файл обязан остаться его,
-  # иначе api после старта не сможет его переписать. Двойной дефис перед
-  # аргументом обязателен: без него node принимает "--all" за свой собственный
-  # флаг и отказывается стартовать.
-  dc run --rm --no-deps -T api node -e '
-    const fs = require("fs");
-    const F = (process.env.DATA_DIR || "/app/uploads/state") + "/registry.json";
-    let reg;
-    try { reg = JSON.parse(fs.readFileSync(F, "utf8")); }
-    catch (e) { console.error("No registry to read at " + F); process.exit(1); }
-    const rows = [];
-    for (const kind of ["servers", "channels"])
-      for (const e of reg[kind] || []) rows.push([kind.slice(0, -1), e]);
-    const target = process.argv[1] || "";
-    if (!target) {
-      const owned = rows.filter(function (r) { return r[1].creatorId; });
-      if (!owned.length) { console.log("Every entry is already free to manage."); process.exit(0); }
-      console.log("Owned by a device — only that browser can rename or delete them:");
-      for (const r of owned) console.log("  " + r[0] + "  " + r[1].id + "  " + (r[1].name || ""));
-      console.log("");
-      console.log("  relay disown <id>     release one");
-      console.log("  relay disown --all    release all of them");
-      process.exit(0);
-    }
-    let n = 0;
-    for (const r of rows)
-      if ((target === "--all" || r[1].id === target) && r[1].creatorId) { delete r[1].creatorId; n++; }
-    if (!n) { console.error("Nothing owned matches " + target); process.exit(1); }
-    fs.writeFileSync(F, JSON.stringify(reg, null, 2));
-    console.log("Released " + n + (n === 1 ? " entry." : " entries."));
-  ' -- "$what" || { if [ -n "$what" ]; then dc up -d api >/dev/null; fi; exit 1; }
-  if [ -n "$what" ]; then dc up -d api >/dev/null; echo "api restarted."; fi
+  local what="${1:-}" owned n cond
+  # Значение приходит от человека из командной строки и уходит в базу
+  # переменной psql (:'target'), а не склейкой в текст запроса.
+  if [ "$what" = "--all" ]; then cond='TRUE'; else cond="id = :'target'"; fi
+
+  if [ -z "$what" ]; then
+    owned="$(psql_q <<'SQL'
+      SELECT 'server   ' || id || '  ' || name FROM servers  WHERE creator_id IS NOT NULL
+      UNION ALL
+      SELECT 'channel  ' || id || '  ' || name FROM channels WHERE creator_id IS NOT NULL;
+SQL
+    )" || die "Could not read the registry. Is the stack up? ('relay up')"
+    if [ -z "$owned" ]; then ok "Every entry is already free to manage."; return 0; fi
+    echo "Owned by a device — only that browser can rename or delete them:"
+    printf '  %s\n' "$owned"
+    cat <<'HINT'
+
+  relay disown <id>     release one
+  relay disown --all    release all of them
+HINT
+    return 0
+  fi
+
+  dc stop api >/dev/null || die "Could not stop api. Nothing has been changed."
+  # Оба апдейта одним запросом — значит, в одной транзакции: id сервера и id
+  # канала не пересекаются, но половина правки при обрыве всё равно недопустима.
+  n="$(psql_q -v target="$what" <<SQL
+    WITH s AS (UPDATE servers  SET creator_id = NULL WHERE creator_id IS NOT NULL AND ($cond) RETURNING 1),
+         c AS (UPDATE channels SET creator_id = NULL WHERE creator_id IS NOT NULL AND ($cond) RETURNING 1)
+    SELECT (SELECT count(*) FROM s) + (SELECT count(*) FROM c);
+SQL
+  )" || { dc up -d api >/dev/null; die "Could not write to the registry. api restarted; nothing was changed."; }
+
+  dc up -d api >/dev/null && echo "api restarted."
+  [ "${n:-0}" -gt 0 ] || die "Nothing owned matches ${what}"
+  if [ "$n" = 1 ]; then ok "Released 1 entry."; else ok "Released ${n} entries."; fi
 }
 
 # ── Commands ─────────────────────────────────────────────────────────────────

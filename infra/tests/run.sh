@@ -16,7 +16,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FAILED=0
 
-for t in relay-cli relay-backup install; do
+for t in relay-cli relay-backup relay-disown install; do
   printf '\n\033[1m── %s.test.sh\033[0m\n' "$t"
   bash "$ROOT/infra/tests/${t}.test.sh" "$ROOT" || FAILED=1
 done
