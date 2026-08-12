@@ -142,6 +142,8 @@ export function ChatPanel() {
   // прокрутку на прежнее место: без этого подгрузка утаскивала бы читателя
   // вверх ровно на высоту приехавшего.
   const anchorHeight = useRef<number | null>(null);
+  // Канал, для которого ленту уже поставили на свежие сообщения.
+  const pinnedFor = useRef<string | null>(null);
   const dragDepth = useRef(0);
   const lastTypingSent = useRef(0);
 
@@ -171,6 +173,23 @@ export function ChatPanel() {
     anchorHeight.current = null;
     prevLen.current = messages.length;
   }, [messages]);
+
+  // Вход в канал ставит человека на свежие сообщения, а не на верх страницы.
+  // Раньше это выходило само собой: истории было ровно столько, сколько
+  // помещалось в память, и лента почти всегда была короткой. Теперь страница
+  // приезжает готовым куском, и «уже у дна» на ней не выполняется — надо
+  // сказать явно.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !messages.length || pinnedFor.current === textRoom) return;
+    pinnedFor.current = textRoom;
+    prevLen.current = messages.length;
+    el.scrollTo({ top: el.scrollHeight });
+    setHasNew(false);
+    // Страница короче экрана, а выше что-то есть: прокрутить вверх человеку
+    // нечем, поэтому подтягиваем сами — иначе история выглядит законченной.
+    if (el.scrollHeight <= el.clientHeight && useChatStore.getState().more) void loadOlder();
+  }, [messages, textRoom]);
 
   // Автопрокрутка вниз, если уже у дна; иначе, если лента выросла — зажигаем «вниз».
   useEffect(() => {
@@ -418,6 +437,10 @@ export function ChatPanel() {
       <div
         ref={scrollRef}
         onScroll={onScroll}
+        // Лента — единственный прокручиваемый контейнер, у которого есть
+        // поведение (подгрузка вверх), и e2e должен находить именно его, а не
+        // угадывать по классам вёрстки.
+        data-feed
         className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-4 pb-2 pt-4"
       >
         {/* Верх ленты отвечает на вопрос «а что было раньше?» — и три ответа

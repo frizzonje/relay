@@ -29,6 +29,10 @@ function fetchConfig(): Promise<ConfigResponse> {
       // Бэк недоступен — звонок всё равно должен собраться на публичном STUN,
       // а медиасервер считаем отсутствующим (фолбэк на p2p — рабочий путь).
       console.error('config fetch failed, using fallback STUN', err);
+      // Неудачу не кэшируем: первый запрос случается и до входа, когда гейт
+      // честно отвечает 401. Запомнить этот ответ на сессию значило бы навсегда
+      // остаться без TURN и без срока хранения — уже после успешного входа.
+      cache = null;
       return { iceServers: FALLBACK, sfu: { available: false } };
     });
 }

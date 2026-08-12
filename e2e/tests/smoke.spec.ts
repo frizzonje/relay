@@ -58,3 +58,40 @@ test('логин → канал → сообщение → upload', async ({ pag
   await page.locator('input[type="file"]').setInputFiles(UPLOAD);
   await expect(page.getByText('sample.txt').first()).toBeVisible({ timeout: 15_000 });
 });
+
+test('лента отдаётся страницей и подгружается вверх', async ({ page }) => {
+  await page.goto('/');
+  await page.getByPlaceholder('Password').fill(PASSWORD);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
+  const channel = page.getByText('общий', { exact: true });
+  await expect(channel).toBeVisible({ timeout: 15_000 });
+  await channel.click();
+  const composer = page.getByPlaceholder(/^message #/);
+  await expect(composer).toBeVisible({ timeout: 10_000 });
+
+  // Больше страницы (50), чтобы первые реплики заведомо в неё не попали.
+  const mark = `p${Date.now().toString().slice(-6)}`;
+  for (let i = 0; i < 55; i += 1) {
+    await composer.fill(`${mark}-${i}`);
+    await composer.press('Enter');
+  }
+  await expect(page.getByText(`${mark}-54`)).toBeVisible({ timeout: 20_000 });
+
+  // Заходим заново — сервер отдаёт последнюю страницу, а не всю историю.
+  // Канал после перезагрузки открывается кликом, как и в первый раз: выбор
+  // канала клиент не запоминает.
+  await page.reload();
+  const again = page.getByText('общий', { exact: true });
+  await expect(again).toBeVisible({ timeout: 15_000 });
+  await again.click();
+  await expect(page.getByPlaceholder(/^message #/)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(`${mark}-54`)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(`${mark}-0`, { exact: true })).toHaveCount(0);
+
+  // Листаем вверх — страница выше приезжает и встаёт на своё место.
+  await page.locator('[data-feed]').evaluate((el) => {
+    el.scrollTop = 0;
+  });
+  await expect(page.getByText(`${mark}-0`, { exact: true })).toBeVisible({ timeout: 15_000 });
+});
