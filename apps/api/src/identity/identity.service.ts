@@ -7,6 +7,7 @@ import {
   fingerprint,
   isPublicKey,
   newNonce,
+  sanitizeDeviceName,
   sanitizeNick,
   verifySignature,
 } from './crypto';
@@ -169,7 +170,9 @@ export class IdentityService {
       identityId: identity.id,
       identity,
       publicKey,
-      name: sanitizeNick(deviceName) || 'устройство',
+      // Имя не переводится: его показывают все устройства этого человека, а
+      // язык интерфейса у каждого свой.
+      name: sanitizeDeviceName(deviceName) || 'device',
       // Корневое устройство никем не подписано: оно и есть корень доверия.
       certificate: null,
       parentDeviceId: null,

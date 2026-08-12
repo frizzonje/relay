@@ -70,6 +70,23 @@ export function sanitizeNick(raw: unknown): string {
     .slice(0, NICK_MAX);
 }
 
+/** Имя устройства длиннее этого в списке не помещается. */
+export const DEVICE_NAME_MAX = 40;
+
+/**
+ * Имя устройства — не ник, и правила у него свои: «Chrome · macOS» обязано
+ * остаться собой, то есть пробелы и разделители тут законны. Режем ровно то,
+ * что ломает чужой экран: управляющие символы и перевод строки.
+ */
+export function sanitizeDeviceName(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  return raw
+    .replace(/[\p{Cc}\p{Cf}]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, DEVICE_NAME_MAX);
+}
+
 /** Случайный нонс челленджа. */
 export function newNonce(): string {
   return Buffer.from(webcrypto.getRandomValues(new Uint8Array(32))).toString('base64url');
