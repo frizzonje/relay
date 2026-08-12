@@ -26,6 +26,21 @@ export {
   type GuestTokenPayload,
 } from './auth';
 
+// Личность на ключах: кодирование, отпечаток и текст подписываемого сообщения.
+// Считается одним кодом на обеих сторонах — см. ./identity.
+export {
+  FINGERPRINT_GROUPS,
+  PUBLIC_KEY_BYTES,
+  SIGNATURE_BYTES,
+  SIGN_ALGORITHM,
+  authMessage,
+  fingerprint,
+  fromBase64Url,
+  isPublicKey,
+  isSignature,
+  toBase64Url,
+} from './identity';
+
 /** Лимит размера загружаемого файла — 25 МБ. */
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
