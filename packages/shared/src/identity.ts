@@ -11,6 +11,11 @@
  *
  * Как и весь `@relay/shared`, файл не зависит ни от lib.dom, ни от `node:`:
  * `crypto.subtle` и `btoa/atob` есть глобально и в браузере, и в Node 20.
+ *
+ * У сервера своя копия — `apps/api/src/identity/crypto.ts`: api намеренно не
+ * зависит от пакета фронта (та же причина, что у `./auth`), и контракт держится
+ * совпадением. Обе стороны прибиты одинаковыми контрольными значениями в
+ * тестах: правка отпечатка или чистки ника роняет тест напротив.
  */
 
 /**
@@ -103,4 +108,27 @@ export async function fingerprint(publicKey: string): Promise<string> {
  */
 export function authMessage(nonce: string): string {
   return `relay-auth-v1:${nonce}`;
+}
+
+/** Ник длиннее этого не помещается ни в ленту, ни в список участников. */
+export const NICK_MAX = 20;
+
+/**
+ * Ник к показываемому виду. Свободный и НЕ уникальный — людей различает
+ * отпечаток, — но не любой: перевод строки и невидимые символы в имени портят
+ * ленту всем остальным, а не только владельцу.
+ *
+ * Чистит обе стороны: клиент — чтобы человек сразу видел, что получится, и
+ * сервер — потому что клиент бывает не наш.
+ */
+export function sanitizeNick(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  return raw
+    .replace(/^@+/, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[^\p{L}\p{N}_-]/gu, '')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+/, '')
+    .slice(0, NICK_MAX);
 }

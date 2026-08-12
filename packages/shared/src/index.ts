@@ -30,6 +30,7 @@ export {
 // Считается одним кодом на обеих сторонах — см. ./identity.
 export {
   FINGERPRINT_GROUPS,
+  NICK_MAX,
   PUBLIC_KEY_BYTES,
   SIGNATURE_BYTES,
   SIGN_ALGORITHM,
@@ -38,6 +39,7 @@ export {
   fromBase64Url,
   isPublicKey,
   isSignature,
+  sanitizeNick,
   toBase64Url,
 } from './identity';
 

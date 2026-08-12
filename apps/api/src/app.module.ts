@@ -1,6 +1,8 @@
 import { Module, type DynamicModule } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { AuthController } from './auth/auth.controller';
+import { IdentityController } from './identity/identity.controller';
+import { IdentityService } from './identity/identity.service';
 import { ConfigController } from './config.controller';
 import { HealthController } from './health.controller';
 import { MetricsController } from './metrics.controller';
@@ -27,6 +29,7 @@ export class AppModule {
       module: AppModule,
       controllers: [
         AuthController,
+        IdentityController,
         ConfigController,
         HealthController,
         MetricsController,
@@ -36,6 +39,7 @@ export class AppModule {
         { provide: DataSource, useValue: db },
         SignalingGateway,
         ChatService,
+        IdentityService,
         RegistryService,
         MetricsService,
         RetentionService,
