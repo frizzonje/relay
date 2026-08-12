@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DataSource } from 'typeorm';
-import { AttachmentRow, ChannelRow, MessageRow, ServerRow } from './db/entities';
+import { ChannelRow, MessageRow, ServerRow } from './db/entities';
 import { resetDatabase, testDatabase } from './db/testing';
 import { UploadByteBudget } from './upload.guard';
 import { UploadsService, parseBytes } from './uploads';
@@ -92,10 +92,10 @@ async function attachTo(channelId: string, attachmentId: string): Promise<void> 
 
 /** Состарить строку вложения: подметание смотрит на время загрузки. */
 async function ageUpload(id: string, hours: number): Promise<void> {
-  await db.query('UPDATE attachments SET uploaded_at = now() - ($1 || \' hours\')::interval WHERE id = $2', [
-    hours,
-    id,
-  ]);
+  await db.query(
+    "UPDATE attachments SET uploaded_at = now() - ($1 || ' hours')::interval WHERE id = $2",
+    [hours, id],
+  );
 }
 
 // Кладём файл на диск и отдаём его так, как отдал бы multer. `ageSec` разводит

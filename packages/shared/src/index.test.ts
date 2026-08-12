@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   APP_NAME,
   AUTH_COOKIE,
-  CHAT_HISTORY_LIMIT,
+  CHAT_PAGE_SIZE,
   CHAT_PREFIX,
   GUEST_TOKEN_TTL_MS,
   LIMITS,
@@ -62,9 +62,9 @@ describe('константы совпадают с копией в api', () => {
     expect(apiSource('uploads.ts')).toContain('MAX_UPLOAD_BYTES = 25 * 1024 * 1024');
   });
 
-  it('глубина истории и потолок каналов — те же', () => {
+  it('страница ленты и потолок каналов — те же', () => {
     expect(apiSource('gateway/chat.service.ts')).toContain(
-      `const HISTORY_LIMIT = ${CHAT_HISTORY_LIMIT};`,
+      `export const PAGE_SIZE = ${CHAT_PAGE_SIZE};`,
     );
     expect(apiSource('gateway/registry.service.ts')).toContain(
       `export const MAX_CHANNELS = ${MAX_CHANNELS};`,

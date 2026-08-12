@@ -1,4 +1,4 @@
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, Optional, type OnModuleInit } from '@nestjs/common';
 import { existsSync, writeFileSync } from 'node:fs';
 import { DataSource, type EntityManager } from 'typeorm';
 import { ChannelRow, ServerRow } from '../db/entities';
@@ -195,11 +195,15 @@ export class RegistryService implements OnModuleInit {
    * модуля: тесту нужен свой каталог, а перезагружать ради этого модуль
    * нельзя — вместе с ним перезагрузятся сущности, и открытое соединение
    * перестанет их узнавать.
+   *
+   * `@Optional()` обязателен: значения по умолчанию в конструкторе — это
+   * договорённость TypeScript, а Nest видит только эмитированные типы и честно
+   * ищет провайдер для `String`. Без него приложение не поднимается вовсе.
    */
   constructor(
     private readonly db: DataSource,
-    private readonly legacyFile: string = REGISTRY_FILE,
-    private readonly migratedMarker: string = MIGRATED_MARKER,
+    @Optional() private readonly legacyFile: string = REGISTRY_FILE,
+    @Optional() private readonly migratedMarker: string = MIGRATED_MARKER,
   ) {}
 
   /**

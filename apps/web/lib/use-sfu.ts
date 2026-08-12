@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { isSfuAvailable } from '@/lib/config';
+import { getRetentionDays, isSfuAvailable } from '@/lib/config';
 
 /**
  * Поднят ли медиасервер (профиль `sfu`). Пока ответ не пришёл — `false`:
@@ -21,4 +21,22 @@ export function useSfuAvailable(): boolean {
     };
   }, []);
   return available;
+}
+
+/**
+ * Срок хранения переписки в днях (0 — не показывать). Тот же кэшированный
+ * запрос, что и у медиасервера: конфиг тянется один раз на сессию.
+ */
+export function useRetentionDays(): number {
+  const [days, setDays] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    void getRetentionDays().then((v) => {
+      if (alive) setDays(v);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return days;
 }

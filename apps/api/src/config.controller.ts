@@ -1,4 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
+import { DEFAULT_RETENTION_DAYS, retentionDays } from './db/retention.service';
 import { sfuHealthy } from './sfu/sfu-health';
 
 interface IceServer {
@@ -17,7 +18,11 @@ function splitUrls(value: string | undefined): string[] {
 @Controller('api')
 export class ConfigController {
   @Get('config')
-  async getConfig(): Promise<{ iceServers: IceServer[]; sfu: { available: boolean } }> {
+  async getConfig(): Promise<{
+    iceServers: IceServer[];
+    sfu: { available: boolean };
+    retentionDays: number;
+  }> {
     const iceServers: IceServer[] = [];
 
     // Без TURN звонок не соберётся между «строгими» NAT (мобильные сети и т.п.)
@@ -64,6 +69,14 @@ export class ConfigController {
     // health-пинг: лежащий контейнер не должен собирать звонки на себя.
     const sfu = { available: await sfuHealthy() };
 
-    return { iceServers, sfu };
+    // Сколько дней живёт переписка. Клиенту это нужно не для красоты: без срока
+    // он не может объяснить человеку, куда делся верх ленты, и «начало канала»
+    // выглядит одинаково с «дальше уже удалено».
+    const days = retentionDays();
+    return {
+      iceServers,
+      sfu,
+      retentionDays: Number.isNaN(days) ? DEFAULT_RETENTION_DAYS : days,
+    };
   }
 }

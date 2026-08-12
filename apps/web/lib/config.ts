@@ -47,3 +47,13 @@ export async function getIceServers(): Promise<IceServer[]> {
 export async function isSfuAvailable(): Promise<boolean> {
   return (await getConfig()).sfu?.available === true;
 }
+
+/**
+ * Сколько дней инсталляция хранит переписку. `0` — не хранит вовсе; сервер
+ * старой версии поля не пришлёт, и тогда честнее не показывать ничего, чем
+ * назвать выдуманный срок.
+ */
+export async function getRetentionDays(): Promise<number> {
+  const days = (await getConfig()).retentionDays;
+  return typeof days === 'number' && days >= 0 ? days : 0;
+}

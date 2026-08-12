@@ -17,7 +17,7 @@ const HOWTO =
   'TEST_DATABASE_URL не задан, а тесты api работают с настоящей базой.\n' +
   '  Поднять и прогнать:\n' +
   '    docker compose -f infra/docker-compose.dev.yml up -d db\n' +
-  '    docker run --rm --network relay_default -v "$PWD":/mono -w /mono \\\n' +
+  '    docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono \\\n' +
   '      -e TEST_DATABASE_URL=postgresql://relay:relay@db:5432/relay_test \\\n' +
   '      node:20-alpine sh -c "corepack enable && pnpm --filter @relay/api test"';
 

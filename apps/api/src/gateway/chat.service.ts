@@ -281,15 +281,17 @@ export class ChatService implements OnModuleInit {
    * канала ради одного булева значения было бы расточительно.
    */
   private feed() {
-    return this.db
-      .getRepository(MessageRow)
-      .createQueryBuilder('m')
-      .leftJoinAndSelect('m.attachment', 'a')
-      .orderBy('m.createdAt', 'DESC')
-      .addOrderBy('m.id', 'DESC')
-      // `limit`, а не `take`: вложение — связь «многие к одному», лишних строк
-      // от неё не бывает, и городить ради этого подзапрос с DISTINCT незачем.
-      .limit(PAGE_SIZE + 1);
+    return (
+      this.db
+        .getRepository(MessageRow)
+        .createQueryBuilder('m')
+        .leftJoinAndSelect('m.attachment', 'a')
+        .orderBy('m.createdAt', 'DESC')
+        .addOrderBy('m.id', 'DESC')
+        // `limit`, а не `take`: вложение — связь «многие к одному», лишних строк
+        // от неё не бывает, и городить ради этого подзапрос с DISTINCT незачем.
+        .limit(PAGE_SIZE + 1)
+    );
   }
 
   private page(rows: MessageRow[]): Page {

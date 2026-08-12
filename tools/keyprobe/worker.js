@@ -18,7 +18,11 @@ const STORE = 'identity';
 // последняя удавшаяся стадия окажется не той, на которой всё встало.
 async function say(stage) {
   postMessage({ stage });
-  try { await fetch('/log?' + encodeURIComponent('    [worker] ' + stage)); } catch (e) {}
+  try {
+    await fetch('/log?' + encodeURIComponent('    [worker] ' + stage));
+  } catch {
+    // Маячок — диагностика, а не работа: сеть отвалилась, а проба идёт дальше.
+  }
 }
 
 function idb(name) {

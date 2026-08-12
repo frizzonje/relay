@@ -57,7 +57,9 @@ describe('пауза между попытками', () => {
 
 describe('объяснение отказа', () => {
   it('база не поднята — говорит, куда смотреть', () => {
-    const text = explainDbFailure(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }));
+    const text = explainDbFailure(
+      Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+    );
     expect(text).toContain('docker compose logs db');
   });
 
@@ -70,7 +72,9 @@ describe('объяснение отказа', () => {
   });
 
   it('нет базы с таким именем — отдельный случай', () => {
-    const text = explainDbFailure(Object.assign(new Error('database "relay" does not exist'), { code: '3D000' }));
+    const text = explainDbFailure(
+      Object.assign(new Error('database "relay" does not exist'), { code: '3D000' }),
+    );
     expect(text).toContain('POSTGRES_DB');
   });
 
@@ -92,7 +96,8 @@ describe('подключение с повторами', () => {
       ds: {
         initialize: async () => {
           calls += 1;
-          if (calls <= fails) throw Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' });
+          if (calls <= fails)
+            throw Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' });
         },
       } as unknown as DataSource,
     };

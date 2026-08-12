@@ -425,8 +425,10 @@ IndexedDB»** — по крайней мере не для десктопа. Р�
 ## Проверка
 
 ```bash
-# typecheck + unit + build (Docker, локальный Node не нужен)
-docker run --rm -v "$PWD":/mono -w /mono node:20-alpine \
+# typecheck + unit + build (Docker, локальный Node не нужен).
+# Тестам api нужна база: docker compose -f infra/docker-compose.dev.yml up -d db
+docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono \
+  -e TEST_DATABASE_URL=postgresql://relay:relay@db:5432/relay_test node:20-alpine \
   sh -c 'corepack enable && pnpm install --frozen-lockfile && pnpm turbo run typecheck test build'
 ```
 

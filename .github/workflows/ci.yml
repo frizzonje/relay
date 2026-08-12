@@ -8,13 +8,32 @@ name: CI
 # на машине разработчика её не видно, там `.next` лежит с прошлого раза.
 on:
   push:
-    branches: [main, 'refactor/**', 'fix/**']
+    branches: [main, 'refactor/**', 'fix/**', 'feat/**']
   pull_request:
 
 jobs:
   build-test:
     name: lint · typecheck · test · build
     runs-on: ubuntu-latest
+    # api tests talk to a real Postgres now. With storage this central to 1.0 —
+    # cursors, cascades, retention — a Map-shaped fake would be testing the
+    # fake, so the database is a requirement of the suite, not a nicety.
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: relay
+          POSTGRES_PASSWORD: relay
+          POSTGRES_DB: relay_test
+        options: >-
+          --health-cmd "pg_isready -U relay -d relay_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    env:
+      TEST_DATABASE_URL: postgresql://relay:relay@localhost:5432/relay_test
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -122,8 +141,29 @@ jobs:
           docker run --rm --network relay_default --add-host "relay.test:$CADDY_IP" \
             -v "$PWD":/work -w /work/e2e \
             -e BASE_URL=https://relay.test -e SITE_PASSWORD=testpass123 -e CI=1 \
+            -e E2E_PHASE=write -e E2E_MARK="$GITHUB_RUN_ID-survives-restart" \
             mcr.microsoft.com/playwright:v1.49.0-noble \
             sh -c 'npm install --no-save @playwright/test@1.49.0 && npx playwright test'
+
+      # The whole point of 1.0's first layer: the chat stops evaporating. Only a
+      # real restart proves it — a message written before the process died has
+      # to be there after it comes back.
+      - name: Restart api and check the chat survived
+        run: |
+          docker compose -f docker-compose.yml -f infra/docker-compose.e2e.yml restart api
+          for i in $(seq 60); do
+            state=$(docker inspect -f '{{.State.Health.Status}}' relay-api-1 2>/dev/null || echo starting)
+            [ "$state" = healthy ] && break
+            if [ "$i" = 60 ]; then echo "api did not come back"; docker logs relay-api-1; exit 1; fi
+            sleep 2
+          done
+          CADDY_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' relay-caddy-1)
+          docker run --rm --network relay_default --add-host "relay.test:$CADDY_IP" \
+            -v "$PWD":/work -w /work/e2e \
+            -e BASE_URL=https://relay.test -e SITE_PASSWORD=testpass123 -e CI=1 \
+            -e E2E_PHASE=read -e E2E_MARK="$GITHUB_RUN_ID-survives-restart" \
+            mcr.microsoft.com/playwright:v1.49.0-noble \
+            sh -c 'npm install --no-save @playwright/test@1.49.0 && npx playwright test tests/persistence.spec.ts'
       - name: Tear down
         if: always()
         run: docker compose -f docker-compose.yml -f infra/docker-compose.e2e.yml down -v

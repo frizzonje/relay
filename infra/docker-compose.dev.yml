@@ -41,6 +41,9 @@ services:
       start_period: 20s
     volumes:
       - pgdata:/var/lib/postgresql
+      # Заводит рядом relay_test — базу для юнит-тестов api. Только здесь:
+      # проду отдельная тестовая база не нужна.
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     expose:
       - "5432"
 

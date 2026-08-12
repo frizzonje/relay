@@ -114,9 +114,11 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       // «Прочитано» не трогаем: следом прилетит `chat-activity` про это же
       // сообщение — там одна общая ветка для открытого канала и всех прочих.
     });
-    socket.on('chat-history', (list) => {
-      if (!openSlug() || !Array.isArray(list)) return;
-      chat().setHistory(list);
+    socket.on('chat-history', (page) => {
+      // Страница подписана каналом: ответ мог обогнать переключение, и чужая
+      // лента, подставленная в открытый канал, выглядела бы как чужая переписка.
+      if (!page || !Array.isArray(page.messages) || page.slug !== openSlug()) return;
+      chat().setHistory(page.messages, page.more === true);
     });
     socket.on('chat-roster', (names) => {
       if (!openSlug() || !Array.isArray(names)) return;

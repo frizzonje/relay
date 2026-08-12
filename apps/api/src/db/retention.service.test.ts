@@ -69,10 +69,10 @@ async function say(text: string, days: number): Promise<string> {
     editedAt: null,
     authorIdentityId: null,
   });
-  await db.query("UPDATE messages SET created_at = now() - ($1 || ' days')::interval WHERE id = $2", [
-    days,
-    id,
-  ]);
+  await db.query(
+    "UPDATE messages SET created_at = now() - ($1 || ' days')::interval WHERE id = $2",
+    [days, id],
+  );
   return id;
 }
 

@@ -29,8 +29,12 @@ export {
 /** Лимит размера загружаемого файла — 25 МБ. */
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
-/** Сколько последних сообщений канала сервер хранит и отдаёт новичку. */
-export const CHAT_HISTORY_LIMIT = 50;
+/**
+ * Размер страницы ленты: столько реплик приходит при входе в канал и столько
+ * же — за одну подгрузку вверх. С 1.0 это уже не потолок хранения: канал
+ * помнит всё, что не съела ретенция.
+ */
+export const CHAT_PAGE_SIZE = 50;
 
 /** Префикс socket.io-комнаты текстового канала. */
 export const CHAT_PREFIX = 'chat:';
@@ -337,6 +341,12 @@ export interface ConfigResponse {
    * не предлагать режим, которого нет, и знать, что делать при фолбэке.
    */
   sfu?: { available: boolean };
+  /**
+   * Сколько дней живёт переписка (`RETENTION_DAYS`). Клиенту нужен, чтобы
+   * объяснить край ленты: «выше начало канала» и «выше уже удалено» — разные
+   * вещи, и человек имеет право знать, какая из них перед ним.
+   */
+  retentionDays?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -495,6 +505,29 @@ export interface ChatReactPayload {
   emoji: string;
 }
 
+/**
+ * Курсор подгрузки ленты вверх: время и id самой верхней реплики, которую
+ * клиент уже держит. Пары достаточно, а «страница номер N» разъезжалась бы —
+ * снизу всё это время приходит новое.
+ */
+export interface ChatHistoryMorePayload {
+  beforeTs: number;
+  beforeId: string;
+}
+
+/**
+ * Страница истории. `more` — «выше есть ещё»: без него клиент не отличает
+ * начало канала от края, срезанного ретенцией, и рисует одно вместо другого.
+ */
+export interface ChatHistoryPage {
+  /** Чей это кусок ленты: ответ мог обогнать смену канала. */
+  slug: string;
+  messages: ChatMessage[];
+  more: boolean;
+}
+
+export type ChatHistoryMoreResult = { ok: true; messages: ChatMessage[]; more: boolean };
+
 export interface MediaUpdatePayload {
   camOn: boolean;
   screenOn: boolean;
@@ -589,6 +622,14 @@ export interface ClientToServerEvents {
   /** «Печатает…» — клиент шлёт с троттлингом, серверу тело не нужно. */
   'chat-typing': () => void;
   'chat-react': (payload: ChatReactPayload) => void;
+  /**
+   * Подгрузить страницу выше уже показанной. Курсор — время и id самой верхней
+   * реплики на экране; сервер по нему ничего не хранит.
+   */
+  'chat-history-more': (
+    payload: ChatHistoryMorePayload,
+    cb: (res: ChatHistoryMoreResult) => void,
+  ) => void;
   'media-update': (payload: MediaUpdatePayload) => void;
   rename: (payload: RenamePayload) => void;
   'server-create': (payload: ServerCreatePayload) => void;
@@ -650,7 +691,7 @@ export interface ServerToClientEvents {
   'ice-candidate': (payload: IceRelay) => void;
   'voice-presence': (presence: VoicePresence) => void;
   chat: (message: ChatMessage) => void;
-  'chat-history': (messages: ChatMessage[]) => void;
+  'chat-history': (page: ChatHistoryPage) => void;
   'chat-roster': (names: string[]) => void;
   'chat-reaction': (payload: ChatReactionRelay) => void;
   /** Сообщение отредактировали — обновить текст и показать пометку «изменено». */

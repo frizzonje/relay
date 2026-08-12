@@ -70,6 +70,18 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.browser, ...globals.audioworklet } },
   },
 
+  // Проба ключа: страница и воркер, которые гоняются в проверяемом движке
+  // напрямую, без сборки. Скоупы у них разные — у воркера нет ни window, ни
+  // document, зато есть postMessage и indexedDB, — поэтому и глобалы разные.
+  {
+    files: ['tools/keyprobe/*.js'],
+    languageOptions: { globals: { ...globals.browser, ...globals.worker } },
+  },
+  {
+    files: ['tools/keyprobe/*.mjs'],
+    languageOptions: { globals: { ...globals.node } },
+  },
+
   // CommonJS-скрипты сборки (Node, require разрешён).
   {
     files: ['**/*.cjs', 'scripts/**'],

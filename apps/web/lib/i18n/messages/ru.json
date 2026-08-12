@@ -62,6 +62,8 @@
   "chat.edit.aria": "Редактирование сообщения",
   "chat.edit.cancel": "Отменить правку",
   "chat.edited": "(изменено)",
+  "chat.history.edge": "Сообщения старше {days} дн. удаляются.",
+  "chat.history.loading": "Загружаем, что было раньше…",
   "chat.image.open": "Открыть изображение: {name}",
   "chat.jump.bottom": "Вниз",
   "chat.jump.new": "Новые сообщения",

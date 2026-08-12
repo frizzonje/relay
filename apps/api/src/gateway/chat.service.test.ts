@@ -92,7 +92,18 @@ describe('страницы ленты', () => {
     const top = page.messages[0];
     const older = await chat.older('obshchii', top.ts, top.id!);
 
-    expect(older.messages.map((m) => m.text)).toEqual(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']);
+    expect(older.messages.map((m) => m.text)).toEqual([
+      '0',
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6',
+      '7',
+      '8',
+      '9',
+    ]);
     expect(older.more).toBe(false);
     // Ни одного повтора между страницами: курсор берёт строго то, что выше.
     const ids = new Set([...page.messages, ...older.messages].map((m) => m.id));
@@ -174,7 +185,12 @@ describe('вложение', () => {
       mime: 'image/png',
       kind: 'image',
     });
-    const hidden = await chat.add('obshchii', { name: 'А', text: '', uploadId: 'up-1', spoiler: true });
+    const hidden = await chat.add('obshchii', {
+      name: 'А',
+      text: '',
+      uploadId: 'up-1',
+      spoiler: true,
+    });
     const open = await chat.add('obshchii', { name: 'А', text: '', uploadId: 'up-1' });
     expect(hidden?.attachment?.spoiler).toBe(true);
     expect(open?.attachment?.spoiler).toBeUndefined();

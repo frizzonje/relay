@@ -18,10 +18,14 @@ docker compose -f infra/docker-compose.dev.yml up
 
 ## Проверки перед PR
 
-Прогоните тот же набор, что и CI (`typecheck → unit → build`):
+Прогоните тот же набор, что и CI (`typecheck → unit → build`). Тесты api
+работают с настоящей базой — с 1.0 хранилище и есть проверяемое поведение
+(курсор ленты, каскады, ретенция), и подделка в памяти проверяла бы подделку:
 
 ```bash
-docker run --rm -v "$PWD":/mono -w /mono node:20-alpine \
+docker compose -f infra/docker-compose.dev.yml up -d db
+docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono \
+  -e TEST_DATABASE_URL=postgresql://relay:relay@db:5432/relay_test node:20-alpine \
   sh -c 'corepack enable && pnpm install --frozen-lockfile && pnpm turbo run typecheck test build'
 ```
 

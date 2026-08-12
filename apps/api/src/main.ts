@@ -41,7 +41,9 @@ async function openDatabase(): Promise<DataSource> {
   try {
     await connectWithRetry(db, {
       onRetry: (attempt, delay, reason) =>
-        console.warn(`База ещё не отвечает (попытка ${attempt}): ${reason}. Повтор через ${delay} мс`),
+        console.warn(
+          `База ещё не отвечает (попытка ${attempt}): ${reason}. Повтор через ${delay} мс`,
+        ),
     });
   } catch (e) {
     die(explainDbFailure(e));

@@ -29,7 +29,7 @@ Want to build from source or hack on it? See [Quick start](#quick-start-from-sou
 
 - **Voice and video** — camera, screen sharing (tab/system audio via the browser; on Windows the desktop client captures system audio natively), push-to-talk, voice activity detection, mute/deafen indicators, per-participant volume mixer (0–300 %) with memory
 - **Two call transports** — P2P mesh and a mediasoup SFU, picked per voice channel; see [Call topology](#call-topology)
-- **Text channels** — replies, editing, deletion, typing indicators, reactions, attachments up to 25 MB. Chat is ephemeral: the API keeps the last 50 messages per channel in memory — see [Data and persistence](#data-and-persistence)
+- **Text channels** — replies, editing, deletion, typing indicators, reactions, attachments up to 25 MB. History is kept in Postgres for `RETENTION_DAYS` (14 by default) and pulled upward a page at a time — see [Data and persistence](#data-and-persistence)
 - **Servers and channels** — create/delete on the fly, optional per-server password, shared registry for all members, invite links with guest tokens. Renaming and deleting is limited to the device that created the entry; if that browser is gone, `relay disown` on the host hands the entry back to everyone
 - **Closed perimeter** — single login password (HMAC cookie), one origin behind Caddy, automatic TLS via Let's Encrypt
 - **Interface in English and Russian** — resolved server-side from the browser's `Accept-Language` on the first visit (so the first paint is already right), remembered in a cookie, switchable in Settings → Appearance. Adding a language is one JSON file — see [Localization](#localization)
@@ -161,8 +161,11 @@ Calls between two machines need a hostname both can reach: set `DOMAIN` and `SER
 ### Tests and checks
 
 ```bash
+# The api suite talks to a real Postgres, so bring one up first:
+#   docker compose -f infra/docker-compose.dev.yml up -d db
 # unit (Vitest) + typecheck + build of all packages — same set as CI
-docker run --rm -v "$PWD":/mono -w /mono node:20-alpine \
+docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono \
+  -e TEST_DATABASE_URL=postgresql://relay:relay@db:5432/relay_test node:20-alpine \
   sh -c 'corepack enable && pnpm install --frozen-lockfile && pnpm turbo run typecheck test build'
 
 # lint and formatting — CI fails on both
@@ -223,17 +226,19 @@ The installer opens these for you. The SFU's signaling port (`3100`) stays inter
 
 ## Data and persistence
 
-There is no database. What survives a restart and what doesn't:
+What lives where:
 
 | Data | Where | Survives a restart? |
 |---|---|---|
-| Servers and channels | `registry.json` on the `uploads` volume (`DATA_DIR`) | yes |
-| Uploaded attachments | `uploads` volume | yes |
+| Servers and channels | Postgres (`pgdata` volume) | yes |
+| Chat messages | Postgres, for `RETENTION_DAYS` days | yes, until the retention window passes |
+| Uploaded attachments | `uploads` volume, one row per file in Postgres | yes, as long as their message lives |
 | TLS certificates | `caddy_data` volume | yes |
-| Chat messages | api process memory — last 50 per channel, 200 channels max | **no** |
 | Your `@`-tag, volume levels, unread state | browser `localStorage` | yes, per browser |
 
-So `relay update`, `docker compose up` or any api restart wipes the message history while keeping servers, channels and files. `relay backup` snapshots both volumes **and** the configuration next to them (`.env` with all its secrets, the compose file, the Caddy config) — a machine rebuilt from one of these tarballs comes back as it was, which was not true of the volumes alone. Accounts don't exist either: access is one shared `SITE_PASSWORD`, and identity is the `@`-tag a visitor picks after entering it.
+Retention is a promise, not a cleanup job: messages older than `RETENTION_DAYS` (14 by default) are deleted every hour, and a file goes with the message that carried it. `0` means the installation keeps nothing. An upload nobody ever sent is swept a day later.
+
+`relay backup` snapshots the database dump and both volumes **and** the configuration next to them (`.env` with all its secrets, the compose file, the Caddy config) — a machine rebuilt from one of these tarballs comes back as it was, which was not true of the volumes alone. Accounts don't exist: access is one shared `SITE_PASSWORD`, and identity is the `@`-tag a visitor picks after entering it.
 
 ## Localization
 

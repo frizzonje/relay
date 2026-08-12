@@ -1,10 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
   MAX_UPLOAD_BYTES,
+  type ChatHistoryMoreResult,
   type ChatMessage,
   type ReplyRef,
   type UploadResponse,
@@ -13,6 +14,8 @@ import { cn } from '@/lib/utils';
 import { Icon } from '@/components/ui/icon';
 import { fmtBytes } from '@/lib/format';
 import { getSocket } from '@/lib/socket';
+import { ask } from '@/lib/channels';
+import { useRetentionDays } from '@/lib/use-sfu';
 import { useUiStore } from '@/stores/ui';
 import { useChatStore } from '@/stores/chat';
 import { useUnreadStore } from '@/stores/unread';
@@ -112,6 +115,9 @@ export function ChatPanel() {
   const callsign = useUiStore((s) => s.callsign);
   const messages = useChatStore((s) => s.messages);
   const typing = useChatStore((s) => s.typing);
+  const more = useChatStore((s) => s.more);
+  const loadingMore = useChatStore((s) => s.loadingMore);
+  const retentionDays = useRetentionDays();
 
   const [text, setText] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -132,6 +138,10 @@ export function ChatPanel() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingRef = useRef<PendingFile[]>([]);
   const prevLen = useRef(0);
+  // Высота ленты до того, как сверху вставится страница. По разнице возвращаем
+  // прокрутку на прежнее место: без этого подгрузка утаскивала бы читателя
+  // вверх ровно на высоту приехавшего.
+  const anchorHeight = useRef<number | null>(null);
   const dragDepth = useRef(0);
   const lastTypingSent = useRef(0);
 
@@ -151,11 +161,24 @@ export function ChatPanel() {
     return () => cancelAnimationFrame(raf);
   }, [textRoom]);
 
+  // Приехала страница сверху — возвращаем прокрутку туда, где читатель и был.
+  // Слоем layout, а не обычным эффектом: между вставкой и правкой scrollTop не
+  // должно быть ни одного кадра, иначе лента дёргается.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || anchorHeight.current === null) return;
+    el.scrollTop += el.scrollHeight - anchorHeight.current;
+    anchorHeight.current = null;
+    prevLen.current = messages.length;
+  }, [messages]);
+
   // Автопрокрутка вниз, если уже у дна; иначе, если лента выросла — зажигаем «вниз».
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const grew = messages.length > prevLen.current;
+    // Подгрузка вверх — не «пришло новое»: значок «вниз» на неё зажигаться не
+    // должен, читатель сам её и попросил.
+    const grew = messages.length > prevLen.current && anchorHeight.current === null;
     prevLen.current = messages.length;
     const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     if (bottom) el.scrollTo({ top: el.scrollHeight, behavior: enterAnim ? 'smooth' : 'auto' });
@@ -181,6 +204,36 @@ export function ChatPanel() {
     // Отскроллен вверх — входящие не считаются прочитанными (stores/unread).
     useUnreadStore.getState().setAtBottom(bottom);
     if (bottom) setHasNew(false);
+    // Подтягиваем заранее, за экран до края: страница успевает приехать, пока
+    // человек ещё листает, и лента не упирается в пустоту.
+    if (el.scrollTop < el.clientHeight) void loadOlder();
+  }
+
+  /**
+   * Страница выше показанной. Курсор — верхняя реплика на экране; системные
+   * строки в нём годятся так же, как обычные: сервер сортирует по времени и id,
+   * а не по смыслу.
+   */
+  async function loadOlder() {
+    const el = scrollRef.current;
+    const state = useChatStore.getState();
+    const top = state.messages[0];
+    if (!el || !state.more || state.loadingMore || !top?.id) return;
+
+    state.setLoadingMore(true);
+    anchorHeight.current = el.scrollHeight;
+    const page = await ask<ChatHistoryMoreResult>('chat-history-more', {
+      beforeTs: top.ts,
+      beforeId: top.id,
+    });
+    if (!page) {
+      // Ответа не дождались — не врём, что история кончилась: пусть попробует
+      // ещё раз, прокрутив ленту.
+      anchorHeight.current = null;
+      useChatStore.getState().setLoadingMore(false);
+      return;
+    }
+    useChatStore.getState().prependHistory(page.messages, page.more);
   }
 
   function jumpToBottom() {
@@ -367,11 +420,25 @@ export function ChatPanel() {
         onScroll={onScroll}
         className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-4 pb-2 pt-4"
       >
-        <div className="px-4 pb-3 pt-7 text-center text-[13px] leading-[1.5] text-text-muted">
-          {rt('chat.start', {
-            channel: <b className="text-text-header">#{textLabel}</b>,
-          })}
-        </div>
+        {/* Верх ленты отвечает на вопрос «а что было раньше?» — и три ответа
+            на него разные: выше есть ещё, выше начало канала, выше уже
+            удалено ретенцией. Рисовать их одинаково значит врать. */}
+        {more ? (
+          <div className="px-4 pb-3 pt-7 text-center text-[13px] leading-[1.5] text-text-muted">
+            {loadingMore ? t('chat.history.loading') : '⋯'}
+          </div>
+        ) : (
+          <div className="px-4 pb-3 pt-7 text-center text-[13px] leading-[1.5] text-text-muted">
+            {rt('chat.start', {
+              channel: <b className="text-text-header">#{textLabel}</b>,
+            })}
+            {retentionDays > 0 && (
+              <div className="pt-1 text-text-muted/70">
+                {t('chat.history.edge', { days: retentionDays })}
+              </div>
+            )}
+          </div>
+        )}
         {messages.map((m, i) => (
           <div key={m.id ?? i}>
             {i === firstUnreadIdx && <UnreadDivider />}

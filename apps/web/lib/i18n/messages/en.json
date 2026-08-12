@@ -58,6 +58,8 @@
   "chat.edit.aria": "Editing a message",
   "chat.edit.cancel": "Cancel editing",
   "chat.edited": "(edited)",
+  "chat.history.edge": "Messages older than {days} days are deleted.",
+  "chat.history.loading": "Loading earlier messages…",
   "chat.image.open": "Open image: {name}",
   "chat.jump.bottom": "Down",
   "chat.jump.new": "New messages",

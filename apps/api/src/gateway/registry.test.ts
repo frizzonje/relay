@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { loadRegistry, saveRegistry } from './registry';
+import { loadRegistry } from './registry';
 
 /**
  * Реестр — единственное хранилище api до 1.0, поэтому проверяем не «читается ли

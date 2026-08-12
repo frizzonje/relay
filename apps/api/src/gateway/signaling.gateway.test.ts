@@ -107,7 +107,11 @@ async function makeGateway(saved: PersistedRegistry = {}) {
   // Пути старого файлового реестра уводим в несуществующий каталог: переезд с
   // 0.x проверяется отдельно, а здесь прогон не должен зависеть от того, лежит
   // ли рядом чужой registry.json.
-  const registry = new RegistryService(db, '/nonexistent/relay/registry.json', '/nonexistent/relay/registry.json.migrated');
+  const registry = new RegistryService(
+    db,
+    '/nonexistent/relay/registry.json',
+    '/nonexistent/relay/registry.json.migrated',
+  );
   await registry.onModuleInit();
   const chat = new ChatService(db, registry);
   await chat.onModuleInit();
@@ -445,7 +449,11 @@ describe('server-unlock', () => {
     const { gw, server } = await makeGateway();
     const owner = connect(gw, server, { id: 'owner', clientId: 'dev-owner' });
     await gw.handleServerCreate(asSocket(owner), { id: 'srv', name: 'тайный', password: 'пароль' });
-    await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'тайный чат' });
+    await gw.handleChannelCreate(asSocket(owner), {
+      serverId: 'srv',
+      type: 'text',
+      name: 'тайный чат',
+    });
     settle();
     server.clearAll();
     return { gw, server, owner };
@@ -542,7 +550,11 @@ describe('server-delete', () => {
     const { gw, server } = await makeGateway();
     const owner = connect(gw, server, { id: 'owner', clientId });
     await gw.handleServerCreate(asSocket(owner), { id: 'srv', name: 'мой' });
-    await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'болталка' });
+    await gw.handleChannelCreate(asSocket(owner), {
+      serverId: 'srv',
+      type: 'text',
+      name: 'болталка',
+    });
     await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'voice', name: 'эфир' });
     settle();
     server.clearAll();
@@ -620,7 +632,10 @@ describe('server-delete', () => {
 
   it('пустой id — not-found, гость — forbidden', async () => {
     const { gw, server, owner } = await withServer();
-    expect(await gw.handleServerDelete(asSocket(owner), {})).toEqual({ ok: false, error: 'not-found' });
+    expect(await gw.handleServerDelete(asSocket(owner), {})).toEqual({
+      ok: false,
+      error: 'not-found',
+    });
     const { token } = issueGuestToken('voice-obshchii');
     const guest = connect(gw, server, { guest: token });
     expect(await gw.handleServerDelete(asSocket(guest), { id: 'srv' })).toEqual({
@@ -688,7 +703,11 @@ describe('channel-create', () => {
 
   it('создаёт канал со слагом из имени', async () => {
     const { gw, owner } = await withOwnServer();
-    await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'Общий Чат!' });
+    await gw.handleChannelCreate(asSocket(owner), {
+      serverId: 'srv',
+      type: 'text',
+      name: 'Общий Чат!',
+    });
     const ch = (gw as AnyGw).registry.channels.find((c) => c.serverId === 'srv')!;
     expect(ch.slug).toBe('общий-чат');
     expect(ch.type).toBe('text');
@@ -709,7 +728,11 @@ describe('channel-create', () => {
 
   it('имя из одной пунктуации канала не даёт', async () => {
     const { gw, owner } = await withOwnServer();
-    await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: '!!! ???' });
+    await gw.handleChannelCreate(asSocket(owner), {
+      serverId: 'srv',
+      type: 'text',
+      name: '!!! ???',
+    });
     expect((gw as AnyGw).registry.channels.some((c) => c.serverId === 'srv')).toBe(false);
   });
 
@@ -724,7 +747,11 @@ describe('channel-create', () => {
   it('несуществующий сервер и неизвестный тип канала не создают', async () => {
     const { gw, owner } = await withOwnServer();
     await gw.handleChannelCreate(asSocket(owner), { serverId: 'нет', type: 'text', name: 'висяк' });
-    await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'видео', name: 'что-то' });
+    await gw.handleChannelCreate(asSocket(owner), {
+      serverId: 'srv',
+      type: 'видео',
+      name: 'что-то',
+    });
     expect((gw as AnyGw).registry.channels).toHaveLength(3);
   });
 
@@ -733,7 +760,11 @@ describe('channel-create', () => {
     await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'общий' });
     await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'общий' });
     expect((gw as AnyGw).registry.channels.filter((c) => c.slug === 'общий')).toHaveLength(1);
-    await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'voice', name: 'общий' });
+    await gw.handleChannelCreate(asSocket(owner), {
+      serverId: 'srv',
+      type: 'voice',
+      name: 'общий',
+    });
     expect((gw as AnyGw).registry.channels.filter((c) => c.slug === 'общий')).toHaveLength(2);
   });
 
@@ -773,7 +804,11 @@ describe('channel-create', () => {
   it('потолок в 50 каналов держится', async () => {
     const { gw, owner } = await withOwnServer();
     for (let i = 0; i < 60; i++) {
-      await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: `ch${i}` });
+      await gw.handleChannelCreate(asSocket(owner), {
+        serverId: 'srv',
+        type: 'text',
+        name: `ch${i}`,
+      });
       vi.advanceTimersByTime(1000);
     }
     expect((gw as AnyGw).registry.channels).toHaveLength(50);
@@ -783,7 +818,11 @@ describe('channel-create', () => {
     const { gw, server } = await withOwnServer();
     const { token } = issueGuestToken('voice-obshchii');
     const guest = connect(gw, server, { guest: token });
-    await gw.handleChannelCreate(asSocket(guest), { serverId: 'srv', type: 'text', name: 'гостевой' });
+    await gw.handleChannelCreate(asSocket(guest), {
+      serverId: 'srv',
+      type: 'text',
+      name: 'гостевой',
+    });
     expect((gw as AnyGw).registry.channels).toHaveLength(3);
   });
 });
@@ -876,7 +915,9 @@ describe('channel-rename / channel-delete / channel-stats', () => {
     await gw.handleChatJoin(asSocket(owner), { room: 'чат', name: 'Хозяин' });
     await gw.handleChatMessage(asSocket(owner), { text: 'до' });
 
-    expect(await gw.handleChannelRename(asSocket(owner), { id: text.id, name: 'Болталка' })).toEqual({
+    expect(
+      await gw.handleChannelRename(asSocket(owner), { id: text.id, name: 'Болталка' }),
+    ).toEqual({
       ok: true,
     });
     expect(text.name).toBe('Болталка');
@@ -960,7 +1001,10 @@ describe('channel-rename / channel-delete / channel-stats', () => {
 
   it('пустой id, дефолтный канал и гость — три разных отказа', async () => {
     const { gw, server, owner } = await withChannels();
-    expect(await gw.handleChannelDelete(asSocket(owner), {})).toEqual({ ok: false, error: 'not-found' });
+    expect(await gw.handleChannelDelete(asSocket(owner), {})).toEqual({
+      ok: false,
+      error: 'not-found',
+    });
     const def = (gw as AnyGw).registry.channels.find((c) => c.slug === 'obshchii')!;
     expect(await gw.handleChannelDelete(asSocket(owner), { id: def.id })).toEqual({
       ok: false,
@@ -1002,13 +1046,19 @@ describe('channel-rename / channel-delete / channel-stats', () => {
     const { gw, server } = await makeGateway();
     const owner = connect(gw, server, { id: 'owner', clientId: 'dev-owner' });
     await gw.handleServerCreate(asSocket(owner), { id: 'srv', name: 'тайный', password: 'п' });
-    await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'скрытый' });
+    await gw.handleChannelCreate(asSocket(owner), {
+      serverId: 'srv',
+      type: 'text',
+      name: 'скрытый',
+    });
     const hidden = (gw as AnyGw).registry.channels.find((c) => c.slug === 'скрытый')!;
 
     // Тот же clientId, что у владельца: если бы владение проверялось первым,
     // ответ был бы «ok». Порядок проверок скрывает даже существование канала.
     const stranger = connect(gw, server, { clientId: 'dev-owner' });
-    expect(await gw.handleChannelRename(asSocket(stranger), { id: hidden.id, name: 'моё' })).toEqual({
+    expect(
+      await gw.handleChannelRename(asSocket(stranger), { id: hidden.id, name: 'моё' }),
+    ).toEqual({
       ok: false,
       error: 'forbidden',
     });
@@ -1780,7 +1830,11 @@ describe('chat-join', () => {
     const { gw, server } = await makeGateway();
     const owner = connect(gw, server, { id: 'owner', clientId: 'dev' });
     await gw.handleServerCreate(asSocket(owner), { id: 'srv', name: 'тайный', password: 'п' });
-    await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'тайный чат' });
+    await gw.handleChannelCreate(asSocket(owner), {
+      serverId: 'srv',
+      type: 'text',
+      name: 'тайный чат',
+    });
 
     const stranger = connect(gw, server, { id: 'stranger' });
     await gw.handleChatJoin(asSocket(stranger), { room: 'тайный-чат', name: 'Ч' });
@@ -1800,7 +1854,11 @@ describe('chat-join', () => {
     const { gw, server } = await makeGateway();
     const owner = connect(gw, server, { id: 'owner', clientId: 'dev' });
     await gw.handleServerCreate(asSocket(owner), { id: 'srv', name: 'мой' });
-    await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'второй' });
+    await gw.handleChannelCreate(asSocket(owner), {
+      serverId: 'srv',
+      type: 'text',
+      name: 'второй',
+    });
 
     const a = connect(gw, server, { id: 'a' });
     await gw.handleChatJoin(asSocket(a), { room: 'obshchii', name: 'A' });
@@ -1932,7 +1990,10 @@ describe('chat-message', () => {
 
     // Пятьдесят свежих и честное «выше есть ещё» — а не обрезанная лента,
     // молча притворяющаяся всей историей, как было до базы.
-    const page = fresh.last('chat-history') as { messages: { text: string; id: string; ts: number }[]; more: boolean };
+    const page = fresh.last('chat-history') as {
+      messages: { text: string; id: string; ts: number }[];
+      more: boolean;
+    };
     expect(page.messages).toHaveLength(50);
     expect(page.messages[0].text).toBe('10');
     expect(page.messages[49].text).toBe('59');
@@ -1943,7 +2004,18 @@ describe('chat-message', () => {
       beforeTs: top.ts,
       beforeId: top.id,
     });
-    expect(older.messages.map((m) => m.text)).toEqual(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']);
+    expect(older.messages.map((m) => m.text)).toEqual([
+      '0',
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6',
+      '7',
+      '8',
+      '9',
+    ]);
     // Выше десятого — начало канала, и это разные вещи с «страница кончилась».
     expect(older.more).toBe(false);
   });
@@ -1962,7 +2034,11 @@ describe('chat-message', () => {
     const { gw, server } = await makeGateway();
     const owner = connect(gw, server, { id: 'owner', clientId: 'dev' });
     await gw.handleServerCreate(asSocket(owner), { id: 'srv', name: 'тайный', password: 'п' });
-    await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'тайный чат' });
+    await gw.handleChannelCreate(asSocket(owner), {
+      serverId: 'srv',
+      type: 'text',
+      name: 'тайный чат',
+    });
     await gw.handleChatJoin(asSocket(owner), { room: 'тайный-чат', name: 'Х' });
     const stranger = connect(gw, server, { id: 'stranger' });
     settle();
