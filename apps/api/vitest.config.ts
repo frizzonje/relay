@@ -23,6 +23,11 @@ export default defineConfig({
         // app.module.ts — один список провайдеров.
         'src/main.ts',
         'src/app.module.ts',
+        // Схема: объявления без поведения. Их правильность проверяется не
+        // покрытием, а тем, что TypeORM после миграции ничего не хочет
+        // дописать (src/db/schema.test.ts) — и настоящей базой в e2e.
+        'src/db/entities.ts',
+        'src/db/migrations/**',
       ],
       reporter: ['text', 'html'],
       thresholds: { statements: 90, branches: 85, functions: 90, lines: 90 },

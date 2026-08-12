@@ -1,4 +1,5 @@
-import { Module } from '@nestjs/common';
+import { Module, type DynamicModule } from '@nestjs/common';
+import { DataSource } from 'typeorm';
 import { AuthController } from './auth/auth.controller';
 import { ConfigController } from './config.controller';
 import { HealthController } from './health.controller';
@@ -10,14 +11,34 @@ import { RegistryService } from './gateway/registry.service';
 import { MetricsService } from './metrics';
 import { UploadsService } from './uploads';
 
-@Module({
-  controllers: [
-    AuthController,
-    ConfigController,
-    HealthController,
-    MetricsController,
-    UploadController,
-  ],
-  providers: [SignalingGateway, ChatService, RegistryService, MetricsService, UploadsService],
-})
-export class AppModule {}
+/**
+ * Модуль собирается вокруг уже открытой базы, а не открывает её сам.
+ *
+ * Порядок здесь — не вкусовщина: соединение и миграции обязаны отработать ДО
+ * того, как поднимется хоть один провайдер, иначе первый же сокет придёт в
+ * полусхему. Поэтому DataSource приходит снаружи готовым (см. `main.ts`), а
+ * модуль его только раздаёт.
+ */
+@Module({})
+export class AppModule {
+  static withDatabase(db: DataSource): DynamicModule {
+    return {
+      module: AppModule,
+      controllers: [
+        AuthController,
+        ConfigController,
+        HealthController,
+        MetricsController,
+        UploadController,
+      ],
+      providers: [
+        { provide: DataSource, useValue: db },
+        SignalingGateway,
+        ChatService,
+        RegistryService,
+        MetricsService,
+        UploadsService,
+      ],
+    };
+  }
+}
