@@ -57,6 +57,39 @@ export function authMessage(nonce: string): string {
   return `relay-auth-v1:${nonce}`;
 }
 
+/**
+ * Что подписывает донор, впуская новый ключ в свою личность: «ключ такой-то
+ * принадлежит личности такой-то». Обе половины обязательны, префикс свой — см.
+ * близнеца в shared.
+ */
+export function certificateMessage(identityId: string, publicKey: string): string {
+  return `relay-device-v1:${identityId}:${publicKey}`;
+}
+
+/** Код связки — шесть цифр, см. близнеца в shared. */
+export const PAIR_CODE_DIGITS = 6;
+
+export function isPairCode(text: unknown): text is string {
+  return typeof text === 'string' && new RegExp(`^\\d{${PAIR_CODE_DIGITS}}$`).test(text);
+}
+
+/**
+ * Новый код связки. Считается тем же генератором, что и нонс: код живёт две
+ * минуты и пускает чужое устройство в личность — предсказуемым он быть не
+ * может, а `Math.random` предсказуем ровно настолько, насколько это важно.
+ */
+export function newPairCode(): string {
+  const span = 10 ** PAIR_CODE_DIGITS;
+  // Отсечка кратности: остаток от деления 2^32 на 10^6 иначе сделал бы первые
+  // коды чуть вероятнее прочих. Цена — редкий повтор броска.
+  const limit = Math.floor(0xffffffff / span) * span;
+  let value = 0;
+  do {
+    value = webcrypto.getRandomValues(new Uint32Array(1))[0];
+  } while (value >= limit);
+  return String(value % span).padStart(PAIR_CODE_DIGITS, '0');
+}
+
 /** Ник к показываемому виду: свободный и не уникальный, но не любой. */
 export function sanitizeNick(raw: unknown): string {
   if (typeof raw !== 'string') return '';

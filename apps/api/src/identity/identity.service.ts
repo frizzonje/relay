@@ -65,6 +65,24 @@ export interface Speaker {
   deviceId: string;
 }
 
+/**
+ * Устройство так, как его видит хозяин: имя, чтобы узнать, отпечаток, чтобы
+ * сверить, и три даты, чтобы понять, что оно тут делает. Публичного ключа
+ * целиком здесь нет — отпечаток решает ту же задачу и читается человеком.
+ */
+export interface DeviceView {
+  id: string;
+  name: string;
+  fingerprint: string;
+  createdAt: string;
+  lastSeenAt: string | null;
+  revokedAt: string | null;
+  /** То самое, с которого человек смотрит. Отозвать его нельзя — см. `revoke`. */
+  current: boolean;
+  /** Корень дерева: с него личность началась, и никто его не впускал. */
+  root: boolean;
+}
+
 export interface VerifyInput {
   publicKey: unknown;
   nonce: unknown;
@@ -186,6 +204,53 @@ export class IdentityService {
       .getRepository(IdentityRow)
       .findOne({ where: { id: identityId }, select: { nick: true } });
     return row?.nick ?? null;
+  }
+
+  /**
+   * Устройства личности — все, включая отозванные. Отозванные не прячем: это
+   * единственное место, где человек может увидеть, что ключ, которому он
+   * когда-то отказал, действительно отказан.
+   */
+  async devices(identityId: string, currentDeviceId: string): Promise<DeviceView[]> {
+    const rows = await this.db.getRepository(DeviceRow).find({
+      where: { identityId },
+      order: { createdAt: 'ASC' },
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      // Отпечаток ключа устройства, а не личности: по нему человек сверяет
+      // связку глазами, и он же отличает два «Chrome · macOS» друг от друга.
+      fingerprint: fingerprint(row.publicKey),
+      createdAt: row.createdAt.toISOString(),
+      lastSeenAt: row.lastSeenAt?.toISOString() ?? null,
+      revokedAt: row.revokedAt?.toISOString() ?? null,
+      current: row.id === currentDeviceId,
+      root: row.parentDeviceId === null,
+    }));
+  }
+
+  /**
+   * Отозвать устройство. Строку не удаляем: отзыв — это факт, и в списке он
+   * должен быть виден.
+   *
+   * То, на котором человек сейчас сидит, отозвать нельзя. Соблазн разрешить
+   * («выйти отовсюду») стоил бы дороже: ключ этого устройства — единственный
+   * способ вернуться, и у личности с одним устройством такая кнопка означала
+   * бы потерю себя одним нажатием, без единого пути назад. Отзывается с
+   * другого своего устройства — там, где отказ можно обдумать.
+   */
+  async revoke(
+    identityId: string,
+    deviceId: unknown,
+    currentDeviceId: string,
+  ): Promise<'ok' | 'current' | 'unknown'> {
+    if (typeof deviceId !== 'string' || !deviceId) return 'unknown';
+    if (deviceId === currentDeviceId) return 'current';
+    const res = await this.db
+      .getRepository(DeviceRow)
+      .update({ id: deviceId, identityId }, { revokedAt: new Date() });
+    return res.affected ? 'ok' : 'unknown';
   }
 
   /** Сменить ник. Он свободный и не уникальный — сверять не с чем. */

@@ -3,10 +3,15 @@ import {
   PUBLIC_KEY_BYTES,
   SIGN_ALGORITHM,
   authMessage,
+  certificateMessage,
   fingerprint,
+  formatPairCode,
   fromBase64Url,
+  isPairCode,
   isPublicKey,
   isSignature,
+  pairLink,
+  readPairCode,
   toBase64Url,
 } from './identity';
 
@@ -101,5 +106,58 @@ describe('подписываемое сообщение', () => {
     // подписывает в другом месте продукта.
     expect(authMessage('abc')).toBe('relay-auth-v1:abc');
     expect(authMessage('abc')).toContain('abc');
+  });
+
+  it('сертификат устройства не спутать со входом', () => {
+    // Разные префиксы — единственное, что мешает подписи под нонсом стать
+    // пропуском для чужого ключа в личность.
+    expect(certificateMessage('id-1', 'key-1')).toBe('relay-device-v1:id-1:key-1');
+    expect(certificateMessage('id-1', 'key-1').startsWith('relay-auth-v1')).toBe(false);
+  });
+
+  it('сертификат называет и личность, и ключ', () => {
+    // Без личности он годился бы для любой другой, где донор тоже состоит.
+    expect(certificateMessage('id-1', 'key-1')).not.toBe(certificateMessage('id-2', 'key-1'));
+    expect(certificateMessage('id-1', 'key-1')).not.toBe(certificateMessage('id-1', 'key-2'));
+  });
+});
+
+describe('код связки', () => {
+  it('шесть цифр — и ничего кроме', () => {
+    expect(isPairCode('428913')).toBe(true);
+    expect(isPairCode('42891')).toBe(false);
+    expect(isPairCode('4289133')).toBe(false);
+    expect(isPairCode('42891a')).toBe(false);
+    expect(isPairCode(428913)).toBe(false);
+  });
+
+  it('читается и голым, и с пробелами, и из ссылки', () => {
+    // Три источника одного значения: ручной ввод, диктовка и сканер QR.
+    expect(readPairCode('428913')).toBe('428913');
+    expect(readPairCode(' 428 913 ')).toBe('428913');
+    expect(readPairCode('https://relay.example/#pair=428913')).toBe('428913');
+  });
+
+  it('чужая ссылка кодом не притворяется', () => {
+    expect(readPairCode('https://relay.example/')).toBeNull();
+    expect(readPairCode('#pair=42891')).toBeNull();
+    expect(readPairCode('')).toBeNull();
+  });
+
+  it('ссылка складывается обратно в тот же код', () => {
+    // Круг замкнут: то, что нарисовано в QR, сканер читает как исходные цифры.
+    expect(readPairCode(pairLink('https://relay.example', '428913'))).toBe('428913');
+    // Лишний слэш в origin не рождает вторую косую в ссылке.
+    expect(pairLink('https://relay.example/', '428913')).toBe('https://relay.example/#pair=428913');
+  });
+
+  it('код во фрагменте, а не в пути и не в запросе', () => {
+    // Фрагмент не уезжает на сервер — значит, и в его журналах кода не будет.
+    const link = pairLink('https://relay.example', '428913');
+    expect(link.split('#')[0]).not.toContain('428913');
+  });
+
+  it('на экране разбит на тройки', () => {
+    expect(formatPairCode('428913')).toBe('428 913');
   });
 });

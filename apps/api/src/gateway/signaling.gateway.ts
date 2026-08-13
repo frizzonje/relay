@@ -139,6 +139,22 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   }
 
   /**
+   * Выгнать сокеты отозванного устройства. Личность узнаётся один раз, при
+   * подключении (см. `afterInit`), — без этого отозванное устройство говорило
+   * бы в каналы до тех пор, пока не переподключится само, то есть часами.
+   * Возвращает число выгнанных: отзывать нечего — это тоже нормальный исход.
+   */
+  dropDevice(deviceId: string): number {
+    let dropped = 0;
+    for (const socket of this.server?.sockets.sockets.values() ?? []) {
+      if ((socket.data.identity as Speaker | undefined)?.deviceId !== deviceId) continue;
+      socket.disconnect(true);
+      dropped += 1;
+    }
+    return dropped;
+  }
+
+  /**
    * Имя, под которым сокет говорит. С личностью его называет сервер, а тело
    * сообщения не спрашивают вовсе: иначе identicon рядом с ником оставался бы
    * украшением — представиться чужим именем можно было бы одним `join`.
