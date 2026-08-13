@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
-import type { Channel, VoiceMode } from '@relay/shared';
+import { sanitizeNick, type Channel, type VoiceMode } from '@relay/shared';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Icon } from '@/components/ui/icon';
 import { Logo } from '@/components/ui/Logo';
@@ -14,9 +14,9 @@ import { useUnreadStore, isChannelUnread } from '@/stores/unread';
 import { useNotifyStore, isChannelLoud } from '@/stores/notify';
 import { MAIN_SERVER_ID } from '@/lib/constants';
 import { useRichT, useT } from '@/lib/i18n';
-import { avatarStyle } from '@/lib/avatar';
+import { Identicon } from '@/components/ui/Identicon';
 import { serverGradient, serverInitials } from '@/lib/server-visual';
-import { sanitizeTag, saveTag } from '@/lib/identity';
+import { useIdentityStore } from '@/stores/identity';
 import {
   joinVoice,
   leaveVoice,
@@ -356,6 +356,7 @@ export function Sidebar() {
   const leaveText = useUiStore((s) => s.leaveText);
   const callsign = useUiStore((s) => s.callsign);
   const setCallsign = useUiStore((s) => s.setCallsign);
+  const fingerprint = useIdentityStore((s) => s.me?.fingerprint ?? '');
 
   const servers = useServersStore((s) => s.servers);
   const activeServerId = useServersStore((s) => s.activeServerId);
@@ -455,14 +456,23 @@ export function Sidebar() {
       });
   }
 
-  // Тег правится в панели в любой момент (даже в эфире). Применяется на
-  // Enter/уход из поля: чистим тег, запоминаем и оповещаем сервер (renameSelf) —
-  // presence канала, ростер чата и подписи плиток обновятся у всех.
-  function commitCallsign() {
-    const clean = sanitizeTag(callsign);
-    setCallsign(clean);
-    saveTag(clean);
-    renameSelf(clean || t('common.anonymous'));
+  // Имя правится в панели в любой момент (даже в эфире). Применяется на
+  // Enter/уход из поля: чистим, отдаём серверу — он хранит его у личности, а не
+  // браузер у себя, — и оповещаем гейтвей (renameSelf), чтобы presence канала,
+  // ростер чата и подписи плиток обновились у всех.
+  //
+  // Не сохранилось — поле возвращается к прежнему имени. Это и есть ответ: имя
+  // теперь общее для всех устройств человека, и показывать в панели одно, пока
+  // на сервере другое, значило бы врать до следующей перезагрузки.
+  async function commitNick() {
+    const clean = sanitizeNick(callsign);
+    const known = useIdentityStore.getState().me?.nick ?? '';
+    if (!clean || clean === known) {
+      setCallsign(known || clean);
+      return;
+    }
+    if (await useIdentityStore.getState().rename(clean)) renameSelf(clean);
+    else setCallsign(known);
   }
 
   return (
@@ -685,22 +695,28 @@ export function Sidebar() {
 
       {/* Панель юзера — стык 64px */}
       <div className="flex h-16 items-center gap-2 border-t border-line bg-bg-deep/80 px-2">
-        <div
-          className="relative h-[34px] w-[34px] shrink-0 rounded-full after:absolute after:-bottom-0.5 after:-right-0.5 after:h-3 after:w-3 after:rounded-full after:border-[3px] after:border-bg-deep after:bg-ok after:content-['']"
-          style={avatarStyle(callsign)}
-        />
+        {/* Лицо своего ключа, а не картинка по имени: имена не уникальны, и
+            узнавать себя по тому, что можно занять, незачем. */}
+        <div className="relative h-[34px] w-[34px] shrink-0 after:absolute after:-bottom-0.5 after:-right-0.5 after:h-3 after:w-3 after:rounded-full after:border-[3px] after:border-bg-deep after:bg-ok after:content-['']">
+          <Identicon
+            fingerprint={fingerprint}
+            size={34}
+            title={fingerprint}
+            className="rounded-lg ring-1 ring-inset ring-white/10"
+          />
+        </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center">
             <span className="select-none text-sm font-semibold text-text-muted">@</span>
             <input
               value={callsign}
               onChange={(e) => setCallsign(e.target.value)}
-              onBlur={commitCallsign}
+              onBlur={() => void commitNick()}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') e.currentTarget.blur();
               }}
               maxLength={20}
-              title={t('user.tag.hint')}
+              title={t('user.nick.hint')}
               className="w-full border-0 border-b border-transparent bg-transparent p-0 text-sm font-semibold text-text-header outline-none focus:border-accent"
             />
           </div>
