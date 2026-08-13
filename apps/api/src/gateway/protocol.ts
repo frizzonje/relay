@@ -253,6 +253,13 @@ export interface ReplyRef {
 export interface ChatMessage {
   id?: string;
   name: string;
+  /**
+   * Отпечаток ключа автора: по нему рисуется лицо в ленте и по нему же двух
+   * одинаковых «Ань» видно, что они разные. Пусто у гостя по инвайту и у всего,
+   * что писалось до 1.0, — поле необязательное именно поэтому, а не «на всякий
+   * случай»: клиент обязан уметь показать реплику без лица.
+   */
+  fingerprint?: string;
   text: string;
   ts: number;
   attachment?: Attachment;
@@ -270,6 +277,8 @@ export interface ChatMessage {
 export interface VoicePresenceEntry {
   id: string;
   name: string;
+  /** Отпечаток ключа: лицо на плитке. Пусто у гостя по инвайту (см. ChatMessage). */
+  fingerprint?: string;
   micOn: boolean;
   deafened: boolean;
   transport: 'p2p' | 'sfu';

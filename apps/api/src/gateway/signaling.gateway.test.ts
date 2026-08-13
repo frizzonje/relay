@@ -1,9 +1,20 @@
 import { Logger } from '@nestjs/common';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DataSource } from 'typeorm';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { issueGuestToken, issueToken, verifyGuestToken } from '../auth/auth';
-import { AttachmentRow, ChannelRow, MessageRow, ServerRow } from '../db/entities';
+import {
+  AttachmentRow,
+  ChannelRow,
+  DeviceRow,
+  IdentityRow,
+  MessageRow,
+  ServerRow,
+} from '../db/entities';
 import { resetDatabase, testDatabase } from '../db/testing';
+import { fingerprint as fingerprintOf } from '../identity/crypto';
+import { IdentityService } from '../identity/identity.service';
+import { issueSession } from '../identity/session';
 import type { Attachment, UploadsService } from '../uploads';
 import type { Channel, PersistedRegistry, ServerEntry } from './registry';
 import { ChatService } from './chat.service';
@@ -115,9 +126,63 @@ async function makeGateway(saved: PersistedRegistry = {}) {
   await registry.onModuleInit();
   const chat = new ChatService(db, registry);
   await chat.onModuleInit();
-  const gw = new SignalingGateway(uploads as unknown as UploadsService, chat, registry);
+  const identities = new IdentityService(db);
+  const gw = new SignalingGateway(uploads as unknown as UploadsService, chat, registry, identities);
   gw.server = server.asServer();
-  return { gw, server, registry, chat };
+  // Узнавание личности вешается миддлварой — заводим её и здесь, иначе тест
+  // проверял бы гейтвей, у которого этой двери нет вовсе.
+  gw.afterInit(server.asServer());
+  return { gw, server, registry, chat, identities };
+}
+
+/**
+ * Личность в базе и кука её сессии. Челлендж здесь не гоняем намеренно: он
+ * проверен в identity.service.test, а гейтвею предъявляют именно куку — и
+ * именно её разбор мы и хотим видеть.
+ */
+async function personCookie(nick: string): Promise<{ cookie: string; fingerprint: string }> {
+  const id = randomUUID();
+  const deviceId = randomUUID();
+  const key = randomBytes(32).toString('base64url');
+  const fingerprint = fingerprintOf(key);
+  await db.getRepository(IdentityRow).insert({
+    id,
+    publicKey: key,
+    fingerprint,
+    nick,
+    createdAt: new Date(),
+    lastSeenAt: null,
+  });
+  await db.getRepository(DeviceRow).insert({
+    id: deviceId,
+    identityId: id,
+    publicKey: key,
+    name: 'тестовое устройство',
+    certificate: null,
+    parentDeviceId: null,
+    createdAt: new Date(),
+    lastSeenAt: new Date(),
+    revokedAt: null,
+  });
+  return { cookie: `relay_id=${issueSession({ identityId: id, deviceId }).value}`, fingerprint };
+}
+
+/** Подключение с предъявлением куки личности — как у вошедшего человека. */
+async function connectAs(
+  gw: SignalingGateway,
+  server: FakeServer,
+  cookie: string,
+  opts: { id?: string; clientId?: string } = {},
+) {
+  const sock = server.connect({
+    id: opts.id,
+    cookie,
+    auth: { ...(opts.clientId ? { clientId: opts.clientId } : {}) },
+  });
+  await server.run(sock);
+  gw.handleConnection(asSocket(sock));
+  sock.clear();
+  return sock;
 }
 
 /** Подключение с прохождением handleConnection — как в жизни. */
@@ -2214,5 +2279,111 @@ describe('voice-diag', () => {
     gw.handleVoiceDiag(asSocket(a), { event: '   ' });
     gw.handleVoiceDiag(asSocket(a), {});
     expect(log.mock.calls.some((c) => String(c[0]).includes('diag'))).toBe(false);
+  });
+});
+
+// ── Личность ──────────────────────────────────────────────────────────────
+
+/**
+ * Гейтвей узнаёт говорящего по куке сессии, а не по тому, как он представился.
+ * Разница здесь ровно одна и вся суть в ней: пока имя приходит из тела
+ * сообщения, лицо рядом с ним — украшение, потому что назваться чужим именем
+ * можно одним `join`.
+ */
+describe('личность в эфире и в ленте', () => {
+  it('имя в голосовом берётся у сервера, а не из тела', async () => {
+    const { gw, server } = await makeGateway();
+    const { cookie, fingerprint } = await personCookie('Аня');
+    const a = await connectAs(gw, server, cookie, { id: 'a' });
+    const b = connect(gw, server, { id: 'b' });
+    gw.handleJoin(asSocket(b), { room: 'voice-obshchii', name: 'B' });
+    b.clear();
+
+    gw.handleJoin(asSocket(a), { room: 'voice-obshchii', name: 'Самозванец' });
+
+    expect(b.last('peer-joined')).toMatchObject({ name: 'Аня', fingerprint });
+    settle();
+    const presence = b.last('voice-presence') as Record<
+      string,
+      { name: string; fingerprint?: string }[]
+    >;
+    expect(presence['voice-obshchii']).toContainEqual(
+      expect.objectContaining({ name: 'Аня', fingerprint }),
+    );
+  });
+
+  it('реплика уносит с собой отпечаток автора', async () => {
+    // Из него рисуется лицо в ленте — и оно должно приезжать с сообщением, а
+    // не подбираться клиентом по имени: имена не уникальны.
+    const { gw, server } = await makeGateway();
+    const { cookie, fingerprint } = await personCookie('Аня');
+    const a = await connectAs(gw, server, cookie, { id: 'a' });
+    await gw.handleChatJoin(asSocket(a), { room: 'obshchii', name: 'Самозванец' });
+    a.clear();
+
+    await gw.handleChatMessage(asSocket(a), { text: 'привет' });
+    expect(a.last('chat')).toMatchObject({ name: 'Аня', fingerprint, text: 'привет' });
+
+    // И в истории тоже: лента открывается ею, а не только живыми событиями.
+    const c = await connectAs(gw, server, cookie, { id: 'c' });
+    await gw.handleChatJoin(asSocket(c), { room: 'obshchii' });
+    const history = c.last('chat-history') as { messages: { fingerprint?: string }[] };
+    expect(history.messages.at(-1)?.fingerprint).toBe(fingerprint);
+  });
+
+  it('тёзка не правит и не удаляет чужое', async () => {
+    // Ровно тот случай, ради которого всё и затевалось: ники не уникальны, и
+    // раньше «тот же тег» означало «тот же человек».
+    const { gw, server } = await makeGateway();
+    const mine = await personCookie('Аня');
+    const other = await personCookie('Аня');
+    const a = await connectAs(gw, server, mine.cookie, { id: 'a' });
+    const b = await connectAs(gw, server, other.cookie, { id: 'b' });
+    await gw.handleChatJoin(asSocket(a), { room: 'obshchii' });
+    await gw.handleChatJoin(asSocket(b), { room: 'obshchii' });
+    await gw.handleChatMessage(asSocket(a), { text: 'моё' });
+    const id = (a.last('chat') as { id: string }).id;
+    server.clearAll();
+
+    await gw.handleChatEdit(asSocket(b), { id, text: 'подменённое' });
+    await gw.handleChatDelete(asSocket(b), { id });
+    expect(a.got('chat-edited')).toBe(false);
+    expect(a.got('chat-deleted')).toBe(false);
+
+    // А своё — правится: проверка отличает чужое от любого.
+    await gw.handleChatEdit(asSocket(a), { id, text: 'поправленное' });
+    expect(a.last('chat-edited')).toMatchObject({ id, text: 'поправленное' });
+  });
+
+  it('гость по инвайту остаётся при своём имени и без лица', async () => {
+    // Ему личность взять неоткуда: ворота инсталляции он не проходил, за него
+    // ручается токен приглашения — и подписывать челлендж ему нечем.
+    const { gw, server } = await makeGateway();
+    const a = connect(gw, server, { id: 'a' });
+    await gw.handleChatJoin(asSocket(a), { room: 'obshchii', name: 'Гость' });
+    a.clear();
+
+    await gw.handleChatMessage(asSocket(a), { text: 'здравствуйте' });
+    const msg = a.last('chat') as { name: string; fingerprint?: string };
+    expect(msg.name).toBe('Гость');
+    expect(msg.fingerprint).toBeUndefined();
+  });
+
+  it('переименование перечитывает имя из базы, а не верит телу', async () => {
+    // `rename` для личности — это «сходите перечитайте», а не «зовите меня
+    // так»: имя меняется отдельным запросом, и сокет узнаёт о смене последним.
+    const { gw, server, identities } = await makeGateway();
+    const { cookie } = await personCookie('Аня');
+    const a = await connectAs(gw, server, cookie, { id: 'a' });
+    const b = connect(gw, server, { id: 'b' });
+    gw.handleJoin(asSocket(b), { room: 'voice-obshchii', name: 'B' });
+    gw.handleJoin(asSocket(a), { room: 'voice-obshchii' });
+    b.clear();
+
+    const speaker = a.data.identity as { id: string };
+    await identities.rename(speaker.id, 'Аня-Б');
+    await gw.handleRename(asSocket(a), { name: 'Королева' });
+
+    expect(b.last('peer-renamed')).toEqual({ id: 'a', name: 'Аня-Б' });
   });
 });

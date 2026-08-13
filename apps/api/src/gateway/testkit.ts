@@ -103,11 +103,40 @@ export class FakeServer {
     };
   }
 
-  connect(opts: { id?: string; auth?: Record<string, unknown>; ip?: string; ua?: string } = {}) {
+  /**
+   * Миддлвары socket.io. Гейтвей вешает сюда узнавание личности, и вешает
+   * именно сюда потому, что здесь оно успевает до первого события клиента, —
+   * значит и в тесте порядок обязан быть тот же (см. `run`).
+   */
+  private readonly middleware: ((socket: Socket, next: (err?: Error) => void) => void)[] = [];
+
+  use(fn: (socket: Socket, next: (err?: Error) => void) => void): this {
+    this.middleware.push(fn);
+    return this;
+  }
+
+  /** Прогнать миддлвары для сокета — то, что socket.io делает до `connection`. */
+  async run(sock: FakeSocket): Promise<void> {
+    for (const fn of this.middleware)
+      await new Promise<void>((resolve) => fn(sock as unknown as Socket, () => resolve()));
+  }
+
+  connect(
+    opts: {
+      id?: string;
+      auth?: Record<string, unknown>;
+      ip?: string;
+      ua?: string;
+      cookie?: string;
+    } = {},
+  ) {
     const id = opts.id ?? `sock-${++this.seq}`;
     const sock = new FakeSocket(id, this, {
       auth: opts.auth ?? {},
-      headers: { ...(opts.ua ? { 'user-agent': opts.ua } : {}) },
+      headers: {
+        ...(opts.ua ? { 'user-agent': opts.ua } : {}),
+        ...(opts.cookie ? { cookie: opts.cookie } : {}),
+      },
       address: opts.ip ?? '10.0.0.1',
     });
     this.all.set(id, sock);

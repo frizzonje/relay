@@ -2,6 +2,7 @@
 
 import { AnimatePresence, motion } from 'framer-motion';
 import { avatarStyle } from '@/lib/avatar';
+import { Identicon } from '@/components/ui/Identicon';
 import { cn } from '@/lib/utils';
 import { listItem, springLayout } from '@/lib/motion';
 import { Icon } from '@/components/ui/icon';
@@ -50,10 +51,14 @@ export function VoiceMembers({ room }: { room: string }) {
               transition={springLayout}
               className="group flex cursor-default items-center gap-2 rounded py-1 pl-[26px] pr-2 text-sm text-text-muted transition-colors hover:bg-bg-hover"
             >
-              <div
-                className="relative h-[22px] w-[22px] shrink-0 rounded-full after:absolute after:-bottom-px after:-right-px after:h-2 after:w-2 after:rounded-full after:border-2 after:border-bg-sidebar after:bg-ok after:content-['']"
-                style={avatarStyle(name)}
-              />
+              {/* Лицо ключа, если участник — личность (см. Message.tsx). */}
+              <div className="relative h-[22px] w-[22px] shrink-0 after:absolute after:-bottom-px after:-right-px after:h-2 after:w-2 after:rounded-full after:border-2 after:border-bg-sidebar after:bg-ok after:content-['']">
+                {m.fingerprint ? (
+                  <Identicon fingerprint={m.fingerprint} size={22} className="rounded-[6px]" />
+                ) : (
+                  <div className="h-full w-full rounded-full" style={avatarStyle(name)} />
+                )}
+              </div>
               <div
                 className={cn(
                   'flex min-w-0 flex-1 items-center gap-1.5',

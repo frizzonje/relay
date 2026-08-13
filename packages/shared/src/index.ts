@@ -106,6 +106,12 @@ export interface ChatMessage {
   id?: string;
   /** Имя автора (для системных — служебное). */
   name?: string;
+  /**
+   * Отпечаток ключа автора: лицо рядом с репликой и единственный способ
+   * отличить двух одинаковых «Ань». Пусто у гостя по инвайту и у всего, что
+   * писалось до 1.0, — реплику без лица клиент обязан показать как обычную.
+   */
+  fingerprint?: string;
   text: string;
   ts: number;
   attachment?: Attachment;
@@ -421,6 +427,13 @@ export interface IceCandidatePayload {
 export interface VoicePeer {
   id: string;
   name?: string;
+  /**
+   * Отпечаток ключа участника — из него рисуется лицо (см. lib/identicon).
+   * Пусто у гостя по инвайту и у клиента, который ещё не стал личностью: имя
+   * такого участника самоназванное, и лица у него нет по существу, а не по
+   * недосмотру.
+   */
+  fingerprint?: string;
   /** Микрофон включён; undefined — состояние ещё не приходило (считаем включённым). */
   micOn?: boolean;
   /** Заглушил себе звук (deafen) — не слышит канал; микрофон при этом тоже выключен. */
@@ -672,6 +685,8 @@ export interface ClientToServerEvents {
 export interface PeerJoinedPayload {
   id: string;
   name?: string;
+  /** Отпечаток ключа: лицо на плитке (см. VoicePeer.fingerprint). */
+  fingerprint?: string;
   /** Гость по инвайт-ссылке. */
   guest?: boolean;
   /** Гость-слушатель: своего медиа не отдаёт (см. VoicePeer.listen). */

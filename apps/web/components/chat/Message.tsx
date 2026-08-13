@@ -8,6 +8,7 @@ import { Icon } from '@/components/ui/icon';
 import { copyText, openContextMenu } from '@/lib/context-menu';
 import { chatMessage, springPop } from '@/lib/motion';
 import { avatarStyle } from '@/lib/avatar';
+import { Identicon } from '@/components/ui/Identicon';
 import { fmtClock } from '@/lib/format';
 import { renderMarkdownMini } from '@/lib/markdown';
 import { getSocket } from '@/lib/socket';
@@ -513,10 +514,24 @@ export const Message = memo(function Message({
           растягивается на всю страницу; подсветка ховера обнимает только её.
           В режиме правки даём умеренную фиксированную ширину под textarea. */}
       <div className="flex min-w-0 max-w-[min(100%,720px)] gap-3 rounded-[10px] px-2.5 py-1.5 transition-colors group-hover:bg-white/[0.03]">
-        <div
-          className="mt-0.5 h-[38px] w-[38px] shrink-0 rounded-full"
-          style={avatarStyle(msg.name ?? '')}
-        />
+        {/* Лицо автора рисуется из отпечатка его ключа, а не из имени: имена
+            свободные и не уникальные, и градиент по имени у двух разных «Ань»
+            совпал бы — то есть показывал бы ровно обратное тому, зачем он тут.
+            Без отпечатка (гость по инвайту, реплика до 1.0) остаётся прежний
+            градиент: у такой подписи и правда нет за спиной ничего, кроме имени. */}
+        {msg.fingerprint ? (
+          <Identicon
+            fingerprint={msg.fingerprint}
+            size={38}
+            title={msg.fingerprint}
+            className="mt-0.5 shrink-0 rounded-[10px]"
+          />
+        ) : (
+          <div
+            className="mt-0.5 h-[38px] w-[38px] shrink-0 rounded-full"
+            style={avatarStyle(msg.name ?? '')}
+          />
+        )}
         <div className="min-w-0 flex-1">
           {msg.replyTo && (
             <ReplyQuote reply={msg.replyTo} onJump={() => onJumpTo(msg.replyTo!.id)} />

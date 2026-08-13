@@ -1,7 +1,9 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
+import { parseCookies } from '../auth/auth';
 import { DeviceRow, IdentityRow } from '../db/entities';
+import { IDENTITY_COOKIE, readSession } from './session';
 import {
   authMessage,
   fingerprint,
@@ -49,6 +51,19 @@ export type VerifyFailure =
 export type VerifyResult =
   | { ok: true; identity: IdentityRow; device: DeviceRow; created: boolean }
   | { ok: false; reason: VerifyFailure };
+
+/**
+ * Личность так, как её видит гейтвей: имя — чтобы подписать сказанное,
+ * отпечаток — чтобы нарисовать лицо, id — чтобы записать авторство. Публичного
+ * ключа здесь нет: подписи в эфире никто не проверяет, а класть в чужие ленты
+ * лишнее незачем.
+ */
+export interface Speaker {
+  id: string;
+  nick: string;
+  fingerprint: string;
+  deviceId: string;
+}
 
 export interface VerifyInput {
   publicKey: unknown;
@@ -136,6 +151,41 @@ export class IdentityService {
     if (device.revokedAt) return { ok: false, reason: 'revoked' };
     await this.touch(device);
     return { ok: true, identity: device.identity, device, created: false };
+  }
+
+  /**
+   * Личность по куке сессии — то, чем гейтвей узнаёт говорящего.
+   *
+   * Сокет цепляется к http-серверу мимо express-миддлвар, поэтому куку он
+   * разбирает сам, из своего handshake. Отзыв здесь тоже действует сразу: не
+   * узнать отозванное устройство — весь смысл отзыва.
+   *
+   * `null` — куки нет, она протухла или личности за ней не осталось. Это не
+   * ошибка: так выглядит гость по инвайту и клиент, ещё не прошедший челлендж.
+   */
+  async fromCookie(cookie: string | undefined): Promise<Speaker | null> {
+    const session = readSession(parseCookies(cookie)[IDENTITY_COOKIE]);
+    if (!session) return null;
+    const result = await this.whoIs(session.identityId, session.deviceId);
+    if (!result.ok) return null;
+    return {
+      id: result.identity.id,
+      nick: result.identity.nick,
+      fingerprint: result.identity.fingerprint,
+      deviceId: result.device.id,
+    };
+  }
+
+  /**
+   * Как эту личность зовут прямо сейчас. Нужен ровно там, где имя могло
+   * измениться под живым сокетом: сокет знает то, что было при подключении, а
+   * переименование идёт другим путём — обычным HTTP.
+   */
+  async nickOf(identityId: string): Promise<string | null> {
+    const row = await this.db
+      .getRepository(IdentityRow)
+      .findOne({ where: { id: identityId }, select: { nick: true } });
+    return row?.nick ?? null;
   }
 
   /** Сменить ник. Он свободный и не уникальный — сверять не с чем. */

@@ -51,6 +51,8 @@ export function isUuid(value: string): boolean {
 /** Новая реплика — то, что гейтвей разобрал из тела и проверил по правам. */
 export interface NewMessage {
   name: string;
+  /** Автор как личность. Пусто — писал гость по инвайту, за него ручается токен. */
+  identityId?: string;
   text: string;
   /** id загрузки (он же имя файла на диске). Проверяется по таблице вложений. */
   uploadId?: string;
@@ -87,6 +89,10 @@ function toMessage(row: MessageRow): ChatMessage {
   return {
     id: row.id,
     name: row.authorName,
+    // Отпечаток берётся у личности, а не хранится в строке: имя — снимок
+    // момента, а лицо у человека одно, и второй его копией мы бы завели место,
+    // где оно может разойтись с ключом.
+    ...(row.authorIdentity ? { fingerprint: row.authorIdentity.fingerprint } : {}),
     text: row.text,
     ts: row.createdAt.getTime(),
     ...(row.attachment ? { attachment: toAttachment(row.attachment, row.spoiler) } : {}),
@@ -176,7 +182,7 @@ export class ChatService implements OnModuleInit {
         attachmentId: (await this.attachmentId(input.uploadId)) ?? null,
         replyTo: await this.replySnapshot(channelId, input.replyToId),
         editedAt: null,
-        authorIdentityId: null,
+        authorIdentityId: input.identityId ?? null,
       })
       .execute();
 
@@ -286,6 +292,7 @@ export class ChatService implements OnModuleInit {
         .getRepository(MessageRow)
         .createQueryBuilder('m')
         .leftJoinAndSelect('m.attachment', 'a')
+        .leftJoinAndSelect('m.authorIdentity', 'ai')
         .orderBy('m.createdAt', 'DESC')
         .addOrderBy('m.id', 'DESC')
         // `limit`, а не `take`: вложение — связь «многие к одному», лишних строк
@@ -309,7 +316,7 @@ export class ChatService implements OnModuleInit {
     if (!channelId || !isUuid(id)) return undefined;
     const row = await this.db.getRepository(MessageRow).findOne({
       where: { id, channelId, ...(includeSystem ? {} : { system: false }) },
-      relations: { attachment: true },
+      relations: { attachment: true, authorIdentity: true },
     });
     return row ? toMessage(row) : undefined;
   }

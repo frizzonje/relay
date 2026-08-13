@@ -4,6 +4,7 @@ import {
   MessageBody,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  OnGatewayInit,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
@@ -11,6 +12,7 @@ import {
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { Server, Socket } from 'socket.io';
 import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
+import { IdentityService, type Speaker } from '../identity/identity.service';
 import { sfuHealthy } from '../sfu/sfu-health';
 import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
 import { UploadsService } from '../uploads';
@@ -95,7 +97,7 @@ function deviceId(client: Socket): string | undefined {
   // окна), чтобы при восстановлении никого не «выкинуть» из канала.
   connectionStateRecovery: { maxDisconnectionDuration: 20_000 },
 })
-export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server!: Server;
 
@@ -103,7 +105,47 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     private readonly uploads: UploadsService,
     private readonly chat: ChatService,
     private readonly registry: RegistryService,
+    private readonly identities: IdentityService,
   ) {}
+
+  /**
+   * Кто говорит — выясняется до первого события, а не в `handleConnection`.
+   *
+   * Разница не стилистическая: миддлвара socket.io отрабатывает ДО того, как
+   * сокет считается подключённым, и до неё клиент физически не может ничего
+   * прислать. Узнавай мы личность в обработчике подключения (он синхронный, а
+   * запрос в базу — нет), первые сообщения успели бы пройти как «безымянные» —
+   * то есть ровно те, которыми открывают канал и здороваются.
+   *
+   * Отказ не рвёт соединение: без личности живут гость по инвайту и клиент,
+   * ещё не прошедший челлендж. Их имена остаются самоназванными, и это честно —
+   * ручается за них не ключ, а токен приглашения.
+   */
+  afterInit(server: Server): void {
+    server.use((socket, next) => {
+      void this.identities
+        .fromCookie(socket.handshake.headers.cookie)
+        .then((speaker) => {
+          if (speaker) socket.data.identity = speaker;
+        })
+        .catch((e) => this.logger.error(`не удалось узнать личность сокета: ${e}`))
+        .finally(() => next());
+    });
+  }
+
+  /** Личность этого сокета — или `undefined`: гость, старый клиент, чужой ключ. */
+  private speaker(client: Socket): Speaker | undefined {
+    return client.data.identity as Speaker | undefined;
+  }
+
+  /**
+   * Имя, под которым сокет говорит. С личностью его называет сервер, а тело
+   * сообщения не спрашивают вовсе: иначе identicon рядом с ником оставался бы
+   * украшением — представиться чужим именем можно было бы одним `join`.
+   */
+  private nameOf(client: Socket, claimed: string | undefined): string | undefined {
+    return this.speaker(client)?.nick ?? claimed;
+  }
 
   // Отложенный выход из комнат по socket.id: при восстановлении сессии отменяем.
   private readonly pendingLeave = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1052,7 +1094,9 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       this.logger.warn(`voice: join to locked room "${room}" refused for ${client.id}`);
       return;
     }
-    const name = optional(payload?.name, LIMIT.tag);
+    // Имя называет сервер, если сокет — личность; тело сообщения остаётся
+    // именем только у гостя по инвайту.
+    const name = this.nameOf(client, optional(payload?.name, LIMIT.tag));
     // Устройство: сначала handshake (см. handleConnection), и только если там
     // пусто — поле payload. Порядок именно такой, и он важен: по этому же id
     // решается владение серверами и каналами, а `??` не даёт перебить уже
@@ -1094,9 +1138,11 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       .filter((id) => this.server.sockets.sockets.has(id))
       .map((id) => {
         const sock = this.server.sockets.sockets.get(id);
+        const speaker = sock ? this.speaker(sock) : undefined;
         return {
           id,
           name: sock?.data.name as string | undefined,
+          ...(speaker ? { fingerprint: speaker.fingerprint } : {}),
           ...(sock?.data.guest === true ? { guest: true } : {}),
           ...(sock?.data.guestListen === true ? { listen: true } : {}),
         };
@@ -1117,6 +1163,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     client.to(room).emit('peer-joined', {
       id: client.id,
       name,
+      ...(this.speaker(client) ? { fingerprint: this.speaker(client)?.fingerprint } : {}),
       ...(this.isGuest(client) ? { guest: true } : {}),
       ...(this.isListener(client) ? { listen: true } : {}),
     });
@@ -1193,11 +1240,25 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   // Смена тега на лету: обновляем имя в голосовой комнате (presence + подписи
   // плиток у собеседников) и в текстовом канале (ростер). Пустое имя игнорируем.
+  /**
+   * Человек переименовался. От личности это не «зовите меня так», а «сходите
+   * перечитайте»: имя меняется обычным HTTP (`POST /api/identity/nick`), сокет
+   * узнаёт о смене последним и берёт новое имя из базы, а не из тела события.
+   * Иначе одним `rename` можно было бы назваться кем угодно посреди разговора —
+   * и лицо рядом с ником перестало бы что-либо значить.
+   */
   @SubscribeMessage('rename')
-  handleRename(@ConnectedSocket() client: Socket, @MessageBody() payload: { name?: unknown }) {
+  async handleRename(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { name?: unknown },
+  ) {
     if (!this.allow(client)) return;
-    const name = trimmed(payload?.name, LIMIT.tag);
+    const speaker = this.speaker(client);
+    const name = speaker
+      ? ((await this.identities.nickOf(speaker.id)) ?? speaker.nick)
+      : trimmed(payload?.name, LIMIT.tag);
     if (!name) return;
+    if (speaker) speaker.nick = name;
 
     const room = client.data.room as string | undefined;
     if (room && client.data.name !== name) {
@@ -1220,7 +1281,8 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     if (!this.allow(client) || this.isGuest(client)) return;
     const slug = trimmed(payload?.room, LIMIT.slug);
     if (!slug) return;
-    const name = trimmed(payload?.name, LIMIT.tag);
+    // Как и в голосовом: имя личности называет сервер (см. nameOf).
+    const name = this.nameOf(client, trimmed(payload?.name, LIMIT.tag));
 
     // В несуществующий канал не пускаем: комната-призрак принимала бы сообщения
     // и заново копила историю под удалённым слагом. Случая два, и они разные.
@@ -1294,6 +1356,9 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     // по нему же строится курсор ленты, и оно обязано быть одних часов с ней.
     const msg = await this.chat.add(this.chat.slug(room), {
       name: this.chatNameOf(client),
+      // Авторство пишется рядом с именем, а не вместо: имя — снимок момента,
+      // личность — то, по чему потом сверяются правка, удаление и модерация.
+      identityId: this.speaker(client)?.id,
       text,
       uploadId,
       spoiler: payload?.spoiler === true,
@@ -1338,8 +1403,21 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     this.activityTimer.unref?.();
   }
 
-  // Правка своего сообщения. Автора сверяем по тегу (chatName) — та же модель
-  // доверия, что у реакций: имя самоназначаемое, но менять чужие реплики нельзя.
+  /**
+   * Своё ли это сообщение. У реплики с личностью сверяется отпечаток — тот
+   * самый, что нарисован рядом с ней в ленте: подписаться чужим именем теперь
+   * нельзя, а значит и правку чужого именем не открыть.
+   *
+   * Без личности остаётся прежнее сравнение имён (audit S1): так подписаны
+   * реплики гостей и всё, что написано до 1.0. Строгость там взять не из чего —
+   * зато и не притворяемся, что она есть.
+   */
+  private ownsMessage(client: Socket, msg: { name: string; fingerprint?: string }): boolean {
+    if (msg.fingerprint) return this.speaker(client)?.fingerprint === msg.fingerprint;
+    return msg.name === this.chatNameOf(client);
+  }
+
+  // Правка своего сообщения — автора сверяет ownsMessage.
   // Системные и сообщения-вложения без текста не редактируем.
   @SubscribeMessage('chat-edit')
   async handleChatEdit(@ConnectedSocket() client: Socket, @MessageBody() payload: ChatEditPayload) {
@@ -1352,14 +1430,13 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
     const msg = await this.chat.find(this.chat.slug(room), id);
     if (!msg) return;
-    const name = this.chatNameOf(client);
-    if (msg.name !== name) return;
+    if (!this.ownsMessage(client, msg)) return;
 
     const editedTs = await this.chat.edit(id, text);
     this.server.to(room).emit('chat-edited', { id, text, editedTs });
   }
 
-  // Удаление своего сообщения (автор — по тегу, как в chat-edit). Убираем из
+  // Удаление своего сообщения (автор — как в chat-edit). Убираем из
   // истории и просим всех снять из ленты. Цитаты в чужих ответах не трогаем —
   // они хранят собственный снимок.
   @SubscribeMessage('chat-delete')
@@ -1375,8 +1452,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
     const msg = await this.chat.find(this.chat.slug(room), id);
     if (!msg) return;
-    const name = this.chatNameOf(client);
-    if (msg.name !== name) return;
+    if (!this.ownsMessage(client, msg)) return;
 
     if (!(await this.chat.remove(id))) return;
     this.server.to(room).emit('chat-deleted', { id });
@@ -1503,9 +1579,11 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       // прошлой версии по умолчанию считает микрофон включённым, а показать
       // «говорит» тому, кого физически не слышно, — худшее из вранья.
       const listen = sock.data.guestListen === true;
+      const speaker = this.speaker(sock);
       (presence[room] ??= []).push({
         id,
         name: (sock.data.name as string) || ANON_NAME,
+        ...(speaker ? { fingerprint: speaker.fingerprint } : {}),
         micOn: !listen && sock.data.micOn !== false,
         deafened: sock.data.deafened === true,
         transport: sock.data.transport === 'sfu' ? 'sfu' : 'p2p',
