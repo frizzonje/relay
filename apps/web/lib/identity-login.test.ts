@@ -179,4 +179,16 @@ describe('имя устройства', () => {
     vi.stubGlobal('navigator', { userAgent: 'нечто/1.0' });
     expect(describeDevice()).toBe('browser');
   });
+
+  it('оболочка называется собой, а не своим движком', () => {
+    // WKWebView не признаётся даже Safari, и в списке устройств человек увидел
+    // бы `browser · macOS` — ровно то, чего он там не ищет. А браузер на той же
+    // машине — другое устройство с другим ключом, и путать их нельзя.
+    vi.stubGlobal('navigator', {
+      userAgent:
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)',
+    });
+    vi.stubGlobal('window', { __TAURI__: {} });
+    expect(describeDevice()).toBe('relay desktop · macOS');
+  });
 });

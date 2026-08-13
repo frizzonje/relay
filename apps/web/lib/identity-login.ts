@@ -131,15 +131,22 @@ export async function renameIdentity(nick: string): Promise<string> {
 export function describeDevice(): string {
   if (typeof navigator === 'undefined') return 'device';
   const ua = navigator.userAgent;
-  const engine = /Firefox/.test(ua)
-    ? 'Firefox'
-    : /Edg\//.test(ua)
-      ? 'Edge'
-      : /Chrome|Chromium/.test(ua)
-        ? 'Chrome'
-        : /Safari/.test(ua)
-          ? 'Safari'
-          : 'browser';
+  // Оболочка называется собой, а не своим движком: в списке устройств человек
+  // ищет «приложение на ноутбуке», и `Safari · macOS` (а в WKWebView и вовсе
+  // `browser · macOS`) он там не узнает. Браузер на той же машине — отдельное
+  // устройство с отдельным ключом, и различать их надо с одного взгляда.
+  const engine =
+    typeof window !== 'undefined' && window.__TAURI__
+      ? 'relay desktop'
+      : /Firefox/.test(ua)
+        ? 'Firefox'
+        : /Edg\//.test(ua)
+          ? 'Edge'
+          : /Chrome|Chromium/.test(ua)
+            ? 'Chrome'
+            : /Safari/.test(ua)
+              ? 'Safari'
+              : 'browser';
   const os = /Windows/.test(ua)
     ? 'Windows'
     : /Mac OS X/.test(ua)

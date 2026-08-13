@@ -10,6 +10,10 @@
 //     `set-autostart` → их правка, `switch-server` → экран выбора сервера.
 //
 // Права удалённого origin ограничены core:event (capabilities/remote.json).
+//
+// Личность идёт по тем же событиям, но своей парой запрос-ответ
+// (`identity-request` → `identity-reply`, см. lib/signer-shell.ts): ключ
+// устройства живёт в Rust, и webview может только попросить подписать.
 
 import { desktopPtt } from '@/lib/voice';
 import { useDesktopStore, type ShellSettings, type UpdateStatus } from '@/stores/desktop';

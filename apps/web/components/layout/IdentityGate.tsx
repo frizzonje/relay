@@ -31,6 +31,11 @@ const FAILURES: Record<string, { title: MessageKey; body: MessageKey; retry?: bo
   'no-crypto': { title: 'identity.fail.crypto.title', body: 'identity.fail.crypto.body' },
   'no-storage': { title: 'identity.fail.storage.title', body: 'identity.fail.storage.body' },
   shell: { title: 'identity.fail.shell.title', body: 'identity.fail.shell.body' },
+  keychain: {
+    title: 'identity.fail.keychain.title',
+    body: 'identity.fail.keychain.body',
+    retry: true,
+  },
   engine: { title: 'identity.fail.engine.title', body: 'identity.fail.engine.body', retry: true },
   revoked: { title: 'identity.fail.revoked.title', body: 'identity.fail.revoked.body' },
   gate: { title: 'identity.fail.gate.title', body: 'identity.fail.gate.body' },
