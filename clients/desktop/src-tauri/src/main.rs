@@ -10,7 +10,12 @@
 //     `desktop-settings-get` запрашивает настройки, `set-ptt-shortcut`
 //     (комбинация или null) переназначает хоткей, `set-autostart` (bool) —
 //     автозапуск, `switch-server` возвращает окно на экран выбора сервера.
+//
+// Единственная пара событий с ответом — личность: `identity-request` (op `key`
+// или `sign`) → `identity-reply` с тем же `id`. Ключ устройства живёт в Rust и
+// в webview не попадает (см. identity.rs).
 
+mod identity;
 mod screen_audio;
 mod settings;
 
@@ -312,6 +317,11 @@ fn main() {
                     event.payload()
                 ));
             });
+
+            // Личность: web-UI просит публичный ключ и подписи, ключ остаётся
+            // здесь. Вешаем до всего остального веб-обмена — это первое, о чём
+            // страница спрашивает, едва загрузившись.
+            identity::wire(&handle);
 
             // web-UI сообщает состояние звонка → перерисовываем трей.
             let h = handle.clone();

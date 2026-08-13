@@ -4,7 +4,8 @@ version = "0.6.1"
 description = "relay desktop — Tauri v2 оболочка над web-клиентом"
 authors = ["relay"]
 edition = "2021"
-rust-version = "1.77.2"
+# Планку держит ed25519-dalek 2 (ключ личности); до него хватало 1.77.2.
+rust-version = "1.81"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -30,13 +31,35 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # tokio::time::timeout — жёсткий предохранитель вокруг updater.check() (см. main.rs).
 tokio = { version = "1", features = ["time"] }
-# PCM-кадры нативного звука демонстрации → base64 в события Tauri.
+# PCM-кадры нативного звука демонстрации → base64 в события Tauri; там же
+# кодируются ключ и подпись личности (base64url без набивки, как в web).
 base64 = "0.22"
 ctor = "0.8.0"
+# Личность: ключ устройства живёт в Rust, а не в webview (см. src/identity.rs).
+ed25519-dalek = "2"
+# Семя ключа. Отдельным крейтом, а не фичей `rand_core` у dalek: тот тянет
+# rand 0.8, которого в дереве нет, — а getrandom уже есть.
+getrandom = "0.3"
+# Имя файла ключа = начало SHA-256 от origin. Крейт уже в дереве через dalek.
+sha2 = "0.10"
+# `Url::origin()` — origin берём у самого webview, а не из тела события.
+url = "2"
 
 # Версия системного WebKitGTK в рантайме (webkit_get_*_version) — решаем,
 # нужен ли WEBKIT_DISABLE_DMABUF_RENDERER (см. main()). Крейт уже в дереве
 # зависимостей через wry, прямая ссылка ничего не тянет.
+# Системный keychain под ключ личности — только там, где он не тянет за собой
+# ни C-библиотеки, ни демона: macOS Keychain и Windows Credential Manager.
+# На Linux ключ хранится файлом 0600 (см. src/identity.rs), поэтому здесь Linux
+# и нет: secret-service привёл бы libdbus в AppImage и в AUR ради пути, который
+# на машине без запущенного демона всё равно кончается тем же файлом.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(windows)'.dependencies.keyring]
+version = "3"
+features = ["windows-native"]
+
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk-sys = "2.0"
 # Обработчик permission-request и настройки WebKit (enable-webrtc): wry на
