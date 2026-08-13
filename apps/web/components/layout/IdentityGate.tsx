@@ -10,6 +10,7 @@ import { randomCallsign } from '@/lib/avatar';
 import type { LoginFailure } from '@/lib/identity-login';
 import { useIdentityStore } from '@/stores/identity';
 import { useT, type MessageKey } from '@/lib/i18n';
+import { LinkDevicePanel } from '@/components/layout/LinkDevicePanel';
 
 /**
  * Первый вход. Регистрации нет и быть не может: личность — это ключевая пара,
@@ -60,6 +61,9 @@ export function IdentityGate() {
 
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
+  // Второй путь с этого экрана: личность у человека уже есть, и он ставит
+  // второе устройство. Спрашивать имя ему незачем — его зовут как вчера.
+  const [linking, setLinking] = useState(false);
 
   useEffect(() => {
     void restore();
@@ -96,7 +100,9 @@ export function IdentityGate() {
         onPointerDownOutside={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
       >
-        {status === 'failed' && failure ? (
+        {linking ? (
+          <LinkDevicePanel onClose={() => setLinking(false)} />
+        ) : status === 'failed' && failure ? (
           <Failure failure={failure} onRetry={() => void restore()} />
         ) : (
           <div className="px-7 pb-6 pt-6 text-center">
@@ -169,6 +175,17 @@ export function IdentityGate() {
                 {t('identity.nick.failed')}
               </p>
             )}
+
+            {/* Человек, у которого личность уже есть, попал сюда не за именем:
+                он поставил второе устройство. Ему сюда, и не искать по
+                настройкам того, чего он ещё не завёл. */}
+            <button
+              type="button"
+              onClick={() => setLinking(true)}
+              className="mt-3 rounded-[8px] px-3 py-1.5 text-[12.5px] text-text-muted outline-none transition-colors hover:bg-bg-hover hover:text-text"
+            >
+              {t('identity.haveOne')}
+            </button>
 
             <p className="mt-3 text-[10px] leading-snug text-text-muted opacity-70">
               {t('identity.note')}

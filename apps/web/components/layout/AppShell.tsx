@@ -2,9 +2,12 @@
 
 import { useEffect, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
+import { readPairCode } from '@relay/shared';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/lib/use-mobile';
 import { useUiStore, type MobilePanel } from '@/stores/ui';
+import { usePairingStore } from '@/stores/pairing';
+import { AdmitDeviceDialog } from '@/components/layout/AdmitDeviceDialog';
 import { ServerRail } from '@/components/layout/ServerRail';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Topbar } from '@/components/layout/Topbar';
@@ -48,6 +51,17 @@ export function AppShell() {
   useEffect(() => {
     if (view === 'text' || view === 'voice') setMobilePanel('stage');
   }, [view, textRoom, voiceRoom, setMobilePanel]);
+
+  // Ссылка из QR: код связки приезжает во фрагменте адреса — так его снимает
+  // системная камера телефона, минуя сканер внутри приложения. Фрагмент сразу
+  // стираем: иначе экран впуска открывался бы заново на каждой перезагрузке,
+  // а код к тому времени давно мёртв.
+  useEffect(() => {
+    const code = readPairCode(window.location.hash);
+    if (!code) return;
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+    usePairingStore.getState().admit(code);
+  }, []);
 
   // Состав есть только в канале; если вкладка «Состав» осталась активной после
   // ухода в лобби — показываем сцену вместо пустого экрана.
@@ -93,6 +107,9 @@ export function AppShell() {
           <OnlineMembers />
         </Panel>
       </div>
+
+      {/* Одно на приложение: зовут его и из панели устройств, и из ссылки. */}
+      <AdmitDeviceDialog />
     </div>
   );
 }

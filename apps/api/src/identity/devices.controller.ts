@@ -63,7 +63,7 @@ export class DevicesController {
       res.status(status(asked.reason)).json({ error: asked.reason });
       return;
     }
-    res.json({ code: asked.code, expiresAt: asked.expiresAt });
+    res.json({ code: asked.code, expiresIn: asked.expiresIn });
   }
 
   @Get('pair/:code')

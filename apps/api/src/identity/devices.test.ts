@@ -249,9 +249,14 @@ describe('связка второго устройства', () => {
   it('через три минуты код уже не код', async () => {
     const donor = await signIn(await device(), 'Аня');
     const guest = await signIn(await device());
-    const code = await ask(guest);
+    const asked = res();
+    await devices.ask(req(guest.cookie), asked);
+    const { code, expiresIn } = asked.body as { code: string; expiresIn: number };
+    // Срок приходит длительностью, а не меткой: часы клиента и сервера
+    // расходятся, и обратный отсчёт по чужим часам показывал бы чушь.
+    expect(expiresIn).toBe(3 * 60 * 1000);
 
-    clock += 3 * 60 * 1000 + 1;
+    clock += expiresIn + 1;
     const out = res();
     await devices.look(req(donor.cookie), out, code);
     expect(out.body).toEqual({ error: 'bad-code' });

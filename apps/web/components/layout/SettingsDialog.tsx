@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { Icon } from '@/components/ui/icon';
 import { springTab, tabPanel } from '@/lib/motion';
+import { DevicesPanel } from '@/components/layout/DevicesPanel';
 import {
   checkForUpdates,
   installUpdate,
@@ -757,6 +758,8 @@ export function SettingsDialog({
                 </div>
               ) : tab === 'app' ? (
                 <AppTab />
+              ) : tab === 'account' ? (
+                <DevicesPanel />
               ) : (
                 <Placeholder>{t('settings.placeholder')}</Placeholder>
               )}

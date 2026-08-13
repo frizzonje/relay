@@ -71,7 +71,12 @@ export interface PairView {
   publicKey: string;
   fingerprint: string;
   deviceName: string;
-  expiresAt: number;
+  /**
+   * Сколько коду жить, в миллисекундах, — а не когда он умрёт. Метка времени
+   * потребовала бы, чтобы часы телефона и сервера совпадали, а они расходятся
+   * на минуты сплошь и рядом: обратный отсчёт на экране показывал бы чушь.
+   */
+  expiresIn: number;
 }
 
 @Injectable()
@@ -90,7 +95,7 @@ export class PairingService {
    * человеку. Проверка на прожитую жизнь стоит здесь, а не в подтверждении, —
    * человек узнает о невозможности до того, как побежит за вторым устройством.
    */
-  async ask(device: DeviceRow): Promise<PairResult<{ code: string; expiresAt: number }>> {
+  async ask(device: DeviceRow): Promise<PairResult<{ code: string; expiresIn: number }>> {
     const { id: deviceId, identityId } = device;
     if (!(await this.stillborn(identityId, deviceId))) return { ok: false, reason: 'has-history' };
 
@@ -105,15 +110,14 @@ export class PairingService {
     for (const [code, w] of this.waiting) if (w.deviceId === deviceId) this.waiting.delete(code);
 
     const code = this.freeCode();
-    const expiresAt = this.now() + PAIR_TTL_MS;
     this.waiting.set(code, {
       identityId,
       deviceId,
       publicKey: device.publicKey,
       deviceName: device.name,
-      expiresAt,
+      expiresAt: this.now() + PAIR_TTL_MS,
     });
-    return { ok: true, code, expiresAt };
+    return { ok: true, code, expiresIn: PAIR_TTL_MS };
   }
 
   /**
@@ -130,7 +134,7 @@ export class PairingService {
         publicKey: waiting.publicKey,
         fingerprint: fingerprint(waiting.publicKey),
         deviceName: waiting.deviceName,
-        expiresAt: waiting.expiresAt,
+        expiresIn: waiting.expiresAt - this.now(),
       },
     };
   }
