@@ -46,6 +46,7 @@ import {
   type DeleteServerTarget,
 } from '@/components/layout/DeleteServerDialog';
 import { ChannelModeDialog, type ChannelModeTarget } from '@/components/layout/ChannelModeDialog';
+import { BannedDialog, type BansTarget } from '@/components/layout/BannedDialog';
 
 /**
  * Вспышка «пришло новое»: контур строки отходит от её краёв наружу и тает.
@@ -395,6 +396,8 @@ export function Sidebar() {
   const [modeTarget, setModeTarget] = useState<ChannelModeTarget | null>(null);
   // Подтверждение удаления сервера (спрашиваем — уносит с собой все каналы).
   const [serverDeleteTarget, setServerDeleteTarget] = useState<DeleteServerTarget | null>(null);
+  // Список забаненных этого сервера: null — закрыт.
+  const [bansTarget, setBansTarget] = useState<BansTarget | null>(null);
 
   // Управление реестровой записью — по флагу `mine`: сервер считает его под
   // наш сокет и присылает вместе с реестром (audit B2). Id владельца клиенту
@@ -498,6 +501,19 @@ export function Sidebar() {
         <span className="truncate font-bold text-text-header">
           {isMain ? 'relay' : (activeServer?.name ?? t('sidebar.server.fallback'))}
         </span>
+        {activeServer?.moderated && (
+          <button
+            // Список забаненных — единственное место, где бан можно снять.
+            // Стоит рядом с удалением сервера и по тому же правилу: кнопки
+            // модератора живут там, где написано имя его сервера.
+            onClick={() => setBansTarget({ server: activeServerId, name: activeServer.name })}
+            title={t('moderation.bans.open')}
+            aria-label={t('moderation.bans.open')}
+            className="ml-auto grid h-6 w-6 shrink-0 place-items-center rounded text-text-muted outline-none transition-colors hover:text-text-header focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <Icon name="user-x" className="text-[14px]" />
+          </button>
+        )}
         {!isMain && activeServer?.removable && activeServer.mine && (
           <button
             // Удаление необратимо и видно всем — спрашиваем своим диалогом,
@@ -507,7 +523,7 @@ export function Sidebar() {
             onClick={() => setServerDeleteTarget({ id: activeServerId, name: activeServer.name })}
             title={t('sidebar.server.delete')}
             aria-label={t('sidebar.server.delete')}
-            className="ml-auto grid h-6 w-6 shrink-0 place-items-center rounded text-lg leading-none text-text-muted outline-none transition-colors hover:text-danger focus-visible:ring-2 focus-visible:ring-accent"
+            className="grid h-6 w-6 shrink-0 place-items-center rounded text-lg leading-none text-text-muted outline-none transition-colors hover:text-danger focus-visible:ring-2 focus-visible:ring-accent"
           >
             ×
           </button>
@@ -745,6 +761,12 @@ export function Sidebar() {
         target={serverDeleteTarget}
         onOpenChange={(open) => {
           if (!open) setServerDeleteTarget(null);
+        }}
+      />
+      <BannedDialog
+        target={bansTarget}
+        onOpenChange={(open) => {
+          if (!open) setBansTarget(null);
         }}
       />
       <ChannelModeDialog

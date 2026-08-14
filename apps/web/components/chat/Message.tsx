@@ -336,13 +336,19 @@ function AddReaction({ id, closeSignal }: { id: string; closeSignal: number }) {
   );
 }
 
-/** Меню «⋯» своего сообщения: правка и удаление, чтобы не плодить кнопки. */
+/**
+ * Меню «⋯» сообщения: правка и удаление, чтобы не плодить кнопки.
+ *
+ * У чужой реплики правки нет вовсе — даже у модератора: `onEdit` там пуст, и
+ * пункт не рисуется. Кнопка «переписать чужое своим текстом» не должна
+ * существовать в интерфейсе, а не просто получать отказ от сервера.
+ */
 function MoreMenu({
   onEdit,
   onDelete,
   closeSignal,
 }: {
-  onEdit: () => void;
+  onEdit?: () => void;
   onDelete: () => void;
   closeSignal: number;
 }) {
@@ -356,15 +362,17 @@ function MoreMenu({
     >
       {(close) => (
         <>
-          <ActionBtn
-            title={t('chat.action.edit')}
-            onClick={() => {
-              close();
-              onEdit();
-            }}
-          >
-            <Icon name="edit" className="text-[13px]" />
-          </ActionBtn>
+          {onEdit && (
+            <ActionBtn
+              title={t('chat.action.edit')}
+              onClick={() => {
+                close();
+                onEdit();
+              }}
+            >
+              <Icon name="edit" className="text-[13px]" />
+            </ActionBtn>
+          )}
           <ActionBtn
             title={t('chat.action.delete')}
             danger
@@ -421,11 +429,14 @@ export const Message = memo(function Message({
   me,
   enter,
   editing,
+  moderated,
+  owner,
   onReply,
   onStartEdit,
   onSubmitEdit,
   onCancelEdit,
   onDelete,
+  onBan,
   onJumpTo,
 }: {
   msg: ChatMessage;
@@ -433,11 +444,20 @@ export const Message = memo(function Message({
   me: string;
   enter: boolean;
   editing: boolean;
+  /**
+   * Этот канал модерируется тобой: сервер сказал `moderated` про его сервер.
+   * Флаг приходит с сервера и не вычисляется здесь — иначе рано или поздно на
+   * экране появилась бы кнопка, которая получает отказ.
+   */
+  moderated: boolean;
+  /** Владелец инсталляции: только ему доступен бан на всю инсталляцию. */
+  owner: boolean;
   onReply: (m: ChatMessage) => void;
   onStartEdit: (m: ChatMessage) => void;
   onSubmitEdit: (id: string, text: string) => void;
   onCancelEdit: () => void;
   onDelete: (m: ChatMessage) => void;
+  onBan: (m: ChatMessage, everywhere: boolean) => void;
   onJumpTo: (id: string) => void;
 }) {
   const t = useT();
@@ -488,13 +508,36 @@ export const Message = memo(function Message({
               run: () => onStartEdit(msg),
             }
           : null,
-        mine
+        // Удалить своё может автор; чужое — модератор сервера. Правку чужого
+        // не предлагаем ни тому, ни другому: удалить сказанное — модерация,
+        // переписать сказанное чужим именем — подлог.
+        mine || moderated
           ? {
               id: 'msg-delete',
               label: t('chat.action.deleteMessage'),
               icon: 'trash' as const,
               danger: true,
               run: () => onDelete(msg),
+            }
+          : null,
+        // Банить есть кого, только если у реплики есть автор-личность: за гостя
+        // по инвайту ручается токен, и разговор с ним кончается «выгнать».
+        !mine && moderated && msg.fingerprint && !msg.system
+          ? {
+              id: 'msg-ban',
+              label: t('chat.action.ban'),
+              icon: 'user-x' as const,
+              danger: true,
+              run: () => onBan(msg, false),
+            }
+          : null,
+        !mine && moderated && owner && msg.fingerprint && !msg.system
+          ? {
+              id: 'msg-ban-everywhere',
+              label: t('chat.action.banEverywhere'),
+              icon: 'user-x' as const,
+              danger: true,
+              run: () => onBan(msg, true),
             }
           : null,
       ],
@@ -594,9 +637,9 @@ export const Message = memo(function Message({
             <Icon name="reply" className="text-[13px]" />
           </ActionBtn>
           <AddReaction id={msg.id} closeSignal={leaveTick} />
-          {mine && (
+          {(mine || moderated) && (
             <MoreMenu
-              onEdit={() => onStartEdit(msg)}
+              onEdit={mine ? () => onStartEdit(msg) : undefined}
               onDelete={() => onDelete(msg)}
               closeSignal={leaveTick}
             />

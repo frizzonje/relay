@@ -17,8 +17,12 @@ import { getSocket } from '@/lib/socket';
 import { ask } from '@/lib/channels';
 import { useRetentionDays } from '@/lib/use-sfu';
 import { useUiStore } from '@/stores/ui';
+import { useChannelsStore } from '@/stores/channels';
 import { useChatStore } from '@/stores/chat';
+import { useOwnerStore } from '@/stores/owner';
+import { useServersStore } from '@/stores/servers';
 import { useUnreadStore } from '@/stores/unread';
+import { BanAuthorDialog, type BanTarget } from '@/components/chat/BanAuthorDialog';
 import { DeleteMessageDialog } from '@/components/chat/DeleteMessageDialog';
 import { Message, UnreadDivider } from '@/components/chat/Message';
 import { tx, useRichT, useT } from '@/lib/i18n';
@@ -118,6 +122,16 @@ export function ChatPanel() {
   const more = useChatStore((s) => s.more);
   const loadingMore = useChatStore((s) => s.loadingMore);
   const retentionDays = useRetentionDays();
+  // Право модерировать приходит с сервера — флагом на сервере реестра, которому
+  // принадлежит открытый канал. Вычислять его здесь было бы гаданием: у
+  // главного сервера создателя нет, и «моё» там истинно у всех.
+  const channels = useChannelsStore((s) => s.channels);
+  const servers = useServersStore((s) => s.servers);
+  const owner = useOwnerStore((s) => s.owner);
+  const channelServer = servers.find(
+    (sv) => sv.id === channels.find((c) => c.type === 'text' && c.slug === textRoom)?.serverId,
+  );
+  const moderated = channelServer?.moderated === true;
 
   const [text, setText] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -125,6 +139,7 @@ export function ChatPanel() {
   const [reply, setReply] = useState<Draft | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ChatMessage | null>(null);
+  const [pendingBan, setPendingBan] = useState<BanTarget | null>(null);
   const [dragging, setDragging] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   const [hasNew, setHasNew] = useState(false);
@@ -288,6 +303,13 @@ export function ChatPanel() {
   const deleteMessage = useCallback((m: ChatMessage) => {
     if (m.id) setPendingDelete(m);
   }, []);
+
+  const banAuthor = useCallback(
+    (m: ChatMessage, everywhere: boolean) => {
+      if (m.id) setPendingBan({ message: m, everywhere, server: channelServer?.name ?? '' });
+    },
+    [channelServer?.name],
+  );
 
   const startEdit = useCallback((m: ChatMessage) => setEditingId(m.id ?? null), []);
   const cancelEdit = useCallback(() => setEditingId(null), []);
@@ -475,7 +497,10 @@ export function ChatPanel() {
               onStartEdit={startEdit}
               onSubmitEdit={submitEdit}
               onCancelEdit={cancelEdit}
+              moderated={moderated}
+              owner={owner}
               onDelete={deleteMessage}
+              onBan={banAuthor}
               onJumpTo={jumpTo}
             />
           </div>
@@ -624,6 +649,8 @@ export function ChatPanel() {
         target={pendingDelete}
         onOpenChange={(open) => !open && setPendingDelete(null)}
       />
+
+      <BanAuthorDialog target={pendingBan} onOpenChange={(open) => !open && setPendingBan(null)} />
     </div>
   );
 }

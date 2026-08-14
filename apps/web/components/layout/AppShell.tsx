@@ -10,6 +10,7 @@ import { useOwnerStore } from '@/stores/owner';
 import { usePairingStore } from '@/stores/pairing';
 import { AdmitDeviceDialog } from '@/components/layout/AdmitDeviceDialog';
 import { OwnerClaimDialog } from '@/components/layout/OwnerClaimDialog';
+import { BannedGate } from '@/components/layout/BannedGate';
 import { ServerRail } from '@/components/layout/ServerRail';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Topbar } from '@/components/layout/Topbar';
@@ -75,6 +76,12 @@ export function AppShell() {
     useOwnerStore.getState().claim(token);
   }, []);
 
+  // Владелец ли — спрашиваем один раз на вход. Ответ нужен не одному экрану:
+  // по нему карточка личности рисует значок, а лента — бан на всю инсталляцию.
+  useEffect(() => {
+    void useOwnerStore.getState().refresh();
+  }, []);
+
   // Состав есть только в канале; если вкладка «Состав» осталась активной после
   // ухода в лобби — показываем сцену вместо пустого экрана.
   const hasPeople = view === 'voice' || view === 'text';
@@ -123,6 +130,7 @@ export function AppShell() {
       {/* Одно на приложение: зовут его и из панели устройств, и из ссылки. */}
       <AdmitDeviceDialog />
       <OwnerClaimDialog />
+      <BannedGate />
     </div>
   );
 }

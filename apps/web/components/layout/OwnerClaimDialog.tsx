@@ -48,6 +48,9 @@ export function OwnerClaimDialog() {
     setPhase({ kind: 'claiming' });
     try {
       await claimOwner(token);
+      // Права в этой же вкладке: без этого человек, только что взявший власть,
+      // не увидел бы ни одной новой кнопки до перезагрузки страницы.
+      await useOwnerStore.getState().refresh();
       setPhase({ kind: 'done' });
     } catch (err) {
       setPhase({ kind: 'failed', reason: err instanceof OwnerError ? err.reason : 'network' });

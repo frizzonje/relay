@@ -2608,7 +2608,9 @@ describe('бан', () => {
 
     expect(await gw.handleModerationBan(asSocket(h), { id })).toEqual({ ok: true });
 
-    expect(g.last('chat-closed')).toEqual({ slug: 'болталка' });
+    // С причиной: канал на месте, ушёл человек. Клиент по ней и говорит правду
+    // вместо «канал удалён».
+    expect(g.last('chat-closed')).toEqual({ slug: 'болталка', reason: 'banned' });
     expect(g.data.room).toBeUndefined();
     const servers = g.last('servers') as { id: string }[];
     expect(servers.map((s) => s.id)).toEqual([MAIN]);

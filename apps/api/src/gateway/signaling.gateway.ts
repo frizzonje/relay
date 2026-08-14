@@ -31,6 +31,7 @@ import {
   type Claimant,
   type PublicChannel,
   type PublicServer,
+  moderatedBy,
   normalizeClientId,
   ownedBy,
   publicChannel,
@@ -1134,11 +1135,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     return !!srv && this.isOpenTo(client, srv) && this.moderates(client, srv);
   }
 
-  /** То же правило, но про сам сервер: владелец инсталляции или его создатель. */
+  /** То же правило, но про сам сервер. Считается там же, где рисуется флаг. */
   private moderates(client: Socket, srv: ServerEntry): boolean {
-    if (client.data.owner === true) return true;
-    const identityId = this.speaker(client)?.id;
-    return !!srv.creatorIdentityId && srv.creatorIdentityId === identityId;
+    return moderatedBy(srv, this.claimant(client));
   }
 
   /**
@@ -1155,7 +1154,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   private applyBan(identityId: string, serverId: string | null): void {
     for (const sock of this.socketsOf(identityId)) {
       if (serverId === null) {
-        sock.emit('banned', {});
+        sock.emit('banned');
         sock.disconnect(true);
         continue;
       }
@@ -1193,10 +1192,10 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       if (channel.serverId !== serverId) continue;
       if (channel.type === 'voice' && voice === channel.slug) this.leaveRoom(client);
       if (channel.type === 'text' && chat === this.chat.room(channel.slug)) {
-        client.leave(chat);
-        client.data.chatRoom = undefined;
-        client.data.chatName = undefined;
-        client.emit('chat-closed', { slug: channel.slug });
+        this.leaveChatRoom(client);
+        // С причиной: канал на месте, ушёл человек. Без неё клиент сказал бы
+        // ему «канал удалён» — и он пошёл бы искать пропажу, которой нет.
+        client.emit('chat-closed', { slug: channel.slug, reason: 'banned' });
       }
     }
   }

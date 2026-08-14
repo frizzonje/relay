@@ -10,6 +10,8 @@ import { useUiStore, myName } from '@/stores/ui';
 import { useChatStore } from '@/stores/chat';
 import { useUnreadStore, LAST_READ_KEY } from '@/stores/unread';
 import { useChannelsStore } from '@/stores/channels';
+import { useIdentityStore } from '@/stores/identity';
+import { useModerationStore } from '@/stores/moderation';
 import { useServersStore } from '@/stores/servers';
 import { forgetServerPassword, storedServerPasswords, unlockServer } from '@/lib/servers';
 import { notifyMessage } from '@/lib/notify';
@@ -157,11 +159,15 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // Канал закрылся под нами: его удалили (или он не пережил наш реконнект).
     // Сервер уже выписал нас из комнаты — закрываем ленту и говорим почему,
     // иначе на экране остался бы канал-призрак, в котором можно писать в пустоту.
-    socket.on('chat-closed', ({ slug }) => {
+    socket.on('chat-closed', ({ slug, reason }) => {
       if (!slug || slug !== ui().textRoom) return;
       const label = ui().textLabel || slug;
       ui().leaveText();
-      toast(tx('channels.deleted', { name: label }));
+      // Бан и удаление канала выглядят на экране одинаково — лента закрылась, —
+      // но означают разное, и человеку важнее второе: канал цел, ушёл он.
+      toast(
+        reason === 'banned' ? tx('moderation.banned.channel') : tx('channels.deleted', { name: label }),
+      );
     });
 
     // Реестр серверов — сервер шлёт полный список на connect и при изменениях.
@@ -234,7 +240,18 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       }
     });
 
+    // Бан на всю инсталляцию приходит двумя путями, и оба нужны. Живым
+    // событием — пока сокет ещё держится, чтобы экран сменился на глазах; и
+    // отказом двери при следующей попытке — там сокет не подключается вовсе, и
+    // без разбора причины человек видел бы вечное «переподключаюсь».
+    socket.on('banned', () => useModerationStore.getState().setBanned(true));
+    socket.on('connect_error', (err: Error) => {
+      if (err?.message === 'banned') useModerationStore.getState().setBanned(true);
+    });
+
     socket.on('connect', () => {
+      // Дверь открылась — значит бана уже нет: разбанили, пока мы стучались.
+      useModerationStore.getState().setBanned(false);
       // Авто-разблокировка закрытых серверов сохранёнными паролями (после reconnect
       // сокет-сессия новая — разблокировки надо повторить).
       for (const { id, password } of storedServerPasswords()) unlockServer(id, password);
@@ -290,10 +307,26 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       window.addEventListener('storage', onStorage);
     }
 
+    // Личность узнаётся один раз, миддлварой на подключении, — а рождается она
+    // на первом заходе уже ПОСЛЕ того, как сокет подключился. Без этой
+    // переподписки первое соединение человека остаётся безымянным до
+    // перезагрузки страницы: его сервер записался бы на устройство, а реплики
+    // ушли бы в ленту без лица.
+    let known = useIdentityStore.getState().me?.id ?? null;
+    const unsubIdentity = useIdentityStore.subscribe((state) => {
+      const id = state.me?.id ?? null;
+      if (id === known) return;
+      known = id;
+      if (!id || !socket.connected) return;
+      socket.disconnect();
+      socket.connect();
+    });
+
     if (!socket.connected) socket.connect();
 
     return () => {
       unsub();
+      unsubIdentity();
       unsubUnread();
       if (typeof window !== 'undefined') {
         document.removeEventListener('visibilitychange', onFocusChange);

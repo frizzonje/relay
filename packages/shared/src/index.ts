@@ -183,6 +183,13 @@ export interface Server {
    * копипасты (audit B2).
    */
   mine?: boolean;
+  /**
+   * Этот сервер модерируешь ты: удаляешь чужие сообщения, банишь, видишь список
+   * забаненных. Отдельный флаг, а не `mine`, и разница не косметическая: `mine`
+   * истинно и у записей без создателя — у главного сервера, например, — где
+   * управлять реестром может каждый, а вот удалять чужие слова не должен никто.
+   */
+  moderated?: boolean;
 }
 
 export interface ServerCreatePayload {
@@ -216,6 +223,41 @@ export type ServerDeleteResult =
     };
 
 /** Ввод пароля для доступа к закрытому серверу. */
+/** Кого банить: сообщение, а `everywhere` — вся инсталляция вместо сервера. */
+export interface ModerationBanPayload {
+  id: string;
+  /** Только владельцу инсталляции. Без него бан действует на текущем сервере. */
+  everywhere?: boolean;
+}
+
+/** Охват: сервер, а пустой — вся инсталляция (её списки видит только владелец). */
+export interface ModerationBansPayload {
+  server?: string;
+}
+
+export interface ModerationUnbanPayload {
+  fingerprint: string;
+  server?: string;
+}
+
+export type ModerationResult =
+  | { ok: true }
+  | { ok: false; error: 'not-found' | 'forbidden' | 'unknown' };
+
+/** Забаненный так, как его показывают модератору: лицо, имя и след. */
+export interface BanEntry {
+  fingerprint: string;
+  nick: string;
+  /** Когда забанен, ISO. */
+  at: string;
+  /** Ник забанившего; пусто — его личности уже нет. */
+  by: string | null;
+}
+
+export type ModerationBansResult =
+  | { ok: true; bans: BanEntry[] }
+  | { ok: false; error: 'forbidden' };
+
 export interface ServerUnlockPayload {
   id: string;
   password: string;
@@ -685,6 +727,19 @@ export interface ClientToServerEvents {
   'invite-create': (payload: InviteCreatePayload, cb: (res: InviteCreateResult) => void) => void;
   /** Выгнать гостя из эфира — вправе любой НЕ-гость, кому виден этот канал. */
   'guest-kick': (payload: GuestKickPayload, cb: (res: GuestKickResult) => void) => void;
+  /**
+   * Забанить автора сообщения. Целью служит сказанное, а не имя: имена не
+   * уникальны, а реплика однозначно указывает на своего автора.
+   */
+  'moderation-ban': (payload: ModerationBanPayload, cb: (res: ModerationResult) => void) => void;
+  'moderation-unban': (
+    payload: ModerationUnbanPayload,
+    cb: (res: ModerationResult) => void,
+  ) => void;
+  'moderation-bans': (
+    payload: ModerationBansPayload,
+    cb: (res: ModerationBansResult) => void,
+  ) => void;
   'sfu-token': (payload: SfuTokenPayload, cb: (res: SfuTokenResult) => void) => void;
   'voice-diag': (payload: VoiceDiagPayload) => void;
 }
@@ -775,6 +830,12 @@ export interface ServerToClientEvents {
    * Летит только ему самому: остальные видят обычный уход участника.
    */
   kicked: (payload: KickedRelay) => void;
+  /**
+   * Тебя забанили на всей инсталляции — сокет сейчас закроется, и обратно его
+   * не пустят. Событие без тела: сказать тут больше нечего, а показать экран
+   * вместо молчащего приложения обязательно.
+   */
+  banned: () => void;
 }
 
 /** Гостя выгнали из этой комнаты. */
@@ -820,6 +881,13 @@ export interface ChatActivityRelay {
 /** Канал закрылся: его слаг (проверить, что закрыли именно открытый у тебя). */
 export interface ChatClosedRelay {
   slug: string;
+  /**
+   * Почему лента закрылась. Пусто — канал удалили, и так было всегда. `banned`
+   * — тебя забанили на сервере, которому канал принадлежит: канал цел, ушёл
+   * ты. Разные вещи, и говорить о них одним тостом значит соврать одному из
+   * двоих — тому, кто пойдёт искать удалённый канал, которого никто не удалял.
+   */
+  reason?: 'banned';
 }
 
 // ─────────────────────────────────────────────────────────────────────────

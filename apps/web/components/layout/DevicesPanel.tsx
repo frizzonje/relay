@@ -5,8 +5,8 @@ import { Identicon } from '@/components/ui/Identicon';
 import { Icon } from '@/components/ui/icon';
 import { fmtSince } from '@/lib/format';
 import { listDevices, revokeDevice, DeviceError, type Device } from '@/lib/devices';
-import { amIOwner } from '@/lib/owner';
 import { useIdentityStore } from '@/stores/identity';
+import { useOwnerStore } from '@/stores/owner';
 import { usePairingStore } from '@/stores/pairing';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
@@ -26,7 +26,9 @@ export function DevicesPanel() {
   const me = useIdentityStore((s) => s.me);
   const admit = usePairingStore((s) => s.admit);
   const [devices, setDevices] = useState<Device[] | null>(null);
-  const [owner, setOwner] = useState(false);
+  // Владельца спрашивает вход (AppShell) — здесь только читаем: два экрана,
+  // задающие один и тот же вопрос по-своему, рано или поздно расходятся.
+  const owner = useOwnerStore((s) => s.owner);
   const [failed, setFailed] = useState(false);
   const [asking, setAsking] = useState<string | null>(null);
   const [linking, setLinking] = useState(false);
@@ -43,9 +45,6 @@ export function DevicesPanel() {
 
   useEffect(() => {
     void load();
-    // Владелец ли — спрашиваем здесь, а не носим в личности: вопрос нужен
-    // одному этому экрану, а вход и без того делает три запроса.
-    void amIOwner().then(setOwner);
   }, [load]);
 
   async function revoke(device: Device) {

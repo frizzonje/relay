@@ -49,6 +49,25 @@ export function ownedBy(
   return !entry.creatorId || entry.creatorId === who.clientId;
 }
 
+/**
+ * Модерирует ли спрашивающий этот сервер: удаляет чужие сообщения, банит,
+ * смотрит список забаненных.
+ *
+ * Это НЕ то же самое, что право править запись (`ownedBy`), и разница
+ * существенная. Там «создателя нет» означает «права общие» — иначе сервер,
+ * созданный до самого правила владения, никто не смог бы даже переименовать.
+ * Здесь такое послабление означало бы, что на главном сервере, у которого
+ * создателя нет и быть не может, любой удаляет чужие слова и банит кого хочет.
+ *
+ * Поэтому нужен названный хозяин: личность создателя либо владелец
+ * инсталляции. Унаследованный clientId власти не даёт — он лежит в localStorage
+ * и подделывается, а модерация не то, что доверяют строке из чужого браузера.
+ */
+export function moderatedBy(entry: { creatorIdentityId?: string }, who: Claimant): boolean {
+  if (who.owner) return true;
+  return !!entry.creatorIdentityId && entry.creatorIdentityId === who.identityId;
+}
+
 /** Нормализованный clientId: обрезаем и режем длину. Пусто → владельца нет. */
 export function normalizeClientId(raw: unknown): string | undefined {
   return typeof raw === 'string' ? raw.trim().slice(0, 64) || undefined : undefined;
@@ -63,6 +82,7 @@ export function publicServer(entry: ServerEntry, who: Claimant) {
     removable: entry.removable,
     ...(entry.passwordHash ? { locked: true as const } : {}),
     ...(ownedBy(entry, who) ? { mine: true as const } : {}),
+    ...(moderatedBy(entry, who) ? { moderated: true as const } : {}),
   };
 }
 
