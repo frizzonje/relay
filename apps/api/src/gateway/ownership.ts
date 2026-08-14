@@ -3,45 +3,66 @@ import type { Channel, ServerEntry } from './registry';
 /**
  * Владение реестровыми записями и их публичная форма (audit B2).
  *
- * Правило одно: сервер или канал правит тот, с чьего устройства он создан.
- * Устройство называет себя `clientId` — тем же стабильным id из localStorage,
- * которым голосовой канал выгоняет «призрака» прошлой вкладки. Он приходит в
- * handshake сокета, а не в каждом сообщении: одна точка входа, одна проверка.
+ * Правило одно: сервер или канал правит тот, кто его создал, — а поверх него
+ * владелец инсталляции, который правит всё. Модерация сервера этим же и
+ * исчерпывается: создатель отвечает за своё и только за своё, отдельной роли
+ * «модератор» никто не выдаёт.
  *
- * Чем это НЕ является: аутентификацией. clientId лежит в localStorage и
- * подделывается тем, кто захочет. Это заслон от случайного и ленивого сноса
- * чужого сервера до слоёв 2–3 плана 1.0, где владельцем станет ключ.
+ * Создатель — это личность. До 1.0 им было устройство, называвшее себя
+ * `clientId` из localStorage: заслон от случайного сноса, но не право —
+ * подделывается тем, кто захочет, и теряется вместе с чисткой браузера.
+ * Унаследованные записи так и остались с `creatorId`, и правило для них
+ * прежнее: переписать его в личность нечем (clientId никогда не был связан с
+ * ключом), а отобрать сервер у человека в день обновления — худший из исходов.
  *
- * Ровно поэтому наружу не уходит сам id владельца — только вычисленный под
- * конкретный сокет флаг `mine`. Разница принципиальная: угадать чужой uuid
- * нельзя, а получить его в рассылке и вернуть обратно в следующем запросе —
- * можно, и тогда «заслон от ленивого» не остановил бы даже ленивого.
+ * Наружу не уходит ни то, ни другое — только вычисленный под конкретный сокет
+ * флаг `mine`. Разница принципиальная: угадать чужой uuid нельзя, а получить его
+ * в рассылке и вернуть обратно в следующем запросе — можно.
  */
+
+/** Тот, кто спрашивает: устройство, личность за ним и власть над инсталляцией. */
+export interface Claimant {
+  /** clientId из handshake. Ключ к унаследованным записям — и только к ним. */
+  clientId?: string;
+  /** Личность сокета. Пусто у гостя по инвайту и у клиента без ключа. */
+  identityId?: string;
+  /** Владелец инсталляции. Ему принадлежит всё, что в ней есть. */
+  owner?: boolean;
+}
+
+/**
+ * Вправе ли спрашивающий править запись.
+ *
+ * Порядок проверок — он же порядок старшинства. Запись, у которой есть личность
+ * создателя, устройством больше не открывается: clientId был слабее ключа
+ * всегда, и оставить его вторым ключом к той же двери значило бы не переезд на
+ * личности, а лишнюю щель. Запись без создателя вообще (такие есть — они старше
+ * самого правила владения) остаётся общей: запереть её навсегда было бы хуже,
+ * лишённый прав хозяин не восстановит свой сервер никак.
+ */
+export function ownedBy(
+  entry: { creatorId?: string; creatorIdentityId?: string },
+  who: Claimant,
+): boolean {
+  if (who.owner) return true;
+  if (entry.creatorIdentityId) return entry.creatorIdentityId === who.identityId;
+  return !entry.creatorId || entry.creatorId === who.clientId;
+}
 
 /** Нормализованный clientId: обрезаем и режем длину. Пусто → владельца нет. */
 export function normalizeClientId(raw: unknown): string | undefined {
   return typeof raw === 'string' ? raw.trim().slice(0, 64) || undefined : undefined;
 }
 
-/**
- * Вправе ли это устройство править запись. Запись без `creatorId` создана до
- * правила владения: владельца у неё не существует, и права на неё прежние —
- * общие. Запереть их навсегда было бы хуже: лишённый возможности хозяин не
- * восстановит сервер никак.
- */
-export function ownedBy(entry: { creatorId?: string }, clientId: string | undefined): boolean {
-  return !entry.creatorId || entry.creatorId === clientId;
-}
-
 /** Публичная форма сервера: без хэша пароля, с флагом `locked` и `mine`. */
-export function publicServer(entry: ServerEntry, clientId: string | undefined) {
+export function publicServer(entry: ServerEntry, who: Claimant) {
   return {
     id: entry.id,
     name: entry.name,
     ...(entry.emoji ? { emoji: entry.emoji } : {}),
     removable: entry.removable,
     ...(entry.passwordHash ? { locked: true as const } : {}),
-    ...(ownedBy(entry, clientId) ? { mine: true as const } : {}),
+    ...(ownedBy(entry, who) ? { mine: true as const } : {}),
   };
 }
 
@@ -50,7 +71,7 @@ export function publicServer(entry: ServerEntry, clientId: string | undefined) {
  * есть: у записи есть поля, которым наружу не место (`creatorId`), и добавится
  * ещё — пусть их утечка требует правки здесь, а не случается сама.
  */
-export function publicChannel(channel: Channel, clientId: string | undefined, lastTs?: number) {
+export function publicChannel(channel: Channel, who: Claimant, lastTs?: number) {
   return {
     id: channel.id,
     serverId: channel.serverId,
@@ -60,7 +81,7 @@ export function publicChannel(channel: Channel, clientId: string | undefined, la
     removable: channel.removable,
     ...(channel.mode ? { mode: channel.mode } : {}),
     ...(lastTs ? { lastTs } : {}),
-    ...(ownedBy(channel, clientId) ? { mine: true as const } : {}),
+    ...(ownedBy(channel, who) ? { mine: true as const } : {}),
   };
 }
 

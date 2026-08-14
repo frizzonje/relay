@@ -33,10 +33,13 @@ export interface ServerEntry {
   // Хэш пароля закрытого сервера (`salt:hash` hex, scrypt). Клиенту НЕ отдаём —
   // наружу уходит только флаг `locked`. Персистится в registry.json.
   passwordHash?: string;
-  // clientId устройства-создателя (localStorage). Поле отсутствует у записей,
-  // созданных до правила владения, — такие серверы остаются в общем доступе.
-  // Заслон от случайного сноса, не личность: clientId подделывается.
+  // clientId устройства-создателя (localStorage) у записей, созданных до 1.0.
+  // Поле отсутствует у тех, что старше самого правила владения, — такие серверы
+  // остаются в общем доступе. Заслон от случайного сноса, не право.
   creatorId?: string;
+  // Личность создателя — он же модератор этого сервера. Пишется начиная с 1.0;
+  // в registry.json такого поля не было и быть не могло.
+  creatorIdentityId?: string;
 }
 export interface Channel {
   id: string;
@@ -51,6 +54,8 @@ export interface Channel {
   // clientId устройства-создателя, как у ServerEntry: владелец канала. У старых
   // записей отсутствует — их может править любой участник.
   creatorId?: string;
+  // Личность создателя, как у ServerEntry.
+  creatorIdentityId?: string;
 }
 
 export interface PersistedRegistry {

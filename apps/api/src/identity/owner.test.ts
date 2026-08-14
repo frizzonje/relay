@@ -4,6 +4,7 @@ import type { Request, Response } from 'express';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DataSource } from 'typeorm';
 import { OwnerClaimRow, RoleRow } from '../db/entities';
+import type { SignalingGateway } from '../gateway/signaling.gateway';
 import { resetDatabase, testDatabase } from '../db/testing';
 import { SIGN_ALGORITHM, authMessage, hashOwnerToken, isOwnerToken } from './crypto';
 import { IdentityController } from './identity.controller';
@@ -60,6 +61,17 @@ let owner: OwnerService;
 let login: IdentityController;
 let controller: OwnerController;
 let clock: number;
+/**
+ * Гейтвей здесь ненастоящий, и это ровно та его часть, которая нужна: после
+ * взятия власти права живых сокетов обязаны пересобраться, а не дождаться
+ * переподключения. Считаем вызовы — сам пересбор проверяется в тестах гейтвея.
+ */
+let synced: number;
+const gateway = {
+  syncOwner: async () => {
+    synced += 1;
+  },
+} as unknown as SignalingGateway;
 
 beforeAll(async () => {
   db = await testDatabase();
@@ -75,7 +87,8 @@ beforeEach(async () => {
   identity = new IdentityService(db);
   owner = new OwnerService(db, () => clock);
   login = new IdentityController(identity);
-  controller = new OwnerController(identity, owner);
+  controller = new OwnerController(identity, owner, gateway);
+  synced = 0;
   vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {});
   vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
   vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
@@ -173,6 +186,17 @@ describe('взятие власти', () => {
     const roles = await db.getRepository(RoleRow).find();
     expect(roles).toHaveLength(1);
     expect(roles[0]).toMatchObject({ identityId: anya.identityId, serverId: null, role: 'owner' });
+  });
+
+  it('права живых сокетов пересобираются, и только когда власть сменилась', async () => {
+    // Иначе бывший владелец продолжал бы удалять чужое до переподключения, а
+    // новый не увидел бы своих прав, пока не перезагрузит страницу.
+    const anya = await person('Аня');
+    await open(anya, (await owner.issue()).token);
+    expect(synced).toBe(1);
+
+    await open(anya, 'x'.repeat(43));
+    expect(synced).toBe(1);
   });
 
   it('ссылка одноразовая: второй открывший получает отказ', async () => {

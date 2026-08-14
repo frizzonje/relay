@@ -14,6 +14,7 @@ import {
 import { resetDatabase, testDatabase } from '../db/testing';
 import { fingerprint as fingerprintOf } from '../identity/crypto';
 import { IdentityService } from '../identity/identity.service';
+import { OwnerService } from '../identity/owner.service';
 import { issueSession } from '../identity/session';
 import type { Attachment, UploadsService } from '../uploads';
 import type { Channel, PersistedRegistry, ServerEntry } from './registry';
@@ -94,6 +95,7 @@ async function makeGateway(saved: PersistedRegistry = {}) {
         removable: s.removable !== false,
         passwordHash: s.passwordHash ?? null,
         creatorId: s.creatorId ?? null,
+        creatorIdentityId: s.creatorIdentityId ?? null,
         position,
       })),
     );
@@ -109,6 +111,7 @@ async function makeGateway(saved: PersistedRegistry = {}) {
         removable: c.removable !== false,
         mode: c.mode ?? null,
         creatorId: c.creatorId ?? null,
+        creatorIdentityId: c.creatorIdentityId ?? null,
         position,
       })),
     );
@@ -127,12 +130,19 @@ async function makeGateway(saved: PersistedRegistry = {}) {
   const chat = new ChatService(db, registry);
   await chat.onModuleInit();
   const identities = new IdentityService(db);
-  const gw = new SignalingGateway(uploads as unknown as UploadsService, chat, registry, identities);
+  const owner = new OwnerService(db);
+  const gw = new SignalingGateway(
+    uploads as unknown as UploadsService,
+    chat,
+    registry,
+    identities,
+    owner,
+  );
   gw.server = server.asServer();
   // Узнавание личности вешается миддлварой — заводим её и здесь, иначе тест
   // проверял бы гейтвей, у которого этой двери нет вовсе.
   gw.afterInit(server.asServer());
-  return { gw, server, registry, chat, identities };
+  return { gw, server, registry, chat, identities, owner };
 }
 
 /**
@@ -140,7 +150,9 @@ async function makeGateway(saved: PersistedRegistry = {}) {
  * проверен в identity.service.test, а гейтвею предъявляют именно куку — и
  * именно её разбор мы и хотим видеть.
  */
-async function personCookie(nick: string): Promise<{ cookie: string; fingerprint: string }> {
+async function personCookie(
+  nick: string,
+): Promise<{ cookie: string; fingerprint: string; identityId: string }> {
   const id = randomUUID();
   const deviceId = randomUUID();
   const key = randomBytes(32).toString('base64url');
@@ -164,15 +176,24 @@ async function personCookie(nick: string): Promise<{ cookie: string; fingerprint
     lastSeenAt: new Date(),
     revokedAt: null,
   });
-  return { cookie: `relay_id=${issueSession({ identityId: id, deviceId }).value}`, fingerprint };
+  return {
+    cookie: `relay_id=${issueSession({ identityId: id, deviceId }).value}`,
+    fingerprint,
+    identityId: id,
+  };
 }
 
-/** Подключение с предъявлением куки личности — как у вошедшего человека. */
+/**
+ * Подключение с предъявлением куки личности — как у вошедшего человека.
+ *
+ * `keep` оставляет то, что пришло на подключении (реестры серверов и каналов):
+ * обычно тесту мешает этот шум, но там, где проверяются права, он и есть ответ.
+ */
 async function connectAs(
   gw: SignalingGateway,
   server: FakeServer,
   cookie: string,
-  opts: { id?: string; clientId?: string } = {},
+  opts: { id?: string; clientId?: string; keep?: boolean } = {},
 ) {
   const sock = server.connect({
     id: opts.id,
@@ -181,7 +202,7 @@ async function connectAs(
   });
   await server.run(sock);
   gw.handleConnection(asSocket(sock));
-  sock.clear();
+  if (!opts.keep) sock.clear();
   return sock;
 }
 
@@ -2385,5 +2406,127 @@ describe('личность в эфире и в ленте', () => {
     await gw.handleRename(asSocket(a), { name: 'Королева' });
 
     expect(b.last('peer-renamed')).toEqual({ id: 'a', name: 'Аня-Б' });
+  });
+});
+
+// ── Права на реестр ───────────────────────────────────────────────────────
+
+/** Сделать человека владельцем инсталляции — тем же путём, что и ссылка. */
+async function makeOwner(owner: OwnerService, identityId: string): Promise<void> {
+  const { token } = await owner.issue();
+  await owner.claim(token, identityId);
+}
+
+describe('права на сервер: личность и владелец инсталляции', () => {
+  it('созданный сервер записан на личность, а не на устройство', async () => {
+    const { gw, server, registry } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const a = await connectAs(gw, server, anya.cookie, { id: 'a', clientId: 'dev-a' });
+
+    await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'мой' });
+    await registry.flush();
+
+    expect(await db.getRepository(ServerRow).findOneBy({ id: 'srv' })).toMatchObject({
+      creatorIdentityId: anya.identityId,
+      creatorId: null,
+    });
+  });
+
+  it('свой сервер правится с другого устройства того же человека', async () => {
+    // Ровно то, ради чего права переезжали с clientId: раньше сервер оставался
+    // у той вкладки, в которой его создали.
+    const { gw, server } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const laptop = await connectAs(gw, server, anya.cookie, { id: 'a', clientId: 'dev-a' });
+    await gw.handleServerCreate(asSocket(laptop), { id: 'srv', name: 'мой' });
+    settle();
+
+    const phone = await connectAs(gw, server, anya.cookie, {
+      id: 'b',
+      clientId: 'dev-b',
+      keep: true,
+    });
+    const seen = (phone.last('servers') as { id: string; mine?: boolean }[]).find(
+      (s) => s.id === 'srv',
+    );
+    expect(seen?.mine).toBe(true);
+    expect(await gw.handleServerDelete(asSocket(phone), { id: 'srv' })).toEqual({ ok: true });
+  });
+
+  it('чужой человек чужой сервер не удаляет', async () => {
+    const { gw, server } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const boris = await personCookie('Борис');
+    const a = await connectAs(gw, server, anya.cookie, { id: 'a' });
+    await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'мой' });
+
+    const b = await connectAs(gw, server, boris.cookie, { id: 'b' });
+    expect(await gw.handleServerDelete(asSocket(b), { id: 'srv' })).toEqual({
+      ok: false,
+      error: 'not-owner',
+    });
+  });
+
+  it('владелец инсталляции правит чужое', async () => {
+    const { gw, server, owner } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const boris = await personCookie('Борис');
+    const a = await connectAs(gw, server, anya.cookie, { id: 'a' });
+    await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'чужой' });
+
+    await makeOwner(owner, boris.identityId);
+    const b = await connectAs(gw, server, boris.cookie, { id: 'b', keep: true });
+
+    const seen = (b.last('servers') as { id: string; mine?: boolean }[]).find(
+      (s) => s.id === 'srv',
+    );
+    expect(seen?.mine).toBe(true);
+    expect(await gw.handleServerDelete(asSocket(b), { id: 'srv' })).toEqual({ ok: true });
+  });
+
+  it('власть, взятая под живым сокетом, действует сразу — и сразу теряется', async () => {
+    // Иначе бывший владелец удалял бы чужое до переподключения, а новый ждал бы
+    // перезагрузки страницы, чтобы увидеть свои права.
+    const { gw, server, owner } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const boris = await personCookie('Борис');
+    const a = await connectAs(gw, server, anya.cookie, { id: 'a' });
+    const b = await connectAs(gw, server, boris.cookie, { id: 'b' });
+    await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'мой' });
+
+    await makeOwner(owner, boris.identityId);
+    await gw.syncOwner();
+    settle();
+    const mine = (sock: { last(e: string): unknown }) =>
+      (sock.last('servers') as { id: string; mine?: boolean }[]).find((s) => s.id === 'srv')?.mine;
+    expect(mine(b)).toBe(true);
+
+    // Ссылку перевыпустили и открыла её Аня — Борис перестал быть владельцем.
+    await makeOwner(owner, anya.identityId);
+    await gw.syncOwner();
+    settle();
+    expect(mine(b)).toBeUndefined();
+    expect(await gw.handleServerDelete(asSocket(b), { id: 'srv' })).toEqual({
+      ok: false,
+      error: 'not-owner',
+    });
+  });
+
+  it('унаследованный сервер остаётся за своим устройством', async () => {
+    // Переписать clientId в личность нечем, поэтому старое правило для старых
+    // записей продолжает работать — и не открывается чужой личностью с тем же
+    // идентификатором.
+    const { gw, server } = await makeGateway({
+      servers: [{ id: 'old', name: 'старый', removable: true, creatorId: 'dev-old' }],
+    });
+    const anya = await personCookie('Аня');
+    const stranger = await connectAs(gw, server, anya.cookie, { id: 'a', clientId: 'dev-new' });
+    expect(await gw.handleServerDelete(asSocket(stranger), { id: 'old' })).toEqual({
+      ok: false,
+      error: 'not-owner',
+    });
+
+    const sameDevice = connect(gw, server, { id: 'b', clientId: 'dev-old' });
+    expect(await gw.handleServerDelete(asSocket(sameDevice), { id: 'old' })).toEqual({ ok: true });
   });
 });

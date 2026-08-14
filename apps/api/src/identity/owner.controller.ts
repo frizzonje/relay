@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { SignalingGateway } from '../gateway/signaling.gateway';
 import { IdentityService } from './identity.service';
 import { OwnerService, type ClaimFailure } from './owner.service';
 import { requireIdentity } from './session-guard';
@@ -20,6 +21,7 @@ export class OwnerController {
   constructor(
     private readonly identity: IdentityService,
     private readonly owner: OwnerService,
+    private readonly gateway: SignalingGateway,
   ) {}
 
   @Get('owner')
@@ -38,6 +40,10 @@ export class OwnerController {
       res.status(status(done.reason)).json({ error: done.reason });
       return;
     }
+    // Права живых сокетов пересобираются здесь же: и у того, кто только что
+    // взял власть, и у того, кто её потерял. Ждать переподключения нельзя —
+    // бывший владелец продолжал бы удалять чужое.
+    await this.gateway.syncOwner();
     res.json({ ok: true });
   }
 }

@@ -136,6 +136,18 @@ export class OwnerService {
     );
   }
 
+  /**
+   * Личность владельца — или `null`, если ссылку ещё никто не открывал. Нужен
+   * там, где вопрос задают не про себя, а про всех сразу: гейтвей пересобирает
+   * права живых сокетов одним запросом, а не по запросу на сокет.
+   */
+  async ownerId(): Promise<string | null> {
+    const row = await this.db
+      .getRepository(RoleRow)
+      .findOne({ where: { serverId: IsNull(), role: OWNER_ROLE }, select: { identityId: true } });
+    return row?.identityId ?? null;
+  }
+
   /** Есть ли у инсталляции владелец вообще. Нужен установщику и тестам. */
   async claimed(): Promise<boolean> {
     return (

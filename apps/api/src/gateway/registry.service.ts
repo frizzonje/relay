@@ -3,7 +3,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { DataSource, type EntityManager } from 'typeorm';
 import { ChannelRow, ServerRow } from '../db/entities';
 import { Channel, MIGRATED_MARKER, REGISTRY_FILE, ServerEntry, loadRegistry } from './registry';
-import { type PublicServer, ownedBy, publicServer } from './ownership';
+import { type Claimant, type PublicServer, ownedBy, publicServer } from './ownership';
 
 /**
  * Реестр серверов и каналов: что вообще существует, кому оно видно и кому
@@ -103,6 +103,7 @@ function toServerEntry(row: ServerRow): ServerEntry {
     ...(row.emoji ? { emoji: row.emoji } : {}),
     ...(row.passwordHash ? { passwordHash: row.passwordHash } : {}),
     ...(row.creatorId ? { creatorId: row.creatorId } : {}),
+    ...(row.creatorIdentityId ? { creatorIdentityId: row.creatorIdentityId } : {}),
   };
 }
 
@@ -116,6 +117,7 @@ function toChannel(row: ChannelRow): Channel {
     removable: row.removable,
     ...(row.mode ? { mode: row.mode as Channel['mode'] } : {}),
     ...(row.creatorId ? { creatorId: row.creatorId } : {}),
+    ...(row.creatorIdentityId ? { creatorIdentityId: row.creatorIdentityId } : {}),
   };
 }
 
@@ -293,6 +295,7 @@ export class RegistryService implements OnModuleInit {
             removable: s.removable,
             passwordHash: s.passwordHash ?? null,
             creatorId: s.creatorId ?? null,
+            creatorIdentityId: s.creatorIdentityId ?? null,
             position,
           })),
           ['id'],
@@ -309,6 +312,7 @@ export class RegistryService implements OnModuleInit {
             removable: c.removable,
             mode: c.mode ?? null,
             creatorId: c.creatorId ?? null,
+            creatorIdentityId: c.creatorIdentityId ?? null,
             position,
           })),
           ['id'],
@@ -443,23 +447,26 @@ export class RegistryService implements OnModuleInit {
    * clientId владельца: рассылать id значило бы раздавать всем то единственное,
    * чем правило владения и держится (см. ./ownership).
    */
-  publicServers(clientId: string | undefined): PublicServer[] {
-    return this.servers.map((s) => publicServer(s, clientId));
+  publicServers(who: Claimant): PublicServer[] {
+    return this.servers.map((s) => publicServer(s, who));
   }
 
   /** Кто из создателей вообще встречается в этих записях (см. gateway.ownerKey). */
-  ownerIds(entries: { creatorId?: string }[]): Set<string> {
+  ownerIds(entries: { creatorId?: string; creatorIdentityId?: string }[]): Set<string> {
     const ids = new Set<string>();
-    for (const e of entries) if (e.creatorId) ids.add(e.creatorId);
+    for (const e of entries) {
+      if (e.creatorId) ids.add(e.creatorId);
+      if (e.creatorIdentityId) ids.add(e.creatorIdentityId);
+    }
     return ids;
   }
 
   /**
    * Канал, который позволено менять: существующий, не дефолтный, свой (создан
-   * с этого устройства) и — если лежит в закрытом сервере — в разблокированном.
+   * этой личностью) и — если лежит в закрытом сервере — в разблокированном.
    * Пароль сервера это и есть право на его каналы.
    *
-   * У каналов без creatorId (созданы до правила владения) права прежние —
+   * У каналов без создателя (они старше самого правила владения) права прежние —
    * владельца не существует, и менять их может любой участник, как раньше.
    *
    * Порядок проверок не случаен: пароль закрытого сервера идёт ПЕРЕД владением.
@@ -470,7 +477,7 @@ export class RegistryService implements OnModuleInit {
   editable(
     id: string,
     unlocked: Set<string> | undefined,
-    clientId: string | undefined,
+    who: Claimant,
   ): { channel: Channel; index: number } | { error: EditError } {
     const index = this.channels.findIndex((c) => c.id === id);
     if (index === -1) return { error: 'not-found' };
@@ -478,7 +485,7 @@ export class RegistryService implements OnModuleInit {
     if (!channel.removable) return { error: 'forbidden' };
     const srv = this.serverOf(channel);
     if (srv?.passwordHash && !unlocked?.has(srv.id)) return { error: 'forbidden' };
-    if (!ownedBy(channel, clientId)) return { error: 'not-owner' };
+    if (!ownedBy(channel, who)) return { error: 'not-owner' };
     return { channel, index };
   }
 }

@@ -13,6 +13,7 @@ import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { Server, Socket } from 'socket.io';
 import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
 import { IdentityService, type Speaker } from '../identity/identity.service';
+import { OwnerService } from '../identity/owner.service';
 import { sfuHealthy } from '../sfu/sfu-health';
 import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
 import { UploadsService } from '../uploads';
@@ -26,6 +27,7 @@ import {
 } from './registry.service';
 import { Channel, ServerEntry, VoiceMode } from './registry';
 import {
+  type Claimant,
   type PublicChannel,
   type PublicServer,
   normalizeClientId,
@@ -106,6 +108,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     private readonly chat: ChatService,
     private readonly registry: RegistryService,
     private readonly identities: IdentityService,
+    private readonly owner: OwnerService,
   ) {}
 
   /**
@@ -125,17 +128,54 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     server.use((socket, next) => {
       void this.identities
         .fromCookie(socket.handshake.headers.cookie)
-        .then((speaker) => {
-          if (speaker) socket.data.identity = speaker;
+        .then(async (speaker) => {
+          if (!speaker) return;
+          socket.data.identity = speaker;
+          // Власть над инсталляцией выясняется здесь же и один раз: её
+          // спрашивает каждая рассылка реестра, а меняется она перевыпуском
+          // ссылки владельца — событием, у которого есть свой обработчик
+          // (см. `syncOwner`).
+          socket.data.owner = await this.owner.isOwner(speaker.id);
         })
         .catch((e) => this.logger.error(`не удалось узнать личность сокета: ${e}`))
         .finally(() => next());
     });
   }
 
+  /**
+   * Власть сменилась — пересобрать права живых сокетов.
+   *
+   * Зовётся из обработчика ссылки владельца: тот, кто её открыл, обязан увидеть
+   * свои новые права сразу, а прежний владелец — потерять их, не дожидаясь
+   * переподключения. Иначе бывший хозяин ещё часами удалял бы чужие серверы
+   * с уже недействительным правом.
+   */
+  async syncOwner(): Promise<void> {
+    const ownerId = await this.owner.ownerId();
+    for (const socket of this.server?.sockets.sockets.values() ?? []) {
+      socket.data.owner = !!ownerId && (socket.data.identity as Speaker | undefined)?.id === ownerId;
+    }
+    this.broadcastServers();
+    this.broadcastChannels();
+  }
+
   /** Личность этого сокета — или `undefined`: гость, старый клиент, чужой ключ. */
   private speaker(client: Socket): Speaker | undefined {
     return client.data.identity as Speaker | undefined;
+  }
+
+  /**
+   * Кто спрашивает, с точки зрения прав: устройство, личность за ним и власть
+   * над инсталляцией. Собирается из того, что уже лежит на сокете, — в базу за
+   * этим не ходят: правами интересуется каждая рассылка реестра, а меняются они
+   * считанные разы за жизнь инсталляции (см. `syncOwner`).
+   */
+  private claimant(client: Socket): Claimant {
+    return {
+      clientId: deviceId(client),
+      identityId: this.speaker(client)?.id,
+      owner: client.data.owner === true,
+    };
   }
 
   /**
@@ -369,17 +409,17 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   // clientId владельца: рассылать id значило бы раздавать всем то единственное,
   // чем правило владения и держится (см. ./ownership).
   private publicServersFor(client: Socket): PublicServer[] {
-    return this.registry.publicServers(deviceId(client));
+    return this.registry.publicServers(this.claimant(client));
   }
 
   // Каналы, видимые сокету: из закрытых серверов — только если он их разблокировал.
   // Текстовым подмешиваем время последнего сообщения: по нему клиент зажигает
   // «непрочитано» сразу после загрузки, не дожидаясь живого `chat-activity`.
   private channelsFor(client: Socket): PublicChannel[] {
-    const clientId = deviceId(client);
+    const who = this.claimant(client);
     return this.registry.channels
       .filter((c) => this.canSee(client, c))
-      .map((c) => publicChannel(c, clientId, c.type === 'text' ? this.chat.lastTs(c.slug) : 0));
+      .map((c) => publicChannel(c, who, c.type === 'text' ? this.chat.lastTs(c.slug) : 0));
   }
 
   // Разблокировки этого сокета — набор id закрытых серверов, чьи пароли он ввёл.
@@ -480,9 +520,12 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
 
   // Чем этот сокет отличается от прочих с точки зрения владения: ничем, если
   // среди записей нет ни одной его. Пустая строка — общая группа «не владелец».
+  // Владелец инсталляции — своя группа на всех: ему принадлежит всё, и второй
+  // такой на инсталляции невозможен.
   private ownerKey(client: Socket, owners: Set<string>): string {
-    const clientId = deviceId(client);
-    return clientId && owners.has(clientId) ? clientId : '';
+    const who = this.claimant(client);
+    if (who.owner) return '\u0003owner';
+    return [who.identityId, who.clientId].filter((id) => id && owners.has(id)).join('\u0002');
   }
 
   /**
@@ -550,17 +593,16 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     if (this.registry.servers.length >= MAX_SERVERS) return;
     if (this.registry.servers.some((s) => s.id === id)) return;
 
-    // Владелец — то устройство, с которого сервер создали (clientId из
-    // handshake). Личности оно не удостоверяет (см. ./ownership): это заслон
-    // от случайного и ленивого сноса чужого сервера, не от атаки. Настоящие
-    // права придут со слоями 2–3 плана 1.0.
+    // Создатель — личность, и он же единственный модератор этого сервера
+    // (см. ./ownership). Клиент без ключа (старый или чужой) по-прежнему
+    // называется устройством: заслон от ленивого сноса лучше, чем ничего.
     this.registry.servers.push({
       id,
       name,
       emoji,
       removable: true,
       passwordHash,
-      creatorId: deviceId(client),
+      ...this.creatorOf(client),
     });
     // Создатель знает пароль — сразу разблокируем сервер для его сокета.
     if (passwordHash) this.markUnlocked(client, id);
@@ -648,13 +690,13 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // Закрытый сервер удалить может только тот, кто ввёл пароль (разблокировал).
     const srv = this.registry.servers[idx];
     if (!this.isOpenTo(client, srv)) return { ok: false, error: 'forbidden' };
-    // Владелец — создатель сервера (clientId из handshake). У записей без
-    // creatorId (созданы до этого правила) владельца не существует: права
-    // прежние. Заблокировать их удаление навсегда было бы хуже — чужой не
-    // нарочно удалит разве что по неосторожности, а лишённый возможности
-    // хозяин не восстановит сервер никак. Отказ пишем в лог: чужой снос —
-    // событие, а не шум.
-    if (!ownedBy(srv, deviceId(client))) {
+    // Удаляет создатель сервера — или владелец инсталляции, которому
+    // принадлежит всё. У записей без создателя (они старше самого правила
+    // владения) владельца не существует: права прежние. Заблокировать их
+    // удаление навсегда было бы хуже — чужой не нарочно удалит разве что по
+    // неосторожности, а лишённый возможности хозяин не восстановит сервер
+    // никак. Отказ пишем в лог: чужой снос — событие, а не шум.
+    if (!ownedBy(srv, this.claimant(client))) {
       this.logger.warn(`server-delete: "${id}" refused for ${client.id} (not the creator)`);
       return { ok: false, error: 'not-owner' };
     }
@@ -706,7 +748,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const srv = this.registry.servers.find((s) => s.id === id);
     if (!srv || !srv.removable) return { ok: false };
     if (!this.isOpenTo(client, srv)) return { ok: false };
-    if (!ownedBy(srv, deviceId(client))) return { ok: false };
+    if (!ownedBy(srv, this.claimant(client))) return { ok: false };
     const own = this.registry.channels.filter((c) => c.serverId === id);
     const counted = await Promise.all(
       own.filter((c) => c.type === 'text').map((c) => this.chat.count(c.slug)),
@@ -772,9 +814,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       name: rawName,
       slug,
       removable: true,
-      // Владелец канала — создавшее его устройство, как у серверов: заслон
-      // от случайного сноса, не личность (см. handleServerCreate).
-      creatorId: deviceId(client),
+      // Создатель канала — как у серверов: личность, а если ключа нет, то
+      // устройство (см. handleServerCreate).
+      ...this.creatorOf(client),
       // Режим — только у голосовых; p2p по умолчанию не пишем, отсутствие поля
       // и есть p2p (реестр не распухает, старые записи читаются одинаково).
       ...(type === 'voice' && payload?.mode === 'sfu' ? { mode: 'sfu' as const } : {}),
@@ -832,10 +874,21 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   /**
    * Канал, который этому сокету разрешено менять. Само правило — в реестре
    * (RegistryService.editable); здесь только распаковка сокета: чьи пароли
-   * введены и с какого устройства пришли.
+   * введены и кто за ним стоит.
    */
   private editableChannel(client: Socket, id: string) {
-    return this.registry.editable(id, this.unlockedOf(client), deviceId(client));
+    return this.registry.editable(id, this.unlockedOf(client), this.claimant(client));
+  }
+
+  /**
+   * Чьей записью станет создаваемое. Личность, если она есть; устройство, если
+   * ключа нет вовсе. Обе колонки сразу не пишем: две двери в один сервер — это
+   * не запасной вход, а щель, и открыта она была бы ровно тем, что подделывается
+   * (см. ./ownership).
+   */
+  private creatorOf(client: Socket): { creatorIdentityId: string } | { creatorId?: string } {
+    const identityId = this.speaker(client)?.id;
+    return identityId ? { creatorIdentityId: identityId } : { creatorId: deviceId(client) };
   }
 
   // Живой срез канала для диалога подтверждения (сколько человек внутри,
