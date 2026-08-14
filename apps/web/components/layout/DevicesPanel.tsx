@@ -5,6 +5,7 @@ import { Identicon } from '@/components/ui/Identicon';
 import { Icon } from '@/components/ui/icon';
 import { fmtSince } from '@/lib/format';
 import { listDevices, revokeDevice, DeviceError, type Device } from '@/lib/devices';
+import { amIOwner } from '@/lib/owner';
 import { useIdentityStore } from '@/stores/identity';
 import { usePairingStore } from '@/stores/pairing';
 import { useT } from '@/lib/i18n';
@@ -25,6 +26,7 @@ export function DevicesPanel() {
   const me = useIdentityStore((s) => s.me);
   const admit = usePairingStore((s) => s.admit);
   const [devices, setDevices] = useState<Device[] | null>(null);
+  const [owner, setOwner] = useState(false);
   const [failed, setFailed] = useState(false);
   const [asking, setAsking] = useState<string | null>(null);
   const [linking, setLinking] = useState(false);
@@ -41,6 +43,9 @@ export function DevicesPanel() {
 
   useEffect(() => {
     void load();
+    // Владелец ли — спрашиваем здесь, а не носим в личности: вопрос нужен
+    // одному этому экрану, а вход и без того делает три запроса.
+    void amIOwner().then(setOwner);
   }, [load]);
 
   async function revoke(device: Device) {
@@ -66,7 +71,14 @@ export function DevicesPanel() {
           className="shrink-0 rounded-xl ring-1 ring-inset ring-white/10"
         />
         <div className="min-w-0">
-          <div className="truncate text-[15px] font-semibold text-text-header">@{me?.nick}</div>
+          <div className="flex items-center gap-2">
+            <span className="truncate text-[15px] font-semibold text-text-header">@{me?.nick}</span>
+            {owner && (
+              <span className="shrink-0 rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-accent">
+                {t('owner.badge')}
+              </span>
+            )}
+          </div>
           <div
             className="select-all font-mono text-[11px] tracking-[0.08em] text-text-muted"
             title={t('identity.fingerprint.hint')}

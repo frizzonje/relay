@@ -2,12 +2,14 @@
 
 import { useEffect, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
-import { readPairCode } from '@relay/shared';
+import { readOwnerToken, readPairCode } from '@relay/shared';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/lib/use-mobile';
 import { useUiStore, type MobilePanel } from '@/stores/ui';
+import { useOwnerStore } from '@/stores/owner';
 import { usePairingStore } from '@/stores/pairing';
 import { AdmitDeviceDialog } from '@/components/layout/AdmitDeviceDialog';
+import { OwnerClaimDialog } from '@/components/layout/OwnerClaimDialog';
 import { ServerRail } from '@/components/layout/ServerRail';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Topbar } from '@/components/layout/Topbar';
@@ -63,6 +65,16 @@ export function AppShell() {
     usePairingStore.getState().admit(code);
   }, []);
 
+  // Тем же путём приезжает ключ владельца — тот, что напечатал установщик. Здесь
+  // стереть фрагмент важнее вдвойне: ключ одноразовый и настоящий секрет, а
+  // адресная строка — самое видное место в браузере.
+  useEffect(() => {
+    const token = readOwnerToken(window.location.hash);
+    if (!token) return;
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+    useOwnerStore.getState().claim(token);
+  }, []);
+
   // Состав есть только в канале; если вкладка «Состав» осталась активной после
   // ухода в лобби — показываем сцену вместо пустого экрана.
   const hasPeople = view === 'voice' || view === 'text';
@@ -110,6 +122,7 @@ export function AppShell() {
 
       {/* Одно на приложение: зовут его и из панели устройств, и из ссылки. */}
       <AdmitDeviceDialog />
+      <OwnerClaimDialog />
     </div>
   );
 }
