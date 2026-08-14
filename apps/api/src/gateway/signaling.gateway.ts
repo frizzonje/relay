@@ -988,7 +988,10 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   /** Ключ отлучения: комната + устройство (а если оно не назвалось — адрес). */
   private banKey(client: Socket, room: string): string {
     const device = deviceId(client) || `ip:${clientIp(client.handshake)}`;
-    return `${room} ${device}`;
+    // Разделитель — NUL, записанный escape-последовательностью: сырой байт
+    // делает весь файл двоичным для grep и file. Ни в имени комнаты, ни в id
+    // устройства он встретиться не может, поэтому склейка однозначна.
+    return `${room}\0${device}`;
   }
 
   private banGuest(client: Socket, room: string) {
