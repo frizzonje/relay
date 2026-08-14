@@ -431,6 +431,51 @@ SQL
   if [ "$n" = 1 ]; then ok "Released 1 entry."; else ok "Released ${n} entries."; fi
 }
 
+# ── Owner link ───────────────────────────────────────────────────────────────
+# The one command that hands out power over an installation, and the only way
+# to get it back. Whoever opens the link binds their own key as the owner; the
+# previous owner stops being one. That is deliberate — a lost key or a departed
+# admin has to be recoverable, and the only authority this system can appeal to
+# is the person holding the machine.
+#
+# The address the link points at is decided the same way the installer decided
+# what to print at the end: a domain (or an IP with a real certificate) answers
+# under its own name, a self-signed installation answers under its public
+# address. Getting this wrong produces a link that opens a certificate warning
+# or nothing at all.
+public_host() {
+  local mode host
+  mode="$(env_get RELAY_TLS_MODE || true)"
+  case "$mode" in
+    domain|ip) host="$(env_get DOMAIN || true)" ;;
+    *)         host="$(env_get SERVER_HOST || true)" ;;
+  esac
+  # Older installations predate RELAY_TLS_MODE; fall back rather than print a
+  # link to nowhere.
+  printf '%s' "${host:-$(env_get DOMAIN || true)}"
+}
+
+cmd_owner_link() {
+  local token host
+  # A one-off container, not `exec`: this must work while api is down, and it
+  # is also how the installer issues the very first link, moments after the
+  # stack came up. Token generation lives in the image (dist/owner-link.js) so
+  # there is exactly one implementation of it — this file only dresses it up.
+  token="$(dc run --rm -T api node dist/owner-link.js | tail -n1)" \
+    || die "Could not issue the owner link. Is the database up? ('relay ps')"
+  [ -n "$token" ] || die "api returned no token — see 'relay logs api'."
+
+  host="$(public_host)"
+  [ -n "$host" ] || die "No DOMAIN in .env — cannot build the link. Re-run the installer."
+
+  # The link itself goes to stdout alone, so `relay owner-link` can be captured
+  # by a script (install.sh does exactly that); everything a human needs is on
+  # stderr next to it.
+  printf 'Open this once, from the browser you want to own this installation.\n' >&2
+  printf 'It is valid for 24 hours, works once, and cancels any earlier link.\n' >&2
+  printf 'https://%s/#owner=%s\n' "$host" "$token"
+}
+
 # ── Commands ─────────────────────────────────────────────────────────────────
 case "${1:-}" in
   up)      dc up -d ;;
@@ -444,6 +489,7 @@ case "${1:-}" in
   restore) shift; cmd_restore "$@" ;;
   config)  ${EDITOR:-nano} "$ENV_FILE" && echo "Run: relay up   (to apply)" ;;
   disown)  shift; cmd_disown "${1:-}" ;;
+  owner-link) cmd_owner_link ;;
   version)
     printf '  %sinstalled:%s %s\n' "$B" "$N" "$(env_get RELAY_VERSION || true)"
     printf '  %slatest:%s    %s\n' "$B" "$N" "$(latest_release || echo '(GitHub unreachable)')"
@@ -462,6 +508,10 @@ relay — control CLI (stack in $DIR)
   relay restore [-y] <f>   put a backup back, config included
   relay disown [id]        list servers/channels tied to a device, or
                            release one (or --all) back to everyone
+  relay owner-link         issue a fresh owner link (valid 24h, single use).
+                           Whoever opens it becomes the owner and the previous
+                           owner stops being one — this is how you take an
+                           installation back
 USAGE
      ;;
 esac

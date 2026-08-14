@@ -471,6 +471,27 @@ fi
 if [ "$USE_SFU" = 1 ]; then
   printf '  %sMedia server: on%s %s(calls of 4+ with video; per-channel switch in the UI)%s\n' "$B" "$N" "$DIM" "$N"
 fi
+
+# ── 13. Owner link ───────────────────────────────────────────────────────────
+# The one thing that cannot be decided inside the application: who owns this
+# installation. Roles are handed out by the owner, and the first owner has
+# nobody to be handed one by — so the claim is issued here, on the machine
+# itself, where the only proof of ownership that exists is the shell you are
+# already holding.
+#
+# Issued by `relay owner-link` rather than inline: the link a person needs in a
+# year (lost key, admin gone) must come from the same place as the first one,
+# and a second implementation here would be the one that rots.
+OWNER_LINK=""
+if [ "$UP" = 1 ]; then OWNER_LINK="$(relay owner-link 2>/dev/null || true)"; fi
+if [ -n "$OWNER_LINK" ]; then
+  printf '  %sOwner link:%s %s\n' "$B" "$N" "$OWNER_LINK"
+  printf '  %s(open it once, from your own browser — that binds this installation%s\n' "$DIM" "$N"
+  printf '  %s to your key. Valid 24h; re-issue any time with `relay owner-link`)%s\n' "$DIM" "$N"
+else
+  warn "Owner link not issued yet — run 'relay owner-link' once the server answers."
+fi
+
 hr
 printf '  Manage it:  %srelay logs%s · %srelay update%s · %srelay config%s\n' "$B" "$N" "$B" "$N" "$B" "$N"
 printf '  Files in:   %s\n' "$INSTALL_DIR"
