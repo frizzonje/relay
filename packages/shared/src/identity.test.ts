@@ -7,10 +7,13 @@ import {
   fingerprint,
   formatPairCode,
   fromBase64Url,
+  isOwnerToken,
   isPairCode,
   isPublicKey,
   isSignature,
+  ownerLink,
   pairLink,
+  readOwnerToken,
   readPairCode,
   toBase64Url,
 } from './identity';
@@ -159,5 +162,37 @@ describe('код связки', () => {
 
   it('на экране разбит на тройки', () => {
     expect(formatPairCode('428913')).toBe('428 913');
+  });
+});
+
+describe('ключ владельца', () => {
+  const token = 'ZGVtby1vd25lci10b2tlbi00My1jaGFycy1sb25nLXh4eHg';
+
+  it('это 43 символа base64url, и ничто другое', () => {
+    expect(isOwnerToken(token.slice(0, 43))).toBe(true);
+    // Короче, длиннее, с выравниванием или не строка вовсе — не ключ.
+    expect(isOwnerToken(token.slice(0, 42))).toBe(false);
+    expect(isOwnerToken(`${token.slice(0, 42)}=`)).toBe(false);
+    expect(isOwnerToken(null)).toBe(false);
+  });
+
+  it('ссылка складывается обратно в тот же ключ', () => {
+    const link = ownerLink('https://relay.example/', token.slice(0, 43));
+    expect(link).toBe(`https://relay.example/#owner=${token.slice(0, 43)}`);
+    expect(readOwnerToken(link)).toBe(token.slice(0, 43));
+  });
+
+  it('ключ во фрагменте: на сервер он не уезжает', () => {
+    // Здесь это важнее, чем у кода связки: ключ — секрет на предъявителя, и
+    // строка в журнале Caddy означала бы владельца инсталляции в журнале.
+    expect(ownerLink('https://relay.example', token.slice(0, 43)).split('#')[0]).not.toContain(
+      token.slice(0, 43),
+    );
+  });
+
+  it('чужая ссылка ключом не притворяется', () => {
+    expect(readOwnerToken('https://relay.example/')).toBeNull();
+    expect(readOwnerToken('#owner=short')).toBeNull();
+    expect(readOwnerToken('#pair=428913')).toBeNull();
   });
 });

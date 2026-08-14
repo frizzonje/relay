@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { DataSource } from 'typeorm';
 import { createDataSource } from './data-source';
+import { MIGRATIONS } from './migrations';
 
 /**
  * Единственная проверка, которая ловит расхождение сущностей и миграции.
@@ -54,7 +55,10 @@ describe.skipIf(!url)('схема базы', () => {
   });
 
   it('откат сносит всё, что создал', async () => {
-    await ds.undoLastMigration();
+    // По одной, до пустого места: миграций уже больше одной, и `down`, который
+    // забыл убрать за собой таблицу, обязан всплыть здесь, а не на чужом
+    // сервере после отката.
+    for (let left = MIGRATIONS.length; left > 0; left -= 1) await ds.undoLastMigration();
     const tables: { table_name: string }[] = await ds.query(
       `SELECT table_name FROM information_schema.tables
        WHERE table_schema = 'public' AND table_name <> 'migrations'`,

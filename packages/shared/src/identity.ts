@@ -165,6 +165,39 @@ export function readPairCode(raw: unknown): string | null {
   return isPairCode(digits) ? digits : null;
 }
 
+/**
+ * Ключ владельца — 32 байта случайности, и здесь, в отличие от кода связки, это
+ * настоящий секрет на предъявителя: открывший ссылку становится владельцем
+ * инсталляции. Поэтому его не диктуют голосом и не набирают руками — его
+ * печатает установщик на терминале хозяина машины, и оттуда он переезжает в
+ * браузер целой ссылкой.
+ */
+export const OWNER_TOKEN_BYTES = 32;
+
+/** Столько символов занимают эти байты в base64url без выравнивания. */
+export const OWNER_TOKEN_CHARS = Math.ceil((OWNER_TOKEN_BYTES * 4) / 3);
+
+export function isOwnerToken(text: unknown): text is string {
+  return typeof text === 'string' && new RegExp(`^[A-Za-z0-9_-]{${OWNER_TOKEN_CHARS}}$`).test(text);
+}
+
+/**
+ * Ссылка владельца. Ключ во фрагменте по той же причине, что и код связки, и
+ * причина здесь весит больше: фрагмент не уходит на сервер, а значит ключ не
+ * оседает ни в журнале Caddy, ни в `Referer` соседней вкладки.
+ */
+export function ownerLink(origin: string, token: string): string {
+  return `${origin.replace(/\/+$/, '')}/#owner=${token}`;
+}
+
+/** Ключ из адресной строки — или `null`, если там его нет. */
+export function readOwnerToken(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const inLink = raw.match(new RegExp(`[#?&]owner=([A-Za-z0-9_-]{${OWNER_TOKEN_CHARS}})`));
+  const token = inLink?.[1] ?? raw;
+  return isOwnerToken(token) ? token : null;
+}
+
 /** Ник длиннее этого не помещается ни в ленту, ни в список участников. */
 export const NICK_MAX = 20;
 

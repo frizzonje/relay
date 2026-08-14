@@ -49,6 +49,6 @@ export function testDatabase(): Promise<DataSource> {
  */
 export async function resetDatabase(db: DataSource): Promise<void> {
   await db.query(
-    'TRUNCATE servers, channels, attachments, messages, identities, devices, roles, reads, pins CASCADE',
+    'TRUNCATE servers, channels, attachments, messages, identities, devices, owner_claims, roles, reads, pins CASCADE',
   );
 }

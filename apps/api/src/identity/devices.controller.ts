@@ -1,11 +1,9 @@
 import { Body, Controller, Get, Param, Post, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { parseCookies } from '../auth/auth';
-import { DeviceRow, IdentityRow } from '../db/entities';
 import { SignalingGateway } from '../gateway/signaling.gateway';
 import { IdentityService } from './identity.service';
 import { PairingService, type PairFailure } from './pairing.service';
-import { IDENTITY_COOKIE, readSession } from './session';
+import { requireIdentity } from './session-guard';
 
 /**
  * Устройства личности и связка новых.
@@ -94,25 +92,9 @@ export class DevicesController {
     res.json({ ok: true, deviceId: done.deviceId });
   }
 
-  /**
-   * Кто спрашивает. Ответ уже отправлен, если вернулся `null`, — вызывающему
-   * остаётся молча выйти.
-   */
-  private async me(
-    req: Request,
-    res: Response,
-  ): Promise<{ identity: IdentityRow; device: DeviceRow } | null> {
-    const session = readSession(parseCookies(req.headers.cookie)[IDENTITY_COOKIE]);
-    if (!session) {
-      res.status(401).json({ error: 'no session' });
-      return null;
-    }
-    const result = await this.identity.whoIs(session.identityId, session.deviceId);
-    if (!result.ok) {
-      res.status(result.reason === 'revoked' ? 403 : 401).json({ error: result.reason });
-      return null;
-    }
-    return { identity: result.identity, device: result.device };
+  /** Кто спрашивает. `null` — ответ уже отправлен, см. `requireIdentity`. */
+  private me(req: Request, res: Response) {
+    return requireIdentity(this.identity, req, res);
   }
 }
 

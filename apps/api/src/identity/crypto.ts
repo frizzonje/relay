@@ -90,6 +90,33 @@ export function newPairCode(): string {
   return String(value % span).padStart(PAIR_CODE_DIGITS, '0');
 }
 
+/** Ключ владельца — 32 байта, см. близнеца в shared. */
+export const OWNER_TOKEN_BYTES = 32;
+export const OWNER_TOKEN_CHARS = Math.ceil((OWNER_TOKEN_BYTES * 4) / 3);
+
+export function isOwnerToken(text: unknown): text is string {
+  return typeof text === 'string' && new RegExp(`^[A-Za-z0-9_-]{${OWNER_TOKEN_CHARS}}$`).test(text);
+}
+
+export function newOwnerToken(): string {
+  return Buffer.from(webcrypto.getRandomValues(new Uint8Array(OWNER_TOKEN_BYTES))).toString(
+    'base64url',
+  );
+}
+
+/**
+ * Как ключ владельца лежит в базе. Хранить его как есть значило бы, что дамп
+ * базы (а `relay backup` делает его регулярно и кладёт файлом рядом) содержит
+ * действующий ключ от инсталляции. Сравнивать по хэшу дешевле, чем объяснять
+ * это потом.
+ *
+ * Без соли намеренно: солить имеет смысл то, что можно подобрать, а здесь под
+ * хэшем 256 бит из системного генератора.
+ */
+export function hashOwnerToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
 /** Ник к показываемому виду: свободный и не уникальный, но не любой. */
 export function sanitizeNick(raw: unknown): string {
   if (typeof raw !== 'string') return '';

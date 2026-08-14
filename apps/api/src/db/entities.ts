@@ -324,6 +324,12 @@ export class DeviceRow {
  * Роль личности. `server_id = null` — вся инсталляция (там и живёт владелец);
  * заполненный — конкретная гильдия. Набор ролей намеренно бедный:
  * `owner` | `member` | `banned`.
+ *
+ * Уникальность по паре — с `NULLS NOT DISTINCT` (см. вторую миграцию): без неё
+ * Postgres считает NULL'ы различными и пропустил бы второго «владельца
+ * инсталляции» для той же личности. Сама пометка `unique` тут ровно для того,
+ * чтобы TypeORM знал об индексе; ключевое слово он не умеет, и его дописывает
+ * миграция.
  */
 @Entity('roles')
 @Index('roles_identity_server_key', ['identityId', 'serverId'], { unique: true })
@@ -350,6 +356,38 @@ export class RoleRow {
 
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt!: Date;
+}
+
+/**
+ * Приглашение во владельцы: то, что печатает `install.sh` и перевыпускает
+ * `relay owner-link`. Кто открыл ссылку — тот привязал свой ключ как владельца.
+ *
+ * Строка живёт в базе, а не в памяти api, по одной причине: между установкой и
+ * первым заходом человека проходит время и как минимум один перезапуск стека.
+ * Использованные строки не удаляются — это единственный след того, кто и когда
+ * взял власть над инсталляцией.
+ */
+@Entity('owner_claims')
+export class OwnerClaimRow {
+  @PrimaryColumn({ type: 'uuid' })
+  id!: string;
+
+  /** SHA-256 ключа. Самого ключа сервер не хранит — см. `hashOwnerToken`. */
+  @Column({ type: 'text', name: 'token_hash', unique: true })
+  tokenHash!: string;
+
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
+  createdAt!: Date;
+
+  @Column({ type: 'timestamptz', name: 'expires_at' })
+  expiresAt!: Date;
+
+  @Column({ type: 'timestamptz', name: 'used_at', nullable: true })
+  usedAt!: Date | null;
+
+  /** Кто им воспользовался. Без внешнего ключа: след переживает личность. */
+  @Column({ type: 'uuid', name: 'used_by', nullable: true })
+  usedBy!: string | null;
 }
 
 /**
@@ -401,6 +439,7 @@ export const ENTITIES = [
   MessageRow,
   IdentityRow,
   DeviceRow,
+  OwnerClaimRow,
   RoleRow,
   ReadRow,
   PinRow,
