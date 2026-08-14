@@ -204,6 +204,22 @@ export class ChatService implements OnModuleInit {
     return this.one(slug, id, true);
   }
 
+  /**
+   * Личность автора реплики. Тем и отличается от имени в ленте, что имя —
+   * снимок момента и не уникально, а модерация обязана попасть в того самого
+   * человека. `null` — у реплики нет автора-личности: её писал гость по
+   * инвайту или она старше самих личностей.
+   */
+  async authorOf(slug: string, id: string): Promise<string | null> {
+    const channelId = this.channelId(slug);
+    if (!channelId || !isUuid(id)) return null;
+    const row = await this.db.getRepository(MessageRow).findOne({
+      where: { id, channelId },
+      select: { authorIdentityId: true },
+    });
+    return row?.authorIdentityId ?? null;
+  }
+
   /** Новый текст своей реплики. Возвращает время правки — тоже с часов базы. */
   async edit(id: string, text: string): Promise<number> {
     const res = await this.db

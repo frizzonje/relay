@@ -14,6 +14,7 @@ import { Server, Socket } from 'socket.io';
 import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
 import { IdentityService, type Speaker } from '../identity/identity.service';
 import { OwnerService } from '../identity/owner.service';
+import { RolesService } from '../identity/roles.service';
 import { sfuHealthy } from '../sfu/sfu-health';
 import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
 import { UploadsService } from '../uploads';
@@ -56,6 +57,11 @@ import {
   type ChatPayload,
   type ChatReactPayload,
   type GuestKickPayload,
+  type ModerationBanPayload,
+  type ModerationBansPayload,
+  type ModerationBansResult,
+  type ModerationResult,
+  type ModerationUnbanPayload,
   type GuestKickResult,
   type InviteCreatePayload,
   type InviteCreateResult,
@@ -72,6 +78,13 @@ import {
   type VoiceDiagPayload,
   type VoicePresenceEntry,
 } from './protocol';
+
+/**
+ * Отказ во входе забаненному. Уезжает клиенту текстом ошибки подключения —
+ * единственным каналом, который у отвергнутого сокета есть. Клиент по этой
+ * строке показывает экран «вас забанили», а не бесконечное «переподключаюсь».
+ */
+export const BANNED_ERROR = 'banned';
 
 // Строка для лога: без переводов строк (чтобы клиент не подделал чужие записи)
 // и лишних пробелов.
@@ -109,6 +122,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     private readonly registry: RegistryService,
     private readonly identities: IdentityService,
     private readonly owner: OwnerService,
+    private readonly roles: RolesService,
   ) {}
 
   /**
@@ -136,9 +150,22 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
           // ссылки владельца — событием, у которого есть свой обработчик
           // (см. `syncOwner`).
           socket.data.owner = await this.owner.isOwner(speaker.id);
+          const rights = await this.roles.rightsOf(speaker.id);
+          socket.data.bannedFrom = rights.bannedFrom;
+          socket.data.banned = rights.banned;
         })
         .catch((e) => this.logger.error(`не удалось узнать личность сокета: ${e}`))
-        .finally(() => next());
+        .finally(() => {
+          // Забаненного на всю инсталляцию не пускаем внутрь вовсе — отказом
+          // самой миддлвары, до `handleConnection`. Причина уезжает клиенту
+          // текстом ошибки: белый экран вместо объяснения — худший из ответов
+          // на «почему меня не пускает».
+          if (socket.data.banned === true) {
+            next(new Error(BANNED_ERROR));
+            return;
+          }
+          next();
+        });
     });
   }
 
@@ -176,6 +203,16 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       identityId: this.speaker(client)?.id,
       owner: client.data.owner === true,
     };
+  }
+
+  /** Серверы, с которых этот сокет забанен. Обычный случай — пустое множество. */
+  private bannedFrom(client: Socket): Set<string> | undefined {
+    return client.data.bannedFrom as Set<string> | undefined;
+  }
+
+  /** Забанен ли этот сокет с этого сервера. */
+  private isBannedFrom(client: Socket, serverId: string | undefined): boolean {
+    return !!serverId && this.bannedFrom(client)?.has(serverId) === true;
   }
 
   /**
@@ -409,7 +446,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   // clientId владельца: рассылать id значило бы раздавать всем то единственное,
   // чем правило владения и держится (см. ./ownership).
   private publicServersFor(client: Socket): PublicServer[] {
-    return this.registry.publicServers(this.claimant(client));
+    const banned = this.bannedFrom(client);
+    const all = this.registry.publicServers(this.claimant(client));
+    return banned?.size ? all.filter((s) => !banned.has(s.id)) : all;
   }
 
   // Каналы, видимые сокету: из закрытых серверов — только если он их разблокировал.
@@ -439,6 +478,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   // Открыт ли сервер этому сокету: открытый — всем, закрытый — только тому,
   // кто ввёл пароль. Право на сам сервер, не на его каналы (те — canSee).
   private isOpenTo(client: Socket, server: ServerEntry): boolean {
+    if (this.isBannedFrom(client, server.id)) return false;
     return !server.passwordHash || this.unlockedOf(client)?.has(server.id) === true;
   }
 
@@ -451,6 +491,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
 
   // Видит ли сокет этот канал: закрытый сервер — только после ввода пароля.
   private canSee(client: Socket, channel: Channel): boolean {
+    if (this.isBannedFrom(client, channel.serverId)) return false;
     return this.registry.canSee(this.unlockedOf(client), channel);
   }
 
@@ -518,14 +559,21 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     }
   }
 
-  // Чем этот сокет отличается от прочих с точки зрения владения: ничем, если
-  // среди записей нет ни одной его. Пустая строка — общая группа «не владелец».
-  // Владелец инсталляции — своя группа на всех: ему принадлежит всё, и второй
-  // такой на инсталляции невозможен.
+  // Чем этот сокет отличается от прочих с точки зрения реестра: своими записями
+  // и своими банами. Пустая строка — общая группа «не владелец, не забанен», в
+  // ней сидит подавляющее большинство. Владелец инсталляции — своя группа на
+  // всех: ему принадлежит всё, и второй такой на инсталляции невозможен.
+  //
+  // Баны обязаны быть в ключе: два сокета с одинаковым владением, но разными
+  // банами получают РАЗНЫЕ реестры, и общая группа отдала бы забаненному
+  // сервер, с которого его выгнали.
   private ownerKey(client: Socket, owners: Set<string>): string {
     const who = this.claimant(client);
-    if (who.owner) return '\u0003owner';
-    return [who.identityId, who.clientId].filter((id) => id && owners.has(id)).join('\u0002');
+    const banned = [...(this.bannedFrom(client) ?? [])].sort().join('\u0004');
+    const mine = who.owner
+      ? '\u0003owner'
+      : [who.identityId, who.clientId].filter((id) => id && owners.has(id)).join('\u0002');
+    return banned ? `${mine}\u0005${banned}` : mine;
   }
 
   /**
@@ -969,6 +1017,188 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.broadcastChannels();
     await this.registry.persist();
     return { ok: true };
+  }
+
+  // ===== Модерация =====
+
+  /**
+   * Забанить автора сообщения.
+   *
+   * Модерирует создатель сервера — своего и только своего; поверх него владелец
+   * инсталляции, который может и это, и бан на всю инсталляцию. Охват
+   * спрашивается явно (`everywhere`): человек, выгоняющий кого-то со своего
+   * сервера, не должен случайно закрыть ему всю инсталляцию.
+   *
+   * Целью служит сообщение, а не имя: имена не уникальны, а сказанное
+   * однозначно указывает на своего автора. Автор-гость забанить себя не даёт —
+   * его личности нет, за него ручается токен приглашения, и разговор с ним
+   * заканчивается через `guest-kick`.
+   */
+  @SubscribeMessage('moderation-ban')
+  async handleModerationBan(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ModerationBanPayload,
+  ): Promise<ModerationResult> {
+    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
+    const me = this.speaker(client);
+    if (!me) return { ok: false, error: 'forbidden' };
+    const room = client.data.chatRoom as string | undefined;
+    if (!room) return { ok: false, error: 'forbidden' };
+    const channel = this.registry.channels.find(
+      (c) => c.type === 'text' && c.slug === this.chat.slug(room),
+    );
+    if (!channel || !this.mayModerate(client, channel)) return { ok: false, error: 'forbidden' };
+
+
+    const everywhere = payload?.everywhere === true;
+    // Бан на всю инсталляцию — только владельцу: у создателя сервера власти
+    // ровно на свой сервер, и расширять её нечем.
+    if (everywhere && client.data.owner !== true) return { ok: false, error: 'forbidden' };
+
+    const id = str(payload?.id);
+    const authorId = id ? await this.chat.authorOf(this.chat.slug(room), id) : null;
+    if (!authorId) return { ok: false, error: 'not-found' };
+
+    const scope = everywhere ? null : channel.serverId;
+    const done = await this.roles.ban(authorId, scope, me.id);
+    if (!done.ok) return { ok: false, error: done.reason === 'unknown' ? 'unknown' : 'forbidden' };
+    this.applyBan(authorId, scope);
+    return { ok: true };
+  }
+
+  /** Разбанить по отпечатку — той же ручкой, которой забаненный показан. */
+  @SubscribeMessage('moderation-unban')
+  async handleModerationUnban(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ModerationUnbanPayload,
+  ): Promise<ModerationResult> {
+    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
+    const scope = this.moderatedScope(client, payload?.server);
+    if (scope === undefined) return { ok: false, error: 'forbidden' };
+    const identityId = await this.roles.byFingerprint(payload?.fingerprint);
+    if (!identityId) return { ok: false, error: 'not-found' };
+    if (!(await this.roles.unban(identityId, scope))) return { ok: false, error: 'not-found' };
+    this.liftBan(identityId, scope);
+    return { ok: true };
+  }
+
+  /** Кто забанен: на этом сервере или, если сервер не назван, на инсталляции. */
+  @SubscribeMessage('moderation-bans')
+  async handleModerationBans(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ModerationBansPayload,
+  ): Promise<ModerationBansResult> {
+    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
+    const scope = this.moderatedScope(client, payload?.server);
+    if (scope === undefined) return { ok: false, error: 'forbidden' };
+    return { ok: true, bans: await this.roles.bans(scope) };
+  }
+
+  /**
+   * Охват, которым этому сокету позволено распоряжаться: названный сервер (если
+   * он его модерирует) или вся инсталляция (если он владелец). `undefined` —
+   * не позволено ничего, и это отличается от `null`, который и есть инсталляция.
+   */
+  private moderatedScope(client: Socket, raw: unknown): string | null | undefined {
+    const id = str(raw);
+    if (!id) return client.data.owner === true ? null : undefined;
+    const srv = this.registry.servers.find((s) => s.id === id);
+    if (!srv || !this.isOpenTo(client, srv)) return undefined;
+    return this.moderates(client, srv) ? id : undefined;
+  }
+
+  /** Модерирует ли этот сокет сервер, которому принадлежит эта комната чата. */
+  private moderatesRoom(client: Socket, room: string): boolean {
+    const slug = this.chat.slug(room);
+    const channel = this.registry.channels.find((c) => c.type === 'text' && c.slug === slug);
+    return !!channel && this.mayModerate(client, channel);
+  }
+
+  /**
+   * Модерирует ли этот сокет сервер, которому принадлежит канал.
+   *
+   * Это НЕ то же, что право править запись реестра (`ownedBy`), и разница
+   * стоит того, чтобы её написать. Там «создателя нет» означает «права общие» —
+   * иначе сервер, созданный до самого правила владения, никто не смог бы даже
+   * переименовать. Здесь такое послабление означало бы, что на главном сервере
+   * любой удаляет чужие сообщения и банит кого хочет: создателя у него нет и
+   * быть не может.
+   *
+   * Поэтому модерация требует названного хозяина — личность создателя, — либо
+   * владельца инсталляции. Унаследованный clientId власти не даёт: он лежит в
+   * localStorage и подделывается, а удаление чужих слов и бан — не то, что
+   * доверяют строке из чужого браузера.
+   */
+  private mayModerate(client: Socket, channel: Channel): boolean {
+    const srv = this.registry.serverOf(channel);
+    return !!srv && this.isOpenTo(client, srv) && this.moderates(client, srv);
+  }
+
+  /** То же правило, но про сам сервер: владелец инсталляции или его создатель. */
+  private moderates(client: Socket, srv: ServerEntry): boolean {
+    if (client.data.owner === true) return true;
+    const identityId = this.speaker(client)?.id;
+    return !!srv.creatorIdentityId && srv.creatorIdentityId === identityId;
+  }
+
+  /**
+   * Бан вступает в силу немедленно, под живыми сокетами.
+   *
+   * Иначе он не значил бы почти ничего: забаненный дописывал бы в канал до тех
+   * пор, пока сам не переподключится, — то есть ровно столько, сколько длится
+   * скандал, из-за которого его и банили.
+   *
+   * На всю инсталляцию — отключаем: пускать обратно его уже не будут, и держать
+   * соединение незачем. С сервера — выписываем из его комнат и раздаём заново
+   * реестр: остальная инсталляция для человека продолжается.
+   */
+  private applyBan(identityId: string, serverId: string | null): void {
+    for (const sock of this.socketsOf(identityId)) {
+      if (serverId === null) {
+        sock.emit('banned', {});
+        sock.disconnect(true);
+        continue;
+      }
+      ((sock.data.bannedFrom as Set<string> | undefined) ??= new Set()).add(serverId);
+      this.evictFrom(sock, serverId);
+      sock.emit('servers', this.publicServersFor(sock));
+      sock.emit('channels', this.channelsFor(sock));
+    }
+  }
+
+  /** Разбан под живым сокетом: сервер возвращается на место сам. */
+  private liftBan(identityId: string, serverId: string | null): void {
+    if (serverId === null) return;
+    for (const sock of this.socketsOf(identityId)) {
+      this.bannedFrom(sock)?.delete(serverId);
+      sock.emit('servers', this.publicServersFor(sock));
+      sock.emit('channels', this.channelsFor(sock));
+    }
+  }
+
+  /** Живые сокеты этой личности. Их обычно один-два: браузер и десктоп. */
+  private socketsOf(identityId: string): Socket[] {
+    const out: Socket[] = [];
+    for (const sock of this.server?.sockets.sockets.values() ?? []) {
+      if ((sock.data.identity as Speaker | undefined)?.id === identityId) out.push(sock);
+    }
+    return out;
+  }
+
+  /** Выписать сокет из эфира и ленты этого сервера — там ему больше нельзя. */
+  private evictFrom(client: Socket, serverId: string): void {
+    const voice = client.data.room as string | undefined;
+    const chat = client.data.chatRoom as string | undefined;
+    for (const channel of this.registry.channels) {
+      if (channel.serverId !== serverId) continue;
+      if (channel.type === 'voice' && voice === channel.slug) this.leaveRoom(client);
+      if (channel.type === 'text' && chat === this.chat.room(channel.slug)) {
+        client.leave(chat);
+        client.data.chatRoom = undefined;
+        client.data.chatName = undefined;
+        client.emit('chat-closed', { slug: channel.slug });
+      }
+    }
   }
 
   // ===== Инвайт-ссылки =====
@@ -1508,9 +1738,13 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.server.to(room).emit('chat-edited', { id, text, editedTs });
   }
 
-  // Удаление своего сообщения (автор — как в chat-edit). Убираем из
-  // истории и просим всех снять из ленты. Цитаты в чужих ответах не трогаем —
-  // они хранят собственный снимок.
+  // Удаление сообщения: своего — автором, любого — модератором сервера, которому
+  // принадлежит канал (и владельцем инсталляции поверх него). Убираем из истории
+  // и просим всех снять из ленты. Цитаты в чужих ответах не трогаем — они хранят
+  // собственный снимок.
+  //
+  // Правка чужого при этом остаётся невозможной, и это не недосмотр: удалить
+  // сказанное — модерация, переписать сказанное чужим именем — подлог.
   @SubscribeMessage('chat-delete')
   async handleChatDelete(
     @ConnectedSocket() client: Socket,
@@ -1524,7 +1758,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
 
     const msg = await this.chat.find(this.chat.slug(room), id);
     if (!msg) return;
-    if (!this.ownsMessage(client, msg)) return;
+    if (!this.ownsMessage(client, msg) && !this.moderatesRoom(client, room)) return;
 
     if (!(await this.chat.remove(id))) return;
     this.server.to(room).emit('chat-deleted', { id });

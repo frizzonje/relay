@@ -118,6 +118,31 @@ export interface ChatReactPayload {
   emoji?: unknown;
 }
 
+/**
+ * Модерация. Целью бана служит СООБЩЕНИЕ, а не человек: id личности в протоколе
+ * не появляется вовсе (см. ./ownership), а список участников — это имена, среди
+ * которых бывают тёзки. Сообщение же однозначно указывает на своего автора, и
+ * банят в жизни именно за сказанное, глядя на него.
+ *
+ * `everywhere` — бан на всю инсталляцию вместо бана со своего сервера. Такой
+ * ставит только владелец, и спрашивается он явно: молча расширить охват до
+ * инсталляции, когда человек хотел выгнать со своего сервера, нельзя.
+ */
+export interface ModerationBanPayload {
+  id?: unknown;
+  everywhere?: unknown;
+}
+
+/** Разбан и список забаненных — по охвату: сервер или, если пусто, инсталляция. */
+export interface ModerationBansPayload {
+  server?: unknown;
+}
+
+export interface ModerationUnbanPayload {
+  fingerprint?: unknown;
+  server?: unknown;
+}
+
 export interface ServerCreatePayload {
   id?: unknown;
   name?: unknown;
@@ -231,6 +256,27 @@ export type InviteCreateResult =
  * виден либо он сам гость.
  */
 export type GuestKickResult = { ok: true } | { ok: false; error: 'not-found' | 'forbidden' };
+
+/**
+ * Отказ модератору. `not-found` — сообщения уже нет (удалили, вышло за
+ * ретенцию) либо у него нет автора-личности: гостя по инвайту банить нечем,
+ * его выгоняют из эфира. `forbidden` — не твой сервер, не ты владелец или это
+ * попытка забанить владельца.
+ */
+export type ModerationResult =
+  | { ok: true }
+  | { ok: false; error: 'not-found' | 'forbidden' | 'unknown' };
+
+export interface BanEntry {
+  fingerprint: string;
+  nick: string;
+  at: string;
+  by: string | null;
+}
+
+export type ModerationBansResult =
+  | { ok: true; bans: BanEntry[] }
+  | { ok: false; error: 'forbidden' };
 
 export type SfuTokenResult =
   | { ok: true; token: string; exp: number; url: string }

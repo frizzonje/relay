@@ -7,6 +7,7 @@ import { IdentityService } from './identity/identity.service';
 import { OwnerController } from './identity/owner.controller';
 import { OwnerService } from './identity/owner.service';
 import { PairingService } from './identity/pairing.service';
+import { RolesService } from './identity/roles.service';
 import { ConfigController } from './config.controller';
 import { HealthController } from './health.controller';
 import { MetricsController } from './metrics.controller';
@@ -48,6 +49,7 @@ export class AppModule {
         IdentityService,
         OwnerService,
         PairingService,
+        RolesService,
         RegistryService,
         MetricsService,
         RetentionService,

@@ -11,6 +11,7 @@ import { IdentityController } from './identity.controller';
 import { IdentityService } from './identity.service';
 import { OwnerController } from './owner.controller';
 import { CLAIM_TTL_MS, OwnerService } from './owner.service';
+import { RolesService } from './roles.service';
 import { IDENTITY_COOKIE } from './session';
 
 /**
@@ -279,6 +280,22 @@ describe('взятие власти', () => {
 });
 
 describe('возвращение власти', () => {
+  it('забаненный, открывший ссылку, становится владельцем и перестаёт быть забаненным', async () => {
+    // Ссылка печатается на машине, и она сильнее любого бана: иначе уходящий
+    // владелец забанил бы всех и запер инсталляцию, а отпереть её было бы нечем.
+    const anya = await person('Аня');
+    const boris = await person('Борис');
+    await open(boris, (await owner.issue()).token);
+    await new RolesService(db).ban(anya.identityId, null, boris.identityId);
+
+    expect((await open(anya, (await owner.issue()).token)).code).toBe(200);
+    expect(await amIOwner(anya)).toBe(true);
+    expect(await new RolesService(db).rightsOf(anya.identityId)).toEqual({
+      banned: false,
+      bannedFrom: new Set(),
+    });
+  });
+
   it('новая ссылка отбирает роль у прежнего владельца', async () => {
     // Это единственный путь восстановления: ключ потерян, человек ушёл — власть
     // возвращается с той машины, где стоит relay.

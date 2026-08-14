@@ -115,10 +115,19 @@ export class FakeServer {
     return this;
   }
 
-  /** Прогнать миддлвары для сокета — то, что socket.io делает до `connection`. */
-  async run(sock: FakeSocket): Promise<void> {
-    for (const fn of this.middleware)
-      await new Promise<void>((resolve) => fn(sock as unknown as Socket, () => resolve()));
+  /**
+   * Прогнать миддлвары для сокета — то, что socket.io делает до `connection`.
+   * Возвращает отказ, если дверь его дала: миддлвара, позвавшая `next(err)`,
+   * обрывает подключение, и следующие за ней уже не работают.
+   */
+  async run(sock: FakeSocket): Promise<Error | undefined> {
+    for (const fn of this.middleware) {
+      const refused = await new Promise<Error | undefined>((resolve) =>
+        fn(sock as unknown as Socket, (err?: Error) => resolve(err)),
+      );
+      if (refused) return refused;
+    }
+    return undefined;
   }
 
   connect(
