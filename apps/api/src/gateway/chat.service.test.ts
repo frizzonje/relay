@@ -1,8 +1,16 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import type { DataSource } from 'typeorm';
-import { AttachmentRow } from '../db/entities';
+import { AttachmentRow, MessageRow } from '../db/entities';
 import { resetDatabase, testDatabase } from '../db/testing';
-import { ChatService, PAGE_SIZE, isUuid } from './chat.service';
+import {
+  AROUND_HALF,
+  ChatService,
+  PAGE_SIZE,
+  SEARCH_PAGE_SIZE,
+  isUuid,
+  searchTerms,
+} from './chat.service';
 import { RegistryService } from './registry.service';
 
 /**
@@ -118,6 +126,193 @@ describe('страницы ленты', () => {
     const older = await fresh.older('obshchii', page.messages[0].ts, page.messages[0].id!);
     const ids = new Set([...page.messages, ...older.messages].map((m) => m.id));
     expect(ids.size).toBe(PAGE_SIZE + 10);
+  });
+});
+
+describe('поиск по истории', () => {
+  /** Второй текстовый канал того же сервера — поиск бывает шире одного канала. */
+  async function secondChannel(): Promise<string> {
+    registry.channels.push({
+      id: 'text-kuhnya',
+      serverId: 'relay-main',
+      type: 'text',
+      name: 'кухня',
+      slug: 'kuhnya',
+      removable: true,
+    });
+    await registry.persist();
+    return 'text-kuhnya';
+  }
+
+  it('находит сказанное по слову', async () => {
+    await say('поедем на дачу в субботу');
+    await say('а я останусь дома');
+
+    const { hits } = await chat.search(['text-obshchii'], 'дачу');
+    expect(hits.map((h) => h.message.text)).toEqual(['поедем на дачу в субботу']);
+    expect(hits[0].slug).toBe('obshchii');
+  });
+
+  it('слово ищется как начало — окончание набирать не надо', async () => {
+    await say('поедем на дачу');
+    // Без стемминга «дач» не нашло бы ничего, и человек, набравший половину
+    // слова, решил бы, что разговора не было.
+    const { hits } = await chat.search(['text-obshchii'], 'дач');
+    expect(hits).toHaveLength(1);
+  });
+
+  it('несколько слов — все обязательны, и порядок им не важен', async () => {
+    await say('поедем на дачу в субботу');
+    await say('дачу продали');
+
+    expect((await chat.search(['text-obshchii'], 'суббота дача')).hits).toHaveLength(0);
+    expect((await chat.search(['text-obshchii'], 'субботу дачу')).hits).toHaveLength(1);
+  });
+
+  it('регистр не важен', async () => {
+    await say('Поедем на Дачу');
+    expect((await chat.search(['text-obshchii'], 'ДАЧУ')).hits).toHaveLength(1);
+  });
+
+  it('ищет по нескольким каналам и говорит, в каком нашлось', async () => {
+    const kuhnya = await secondChannel();
+    await say('дачу видно отсюда');
+    await chat.add('kuhnya', { name: 'Б', text: 'а с дачи не видно' });
+
+    const { hits } = await chat.search(['text-obshchii', kuhnya], 'дач');
+    expect(hits.map((h) => h.slug).sort()).toEqual(['kuhnya', 'obshchii']);
+  });
+
+  it('канал, которого нет в списке, молчит', async () => {
+    const kuhnya = await secondChannel();
+    await chat.add('kuhnya', { name: 'Б', text: 'секрет кухни' });
+    // Права считает гейтвей и передаёт готовым списком: канал не в списке —
+    // его реплики не существуют, а не «существуют, но не показываются».
+    expect((await chat.search(['text-obshchii'], 'секрет')).hits).toHaveLength(0);
+    expect((await chat.search([kuhnya], 'секрет')).hits).toHaveLength(1);
+  });
+
+  it('свежее первым, и страница листается курсором', async () => {
+    for (let i = 0; i < SEARCH_PAGE_SIZE + 3; i += 1) await say(`дача номер ${i}`);
+
+    const first = await chat.search(['text-obshchii'], 'дача');
+    expect(first.hits).toHaveLength(SEARCH_PAGE_SIZE);
+    expect(first.hits[0].message.text).toBe(`дача номер ${SEARCH_PAGE_SIZE + 2}`);
+    expect(first.more).toBe(true);
+
+    const last = first.hits[first.hits.length - 1].message;
+    const second = await chat.search(['text-obshchii'], 'дача', { ts: last.ts, id: last.id! });
+    expect(second.hits.map((h) => h.message.text)).toEqual([
+      'дача номер 2',
+      'дача номер 1',
+      'дача номер 0',
+    ]);
+    expect(second.more).toBe(false);
+  });
+
+  it('системные строки не находятся — человек ищет сказанное людьми', async () => {
+    await db.getRepository(MessageRow).insert({
+      id: randomUUID(),
+      channelId: 'text-obshchii',
+      authorName: 'relay',
+      text: 'история дачи истекла',
+      system: true,
+      spoiler: false,
+      reactions: {},
+    });
+    expect((await chat.search(['text-obshchii'], 'дачи')).hits).toHaveLength(0);
+  });
+
+  it('синтаксис tsquery в запросе — это просто текст', async () => {
+    await say('дача & огород');
+    // Без разбора запрос вроде «& |» уехал бы в to_tsquery как выражение, и
+    // человек получил бы не пустой результат, а ошибку базы.
+    await expect(chat.search(['text-obshchii'], '& | ! ( )')).resolves.toEqual({
+      hits: [],
+      more: false,
+    });
+    expect((await chat.search(['text-obshchii'], 'дача & огород')).hits).toHaveLength(1);
+  });
+
+  it('пустой запрос и пустой список каналов ничего не ищут', async () => {
+    await say('дача');
+    await expect(chat.search(['text-obshchii'], '   ')).resolves.toEqual({
+      hits: [],
+      more: false,
+    });
+    await expect(chat.search([], 'дача')).resolves.toEqual({ hits: [], more: false });
+  });
+
+  it('слова запроса — то, чем потом подсвечивают', () => {
+    expect(searchTerms('  Дачу,  в СУББОТУ!  ')).toEqual(['дачу', 'в', 'субботу']);
+    expect(searchTerms('***')).toEqual([]);
+  });
+});
+
+describe('переход к найденному', () => {
+  beforeEach(async () => {
+    for (let i = 0; i < AROUND_HALF * 3; i += 1) await say(`${i}`);
+  });
+
+  it('окно показывает соседей сверху и снизу', async () => {
+    const { messages } = await chat.history('obshchii');
+    const target = messages[messages.length - 1];
+    // Целимся в середину истории — как из результата поиска по старому.
+    const middle = (await chat.older('obshchii', target.ts, target.id!)).messages[10];
+
+    const window = await chat.around('obshchii', middle.id!);
+    const texts = window.messages.map((m) => m.text);
+    expect(texts).toContain(middle.text);
+    expect(texts).toHaveLength(AROUND_HALF * 2 + 1);
+    expect(window.more).toBe(true);
+    expect(window.moreAfter).toBe(true);
+  });
+
+  it('у конца канала низа нет', async () => {
+    const { messages } = await chat.history('obshchii');
+    const last = messages[messages.length - 1];
+
+    const window = await chat.around('obshchii', last.id!);
+    expect(window.moreAfter).toBe(false);
+    expect(window.messages[window.messages.length - 1].id).toBe(last.id);
+  });
+
+  it('реплику удалили, пока читали результаты — окно пустое, а не чужое', async () => {
+    const { messages } = await chat.history('obshchii');
+    const doomed = messages[messages.length - 1];
+    await chat.remove(doomed.id!);
+
+    await expect(chat.around('obshchii', doomed.id!)).resolves.toEqual({
+      messages: [],
+      more: false,
+      moreAfter: false,
+    });
+    await expect(chat.around('obshchii', 'мусор')).resolves.toEqual({
+      messages: [],
+      more: false,
+      moreAfter: false,
+    });
+  });
+
+  it('подгрузка вниз не теряет и не повторяет', async () => {
+    const { messages } = await chat.history('obshchii');
+    const oldest = (await chat.older('obshchii', messages[0].ts, messages[0].id!)).messages[0];
+
+    const down = await chat.newer('obshchii', oldest.ts, oldest.id!);
+    expect(down.messages).toHaveLength(PAGE_SIZE);
+    expect(down.messages[0].text).toBe('1');
+    expect(down.moreAfter).toBe(true);
+    expect(down.messages.some((m) => m.id === oldest.id)).toBe(false);
+  });
+
+  it('дно ленты — честное «дальше ничего»', async () => {
+    const { messages } = await chat.history('obshchii');
+    const last = messages[messages.length - 1];
+    await expect(chat.newer('obshchii', last.ts, last.id!)).resolves.toEqual({
+      messages: [],
+      more: false,
+      moreAfter: false,
+    });
   });
 });
 

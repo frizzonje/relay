@@ -32,6 +32,60 @@ export const CHAT_PREFIX = 'chat:';
 export const PAGE_SIZE = 50;
 
 /**
+ * Сколько находок отдаём одной страницей. Меньше страницы ленты намеренно:
+ * результат читают глазами по одному, а не пролистывают.
+ */
+export const SEARCH_PAGE_SIZE = 20;
+
+/**
+ * Окно вокруг найденной реплики — столько же сверху и снизу. Смысл перехода из
+ * поиска в том, чтобы увидеть разговор, а не одну строку: ответ на вопрос почти
+ * всегда ниже вопроса.
+ */
+export const AROUND_HALF = 25;
+
+/**
+ * Конфигурация полнотекста. Обязана слово в слово совпадать с той, что в
+ * индексе (миграция MessageSearch) — иначе индекс молча не применится.
+ * Почему `simple`, а не язык — там же, в шапке миграции.
+ */
+const SEARCH_CONFIG = 'simple';
+
+/** Больше слов в запрос не берём: это поиск по чату, а не язык запросов. */
+const SEARCH_MAX_TERMS = 8;
+
+/** И длиннее слова не берём — тем более что ищем по префиксу. */
+const SEARCH_TERM_MAX = 40;
+
+/**
+ * Запрос человека → слова для полнотекста.
+ *
+ * Режем по всему, что не буква и не цифра, и тем самым решаем сразу вторую
+ * задачу: у `to_tsquery` свой синтаксис (`&`, `|`, `!`, скобки, кавычки), и
+ * человек, написавший в поиске «а & б», не должен получить ни ошибку базы, ни
+ * чужой смысл. После разбора в словах не остаётся ни одного его символа.
+ */
+export function searchTerms(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}_]+/u)
+    .filter(Boolean)
+    .map((term) => term.slice(0, SEARCH_TERM_MAX))
+    .slice(0, SEARCH_MAX_TERMS);
+}
+
+/**
+ * Слова → tsquery: все слова обязательны, каждое ищется как начало.
+ *
+ * Префикс — замена стеммингу, которого в `simple` нет: «канал» находит
+ * «каналы» и «каналом». Обратное неверно, и это честный размен — набранное
+ * человеком слово почти всегда короче или равно тому, что он ищет.
+ */
+function tsquery(terms: string[]): string {
+  return terms.map((term) => `${term}:*`).join(' & ');
+}
+
+/**
  * Разрешённый набор реакций — дублирует REACTION_EMOJIS из `@relay/shared`
  * (api намеренно не зависит от пакета фронта, как и прочие константы).
  */
@@ -66,6 +120,38 @@ export interface Page {
   messages: ChatMessage[];
   /** Выше есть ещё — клиент показывает «подгрузить», а не «начало истории». */
   more: boolean;
+}
+
+/**
+ * Кусок ленты из середины истории — то, что видно после перехода из поиска.
+ * От обычной страницы отличается тем, что «ещё» бывает с обеих сторон: у ленты
+ * появился низ, которого при чтении сверху вниз никогда не было.
+ */
+export interface FeedWindow extends Page {
+  /** Ниже есть ещё — значит человек смотрит прошлое, а не живой конец канала. */
+  moreAfter: boolean;
+}
+
+/**
+ * Находка: реплика и канал, в котором она сказана. Слаг здесь обязателен —
+ * поиск по серверу возвращает реплики из каналов, в которых человек сейчас не
+ * сидит, и без него результат некуда открыть.
+ */
+export interface SearchHit {
+  slug: string;
+  message: ChatMessage;
+}
+
+export interface SearchPage {
+  hits: SearchHit[];
+  /** Есть что показать дальше — страница, а не «всё, что нашлось». */
+  more: boolean;
+}
+
+/** Курсор — «время и id последней показанной реплики», как у ленты. */
+export interface Cursor {
+  ts: number;
+  id: string;
 }
 
 function toAttachment(row: AttachmentRow, spoiler: boolean): Attachment {
@@ -155,6 +241,134 @@ export class ChatService implements OnModuleInit {
       })
       .getMany();
     return this.page(rows);
+  }
+
+  /**
+   * Страница ниже курсора — то, чего до поиска не требовалось. Лента читается
+   * сверху вниз и всегда упиралась в живой конец канала; из поиска человек
+   * попадает в середину истории, и «дальше» для него означает вниз.
+   */
+  async newer(slug: string, afterTs: number, afterId: string): Promise<FeedWindow> {
+    const channelId = this.channelId(slug);
+    if (!channelId || !isUuid(afterId)) return { messages: [], more: false, moreAfter: false };
+    const rows = await this.db
+      .getRepository(MessageRow)
+      .createQueryBuilder('m')
+      .leftJoinAndSelect('m.attachment', 'a')
+      .leftJoinAndSelect('m.authorIdentity', 'ai')
+      .where('m.channel_id = :channelId', { channelId })
+      .andWhere('(m.created_at, m.id) > (:afterAt, :afterId)', {
+        afterAt: new Date(afterTs),
+        afterId,
+      })
+      .orderBy('m.createdAt', 'ASC')
+      .addOrderBy('m.id', 'ASC')
+      .limit(PAGE_SIZE + 1)
+      .getMany();
+    const moreAfter = rows.length > PAGE_SIZE;
+    const slice = moreAfter ? rows.slice(0, PAGE_SIZE) : rows;
+    return { messages: slice.map(toMessage), more: false, moreAfter };
+  }
+
+  /**
+   * Окно вокруг реплики: она сама, соседи сверху и соседи снизу.
+   *
+   * Двумя запросами, а не одним с `OFFSET`: «двадцать пять до» и «двадцать пять
+   * после» — это два разных обхода одного индекса, и каждый читает ровно
+   * столько строк, сколько отдаёт.
+   */
+  async around(slug: string, id: string): Promise<FeedWindow> {
+    const empty = { messages: [], more: false, moreAfter: false };
+    const channelId = this.channelId(slug);
+    if (!channelId || !isUuid(id)) return empty;
+    const target = await this.db.getRepository(MessageRow).findOne({
+      where: { id, channelId },
+      relations: { attachment: true, authorIdentity: true },
+    });
+    // Реплики нет — её удалили, пока человек читал результаты поиска. Пустое
+    // окно здесь честнее последней страницы канала: «нашли, но показать нечего»
+    // и «вот вам живой конец» — разные ответы, и клиент их различает.
+    if (!target) return empty;
+
+    const at = target.createdAt;
+    const [before, after] = await Promise.all([
+      this.db
+        .getRepository(MessageRow)
+        .createQueryBuilder('m')
+        .leftJoinAndSelect('m.attachment', 'a')
+        .leftJoinAndSelect('m.authorIdentity', 'ai')
+        .where('m.channel_id = :channelId', { channelId })
+        .andWhere('(m.created_at, m.id) < (:at, :id)', { at, id })
+        .orderBy('m.createdAt', 'DESC')
+        .addOrderBy('m.id', 'DESC')
+        .limit(AROUND_HALF + 1)
+        .getMany(),
+      this.db
+        .getRepository(MessageRow)
+        .createQueryBuilder('m')
+        .leftJoinAndSelect('m.attachment', 'a')
+        .leftJoinAndSelect('m.authorIdentity', 'ai')
+        .where('m.channel_id = :channelId', { channelId })
+        .andWhere('(m.created_at, m.id) > (:at, :id)', { at, id })
+        .orderBy('m.createdAt', 'ASC')
+        .addOrderBy('m.id', 'ASC')
+        .limit(AROUND_HALF + 1)
+        .getMany(),
+    ]);
+
+    const more = before.length > AROUND_HALF;
+    const moreAfter = after.length > AROUND_HALF;
+    const top = (more ? before.slice(0, AROUND_HALF) : before).reverse();
+    const bottom = moreAfter ? after.slice(0, AROUND_HALF) : after;
+    return { messages: [...top, target, ...bottom].map(toMessage), more, moreAfter };
+  }
+
+  /**
+   * Поиск по истории. Каналы приходят списком — гейтвей уже отобрал те, что
+   * человеку видно, и решать это здесь второй раз значило бы завести второе
+   * место, где живут права.
+   *
+   * Порядок — по времени, а не по релевантности: в чате ищут не «самое
+   * подходящее», а «то, что говорили тогда», и свежее почти всегда нужнее.
+   * Заодно это делает курсор тем же, что у ленты, — время и id.
+   */
+  async search(channelIds: string[], query: string, cursor?: Cursor): Promise<SearchPage> {
+    const terms = searchTerms(query);
+    if (!terms.length || channelIds.length === 0) return { hits: [], more: false };
+
+    const qb = this.db
+      .getRepository(MessageRow)
+      .createQueryBuilder('m')
+      .leftJoinAndSelect('m.attachment', 'a')
+      .leftJoinAndSelect('m.authorIdentity', 'ai')
+      .where('m.channel_id IN (:...channelIds)', { channelIds })
+      // Системные строки — «история истекла», «удалено владельцем» — не то, что
+      // человек искал: он ищет сказанное людьми.
+      .andWhere('m.system = false')
+      .andWhere(`to_tsvector('${SEARCH_CONFIG}', m.text) @@ to_tsquery('${SEARCH_CONFIG}', :q)`, {
+        q: tsquery(terms),
+      })
+      .orderBy('m.createdAt', 'DESC')
+      .addOrderBy('m.id', 'DESC')
+      .limit(SEARCH_PAGE_SIZE + 1);
+
+    if (cursor && isUuid(cursor.id)) {
+      qb.andWhere('(m.created_at, m.id) < (:beforeAt, :beforeId)', {
+        beforeAt: new Date(cursor.ts),
+        beforeId: cursor.id,
+      });
+    }
+
+    const rows = await qb.getMany();
+    const more = rows.length > SEARCH_PAGE_SIZE;
+    const slice = more ? rows.slice(0, SEARCH_PAGE_SIZE) : rows;
+    return {
+      hits: slice.flatMap((row) => {
+        const slug = this.slugOf(row.channelId);
+        return slug ? [{ slug, message: toMessage(row) }] : [];
+      }),
+      more,
+    };
   }
 
   /**
@@ -295,6 +509,15 @@ export class ChatService implements OnModuleInit {
   /** Текстовый канал с таким слагом — из реестра в памяти, без похода в базу. */
   private channelId(slug: string): string | undefined {
     return this.registry.channels.find((c) => c.type === 'text' && c.slug === slug)?.id;
+  }
+
+  /**
+   * Обратный ход: слаг канала по его id. Нужен поиску — в базе у реплики
+   * записан id канала, а клиент оперирует слагами, и переводить одно в другое
+   * должна та сторона, у которой реестр под рукой.
+   */
+  private slugOf(channelId: string): string | undefined {
+    return this.registry.channels.find((c) => c.id === channelId)?.slug;
   }
 
   /**

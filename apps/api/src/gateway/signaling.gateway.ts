@@ -20,7 +20,7 @@ import { RolesService } from '../identity/roles.service';
 import { sfuHealthy } from '../sfu/sfu-health';
 import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
 import { UploadsService } from '../uploads';
-import { ChatService } from './chat.service';
+import { ChatService, searchTerms } from './chat.service';
 import {
   MAIN_SERVER_ID,
   MAX_CHANNELS,
@@ -57,6 +57,11 @@ import {
   type ChatEditPayload,
   type ChatHistoryMorePayload,
   type ChatHistoryMoreResult,
+  type ChatSearchResult,
+  type ChatWindowResult,
+  type ChatHistoryAfterPayload,
+  type ChatAroundPayload,
+  type ChatSearchPayload,
   type ChatPayload,
   type ChatReactPayload,
   type GuestKickPayload,
@@ -1749,6 +1754,93 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const beforeId = str(payload?.beforeId);
     if (!beforeTs || !beforeId) return empty;
     return { ok: true, ...(await this.chat.older(this.chat.slug(room), beforeTs, beforeId)) };
+  }
+
+  /**
+   * Страница ниже показанной. Спрашивается только после перехода из поиска: у
+   * живого конца канала ниже ничего нет, и обычное чтение сюда не приходит.
+   */
+  @SubscribeMessage('chat-history-after')
+  async handleChatHistoryAfter(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ChatHistoryAfterPayload,
+  ): Promise<ChatWindowResult> {
+    const empty = { ok: true as const, messages: [], more: false, moreAfter: false };
+    if (!this.allow(client) || this.isGuest(client)) return empty;
+    const room = client.data.chatRoom as string | undefined;
+    if (!room) return empty;
+    const afterTs = typeof payload?.afterTs === 'number' ? payload.afterTs : 0;
+    const afterId = str(payload?.afterId);
+    if (!afterTs || !afterId) return empty;
+    return { ok: true, ...(await this.chat.newer(this.chat.slug(room), afterTs, afterId)) };
+  }
+
+  /**
+   * Окно вокруг реплики — то, чем заканчивается переход из результатов поиска.
+   *
+   * Канал не называется: берём тот, в котором сокет сидит. Клиент, идущий в
+   * чужой канал, сперва входит в него обычным `chat-join` (и там же проверяются
+   * права), а socket.io держит порядок событий одного сокета, так что к моменту
+   * этого запроса комната уже та.
+   */
+  @SubscribeMessage('chat-around')
+  async handleChatAround(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ChatAroundPayload,
+  ): Promise<ChatWindowResult> {
+    const empty = { ok: true as const, messages: [], more: false, moreAfter: false };
+    if (!this.allow(client) || this.isGuest(client)) return empty;
+    const room = client.data.chatRoom as string | undefined;
+    const id = str(payload?.id);
+    if (!room || !id) return empty;
+    return { ok: true, ...(await this.chat.around(this.chat.slug(room), id)) };
+  }
+
+  /**
+   * Поиск по истории.
+   *
+   * Область называет клиент, но каналы по ней собирает сервер: «по серверу»
+   * значит «по тем его текстовым каналам, которые видно этому сокету», и решать
+   * это клиенту не дают нигде. Пустой набор каналов — пустой результат, а не
+   * отказ: искать в закрытом сервере, пароль от которого не введён, не
+   * запрещено, там просто нечего найти.
+   */
+  @SubscribeMessage('chat-search')
+  async handleChatSearch(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ChatSearchPayload,
+  ): Promise<ChatSearchResult> {
+    const empty = { ok: true as const, hits: [], more: false, terms: [] };
+    if (!this.allow(client) || this.isGuest(client)) return empty;
+    const room = client.data.chatRoom as string | undefined;
+    if (!room) return empty;
+    const here = this.registry.channels.find(
+      (c) => c.type === 'text' && c.slug === this.chat.slug(room),
+    );
+    if (!here || !this.canSee(client, here)) return empty;
+
+    const query = trimmed(payload?.query, LIMIT.search);
+    const terms = searchTerms(query);
+    if (!terms.length) return empty;
+
+    const scope = payload?.scope === 'server' ? 'server' : 'channel';
+    const channels =
+      scope === 'server'
+        ? this.registry.channels.filter(
+            (c) => c.type === 'text' && c.serverId === here.serverId && this.canSee(client, c),
+          )
+        : [here];
+
+    const beforeTs = typeof payload?.beforeTs === 'number' ? payload.beforeTs : 0;
+    const beforeId = str(payload?.beforeId);
+    const cursor = beforeTs && beforeId ? { ts: beforeTs, id: beforeId } : undefined;
+
+    const { hits, more } = await this.chat.search(
+      channels.map((c) => c.id),
+      query,
+      cursor,
+    );
+    return { ok: true, hits, more, terms };
   }
 
   @SubscribeMessage('chat-leave')

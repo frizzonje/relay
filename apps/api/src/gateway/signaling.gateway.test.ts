@@ -2914,3 +2914,151 @@ describe('личное: непрочитанное и настройки', () =>
     expect(await reads.marks(anya.identityId)).toEqual(new Map());
   });
 });
+
+describe('поиск по истории', () => {
+  /**
+   * Сервер с двумя текстовыми каналами и сказанным в обоих — минимум, на
+   * котором видно разницу между «искать здесь» и «искать по серверу».
+   */
+  async function withTalk() {
+    const { gw, server } = await makeGateway();
+    const a = connect(gw, server, { id: 'a', clientId: 'dev' });
+    await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'мой' });
+    await gw.handleChannelCreate(asSocket(a), { serverId: 'srv', type: 'text', name: 'болталка' });
+    await gw.handleChannelCreate(asSocket(a), { serverId: 'srv', type: 'text', name: 'кухня' });
+    settle();
+
+    await gw.handleChatJoin(asSocket(a), { room: 'кухня', name: 'A' });
+    await gw.handleChatMessage(asSocket(a), { text: 'чайник на кухне' });
+    await gw.handleChatJoin(asSocket(a), { room: 'болталка', name: 'A' });
+    await gw.handleChatMessage(asSocket(a), { text: 'чайник закипел' });
+    return { gw, server, a };
+  }
+
+  it('ищет в открытом канале и возвращает слова, которыми подсвечивать', async () => {
+    const { gw, a } = await withTalk();
+    const res = await gw.handleChatSearch(asSocket(a), { query: 'Чайник', scope: 'channel' });
+    expect(res.hits.map((h) => h.message.text)).toEqual(['чайник закипел']);
+    expect(res.terms).toEqual(['чайник']);
+    expect(res.more).toBe(false);
+  });
+
+  it('по серверу — по всем его каналам, а не только по открытому', async () => {
+    const { gw, a } = await withTalk();
+    const res = await gw.handleChatSearch(asSocket(a), { query: 'чайник', scope: 'server' });
+    expect(res.hits.map((h) => h.slug).sort()).toEqual(['болталка', 'кухня']);
+  });
+
+  it('чужой сервер в область не попадает', async () => {
+    const { gw, server, a } = await withTalk();
+    // Главный сервер — соседний: его канал виден всем, но искать по нему,
+    // сидя в чужом, никто не просил.
+    const b = connect(gw, server, { id: 'b' });
+    await gw.handleChatJoin(asSocket(b), { room: 'obshchii', name: 'B' });
+    await gw.handleChatMessage(asSocket(b), { text: 'чайник общий' });
+
+    const res = await gw.handleChatSearch(asSocket(a), { query: 'чайник', scope: 'server' });
+    expect(res.hits.map((h) => h.slug)).not.toContain('obshchii');
+  });
+
+  it('канал закрытого сервера не ищется, пока пароль не введён', async () => {
+    const { gw, server } = await makeGateway();
+    const owner = connect(gw, server, { id: 'owner', clientId: 'dev' });
+    await gw.handleServerCreate(asSocket(owner), { id: 'srv', name: 'тайный', password: 'п' });
+    await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'тайны' });
+    settle();
+    await gw.handleChatJoin(asSocket(owner), { room: 'тайны', name: 'Хозяин' });
+    await gw.handleChatMessage(asSocket(owner), { text: 'пароль от сейфа' });
+
+    // Чужой сокет сидит в своём канале — область «сервер» считается от него, и
+    // чужой закрытый в неё не входит ни при каком запросе.
+    const stranger = connect(gw, server, { id: 'stranger' });
+    await gw.handleChatJoin(asSocket(stranger), { room: 'obshchii', name: 'Ч' });
+    const res = await gw.handleChatSearch(asSocket(stranger), { query: 'сейфа', scope: 'server' });
+    expect(res.hits).toEqual([]);
+  });
+
+  it('не сидя в канале, искать негде', async () => {
+    const { gw, server } = await makeGateway();
+    const a = connect(gw, server, { id: 'a' });
+    expect(
+      await gw.handleChatSearch(asSocket(a), { query: 'что-нибудь', scope: 'server' }),
+    ).toEqual({ ok: true, hits: [], more: false, terms: [] });
+  });
+
+  it('гость не ищет — он и читать не умеет', async () => {
+    const { gw, server } = await makeGateway();
+    const { token } = issueGuestToken('voice-obshchii');
+    const guest = connect(gw, server, { guest: token });
+    expect(await gw.handleChatSearch(asSocket(guest), { query: 'всё', scope: 'channel' })).toEqual({
+      ok: true,
+      hits: [],
+      more: false,
+      terms: [],
+    });
+  });
+
+  it('мусор вместо запроса — пустой ответ, а не отказ', async () => {
+    const { gw, a } = await withTalk();
+    for (const query of ['   ', '***', 42 as unknown as string, undefined]) {
+      expect(await gw.handleChatSearch(asSocket(a), { query, scope: 'channel' })).toMatchObject({
+        hits: [],
+        terms: [],
+      });
+    }
+  });
+});
+
+describe('переход к найденному', () => {
+  async function withHistory() {
+    const { gw, server } = await makeGateway();
+    const a = connect(gw, server, { id: 'a' });
+    await gw.handleChatJoin(asSocket(a), { room: 'obshchii', name: 'A' });
+    for (let i = 0; i < 5; i += 1) await gw.handleChatMessage(asSocket(a), { text: `${i}` });
+    // Историю отдают на входе в канал, и на тот момент её ещё не было —
+    // спрашиваем заново, уже со сказанным.
+    await gw.handleChatJoin(asSocket(a), { room: 'obshchii', name: 'A' });
+    const history = a.last('chat-history') as { messages: { id: string; ts: number }[] };
+    return { gw, server, a, messages: history.messages };
+  }
+
+  it('окно вокруг реплики приходит вместе с ответом на «есть ли ещё снизу»', async () => {
+    const { gw, a, messages } = await withHistory();
+    const res = await gw.handleChatAround(asSocket(a), { id: messages[0].id });
+    expect(res.messages).toHaveLength(5);
+    expect(res.more).toBe(false);
+    expect(res.moreAfter).toBe(false);
+  });
+
+  it('страница вниз идёт от курсора и не повторяет его', async () => {
+    const { gw, a, messages } = await withHistory();
+    const from = messages[1];
+    const res = await gw.handleChatHistoryAfter(asSocket(a), {
+      afterTs: from.ts,
+      afterId: from.id,
+    });
+    expect(res.messages.map((m) => m.text)).toEqual(['2', '3', '4']);
+  });
+
+  it('вне канала оба запроса пусты, а не ошибочны', async () => {
+    const { gw, server } = await makeGateway();
+    const a = connect(gw, server, { id: 'a' });
+    const empty = { ok: true, messages: [], more: false, moreAfter: false };
+    expect(await gw.handleChatAround(asSocket(a), { id: randomUUID() })).toEqual(empty);
+    expect(
+      await gw.handleChatHistoryAfter(asSocket(a), { afterTs: Date.now(), afterId: randomUUID() }),
+    ).toEqual(empty);
+  });
+
+  it('гостю окно не показывают', async () => {
+    const { gw, server } = await makeGateway();
+    const { token } = issueGuestToken('voice-obshchii');
+    const guest = connect(gw, server, { guest: token });
+    expect(await gw.handleChatAround(asSocket(guest), { id: randomUUID() })).toEqual({
+      ok: true,
+      messages: [],
+      more: false,
+      moreAfter: false,
+    });
+  });
+});

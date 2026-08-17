@@ -38,6 +38,8 @@ export const LIMIT = {
   emoji: 8,
   /** Реплика чата. */
   message: 500,
+  /** Поисковый запрос — заведомо длиннее любого осмысленного и короче реплики. */
+  search: 100,
   /** Диагностическая веха звонка и её пояснение — только в лог. */
   diagEvent: 48,
   diagDetail: 200,
@@ -100,6 +102,29 @@ export interface ChatPayload {
  * страницы разъезжаются, когда снизу приходит новое.
  */
 export interface ChatHistoryMorePayload {
+  beforeTs?: unknown;
+  beforeId?: unknown;
+}
+
+/** Тот же курсор, но вниз: время и id самой нижней реплики на экране. */
+export interface ChatHistoryAfterPayload {
+  afterTs?: unknown;
+  afterId?: unknown;
+}
+
+/** Какую реплику показать в контексте её канала — переход из поиска. */
+export interface ChatAroundPayload {
+  id?: unknown;
+}
+
+/**
+ * Запрос поиска. Область приходит от клиента, но набор каналов по ней собирает
+ * сервер: «по этому серверу» значит «по тем его каналам, которые видно этому
+ * сокету», и решать, что кому видно, клиенту не дают нигде.
+ */
+export interface ChatSearchPayload {
+  query?: unknown;
+  scope?: unknown;
   beforeTs?: unknown;
   beforeId?: unknown;
 }
@@ -256,6 +281,26 @@ export interface ChatHistoryPage {
 }
 
 export type ChatHistoryMoreResult = { ok: true } & ChatHistoryPage;
+
+/**
+ * Окно ленты вокруг точки: у него, в отличие от страницы, есть низ. Пока лента
+ * читалась только сверху вниз, «дальше» всегда значило вверх; из поиска человек
+ * попадает в середину истории, и под ним остаётся весь остальной канал.
+ */
+export type ChatWindowResult = { ok: true } & ChatHistoryPage & { moreAfter: boolean };
+
+/** Ответ поиска: находки, есть ли ещё и слова, по которым искали. */
+export type ChatSearchResult = {
+  ok: true;
+  hits: { slug: string; message: ChatMessage }[];
+  more: boolean;
+  /**
+   * Разобранные слова запроса. Возвращаем их, чтобы подсветку в найденном
+   * рисовали ровно по тому, по чему искали: свой разбор на клиенте — это второе
+   * место с правилами, и оно неизбежно разъедется с первым.
+   */
+  terms: string[];
+};
 
 export type ServerDeleteResult =
   | { ok: true }

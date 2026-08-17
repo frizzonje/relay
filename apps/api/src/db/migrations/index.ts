@@ -2,6 +2,8 @@ import { InitialSchema1755000000000 } from './1755000000000-InitialSchema';
 import { OwnerClaim1756000000000 } from './1756000000000-OwnerClaim';
 import { CreatorIdentity1757000000000 } from './1757000000000-CreatorIdentity';
 import { Prefs1758000000000 } from './1758000000000-Prefs';
+import { MessageSearch1759000000000 } from './1759000000000-MessageSearch';
+import { MessageTimeMillis1759100000000 } from './1759100000000-MessageTimeMillis';
 
 /**
  * Миграции по порядку. Список руками, а не `migrations: ['dist/**']` по маске:
@@ -13,4 +15,6 @@ export const MIGRATIONS = [
   OwnerClaim1756000000000,
   CreatorIdentity1757000000000,
   Prefs1758000000000,
+  MessageSearch1759000000000,
+  MessageTimeMillis1759100000000,
 ];

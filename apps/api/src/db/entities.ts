@@ -191,6 +191,10 @@ export class AttachmentRow {
 @Index('messages_channel_ts_idx', ['channelId', 'createdAt', 'id'])
 // Ретенция ходит по всей таблице, без канала.
 @Index('messages_created_at_idx', ['createdAt'])
+// Третий индекс этой таблицы — `messages_search_idx` под поиск — объявлен
+// только в миграции MessageSearch: он GIN по выражению `to_tsvector(...)`, а
+// декоратор такого не выражает. Схема от этого не разъезжается (проверяется в
+// schema.test), но при чтении entities о нём легко забыть — потому и написано.
 export class MessageRow {
   @PrimaryColumn({ type: 'uuid' })
   id!: string;
@@ -252,8 +256,19 @@ export class MessageRow {
    * идти из одних часов — тех же, по которым потом сортируется выборка.
    * Поэтому обычная колонка с дефолтом, а не `@CreateDateColumn`: тот
    * подставляет время процесса.
+   *
+   * Точность — миллисекунды, ровно та, в которой это время уходит клиенту и
+   * возвращается курсором. У Postgres по умолчанию микросекунды, и лишние три
+   * знака оборачивались бы потерянными и удвоенными репликами на границе
+   * страницы: клиент присылает `12:00:00.001`, а в базе лежит `12:00:00.0014`,
+   * и строка одновременно «не старше» и «не новее» собственного курсора.
    */
-  @Column({ type: 'timestamptz', name: 'created_at', default: () => 'now()' })
+  @Column({
+    type: 'timestamptz',
+    precision: 3,
+    name: 'created_at',
+    default: () => `date_trunc('milliseconds', now())`,
+  })
   createdAt!: Date;
 
   // Дефолт объектом, а не выражением: у jsonb TypeORM сверяет дефолты глубоким

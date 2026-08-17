@@ -662,6 +662,63 @@ export interface ChatHistoryPage {
 
 export type ChatHistoryMoreResult = { ok: true; messages: ChatMessage[]; more: boolean };
 
+/**
+ * Кусок ленты из середины истории — то, что видно после перехода из поиска. От
+ * обычной страницы отличается тем, что у него есть низ: пока лента читалась
+ * сверху вниз, «дальше» всегда значило вверх, а из поиска человек попадает в
+ * прошлое, и под ним остаётся весь остальной канал.
+ */
+export type ChatWindowResult = {
+  ok: true;
+  messages: ChatMessage[];
+  more: boolean;
+  moreAfter: boolean;
+};
+
+/** Курсор подгрузки вниз: время и id самой нижней реплики, которую держит клиент. */
+export interface ChatHistoryAfterPayload {
+  afterTs: number;
+  afterId: string;
+}
+
+/** Какую реплику показать в контексте её канала (переход из результатов поиска). */
+export interface ChatAroundPayload {
+  id: string;
+}
+
+/**
+ * Где ищем. Канал — открытый прямо сейчас; сервер — все его текстовые каналы,
+ * которые человеку видно. Дальше сервера поиск не идёт намеренно: общий список
+ * «по всему» смешал бы разговоры из мест, которые человек держит раздельно.
+ */
+export type SearchScope = 'channel' | 'server';
+
+/** Запрос поиска. Курсор — как у ленты: время и id последней показанной находки. */
+export interface ChatSearchPayload {
+  query: string;
+  scope: SearchScope;
+  beforeTs?: number;
+  beforeId?: string;
+}
+
+/** Находка: реплика и канал, где она сказана (в поиске по серверу — любой). */
+export interface SearchHit {
+  slug: string;
+  message: ChatMessage;
+}
+
+export type ChatSearchResult = {
+  ok: true;
+  hits: SearchHit[];
+  more: boolean;
+  /**
+   * Слова, по которым искали на самом деле. Ими клиент подсвечивает найденное:
+   * разбери он запрос второй раз, своими правилами, — подсветил бы не то, что
+   * нашлось.
+   */
+  terms: string[];
+};
+
 export interface MediaUpdatePayload {
   camOn: boolean;
   screenOn: boolean;
@@ -764,6 +821,18 @@ export interface ClientToServerEvents {
     payload: ChatHistoryMorePayload,
     cb: (res: ChatHistoryMoreResult) => void,
   ) => void;
+  /**
+   * Подгрузить страницу НИЖЕ показанной. Спрашивается только после перехода из
+   * поиска: у живого конца канала ниже ничего нет по определению.
+   */
+  'chat-history-after': (
+    payload: ChatHistoryAfterPayload,
+    cb: (res: ChatWindowResult) => void,
+  ) => void;
+  /** Показать реплику в контексте: окно вокруг неё вместо последней страницы. */
+  'chat-around': (payload: ChatAroundPayload, cb: (res: ChatWindowResult) => void) => void;
+  /** Поиск по истории — канала или всего сервера, в котором открыт канал. */
+  'chat-search': (payload: ChatSearchPayload, cb: (res: ChatSearchResult) => void) => void;
   'media-update': (payload: MediaUpdatePayload) => void;
   rename: (payload: RenamePayload) => void;
   'server-create': (payload: ServerCreatePayload) => void;

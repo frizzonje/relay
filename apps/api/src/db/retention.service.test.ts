@@ -69,8 +69,11 @@ async function say(text: string, days: number): Promise<string> {
     editedAt: null,
     authorIdentityId: null,
   });
+  // Время реплики хранится с точностью до миллисекунды и всегда обрезанным, а
+  // не округлённым (см. миграцию MessageTimeMillis) — иначе «только что»
+  // ложится на полмиллисекунды в будущее и переживает ретенцию нулевого срока.
   await db.query(
-    "UPDATE messages SET created_at = now() - ($1 || ' days')::interval WHERE id = $2",
+    "UPDATE messages SET created_at = date_trunc('milliseconds', now() - ($1 || ' days')::interval) WHERE id = $2",
     [days, id],
   );
   return id;
