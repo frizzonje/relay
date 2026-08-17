@@ -143,6 +143,29 @@ export interface ModerationUnbanPayload {
   server?: unknown;
 }
 
+/**
+ * «Дочитал этот канал до этого момента». Канал зовётся слагом — тем же, что и
+ * везде в протоколе; в базе отметка живёт по id канала, чтобы переименование
+ * не объявляло его непрочитанным заново.
+ *
+ * Время — серверное: клиент возвращает то, что сам получил в `chat-activity`
+ * или в снимке каналов. Свои часы он здесь не спрашивает вовсе, иначе на
+ * спешащем устройстве точка не загоралась бы, а на отстающем не гасла.
+ */
+export interface ReadMarkPayload {
+  slug?: unknown;
+  ts?: unknown;
+}
+
+/**
+ * Настройка человека: ключ из закрытого списка (см. `identity/prefs.service`) и
+ * значение, о смысле которого сервер не осведомлён.
+ */
+export interface PrefsSetPayload {
+  key?: unknown;
+  value?: unknown;
+}
+
 export interface ServerCreatePayload {
   id?: unknown;
   name?: unknown;

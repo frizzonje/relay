@@ -15,6 +15,8 @@ import { resetDatabase, testDatabase } from '../db/testing';
 import { fingerprint as fingerprintOf } from '../identity/crypto';
 import { IdentityService } from '../identity/identity.service';
 import { OwnerService } from '../identity/owner.service';
+import { PrefsService } from '../identity/prefs.service';
+import { ReadsService } from '../identity/reads.service';
 import { RolesService } from '../identity/roles.service';
 import { issueSession } from '../identity/session';
 import type { Attachment, UploadsService } from '../uploads';
@@ -133,6 +135,8 @@ async function makeGateway(saved: PersistedRegistry = {}) {
   const identities = new IdentityService(db);
   const owner = new OwnerService(db);
   const roles = new RolesService(db);
+  const reads = new ReadsService(db);
+  const prefs = new PrefsService(db);
   const gw = new SignalingGateway(
     uploads as unknown as UploadsService,
     chat,
@@ -140,12 +144,14 @@ async function makeGateway(saved: PersistedRegistry = {}) {
     identities,
     owner,
     roles,
+    reads,
+    prefs,
   );
   gw.server = server.asServer();
   // Узнавание личности вешается миддлварой — заводим её и здесь, иначе тест
   // проверял бы гейтвей, у которого этой двери нет вовсе.
   gw.afterInit(server.asServer());
-  return { gw, server, registry, chat, identities, owner, roles };
+  return { gw, server, registry, chat, identities, owner, roles, reads, prefs };
 }
 
 /**
@@ -2586,7 +2592,9 @@ describe('бан', () => {
 
     const id = await say(gw, a, 'obshchii', 'здрасьте');
     await gw.handleChatJoin(asSocket(b), { room: 'obshchii' });
-    expect(await gw.handleModerationBan(asSocket(b), { id, everywhere: true })).toEqual({ ok: true });
+    expect(await gw.handleModerationBan(asSocket(b), { id, everywhere: true })).toEqual({
+      ok: true,
+    });
 
     expect(a.got('banned')).toBe(true);
     expect(a.disconnected).toBe(true);
@@ -2729,7 +2737,10 @@ describe('бан', () => {
 
     g.clear();
     expect(
-      await gw.handleModerationUnban(asSocket(h), { fingerprint: guest.fingerprint, server: 'srv' }),
+      await gw.handleModerationUnban(asSocket(h), {
+        fingerprint: guest.fingerprint,
+        server: 'srv',
+      }),
     ).toEqual({ ok: true });
     expect((g.last('servers') as { id: string }[]).map((s) => s.id)).toContain('srv');
   });
@@ -2769,5 +2780,137 @@ describe('бан', () => {
     expect(a.got('chat-deleted')).toBe(false);
     await gw.handleChatDelete(asSocket(a), { id: mine });
     expect(a.last('chat-deleted')).toEqual({ id: mine });
+  });
+});
+
+describe('личное: непрочитанное и настройки', () => {
+  /**
+   * Дождаться того, что гейтвей делает после подключения асинхронно (за личным
+   * состоянием он ходит в базу). Время здесь поддельное, поэтому крутим его
+   * асинхронно: только так настоящий запрос в Postgres успевает вернуться.
+   */
+  async function until(check: () => boolean): Promise<void> {
+    for (let i = 0; i < 200 && !check(); i += 1) await vi.advanceTimersByTimeAsync(5);
+  }
+
+  /** Подключиться и дождаться, пока приедет снимок личного. */
+  async function personal(gw: SignalingGateway, server: FakeServer, cookie: string, id: string) {
+    const sock = await connectAs(gw, server, cookie, { id, keep: true });
+    await until(() => sock.got('prefs'));
+    sock.clear();
+    return sock;
+  }
+
+  it('на входе человек получает свои отметки и настройки, а безымянный — ничего', async () => {
+    const { gw, server, prefs, reads } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const channel = (gw as AnyGw).registry.channels.find((c) => c.type === 'text')!;
+    await reads.mark(anya.identityId, channel.id, 5_000);
+    await prefs.set(anya.identityId, 'sound', [channel.slug]);
+
+    const a = await connectAs(gw, server, anya.cookie, { id: 'a', keep: true });
+    await until(() => a.got('prefs'));
+    // В протоколе канал зовётся слагом, в базе отметка живёт по id: иначе
+    // переименование канала объявляло бы его непрочитанным у всех разом.
+    expect(a.last('reads')).toEqual({ marks: { [channel.slug]: 5_000 }, full: true });
+    expect(a.last('prefs')).toEqual({ values: { sound: [channel.slug] }, full: true });
+
+    // Без личности общего между устройствами нет — и слать нечего.
+    const stranger = connect(gw, server, { id: 's' });
+    await until(() => false);
+    expect(stranger.got('reads')).toBe(false);
+    expect(stranger.got('prefs')).toBe(false);
+  });
+
+  it('прочитано на десктопе — прочитано и в браузере, не дожидаясь перезахода', async () => {
+    const { gw, server, reads } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const desktop = await personal(gw, server, anya.cookie, 'desktop');
+    const browser = await personal(gw, server, anya.cookie, 'browser');
+    const boris = await personal(gw, server, (await personCookie('Борис')).cookie, 'b');
+
+    await gw.handleReadMark(asSocket(desktop), { slug: 'obshchii', ts: 7_000 });
+
+    expect(browser.last('reads')).toEqual({ marks: { obshchii: 7_000 } });
+    // Тому, кто это и сделал, эхо ни к чему: у него точка уже погасла.
+    expect(desktop.got('reads')).toBe(false);
+    // И уж точно не чужому человеку: непрочитанное — личное дело.
+    expect(boris.got('reads')).toBe(false);
+    const channel = (gw as AnyGw).registry.channels.find((c) => c.slug === 'obshchii')!;
+    expect(await reads.marks(anya.identityId)).toEqual(new Map([[channel.id, 7_000]]));
+  });
+
+  it('отметка не ходит назад: опоздавшее устройство ничего не зажигает', async () => {
+    const { gw, server } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const a = await personal(gw, server, anya.cookie, 'a');
+    const b = await personal(gw, server, anya.cookie, 'b');
+
+    await gw.handleReadMark(asSocket(a), { slug: 'obshchii', ts: 7_000 });
+    b.clear();
+    await gw.handleReadMark(asSocket(a), { slug: 'obshchii', ts: 3_000 });
+    expect(b.got('reads')).toBe(false);
+  });
+
+  it('канал, которого не видно, не дочитать', async () => {
+    // Иначе отметки становятся способом перебирать слаги закрытых серверов.
+    const { gw, server, reads } = await makeGateway({
+      servers: [{ id: 'tайный', name: 'тайный', removable: true, passwordHash: 'x:y' }],
+      channels: [
+        {
+          id: 'c1',
+          serverId: 'tайный',
+          type: 'text',
+          name: 'секрет',
+          slug: 'секрет',
+          removable: true,
+        },
+      ],
+    });
+    const anya = await personCookie('Аня');
+    const a = await personal(gw, server, anya.cookie, 'a');
+
+    await gw.handleReadMark(asSocket(a), { slug: 'секрет', ts: 7_000 });
+    expect(await reads.marks(anya.identityId)).toEqual(new Map());
+  });
+
+  it('настройка с одного устройства доезжает на другое', async () => {
+    const { gw, server, prefs } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const a = await personal(gw, server, anya.cookie, 'a');
+    const b = await personal(gw, server, anya.cookie, 'b');
+
+    await gw.handlePrefsSet(asSocket(a), { key: 'volume', value: { Борис: { voice: 2 } } });
+
+    expect(b.last('prefs')).toEqual({ values: { volume: { Борис: { voice: 2 } } } });
+    expect(await prefs.values(anya.identityId)).toEqual({ volume: { Борис: { voice: 2 } } });
+  });
+
+  it('чужой ключ настройки — молчание, а не хранилище', async () => {
+    const { gw, server, prefs } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const a = await personal(gw, server, anya.cookie, 'a');
+    const b = await personal(gw, server, anya.cookie, 'b');
+
+    await gw.handlePrefsSet(asSocket(a), { key: 'архив', value: 'что угодно' });
+
+    expect(b.got('prefs')).toBe(false);
+    expect(await prefs.values(anya.identityId)).toEqual({});
+  });
+
+  it('удалённый канал уносит отметки с собой', async () => {
+    const { gw, server, reads } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const a = await connectAs(gw, server, anya.cookie, { id: 'a', clientId: 'dev' });
+    await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'мой' });
+    await gw.handleChannelCreate(asSocket(a), { serverId: 'srv', type: 'text', name: 'болталка' });
+    settle();
+    await gw.handleReadMark(asSocket(a), { slug: 'болталка', ts: 7_000 });
+    const channel = (gw as AnyGw).registry.channels.find((c) => c.slug === 'болталка')!;
+
+    expect(await gw.handleChannelDelete(asSocket(a), { id: channel.id })).toEqual({ ok: true });
+    // Каскада у отметок нет намеренно (они не должны запирать удаление канала),
+    // значит убрать за собой некому, кроме обработчика удаления.
+    expect(await reads.marks(anya.identityId)).toEqual(new Map());
   });
 });

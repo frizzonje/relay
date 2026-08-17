@@ -14,6 +14,8 @@ import { Server, Socket } from 'socket.io';
 import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
 import { IdentityService, type Speaker } from '../identity/identity.service';
 import { OwnerService } from '../identity/owner.service';
+import { PrefsService } from '../identity/prefs.service';
+import { ReadsService } from '../identity/reads.service';
 import { RolesService } from '../identity/roles.service';
 import { sfuHealthy } from '../sfu/sfu-health';
 import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
@@ -63,6 +65,8 @@ import {
   type ModerationBansResult,
   type ModerationResult,
   type ModerationUnbanPayload,
+  type PrefsSetPayload,
+  type ReadMarkPayload,
   type GuestKickResult,
   type InviteCreatePayload,
   type InviteCreateResult,
@@ -124,6 +128,8 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     private readonly identities: IdentityService,
     private readonly owner: OwnerService,
     private readonly roles: RolesService,
+    private readonly reads: ReadsService,
+    private readonly prefs: PrefsService,
   ) {}
 
   /**
@@ -181,7 +187,8 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   async syncOwner(): Promise<void> {
     const ownerId = await this.owner.ownerId();
     for (const socket of this.server?.sockets.sockets.values() ?? []) {
-      socket.data.owner = !!ownerId && (socket.data.identity as Speaker | undefined)?.id === ownerId;
+      socket.data.owner =
+        !!ownerId && (socket.data.identity as Speaker | undefined)?.id === ownerId;
     }
     this.broadcastServers();
     this.broadcastChannels();
@@ -423,6 +430,53 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     client.emit('servers', this.publicServersFor(client));
     client.emit('channels', this.channelsFor(client));
     client.emit('voice-presence', this.presenceFor(client, this.buildVoicePresence()));
+    // Своё личное — отметки чтения и настройки. Отдельно от реестра и позже
+    // него: за ними надо в базу, а реестр уже здесь, и задерживать первый кадр
+    // приложения ради громкостей незачем.
+    void this.sendPersonal(client);
+  }
+
+  /**
+   * Отдать сокету то, что принадлежит человеку, а не браузеру: докуда дочитаны
+   * каналы и его настройки.
+   *
+   * Без личности не шлём ничего — и это не забывчивость. У гостя по инвайту и у
+   * браузера, который не смог родить ключ, личности нет, а значит нет и общего
+   * между устройствами: их непрочитанное остаётся в localStorage, как и было.
+   */
+  private async sendPersonal(client: Socket): Promise<void> {
+    const me = this.speaker(client);
+    if (!me) return;
+    try {
+      const [marks, values] = await Promise.all([
+        this.reads.marks(me.id),
+        this.prefs.values(me.id),
+      ]);
+      // `full` — «это весь список». По нему клиент понимает, что может отдать
+      // серверу то, что прочитал и настроил без личности, а не только принять.
+      client.emit('reads', { marks: this.marksBySlug(marks), full: true });
+      client.emit('prefs', { values, full: true });
+    } catch (e) {
+      // Личное — не то, без чего приложение не работает: без отметок канал
+      // просто выглядит непрочитанным. Падать на этом (и уж тем более рвать
+      // подключение) хуже, чем показать точку лишний раз.
+      this.logger.error(`не удалось отдать личное состояние: ${e}`);
+    }
+  }
+
+  /**
+   * Отметки чтения так, как их зовёт клиент: по слагам. Хранятся они по id
+   * канала — переименование не должно зажигать «непрочитано» у всех разом, — а
+   * в протоколе канал всю жизнь звался слагом, и заводить ради этого второе имя
+   * канала на проводе незачем. Каналы, которых уже нет, отпадают сами.
+   */
+  private marksBySlug(marks: Map<string, number>): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const channel of this.registry.channels) {
+      const ts = marks.get(channel.id);
+      if (ts) out[channel.slug] = ts;
+    }
+    return out;
   }
 
   // Гость по инвайту: разрешён только эфир своей комнаты (join/leave/сигналинг/
@@ -1013,11 +1067,74 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     if (channel.type === 'text') {
       this.chat.forget(channel.slug);
       this.closeChatRoom(channel.slug);
+      // Отметки чтения канала уходят вместе с ним: каскада у них нет намеренно
+      // (отметка не должна запирать удаление канала), значит убрать за собой
+      // некому, кроме этого места.
+      await this.reads.forget(channel.id);
     }
     this.registry.channels.splice(index, 1);
     this.broadcastChannels();
     await this.registry.persist();
     return { ok: true };
+  }
+
+  // ===== Личное: непрочитанное и настройки =====
+
+  /**
+   * «Этот канал дочитан до этого момента».
+   *
+   * Отметка растёт и только растёт (см. `reads.service`), поэтому опоздавшее
+   * сообщение с устройства, которое проснулось со старым снимком, ничего не
+   * ломает: оно просто не делает ничего. Ответа клиент не ждёт — у него уже
+   * погашена точка, и переспрашивать сервер, засчитал ли он прочтение, значило
+   * бы держать индикатор в зависимости от сети.
+   */
+  @SubscribeMessage('read-mark')
+  async handleReadMark(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ReadMarkPayload,
+  ): Promise<void> {
+    if (!this.allow(client) || this.isGuest(client)) return;
+    const me = this.speaker(client);
+    if (!me) return;
+    const slug = trimmed(payload?.slug, LIMIT.slug);
+    const ts = typeof payload?.ts === 'number' ? payload.ts : 0;
+    const channel = this.registry.channels.find((c) => c.type === 'text' && c.slug === slug);
+    // Канал, которого этот сокет не видит, ему и не дочитать: иначе отметки
+    // становятся способом перебирать слаги закрытых серверов.
+    if (!channel || !this.canSee(client, channel)) return;
+    const mark = await this.reads.mark(me.id, channel.id, ts);
+    if (mark === null) return;
+    // Прочитано на десктопе — прочитано и в браузере, прямо сейчас. Это и есть
+    // весь смысл переезда: догонять его перезагрузкой страницы было бы почти
+    // тем же самым, что и не переезжать.
+    this.tellOtherDevices(client, me.id, 'reads', { marks: { [slug]: mark } });
+  }
+
+  /**
+   * Настройка человека. Что можно писать — решает `prefs.service`, здесь только
+   * доставка: отказ (чужой ключ, слишком большое значение) остаётся молчанием.
+   * Клиент шлёт лишь то, что сам же и понимает, а живого человека за неверным
+   * ключом нет — объяснять некому.
+   */
+  @SubscribeMessage('prefs-set')
+  async handlePrefsSet(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: PrefsSetPayload,
+  ): Promise<void> {
+    if (!this.allow(client) || this.isGuest(client)) return;
+    const me = this.speaker(client);
+    if (!me) return;
+    const key = payload?.key;
+    if (!(await this.prefs.set(me.id, key, payload?.value))) return;
+    this.tellOtherDevices(client, me.id, 'prefs', { values: { [key as string]: payload?.value } });
+  }
+
+  /** Остальным устройствам того же человека — но не тому, кто это и сделал. */
+  private tellOtherDevices(client: Socket, identityId: string, event: string, data: unknown): void {
+    for (const sock of this.socketsOf(identityId)) {
+      if (sock.id !== client.id) sock.emit(event, data);
+    }
   }
 
   // ===== Модерация =====
@@ -1049,7 +1166,6 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       (c) => c.type === 'text' && c.slug === this.chat.slug(room),
     );
     if (!channel || !this.mayModerate(client, channel)) return { ok: false, error: 'forbidden' };
-
 
     const everywhere = payload?.everywhere === true;
     // Бан на всю инсталляцию — только владельцу: у создателя сервера власти
