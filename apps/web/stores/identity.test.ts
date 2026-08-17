@@ -16,6 +16,10 @@ import { useUiStore } from './ui';
  *   — что показывать в панели, если сервер имя не принял.
  */
 
+// Сокет: стору от него нужно ровно одно — сказать гейтвею, что имя сменилось.
+const emit = vi.fn();
+vi.mock('@/lib/socket', () => ({ getSocket: () => ({ connected: true, emit }) }));
+
 vi.mock('@/lib/identity-login', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/identity-login')>()),
   whoAmI: vi.fn(),
@@ -133,6 +137,14 @@ describe('имя на первом входе', () => {
     expect(useUiStore.getState().callsign).toBe('Аня-Б');
   });
 
+  it('гейтвей узнаёт имя сразу, а не со следующего подключения', async () => {
+    // Иначе первые реплики только что назвавшегося человека подписаны его
+    // автоником: сокет подключился раньше, чем у личности появилось имя.
+    said.rename.mockResolvedValue('Аня');
+    await s().name('Аня');
+    expect(emit).toHaveBeenCalledWith('rename', { name: 'Аня' });
+  });
+
   it('сервер не ответил — остаёмся на том же экране', async () => {
     // Выкидывать отсюда некуда: человек уже вошёл, а починка — нажать ещё раз.
     said.rename.mockRejectedValue(new LoginError({ kind: 'network', status: 502 }));
@@ -140,6 +152,8 @@ describe('имя на первом входе', () => {
 
     expect(s().status).toBe('naming');
     expect(s().failure).toEqual({ kind: 'network', status: 502 });
+    // И гейтвею говорить нечего: имя не сохранилось.
+    expect(emit).not.toHaveBeenCalled();
   });
 
   it('пропуск на инсталляцию протух — это уже экран беды', async () => {

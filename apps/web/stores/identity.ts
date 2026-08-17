@@ -8,6 +8,7 @@ import {
   type LoginFailure,
 } from '@/lib/identity-login';
 import { SignerError } from '@/lib/signer';
+import { getSocket } from '@/lib/socket';
 import { useUiStore } from './ui';
 
 /**
@@ -83,6 +84,26 @@ export const useIdentityStore = create<IdentityState>((set, get) => {
     useUiStore.getState().setCallsign(me.nick);
   }
 
+  /**
+   * Сказать гейтвею, что имя изменилось. Имя живёт у личности и меняется
+   * обычным HTTP, а сокет знает то, что было при подключении, — и без этого
+   * пинка первые реплики только что назвавшегося человека подписаны его
+   * автоником (куском отпечатка), хотя в базе он уже Аня.
+   *
+   * Имя в теле сервер у личности не спрашивает — он перечитывает его сам, — но
+   * поле остаётся частью события: им же зовут себя те, у кого личности нет.
+   * Повтор безвреден: из панели то же событие шлёт `renameSelf` (ему нужно ещё
+   * и подписать свою плитку), и второй такой же rename не делает ничего.
+   */
+  function tellGateway(nick: string): void {
+    try {
+      const socket = getSocket();
+      if (socket.connected) socket.emit('rename', { name: nick });
+    } catch {
+      // Сокета может не быть вовсе (тесты, серверный рендер) — не повод падать.
+    }
+  }
+
   return {
     status: 'checking',
     me: null,
@@ -109,7 +130,9 @@ export const useIdentityStore = create<IdentityState>((set, get) => {
       const me = get().me;
       if (!me) return false;
       try {
-        adopt({ ...me, nick: await renameIdentity(nick) }, 'in');
+        const named = await renameIdentity(nick);
+        adopt({ ...me, nick: named }, 'in');
+        tellGateway(named);
         return true;
       } catch (err) {
         const failure = failureOf(err);
@@ -122,7 +145,9 @@ export const useIdentityStore = create<IdentityState>((set, get) => {
       const me = get().me;
       if (!me) return false;
       try {
-        adopt({ ...me, nick: await renameIdentity(nick) }, get().status);
+        const named = await renameIdentity(nick);
+        adopt({ ...me, nick: named }, get().status);
+        tellGateway(named);
         return true;
       } catch {
         // Экран не трогаем: смена имени — не вход, и терять из-за неё сессию
