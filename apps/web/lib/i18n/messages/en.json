@@ -428,6 +428,29 @@
   },
   "personal.volume.empty": "Everyone sounds as they are.",
   "personal.volume.reset": "Reset every volume",
+  "pins.action.pin": "Pin",
+  "pins.action.unpin": "Unpin",
+  "pins.count": {
+    "one": "{count} pinned message",
+    "other": "{count} pinned messages"
+  },
+  "pins.empty": "Nothing is pinned here yet.",
+  "pins.empty.can": "Nothing is pinned here yet. Pin a message from its menu and it stays at the top of this list — and in the channel.",
+  "pins.failed": "The server did not answer. Try again.",
+  "pins.gone": "That message is gone — someone deleted it.",
+  "pins.kept": {
+    "one": "Pinned messages stay. Everything else in this channel disappears after {count} day.",
+    "other": "Pinned messages stay. Everything else in this channel disappears after {count} days."
+  },
+  "pins.limit": {
+    "one": "A channel holds {count} pinned message. Unpin something to make room.",
+    "other": "A channel holds {count} pinned messages. Unpin something to make room."
+  },
+  "pins.loading": "Loading…",
+  "pins.mark": "pinned",
+  "pins.mark.title": "Pinned in this channel",
+  "pins.open": "Pinned messages",
+  "pins.title": "Pinned",
   "ping.alone": "alone in the channel",
   "ping.connecting": "establishing the link",
   "ping.measuring": "measuring latency",

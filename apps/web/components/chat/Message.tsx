@@ -354,10 +354,15 @@ function AddReaction({ id, closeSignal }: { id: string; closeSignal: number }) {
  */
 function MoreMenu({
   onEdit,
+  onPin,
+  pinned,
   onDelete,
   closeSignal,
 }: {
   onEdit?: () => void;
+  /** Закрепить/открепить. Пусто — канал не твой, и пункта в меню нет вовсе. */
+  onPin?: () => void;
+  pinned: boolean;
   onDelete: () => void;
   closeSignal: number;
 }) {
@@ -380,6 +385,17 @@ function MoreMenu({
               }}
             >
               <Icon name="edit" className="text-[13px]" />
+            </ActionBtn>
+          )}
+          {onPin && (
+            <ActionBtn
+              title={t(pinned ? 'pins.action.unpin' : 'pins.action.pin')}
+              onClick={() => {
+                close();
+                onPin();
+              }}
+            >
+              <Icon name={pinned ? 'pin-off' : 'pin'} className="text-[13px]" />
             </ActionBtn>
           )}
           <ActionBtn
@@ -448,6 +464,8 @@ export const Message = memo(function Message({
   onDelete,
   onBan,
   onJumpTo,
+  onPin,
+  retentionDays,
 }: {
   msg: ChatMessage;
   mine: boolean;
@@ -474,6 +492,10 @@ export const Message = memo(function Message({
   onDelete: (m: ChatMessage) => void;
   onBan: (m: ChatMessage, everywhere: boolean) => void;
   onJumpTo: (id: string) => void;
+  /** Закрепить/открепить — доступно там же, где модерация (см. `moderated`). */
+  onPin: (m: ChatMessage, on: boolean) => void;
+  /** Сколько дней живёт переписка — этим объясняется, что обещает пометка. */
+  retentionDays: number;
 }) {
   const t = useT();
   // Счётчик «мышь ушла с сообщения» — по нему AddReaction закрывает свой пикер.
@@ -523,6 +545,16 @@ export const Message = memo(function Message({
               label: t('chat.action.edit'),
               icon: 'edit' as const,
               run: () => onStartEdit(msg),
+            }
+          : null,
+        // Закрепление — то же право, что и удаление чужого: оно меняет канал
+        // для всех и вынимает реплику из-под ретенции.
+        moderated
+          ? {
+              id: 'msg-pin',
+              label: t(msg.pinned ? 'pins.action.unpin' : 'pins.action.pin'),
+              icon: msg.pinned ? ('pin-off' as const) : ('pin' as const),
+              run: () => onPin(msg, !msg.pinned),
             }
           : null,
         // Удалить своё может автор; чужое — модератор сервера. Правку чужого
@@ -613,6 +645,22 @@ export const Message = memo(function Message({
             {msg.editedTs && (
               <span className="text-[10px] text-text-faint">{t('chat.edited')}</span>
             )}
+            {/* Пометка говорит не «важное», а «эта строка переживёт срок» —
+                и потому объясняет себя целиком, а не значком без подписи:
+                закрепление здесь единственное исключение из ретенции. */}
+            {msg.pinned && (
+              <span
+                title={
+                  retentionDays > 0
+                    ? t('pins.kept', { count: retentionDays })
+                    : t('pins.mark.title')
+                }
+                className="inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.08em] text-accent-strong/80"
+              >
+                <Icon name="pin" className="text-[11px]" />
+                {t('pins.mark')}
+              </span>
+            )}
           </div>
           {editing && msg.id ? (
             <EditBox
@@ -666,6 +714,8 @@ export const Message = memo(function Message({
           {(mine || moderated) && (
             <MoreMenu
               onEdit={mine ? () => onStartEdit(msg) : undefined}
+              onPin={moderated ? () => onPin(msg, !msg.pinned) : undefined}
+              pinned={msg.pinned === true}
               onDelete={() => onDelete(msg)}
               closeSignal={leaveTick}
             />

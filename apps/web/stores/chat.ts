@@ -50,6 +50,8 @@ interface ChatState {
   /** Правка: текст, время и упоминания новой редакции (имя могли и убрать). */
   applyEdit: (id: string, text: string, editedTs: number, mentions?: MentionRef[]) => void;
   applyDelete: (id: string) => void;
+  /** Реплику закрепили или открепили — пометка в ленте. */
+  applyPinned: (id: string, pinned: boolean) => void;
 }
 
 export const useChatStore = create<ChatState>((set) => ({
@@ -119,4 +121,16 @@ export const useChatStore = create<ChatState>((set) => ({
       ),
     })),
   applyDelete: (id) => set((s) => ({ messages: s.messages.filter((m) => m.id !== id) })),
+  // Пометки нет вовсе, а не `pinned: false`: у реплики её либо видно, либо нет,
+  // и второе значение «выключено» отличалось бы от «не приходило» только тем,
+  // что о нём надо помнить в каждой проверке.
+  applyPinned: (id, pinned) =>
+    set((s) => ({
+      messages: s.messages.map((m) => {
+        if (m.id !== id) return m;
+        if (pinned) return { ...m, pinned: true as const };
+        const { pinned: _was, ...rest } = m;
+        return rest;
+      }),
+    })),
 }));

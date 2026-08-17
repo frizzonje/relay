@@ -10,6 +10,7 @@ import { avatarStyle } from '@/lib/avatar';
 import { useUiStore, type MobilePanel } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import { useChatStore } from '@/stores/chat';
+import { usePinsStore } from '@/stores/pins';
 import { useSearchStore } from '@/stores/search';
 import { toggleMic, leaveVoice, showVoiceStage } from '@/lib/voice';
 import { useT } from '@/lib/i18n';
@@ -91,6 +92,7 @@ export function MobileNav() {
   const tiles = useVoiceStore((s) => s.tiles);
   const roster = useChatStore((s) => s.roster);
   const typing = useChatStore((s) => s.typing);
+  const pins = usePinsStore((s) => s.count);
 
   // Состав осмыслен только в канале (голос/текст). В лобби вкладку прячем, а
   // если она была активной — считаем активной сцену (иначе пустой экран).
@@ -193,6 +195,18 @@ export function MobileNav() {
         {/* Поиск живёт в шапке канала — там же, где он на десктопе. На мобиле
             он откроется во весь экран: делить 375 точек между лентой и
             результатами не на что. */}
+        {view === 'text' && !people && pins > 0 && (
+          <button
+            type="button"
+            onClick={() => usePinsStore.getState().setOpen(true)}
+            aria-label={t('pins.open')}
+            className="flex h-9 shrink-0 items-center gap-1 rounded-full px-1.5 text-text-muted outline-none transition-colors active:bg-bg-hover active:text-text-header"
+          >
+            <Icon name="pin" className="text-[18px]" />
+            <span className="text-[12px] font-semibold tabular-nums">{pins}</span>
+          </button>
+        )}
+
         {view === 'text' && !people && (
           <button
             type="button"

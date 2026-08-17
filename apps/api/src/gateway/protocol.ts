@@ -176,6 +176,16 @@ export interface ChatPinPayload {
 }
 
 /**
+ * За закреплённым какого канала пришли. Слаг здесь — не адрес (сервер отвечает
+ * про ту комнату, в которой сокет и сидит), а сверка: ответ бывает медленнее
+ * человека, и список чужого канала, подставленный в открытый, выглядел бы как
+ * чужие закрепления.
+ */
+export interface ChatPinsPayload {
+  slug?: unknown;
+}
+
+/**
  * Модерация. Целью бана служит СООБЩЕНИЕ, а не человек: id личности в протоколе
  * не появляется вовсе (см. ./ownership), а список участников — это имена, среди
  * которых бывают тёзки. Сообщение же однозначно указывает на своего автора, и
@@ -353,8 +363,12 @@ export type ChatPinResult =
   | { ok: true; pinned: boolean; count: number }
   | { ok: false; error: 'forbidden' | 'not-found' | 'limit' };
 
-/** Закреплённое канала — целиком: их не больше `PIN_LIMIT`, страниц не нужно. */
-export type ChatPinsResult = { ok: true; pins: ChatMessage[] } | { ok: false };
+/**
+ * Закреплённое канала — целиком: их не больше `PIN_LIMIT`, страниц не нужно.
+ * Слаг в ответе — чей это список: по нему клиент отличает свой ответ от
+ * доехавшего после смены канала.
+ */
+export type ChatPinsResult = { ok: true; slug: string; pins: ChatMessage[] } | { ok: false };
 
 export type ServerDeleteResult =
   | { ok: true }

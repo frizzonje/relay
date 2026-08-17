@@ -72,6 +72,7 @@ import {
   type ChatPayload,
   type ChatPinPayload,
   type ChatPinResult,
+  type ChatPinsPayload,
   type ChatPinsResult,
   type ChatReactPayload,
   type GuestKickPayload,
@@ -2236,11 +2237,19 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    * поповера, который откроют однажды, незачем.
    */
   @SubscribeMessage('chat-pins')
-  async handleChatPins(@ConnectedSocket() client: Socket): Promise<ChatPinsResult> {
+  async handleChatPins(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ChatPinsPayload,
+  ): Promise<ChatPinsResult> {
     if (!this.allow(client) || this.isGuest(client)) return { ok: false };
     const room = client.data.chatRoom as string | undefined;
     if (!room) return { ok: false };
-    return { ok: true, pins: await this.chat.pinned(this.chat.slug(room)) };
+    const slug = this.chat.slug(room);
+    // Спросили про другой канал — значит спрашивавший уже не здесь: отвечаем
+    // отказом, а не списком того канала, где сокет оказался.
+    const asked = trimmed(payload?.slug, LIMIT.slug);
+    if (asked && asked !== slug) return { ok: false };
+    return { ok: true, slug, pins: await this.chat.pinned(slug) };
   }
 
   // «Печатает…»: клиент шлёт с троттлингом, релеим остальным в канале (себе — нет).

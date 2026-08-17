@@ -33,7 +33,9 @@ import {
   useMentionSuggest,
   type MentionCandidate,
 } from '@/components/chat/MentionPicker';
+import { PinsPanel } from '@/components/chat/PinsPanel';
 import { SearchPanel } from '@/components/chat/SearchPanel';
+import { usePinsStore } from '@/stores/pins';
 import { insertMention, typedMention, writtenIn } from '@/lib/mentions';
 import { useIdentityStore } from '@/stores/identity';
 import { tx, useRichT, useT } from '@/lib/i18n';
@@ -137,6 +139,7 @@ export function ChatPanel() {
   const moreAfter = useChatStore((s) => s.moreAfter);
   const jump = useChatStore((s) => s.jump);
   const searchOpen = useSearchStore((s) => s.open);
+  const pinsOpen = usePinsStore((s) => s.open);
   const retentionDays = useRetentionDays();
   // Право модерировать приходит с сервера — флагом на сервере реестра, которому
   // принадлежит открытый канал. Вычислять его здесь было бы гаданием: у
@@ -390,6 +393,14 @@ export function ChatPanel() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Поиск и закреплённые делят одно место у правого края ленты. Обратную
+  // сторону этого правила — «открыли закреплённые, поиск закрылся» — знает сам
+  // стор закреплённых; здесь только эта, чтобы поиск не зависел от того, что в
+  // приложении вообще есть закреплённые.
+  useEffect(() => {
+    if (searchOpen) usePinsStore.getState().setOpen(false);
+  }, [searchOpen]);
+
   // Ушли из текстового канала совсем — панель поиска закрываем. Переход по
   // найденному в соседний канал сюда не попадает: там лента не размонтируется,
   // и результаты остаются на месте, чтобы можно было открыть следующий.
@@ -431,6 +442,14 @@ export function ChatPanel() {
 
   const startEdit = useCallback((m: ChatMessage) => setEditingId(m.id ?? null), []);
   const cancelEdit = useCallback(() => setEditingId(null), []);
+
+  // Закрепление ленту не трогает: пометку и число пришлёт сервер событием
+  // `chat-pinned` — тем же, каким они приедут остальным. Рисовать своё
+  // немедленно значило бы показать закреплённым то, что сервер мог и не принять
+  // (потолок канала).
+  const pinMessage = useCallback((m: ChatMessage, on: boolean) => {
+    if (m.id) void usePinsStore.getState().toggle(m.id, on);
+  }, []);
 
   async function send(e: React.FormEvent) {
     e.preventDefault();
@@ -678,6 +697,8 @@ export function ChatPanel() {
               onDelete={deleteMessage}
               onBan={banAuthor}
               onJumpTo={jumpTo}
+              onPin={pinMessage}
+              retentionDays={retentionDays}
             />
           </div>
         ))}
@@ -720,7 +741,7 @@ export function ChatPanel() {
               // Открытый поиск занимает правый край ленты — кнопка уходит от
               // него влево, иначе она оказывается под панелью и по ней нечем
               // попасть. На мобиле панель во весь экран, и ленты не видно вовсе.
-              searchOpen ? 'right-[396px] max-md:right-5' : 'right-5',
+              searchOpen || pinsOpen ? 'right-[396px] max-md:right-5' : 'right-5',
               hasNew
                 ? 'border-accent-strong/40 bg-accent-strong/90 text-bg-app hover:brightness-95'
                 : 'border-line bg-bg-panel/95 text-text hover:bg-bg-active',
@@ -856,6 +877,7 @@ export function ChatPanel() {
 
       <BanAuthorDialog target={pendingBan} onOpenChange={(open) => !open && setPendingBan(null)} />
 
+      <PinsPanel moderated={moderated} />
       <SearchPanel />
     </div>
   );

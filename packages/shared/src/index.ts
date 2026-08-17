@@ -712,8 +712,21 @@ export type ChatPinResult =
   | { ok: true; pinned: boolean; count: number }
   | { ok: false; error: 'forbidden' | 'not-found' | 'limit' };
 
-/** Закреплённое канала целиком: их не больше потолка, страниц не нужно. */
-export type ChatPinsResult = { ok: true; pins: ChatMessage[] } | { ok: false };
+/**
+ * За закреплённым какого канала пришли. Слаг — не адрес (сервер отвечает про ту
+ * комнату, в которой сокет и так сидит), а сверка: ответ бывает медленнее
+ * человека, и чужой список, подставленный в открытый канал, читался бы как его
+ * собственный.
+ */
+export interface ChatPinsPayload {
+  slug: string;
+}
+
+/**
+ * Закреплённое канала целиком: их не больше потолка, страниц не нужно. Слаг в
+ * ответе говорит, чей это список.
+ */
+export type ChatPinsResult = { ok: true; slug: string; pins: ChatMessage[] } | { ok: false };
 
 /**
  * Сколько реплик можно закрепить в одном канале — потолок сервера, клиент
@@ -914,7 +927,7 @@ export interface ClientToServerEvents {
   /** Закрепить или открепить реплику — право модератора сервера. */
   'chat-pin': (payload: ChatPinPayload, cb: (res: ChatPinResult) => void) => void;
   /** Список закреплённого открытого канала — спрашивается, когда его открывают. */
-  'chat-pins': (cb: (res: ChatPinsResult) => void) => void;
+  'chat-pins': (payload: ChatPinsPayload, cb: (res: ChatPinsResult) => void) => void;
   /**
    * Подгрузить страницу выше уже показанной. Курсор — время и id самой верхней
    * реплики на экране; сервер по нему ничего не хранит.

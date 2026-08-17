@@ -3426,12 +3426,20 @@ describe('закреплённые', () => {
 
     // Спрашивать может любой, кто в канале: закрепление — то, что канал
     // показывает всем, и прятать его от читателей значило бы прятать шапку.
-    const res = (await gw.handleChatPins(asSocket(g))) as {
+    const res = (await gw.handleChatPins(asSocket(g), { slug: 'болталка' })) as {
       ok: true;
       pins: { id: string; text: string }[];
     };
     expect(res.ok).toBe(true);
     expect(res.pins.map((m) => m.text)).toEqual(['важное слово']);
+  });
+
+  it('спросили про другой канал — отказ, а не чужой список', async () => {
+    // Ответ бывает медленнее человека: список канала, из которого он уже ушёл,
+    // на экране открытого читался бы как его собственный.
+    const { gw, h, id } = await ownChannel();
+    await gw.handleChatPin(asSocket(h), { id, on: true });
+    expect(await gw.handleChatPins(asSocket(h), { slug: 'obshchii' })).toEqual({ ok: false });
   });
 
   it('открепление возвращает канал в прежний вид', async () => {
@@ -3444,7 +3452,11 @@ describe('закреплённые', () => {
       count: 0,
     });
     expect(g.last('chat-pinned')).toEqual({ id, pinned: false, count: 0 });
-    expect(await gw.handleChatPins(asSocket(h))).toEqual({ ok: true, pins: [] });
+    expect(await gw.handleChatPins(asSocket(h), { slug: 'болталка' })).toEqual({
+      ok: true,
+      slug: 'болталка',
+      pins: [],
+    });
   });
 
   it('не модератору закрепление недоступно — даже своё', async () => {
@@ -3520,7 +3532,7 @@ describe('закреплённые', () => {
       ok: false,
       error: 'forbidden',
     });
-    expect(await gw.handleChatPins(asSocket(loner))).toEqual({ ok: false });
+    expect(await gw.handleChatPins(asSocket(loner), { slug: 'болталка' })).toEqual({ ok: false });
 
     const { token } = issueGuestToken('voice-obshchii');
     const guest = connect(gw, server, { guest: token });
@@ -3528,6 +3540,6 @@ describe('закреплённые', () => {
       ok: false,
       error: 'forbidden',
     });
-    expect(await gw.handleChatPins(asSocket(guest))).toEqual({ ok: false });
+    expect(await gw.handleChatPins(asSocket(guest), { slug: 'болталка' })).toEqual({ ok: false });
   });
 });

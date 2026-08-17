@@ -12,6 +12,7 @@ import { useUnreadStore, LAST_READ_KEY } from '@/stores/unread';
 import { useChannelsStore } from '@/stores/channels';
 import { useIdentityStore } from '@/stores/identity';
 import { useModerationStore } from '@/stores/moderation';
+import { usePinsStore } from '@/stores/pins';
 import { useServersStore } from '@/stores/servers';
 import { forgetServerPassword, storedServerPasswords, unlockServer } from '@/lib/servers';
 import {
@@ -40,6 +41,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     const chat = useChatStore.getState;
     const ui = useUiStore.getState;
     const unread = useUnreadStore.getState;
+    const pins = usePinsStore.getState;
 
     // «Печатает…»: держим по тегу таймер угасания. Каждый пинг chat-typing его
     // продлевает; истёк — убираем имя из списка. Отдельная функция сброса нужна
@@ -129,6 +131,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       // лента, подставленная в открытый канал, выглядела бы как чужая переписка.
       if (!page || !Array.isArray(page.messages) || page.slug !== openSlug()) return;
       chat().setHistory(page.messages, page.more === true);
+      // Сколько здесь закреплено — числом для шапки. Сам список спрашивают,
+      // только когда его открывают (см. stores/pins).
+      pins().setCount(typeof page.pins === 'number' ? page.pins : 0);
     });
     socket.on('chat-roster', (names) => {
       if (!openSlug() || !Array.isArray(names)) return;
@@ -145,6 +150,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     socket.on('chat-deleted', ({ id }) => {
       if (!openSlug() || !id) return;
       chat().applyDelete(id);
+    });
+    socket.on('chat-pinned', ({ id, pinned, count }) => {
+      if (!openSlug() || !id) return;
+      pins().applyPinned(id, pinned === true, typeof count === 'number' ? count : 0);
     });
     socket.on('chat-typing', ({ name }) => {
       if (!openSlug() || !name || name === myName()) return;
@@ -344,6 +353,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         clearTyping();
         if (state.textRoom) {
           chat().reset();
+          // Закреплённое — канала, а не человека: список прежнего, оставшийся
+          // на экране, читался бы как закреплённое нового.
+          pins().enterChannel();
           // Вход в канал: линия «новые» встаёт на прежней отметке чтения, точка гаснет.
           unread().openChannel(state.textRoom);
           unread().setAtBottom(true);
@@ -355,6 +367,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         } else {
           socket.emit('chat-leave');
           chat().reset();
+          pins().reset();
           watched = false;
         }
       }
@@ -418,6 +431,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('chat-reaction');
       socket.off('chat-edited');
       socket.off('chat-deleted');
+      socket.off('chat-pinned');
       socket.off('chat-typing');
       socket.off('chat-activity');
       socket.off('chat-closed');
