@@ -225,6 +225,35 @@ describe('лента чата', () => {
     expect(s().messages[0].text).toBe('привет');
   });
 
+  it('окно из поиска заменяет ленту и объявляет, что канал есть и ниже', () => {
+    s().setHistory([msg('свежее')], false);
+    s().setWindow([msg('старое')], true, true);
+    expect(s().messages.map((m) => m.id)).toEqual(['старое']);
+    expect([s().more, s().moreAfter]).toEqual([true, true]);
+  });
+
+  it('лента в прошлом не принимает новые реплики — между ними дыра', () => {
+    s().setWindow([msg('старое')], false, true);
+    s().addMessage(msg('только что'));
+    // Приклеить новое к куску из прошлого значило бы показать разговор,
+    // которого не было: между ними лежит непрогруженное.
+    expect(s().messages.map((m) => m.id)).toEqual(['старое']);
+  });
+
+  it('страница снизу склеивается по id, а не по длине', () => {
+    s().setWindow([msg('1'), msg('2')], false, true);
+    s().appendHistory([msg('2'), msg('3')], false);
+    expect(s().messages.map((m) => m.id)).toEqual(['1', '2', '3']);
+    expect(s().moreAfter).toBe(false);
+  });
+
+  it('возврат к последним снимает и «ниже есть ещё», и метку перехода', () => {
+    s().setWindow([msg('старое')], true, true);
+    s().setJump('старое');
+    s().setHistory([msg('свежее')], false);
+    expect([s().moreAfter, s().jump]).toEqual([false, null]);
+  });
+
   it('сброс чистит и ленту, и состав, и «печатает»', () => {
     s().addMessage(msg('1'));
     s().setRoster(['A', 'B']);

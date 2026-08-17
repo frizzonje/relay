@@ -11,6 +11,20 @@ export function fmtClock(ts?: number): string {
   }).format(new Date(ts || Date.now()));
 }
 
+/**
+ * Дата и время — для находок поиска. В ленте хватает часов (какой это день,
+ * видно по её ходу), а результат вырван из потока: без даты «14:20» не отвечает
+ * на вопрос «когда это было», ради которого поиск и открывали.
+ */
+export function fmtDayTime(ts?: number): string {
+  return new Intl.DateTimeFormat(getClientLocale(), {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(ts || Date.now()));
+}
+
 /** Сколько времени в единице — от секунды к году. Порядок важен: ищем первую подходящую. */
 const SINCE: [Intl.RelativeTimeFormatUnit, number][] = [
   ['second', 1000],

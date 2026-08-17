@@ -10,6 +10,7 @@ import { avatarStyle } from '@/lib/avatar';
 import { useUiStore, type MobilePanel } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import { useChatStore } from '@/stores/chat';
+import { useSearchStore } from '@/stores/search';
 import { toggleMic, leaveVoice, showVoiceStage } from '@/lib/voice';
 import { useT } from '@/lib/i18n';
 
@@ -188,6 +189,20 @@ export function MobileNav() {
             </motion.button>
           </AnimatePresence>
         </div>
+
+        {/* Поиск живёт в шапке канала — там же, где он на десктопе. На мобиле
+            он откроется во весь экран: делить 375 точек между лентой и
+            результатами не на что. */}
+        {view === 'text' && !people && (
+          <button
+            type="button"
+            onClick={() => useSearchStore.getState().setOpen(true)}
+            aria-label={t('search.open')}
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-text-muted outline-none transition-colors active:bg-bg-hover active:text-text-header"
+          >
+            <Icon name="search" className="text-[19px]" />
+          </button>
+        )}
 
         {hasPeople && !people && (
           <PeopleButton

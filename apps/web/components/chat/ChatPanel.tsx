@@ -7,6 +7,7 @@ import {
   MAX_UPLOAD_BYTES,
   type ChatHistoryMoreResult,
   type ChatMessage,
+  type ChatWindowResult,
   type ReplyRef,
   type UploadResponse,
 } from '@relay/shared';
@@ -22,9 +23,12 @@ import { useChatStore } from '@/stores/chat';
 import { useOwnerStore } from '@/stores/owner';
 import { useServersStore } from '@/stores/servers';
 import { useUnreadStore } from '@/stores/unread';
+import { useSearchStore } from '@/stores/search';
+import { myName } from '@/stores/ui';
 import { BanAuthorDialog, type BanTarget } from '@/components/chat/BanAuthorDialog';
 import { DeleteMessageDialog } from '@/components/chat/DeleteMessageDialog';
 import { Message, UnreadDivider } from '@/components/chat/Message';
+import { SearchPanel } from '@/components/chat/SearchPanel';
 import { tx, useRichT, useT } from '@/lib/i18n';
 
 interface PendingFile {
@@ -121,6 +125,11 @@ export function ChatPanel() {
   const typing = useChatStore((s) => s.typing);
   const more = useChatStore((s) => s.more);
   const loadingMore = useChatStore((s) => s.loadingMore);
+  // Лента стоит в прошлом — так бывает после перехода из поиска. Ниже
+  // показанного есть ещё канал, и «вниз» перестаёт значить «к последним».
+  const moreAfter = useChatStore((s) => s.moreAfter);
+  const jump = useChatStore((s) => s.jump);
+  const searchOpen = useSearchStore((s) => s.open);
   const retentionDays = useRetentionDays();
   // Право модерировать приходит с сервера — флагом на сервере реестра, которому
   // принадлежит открытый канал. Вычислять его здесь было бы гаданием: у
@@ -210,6 +219,9 @@ export function ChatPanel() {
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    // Лента переехала в прошлое (переход из поиска) — тащить её вниз нельзя:
+    // человека несло бы прочь от того, что он только что открыл.
+    if (useChatStore.getState().jump || useChatStore.getState().moreAfter) return;
     // Подгрузка вверх — не «пришло новое»: значок «вниз» на неё зажигаться не
     // должен, читатель сам её и попросил.
     const grew = messages.length > prevLen.current && anchorHeight.current === null;
@@ -233,14 +245,18 @@ export function ChatPanel() {
   function onScroll() {
     const el = scrollRef.current;
     if (!el) return;
-    const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const bottom = fromBottom < 80;
     setAtBottom(bottom);
     // Отскроллен вверх — входящие не считаются прочитанными (stores/unread).
-    useUnreadStore.getState().setAtBottom(bottom);
+    // Пока лента стоит в прошлом, «у дна» не бывает вовсе: под видимым лежит
+    // ещё канал, и считать это дочитанным было бы неправдой.
+    useUnreadStore.getState().setAtBottom(bottom && !useChatStore.getState().moreAfter);
     if (bottom) setHasNew(false);
     // Подтягиваем заранее, за экран до края: страница успевает приехать, пока
     // человек ещё листает, и лента не упирается в пустоту.
     if (el.scrollTop < el.clientHeight) void loadOlder();
+    if (fromBottom < el.clientHeight) void loadNewer();
   }
 
   /**
@@ -270,7 +286,41 @@ export function ChatPanel() {
     useChatStore.getState().prependHistory(page.messages, page.more);
   }
 
+  /**
+   * Страница ниже показанной. Спрашивается только у ленты, стоящей в прошлом:
+   * у живого конца канала ниже ничего нет, и лишний запрос там был бы вопросом,
+   * ответ на который известен заранее.
+   */
+  async function loadNewer() {
+    const state = useChatStore.getState();
+    const bottom = state.messages[state.messages.length - 1];
+    if (!state.moreAfter || state.loadingAfter || !bottom?.id) return;
+
+    state.setLoadingAfter(true);
+    const page = await ask<ChatWindowResult>('chat-history-after', {
+      afterTs: bottom.ts,
+      afterId: bottom.id,
+    });
+    if (!page) {
+      useChatStore.getState().setLoadingAfter(false);
+      return;
+    }
+    useChatStore.getState().appendHistory(page.messages, page.moreAfter);
+  }
+
+  /**
+   * Кнопка внизу ленты делает разное. У живого канала — просто прокручивает
+   * вниз. У ленты, стоящей в прошлом, прокрутка ни к чему не приведёт: под ней
+   * лежит непрогруженное, и вернуться к последним можно только заново спросив
+   * канал — тем же входом, каким он открывается.
+   */
   function jumpToBottom() {
+    if (useChatStore.getState().moreAfter && textRoom) {
+      getSocket().emit('chat-join', { room: textRoom, name: myName() });
+      pinnedFor.current = null;
+      setHasNew(false);
+      return;
+    }
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
@@ -285,6 +335,39 @@ export function ChatPanel() {
     el.classList.add('msg-flash');
     setTimeout(() => el.classList.remove('msg-flash'), 1200);
   }, []);
+
+  // Переход из поиска: встать на найденное и подсветить его. Эффект ждёт саму
+  // ленту — окно приезжает вместе с id, но нарисовано будет позже, поэтому
+  // зависимость и от сообщений тоже.
+  useEffect(() => {
+    if (!jump) return;
+    const el = scrollRef.current?.querySelector<HTMLElement>(`[data-mid="${jump}"]`);
+    if (!el) return;
+    // Без анимации: сюда пришли прицельно, и проматывать перед человеком
+    // полканала ради красоты незачем.
+    el.scrollIntoView({ block: 'center' });
+    el.classList.add('msg-flash');
+    useChatStore.getState().setJump(null);
+    const timer = setTimeout(() => el.classList.remove('msg-flash'), 1200);
+    return () => clearTimeout(timer);
+  }, [jump, messages]);
+
+  // Хоткей поиска. `code`, а не `key`: на кириллице «F» — это буква «А», и
+  // привязка к букве работала бы у половины пользователей.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.code !== 'KeyF' || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+      e.preventDefault();
+      useSearchStore.getState().setOpen(true);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Ушли из текстового канала совсем — панель поиска закрываем. Переход по
+  // найденному в соседний канал сюда не попадает: там лента не размонтируется,
+  // и результаты остаются на месте, чтобы можно было открыть следующий.
+  useEffect(() => () => useSearchStore.getState().setOpen(false), []);
 
   // Обработчики строки сообщения — стабильные (useCallback): ими живёт memo у
   // Message. Новая реплика меняет лишь свои пропсы, а не пропсы всей ленты.
@@ -527,9 +610,11 @@ export function ChatPanel() {
         )}
       </AnimatePresence>
 
-      {/* «Вниз к новым» — когда лента прокручена вверх */}
+      {/* «Вниз к новым» — когда лента прокручена вверх. У ленты, стоящей в
+          прошлом, кнопка нужна и у самого низа окна: низ окна — это не конец
+          канала, и без неё оттуда некуда возвращаться. */}
       <AnimatePresence>
-        {!atBottom && (
+        {(!atBottom || moreAfter) && (
           <motion.button
             type="button"
             onClick={jumpToBottom}
@@ -538,14 +623,18 @@ export function ChatPanel() {
             exit={{ opacity: 0, y: 8 }}
             transition={{ duration: 0.14 }}
             className={cn(
-              'absolute right-5 z-20 flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] shadow-lg backdrop-blur transition-colors',
+              'absolute z-20 flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] shadow-lg backdrop-blur transition-colors',
+              // Открытый поиск занимает правый край ленты — кнопка уходит от
+              // него влево, иначе она оказывается под панелью и по ней нечем
+              // попасть. На мобиле панель во весь экран, и ленты не видно вовсе.
+              searchOpen ? 'right-[396px] max-md:right-5' : 'right-5',
               hasNew
                 ? 'border-accent-strong/40 bg-accent-strong/90 text-bg-app hover:brightness-95'
                 : 'border-line bg-bg-panel/95 text-text hover:bg-bg-active',
             )}
             style={{ bottom: pending.length || reply ? 132 : 84 }}
           >
-            {t(hasNew ? 'chat.jump.new' : 'chat.jump.bottom')}
+            {t(moreAfter ? 'chat.jump.present' : hasNew ? 'chat.jump.new' : 'chat.jump.bottom')}
             <Icon name="arrow-down" className="text-[15px]" />
           </motion.button>
         )}
@@ -651,6 +740,8 @@ export function ChatPanel() {
       />
 
       <BanAuthorDialog target={pendingBan} onOpenChange={(open) => !open && setPendingBan(null)} />
+
+      <SearchPanel />
     </div>
   );
 }

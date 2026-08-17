@@ -19,12 +19,31 @@ interface ChatState {
   more: boolean;
   /** Страница уже запрошена — чтобы не запросить её же ещё пять раз при скролле. */
   loadingMore: boolean;
+  /**
+   * Ниже показанного тоже есть ещё — то есть человек смотрит не живой конец
+   * канала, а его прошлое: так бывает после перехода из поиска. У обычной ленты
+   * это всегда `false`, и «вниз» означает просто прокрутку.
+   */
+  moreAfter: boolean;
+  loadingAfter: boolean;
+  /**
+   * К какой реплике прокрутиться и подсветить её. Живёт в сторе, а не в
+   * компоненте, потому что путь сюда идёт снаружи ленты — из результатов
+   * поиска, иногда вместе со сменой канала.
+   */
+  jump: string | null;
   reset: () => void;
   addMessage: (m: ChatMessage) => void;
   setHistory: (list: ChatMessage[], more: boolean) => void;
   /** Страница сверху: приезжает при подгрузке вверх. */
   prependHistory: (list: ChatMessage[], more: boolean) => void;
+  /** Страница снизу — только когда лента стоит в прошлом. */
+  appendHistory: (list: ChatMessage[], moreAfter: boolean) => void;
+  /** Окно вокруг найденного: заменяет ленту целиком, «ещё» с обеих сторон. */
+  setWindow: (list: ChatMessage[], more: boolean, moreAfter: boolean) => void;
+  setJump: (id: string | null) => void;
   setLoadingMore: (value: boolean) => void;
+  setLoadingAfter: (value: boolean) => void;
   setRoster: (names: string[]) => void;
   setTyping: (names: string[]) => void;
   applyReaction: (id: string, reactions: ReactionMap) => void;
@@ -38,9 +57,45 @@ export const useChatStore = create<ChatState>((set) => ({
   typing: [],
   more: false,
   loadingMore: false,
-  reset: () => set({ messages: [], roster: [], typing: [], more: false, loadingMore: false }),
-  addMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
-  setHistory: (list, more) => set({ messages: list, more, loadingMore: false }),
+  moreAfter: false,
+  loadingAfter: false,
+  jump: null,
+  reset: () =>
+    set({
+      messages: [],
+      roster: [],
+      typing: [],
+      more: false,
+      loadingMore: false,
+      moreAfter: false,
+      loadingAfter: false,
+      jump: null,
+    }),
+  // Новая реплика в ленту, стоящую в прошлом, не попадает: она не «следующая»
+  // за показанным, между ними лежит непрогруженное. Ждать её человеку не надо —
+  // канал у него не заканчивается на видимом, о чём и говорит `moreAfter`.
+  addMessage: (m) => set((s) => (s.moreAfter ? s : { messages: [...s.messages, m] })),
+  // Живая последняя страница — это и есть «вернулись к последним»: ни низа за
+  // горизонтом, ни цели перехода, которой в новой ленте может уже не быть.
+  setHistory: (list, more) =>
+    set({
+      messages: list,
+      more,
+      loadingMore: false,
+      moreAfter: false,
+      loadingAfter: false,
+      jump: null,
+    }),
+  appendHistory: (list, moreAfter) =>
+    set((s) => {
+      const known = new Set(s.messages.map((m) => m.id));
+      const fresh = list.filter((m) => !m.id || !known.has(m.id));
+      return { messages: [...s.messages, ...fresh], moreAfter, loadingAfter: false };
+    }),
+  setWindow: (list, more, moreAfter) =>
+    set({ messages: list, more, moreAfter, loadingMore: false, loadingAfter: false }),
+  setJump: (id) => set({ jump: id }),
+  setLoadingAfter: (value) => set({ loadingAfter: value }),
   prependHistory: (list, more) =>
     set((s) => {
       // Страница могла обогнать удаление или прийти дважды по двойному клику:

@@ -233,6 +233,14 @@ const GLYPHS = {
       <path d="m17 3 5 5" />
     </>
   ),
+  // Лупа без плюса и минуса: те двое (`zoom-in`/`zoom-out`) про масштаб
+  // картинки, а этот — про поиск по истории.
+  search: (
+    <>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </>
+  ),
   'select-all': (
     <>
       <rect x="3" y="3" width="18" height="18" rx="2" strokeDasharray="4 3" />
