@@ -12,6 +12,7 @@ import {
 } from '@/lib/desktop-screen-audio';
 import { useUiStore, myName } from '@/stores/ui';
 import { loadClientId } from '@/lib/identity';
+import { readPref, setPref } from '@/lib/prefs';
 import { tx as msg } from '@/lib/i18n';
 import type { MessageKey, Vars } from '@/lib/i18n/translate';
 import { useVoiceStore, type ScreenMode, type TileNet, type VoiceTile } from '@/stores/voice';
@@ -222,44 +223,50 @@ const host: TransportHost = {
 const tiles = new Map<string, VoiceTile>();
 
 /**
- * Роли собеседников в НАШЕЙ комнате — из presence: кто пришёл по инвайту и кто
- * из них только слушает. Плитка и presence приезжают в непредсказуемом порядке
+ * Кто с нами в комнате — из presence: гость по инвайту, слушатель, и отпечаток
+ * ключа (лицо человека). Плитка и presence приезжают в непредсказуемом порядке
  * (плитку заводит транспорт, роли — сигналинг), поэтому карта живёт отдельно:
- * `addTile` берёт роль из неё, а свежий presence правит уже стоящие плитки.
+ * `addTile` берёт из неё что успело приехать, а свежий presence правит уже
+ * стоящие плитки.
  */
-const peerRoles = new Map<string, { guest: boolean; listen: boolean }>();
+const peerRoles = new Map<string, { guest: boolean; listen: boolean; fingerprint?: string }>();
 
 // ─────────────────────────────────────────────────────────────────────────
 // Персональная громкость собеседников. Ползунок ходит 0–3 (0–300%), значение
-// применяется к GainNode как есть (без урезания). Запоминаем по тегу
-// собеседника (stable), чтобы «этот долбик на 200%» так и остался громким
-// при следующем заходе.
+// применяется к GainNode как есть (без урезания).
+//
+// Запоминаем по ОТПЕЧАТКУ ключа, а не по имени: имена в relay свободные и не
+// уникальные, и «этот долбик на 200%» по имени означал бы, что выкрученная
+// громкость достаётся любому тёзке. Гостю по инвайту отпечатка не выдают —
+// для него ключом остаётся имя, другого у него нет.
+//
+// Сама настройка принадлежит человеку и едет с ним на другие устройства
+// (lib/prefs); localStorage под ней остался кэшем, поэтому записанное прежними
+// версиями по имени продолжает работать как запасной вариант.
 export const PEER_VOL_MAX = 3;
-const PEER_VOL_KEY = 'relay-peer-vol';
 type PeerVol = { voice?: number; screen?: number };
 
 function loadPeerVols(): Record<string, PeerVol> {
-  try {
-    if (typeof localStorage === 'undefined') return {};
-    return JSON.parse(localStorage.getItem(PEER_VOL_KEY) || '{}');
-  } catch {
-    return {};
-  }
+  const value = readPref<unknown>('volume', {});
+  return value && typeof value === 'object' ? (value as Record<string, PeerVol>) : {};
 }
 
-function peerVol(name: string): PeerVol {
-  return loadPeerVols()[name] ?? {};
+/** Чем этот собеседник записан в настройках: отпечаток, а у гостя — имя. */
+function volumeKey(peerId: string, name: string): string {
+  return peerRoles.get(peerId)?.fingerprint || name;
 }
 
-function savePeerVol(name: string, patch: PeerVol) {
-  try {
-    if (typeof localStorage === 'undefined' || !name) return;
-    const all = loadPeerVols();
-    all[name] = { ...all[name], ...patch };
-    localStorage.setItem(PEER_VOL_KEY, JSON.stringify(all));
-  } catch {
-    // приватный режим/квота — тихо переживаем, громкость просто не запомнится
-  }
+/** Сохранённая громкость: по отпечатку, а если его нет — по имени (старые записи). */
+function peerVol(peerId: string, name: string): PeerVol {
+  const all = loadPeerVols();
+  return all[volumeKey(peerId, name)] ?? all[name] ?? {};
+}
+
+function savePeerVol(peerId: string, name: string, patch: PeerVol) {
+  const key = volumeKey(peerId, name);
+  if (!key) return;
+  const all = loadPeerVols();
+  setPref('volume', { ...all, [key]: { ...all[key], ...patch } });
 }
 
 function syncTiles() {
@@ -269,8 +276,8 @@ function syncTiles() {
 function addTile(id: string, name: string, stream: MediaStream | null, isLocal: boolean) {
   const existing = tiles.get(id);
   if (!existing) {
-    // Для собеседника восстанавливаем ранее выкрученную ему громкость по тегу.
-    const saved = isLocal ? {} : peerVol(name);
+    // Для собеседника восстанавливаем ранее выкрученную ему громкость.
+    const saved = isLocal ? {} : peerVol(id, name);
     const role = isLocal ? undefined : peerRoles.get(id);
     tiles.set(id, {
       id,
@@ -596,7 +603,7 @@ export function setPeerVolume(peerId: string, vol: number) {
   const t = tiles.get(peerId);
   if (t) {
     tiles.set(peerId, { ...t, volume: v });
-    savePeerVol(t.name, { voice: v }); // запоминаем на следующий заход
+    savePeerVol(peerId, t.name, { voice: v }); // запоминаем на следующий заход
     syncTiles();
   }
 }
@@ -609,7 +616,7 @@ export function setPeerScreenVolume(peerId: string, vol: number) {
   const t = tiles.get(peerId);
   if (t) {
     tiles.set(peerId, { ...t, screenVolume: v });
-    savePeerVol(t.name, { screen: v });
+    savePeerVol(peerId, t.name, { screen: v });
     syncTiles();
   }
 }
@@ -1377,23 +1384,46 @@ function syncPeerRoles(presence: VoicePresence) {
   peerRoles.clear();
   let changed = false;
   for (const p of (room && presence[room]) || []) {
-    if (!p.guest) continue;
-    peerRoles.set(p.id, { guest: true, listen: p.listen === true });
+    const guest = p.guest === true;
+    peerRoles.set(p.id, { guest, listen: p.listen === true, fingerprint: p.fingerprint });
     const t = tiles.get(p.id);
-    if (t && (t.guest !== true || t.listen !== (p.listen === true))) {
+    if (t && guest && (t.guest !== true || t.listen !== (p.listen === true))) {
       tiles.set(p.id, { ...t, guest: true, listen: p.listen === true });
       changed = true;
     }
+    // Плитка могла встать раньше, чем приехало лицо: транспорт быстрее
+    // сигналинга. Тогда громкость искали по имени и не нашли — ищем ещё раз,
+    // теперь по отпечатку. Иначе выкрученная человеку громкость возвращалась
+    // бы через раз, и понять почему было бы невозможно.
+    if (t && p.fingerprint) applySavedVolume(p.id, t.name);
   }
   // Гостем перестать быть нельзя, а вот уйти — можно: плитка пережившего своего
   // хозяина флага осталась бы помеченной.
   for (const t of tiles.values()) {
-    if (t.guest && !peerRoles.has(t.id)) {
+    if (t.guest && !peerRoles.get(t.id)?.guest) {
       tiles.set(t.id, { ...t, guest: undefined, listen: undefined });
       changed = true;
     }
   }
   if (changed) syncTiles();
+}
+
+/**
+ * Применить сохранённую громкость к уже стоящей плитке — не записывая ничего
+ * обратно: это не выбор человека, а восстановление сделанного им раньше.
+ */
+function applySavedVolume(peerId: string, name: string) {
+  const t = tiles.get(peerId);
+  if (!t || t.isLocal) return;
+  const saved = peerVol(peerId, name);
+  const voice = saved.voice ?? 1;
+  const screen = saved.screen ?? 1;
+  if (t.volume === voice && t.screenVolume === screen) return;
+  const pa = peerAudio.get(peerId);
+  if (pa?.micGain) pa.micGain.gain.value = voice;
+  if (pa?.screenGain) pa.screenGain.gain.value = screen;
+  tiles.set(peerId, { ...t, volume: voice, screenVolume: screen });
+  syncTiles();
 }
 
 /**
@@ -2070,10 +2100,13 @@ export function initVoice() {
     tx().renamePeer(id, name);
     const t = tiles.get(id);
     if (t && t.name !== name) {
-      // Тег сменился — переносим сохранённую громкость на новое имя, чтобы
-      // выкрученные проценты не потерялись.
-      if (t.volume !== 1 || t.screenVolume !== 1)
-        savePeerVol(name, { voice: t.volume, screen: t.screenVolume });
+      // Имя сменилось — переносим сохранённую громкость на новое, чтобы
+      // выкрученные проценты не потерялись. Касается это только гостя по
+      // инвайту: отпечатка ему не выдают, и имя — единственный его ключ. У
+      // человека с ключом громкость записана на отпечаток и переименования
+      // не замечает вовсе.
+      if (!peerRoles.get(id)?.fingerprint && (t.volume !== 1 || t.screenVolume !== 1))
+        savePeerVol(id, name, { voice: t.volume, screen: t.screenVolume });
       tiles.set(id, { ...t, name });
       syncTiles();
     }

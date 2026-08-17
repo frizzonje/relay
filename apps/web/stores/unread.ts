@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { getSocket } from '@/lib/socket';
 
 /**
  * Непрочитанное по текстовым каналам.
@@ -7,8 +8,12 @@ import { create } from 'zustand';
  *    `chat-activity` (слаг + время, без содержимого) и снимком `lastTs` из
  *    реестра каналов, который сервер шлёт на connect, — поэтому непрочитанное
  *    переживает перезагрузку страницы, а не начинается каждый раз с чистого листа.
- *  • `lastRead` — до какого времени канал дочитан. Живёт в localStorage и
- *    подхватывается из других вкладок (событие `storage`).
+ *  • `lastRead` — до какого времени канал дочитан. Принадлежит человеку, а не
+ *    браузеру: отметка уезжает на сервер и приходит оттуда же, поэтому
+ *    прочитанное на десктопе прочитано и на телефоне. localStorage при этом
+ *    остался кэшем — он отвечает в первый кадр, до сокета, и он же остаётся
+ *    единственным хранилищем там, где личности нет (гость по инвайту, браузер
+ *    без ключа). Соседние вкладки по-прежнему подхватывают его через `storage`.
  *  • `divider` — где стояла отметка чтения в момент, когда ты в канал вошёл или
  *    отвернулся от окна. По ней ChatPanel рисует линию «новые»; она НЕ обязана
  *    совпадать с `lastRead`, иначе линия исчезала бы ровно тогда, когда нужна.
@@ -58,6 +63,21 @@ function saveLastRead(map: Marks) {
   }
 }
 
+/**
+ * Сказать серверу, что канал дочитан. Ответа нет и не нужно: точка у человека
+ * уже погасла, а отметка на сервере только растёт — опоздавшее сообщение
+ * ничего не испортит. Нет личности или нет связи — промолчали: тогда
+ * непрочитанное остаётся личным делом этого браузера, ровно как раньше.
+ */
+function tellServer(slug: string, ts: number) {
+  try {
+    const socket = getSocket();
+    if (socket.connected) socket.emit('read-mark', { slug, ts });
+  } catch {
+    // сокета может не быть вовсе (тесты, серверный рендер) — это не повод падать
+  }
+}
+
 interface UnreadState {
   activity: Marks;
   lastRead: Marks;
@@ -78,6 +98,12 @@ interface UnreadState {
   setAtBottom: (atBottom: boolean) => void;
   /** Отметки чтения из соседней вкладки (событие `storage`). */
   adoptLastRead: (raw: string | null) => void;
+  /**
+   * Отметки с сервера: снимок на входе или «дочитал на другом устройстве».
+   * Возвращает то, о чём сервер ещё не знает, — вызывающий отдаёт это наверх
+   * (см. `full` в ReadsRelay).
+   */
+  adoptMarks: (incoming: Marks, opts?: { full?: boolean }) => { slug: string; ts: number }[];
   /** Время, до которого канал был прочитан на момент входа (линия «новые»). */
   dividerAt: (slug: string) => number;
 }
@@ -112,6 +138,7 @@ export const useUnreadStore = create<UnreadState>((set, get) => ({
       if (!slug || (s.lastRead[slug] ?? 0) >= seen) return s;
       const lastRead = { ...s.lastRead, [slug]: seen };
       saveLastRead(lastRead);
+      tellServer(slug, seen);
       return { lastRead };
     }),
 
@@ -125,6 +152,7 @@ export const useUnreadStore = create<UnreadState>((set, get) => ({
       if (mark >= seen) return { divider };
       const lastRead = { ...s.lastRead, [slug]: seen };
       saveLastRead(lastRead);
+      tellServer(slug, seen);
       return { divider, lastRead };
     }),
 
@@ -151,6 +179,32 @@ export const useUnreadStore = create<UnreadState>((set, get) => ({
       // Пришло из localStorage — обратно не пишем, иначе вкладки зациклятся.
       return changed ? { lastRead } : s;
     }),
+
+  adoptMarks: (incoming, opts = {}) => {
+    const before = get().lastRead;
+    const lastRead = { ...before };
+    let changed = false;
+    for (const [slug, ts] of Object.entries(incoming ?? {})) {
+      if (!Number.isFinite(ts) || (lastRead[slug] ?? 0) >= ts) continue;
+      lastRead[slug] = ts;
+      changed = true;
+    }
+    if (changed) {
+      // В кэш пишем: он отвечает в первый кадр следующей загрузки, до сокета.
+      saveLastRead(lastRead);
+      set({ lastRead });
+    }
+    // Своё, о чём сервер не знает. Это прочитанное «до личности»: в этом
+    // браузере человек читал каналы ещё до того, как у него появился ключ.
+    // Отдаём только по снимку — отвечать своим списком на каждую чужую правку
+    // значило бы устроить двум устройствам вечную переписку.
+    if (!opts.full) return [];
+    const behind: { slug: string; ts: number }[] = [];
+    for (const [slug, ts] of Object.entries(before)) {
+      if (ts > (incoming?.[slug] ?? 0)) behind.push({ slug, ts });
+    }
+    return behind;
+  },
 
   dividerAt: (slug) => get().divider[slug] ?? 0,
 }));

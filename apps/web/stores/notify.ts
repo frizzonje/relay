@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { readPref, setPref } from '@/lib/prefs';
 
 /**
  * Уведомления о входящих сообщениях: звук и вспышка в сайдбаре.
@@ -11,33 +12,25 @@ import { create } from 'zustand';
  * хосте, канала, появившегося после обновления клиента. Список «заглушённых» дал
  * бы обратное — каждый новый канал начинал бы звенеть сам собой.
  *
- * Выбор живёт в localStorage (`relay-channel-sound`) и переживает перезагрузку.
- * Ключ — слаг канала: он же приходит в `chat-activity`, по нему считается
- * непрочитанное (stores/unread), и переименование канала звук не сбрасывает.
+ * Выбор принадлежит человеку, а не браузеру: он уезжает на сервер настройкой
+ * `sound` и оттуда же приходит на другие устройства (lib/prefs). localStorage
+ * остался кэшем — он отвечает в первый кадр и остаётся единственным хранилищем
+ * там, где личности нет. Ключ — слаг канала: он же приходит в `chat-activity`,
+ * по нему считается непрочитанное (stores/unread), и переименование канала звук
+ * не сбрасывает.
  *
  * Вспышка (`pings`) настройки не имеет и заглушке не подчиняется: она беззвучна,
  * ничего не перебивает и нужна ровно там, куда ты сейчас не смотришь. Заглушить
  * можно звук, не глаза. Счётчик не сохраняется — это событие, а не выбор.
  */
-export const CHANNEL_SOUND_KEY = 'relay-channel-sound';
 
-function load(): string[] {
-  try {
-    if (typeof localStorage === 'undefined') return [];
-    const parsed = JSON.parse(localStorage.getItem(CHANNEL_SOUND_KEY) || '[]');
-    return Array.isArray(parsed) ? parsed.filter((s): s is string => typeof s === 'string') : [];
-  } catch {
-    return [];
-  }
+/** Список каналов со звуком: только строки, что бы там ни лежало. */
+function slugsOf(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((s): s is string => typeof s === 'string') : [];
 }
 
-function save(slugs: string[]) {
-  try {
-    if (typeof localStorage === 'undefined') return;
-    localStorage.setItem(CHANNEL_SOUND_KEY, JSON.stringify(slugs));
-  } catch {
-    // приватный режим/квота — переживём, выбор просто не запомнится
-  }
+function load(): string[] {
+  return slugsOf(readPref<unknown>('sound', []));
 }
 
 interface NotifyState {
@@ -54,6 +47,8 @@ interface NotifyState {
   toggleChannel: (slug: string) => boolean;
   /** В канал пришло новое сообщение — мигнуть строкой. */
   notePing: (slug: string) => void;
+  /** Звук поменяли на другом устройстве этого же человека. */
+  adoptLoud: (value: unknown) => void;
 }
 
 export const useNotifyStore = create<NotifyState>((set, get) => ({
@@ -63,10 +58,12 @@ export const useNotifyStore = create<NotifyState>((set, get) => ({
     if (!slug) return false;
     const on = !get().loud.includes(slug);
     const loud = on ? [...get().loud, slug] : get().loud.filter((s) => s !== slug);
-    save(loud);
+    setPref('sound', loud);
     set({ loud });
     return on;
   },
+
+  adoptLoud: (value) => set({ loud: slugsOf(value) }),
   notePing: (slug) =>
     set((s) => (slug ? { pings: { ...s.pings, [slug]: (s.pings[slug] ?? 0) + 1 } } : s)),
 }));

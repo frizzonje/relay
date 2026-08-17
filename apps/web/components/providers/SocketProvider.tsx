@@ -15,6 +15,8 @@ import { useModerationStore } from '@/stores/moderation';
 import { useServersStore } from '@/stores/servers';
 import { forgetServerPassword, storedServerPasswords, unlockServer } from '@/lib/servers';
 import { notifyMessage } from '@/lib/notify';
+import { useNotifyStore } from '@/stores/notify';
+import { adoptPrefs, onPref } from '@/lib/prefs';
 import { tx } from '@/lib/i18n';
 
 /**
@@ -166,7 +168,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       // Бан и удаление канала выглядят на экране одинаково — лента закрылась, —
       // но означают разное, и человеку важнее второе: канал цел, ушёл он.
       toast(
-        reason === 'banned' ? tx('moderation.banned.channel') : tx('channels.deleted', { name: label }),
+        reason === 'banned'
+          ? tx('moderation.banned.channel')
+          : tx('channels.deleted', { name: label }),
       );
     });
 
@@ -238,6 +242,25 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         forgetServerPassword(id);
         if (s.unlockTargetId === id) s.setUnlockError('unlockServer.error.wrongPassword');
       }
+    });
+
+    // Личное состояние человека: отметки чтения и настройки. Приходит снимком
+    // на входе (`full`) и правкой, когда он что-то сделал на другом своём
+    // устройстве. Без личности не приходит вовсе — тогда всё как раньше,
+    // в localStorage этого браузера.
+    socket.on('reads', ({ marks, full }) => {
+      if (!marks || typeof marks !== 'object') return;
+      // Своё, о чём сервер ещё не знает: этот браузер читал каналы до того, как
+      // у человека появился ключ. Догоняем — но только по снимку.
+      for (const { slug, ts } of unread().adoptMarks(marks, { full })) {
+        socket.emit('read-mark', { slug, ts });
+      }
+      // Канал, дочитанный на другом устройстве, гаснет и здесь — но линия
+      // «новые» в открытой ленте остаётся там, где стояла: она про этот экран.
+    });
+
+    socket.on('prefs', ({ values, full }) => {
+      if (values && typeof values === 'object') adoptPrefs(values, { full });
     });
 
     // Бан на всю инсталляцию приходит двумя путями, и оба нужны. Живым
@@ -312,6 +335,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // переподписки первое соединение человека остаётся безымянным до
     // перезагрузки страницы: его сервер записался бы на устройство, а реплики
     // ушли бы в ленту без лица.
+    // Звук каналов поменяли на другом устройстве — список в сторе обязан это
+    // заметить: иначе сайдбар остался бы с прежними значками до перезагрузки.
+    const unsubSound = onPref('sound', (value) => useNotifyStore.getState().adoptLoud(value));
+
     let known = useIdentityStore.getState().me?.id ?? null;
     const unsubIdentity = useIdentityStore.subscribe((state) => {
       const id = state.me?.id ?? null;
@@ -327,6 +354,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     return () => {
       unsub();
       unsubIdentity();
+      unsubSound();
       unsubUnread();
       if (typeof window !== 'undefined') {
         document.removeEventListener('visibilitychange', onFocusChange);
@@ -344,6 +372,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('chat-typing');
       socket.off('chat-activity');
       socket.off('chat-closed');
+      socket.off('reads');
+      socket.off('prefs');
       socket.off('servers');
       socket.off('server-unlock-result');
       socket.off('channels');

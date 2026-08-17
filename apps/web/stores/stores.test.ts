@@ -5,7 +5,8 @@ import { useAudioUnlockStore } from './audio-unlock';
 import { useChannelsStore } from './channels';
 import { useChatStore } from './chat';
 import { useHostsStore } from './hosts';
-import { CHANNEL_SOUND_KEY, isChannelLoud, useNotifyStore } from './notify';
+import { PREF_STORAGE } from '@/lib/prefs';
+import { isChannelLoud, useNotifyStore } from './notify';
 import { isServerUnlocked, useServersStore } from './servers';
 import { LAST_READ_KEY, isChannelUnread, useUnreadStore } from './unread';
 
@@ -123,6 +124,46 @@ describe('непрочитанное', () => {
 
     const before = s().lastRead;
     s().adoptLastRead(JSON.stringify({ obshchii: 1 }));
+    expect(s().lastRead).toBe(before);
+  });
+
+  it('прочитанное на другом устройстве гасит точку и здесь', () => {
+    s().noteActivity('obshchii', 5000);
+    expect(isChannelUnread(s(), 'obshchii')).toBe(true);
+
+    // Снимок с сервера: человек дочитал этот канал с телефона.
+    expect(s().adoptMarks({ obshchii: 5000 })).toEqual([]);
+    expect(isChannelUnread(s(), 'obshchii')).toBe(false);
+    // В кэш тоже — он отвечает в первый кадр следующей загрузки, до сокета.
+    expect(JSON.parse(localStorage.getItem(LAST_READ_KEY)!)).toEqual({ obshchii: 5000 });
+  });
+
+  it('снимок отдаёт наверх прочитанное до появления личности', () => {
+    s().noteActivity('obshchii', 3000);
+    s().noteActivity('флуд', 4000);
+    s().readNow('obshchii');
+    s().readNow('флуд');
+
+    // Сервер знает про один канал и отстал; про второй не знает вовсе.
+    expect(s().adoptMarks({ obshchii: 1000 }, { full: true })).toEqual([
+      { slug: 'obshchii', ts: 3000 },
+      { slug: 'флуд', ts: 4000 },
+    ]);
+  });
+
+  it('на правку с другого устройства своим списком не отвечают', () => {
+    s().noteActivity('флуд', 4000);
+    s().readNow('флуд');
+    // Иначе два устройства устроили бы друг другу вечную переписку.
+    expect(s().adoptMarks({ obshchii: 1000 })).toEqual([]);
+    expect(s().lastRead).toEqual({ флуд: 4000, obshchii: 1000 });
+  });
+
+  it('отметка с сервера назад не ходит', () => {
+    s().noteActivity('obshchii', 5000);
+    s().readNow('obshchii');
+    const before = s().lastRead;
+    s().adoptMarks({ obshchii: 1000 });
     expect(s().lastRead).toBe(before);
   });
 
@@ -296,9 +337,9 @@ describe('звук каналов', () => {
 
   it('выбор сразу уходит в хранилище', () => {
     s().toggleChannel('obshchii');
-    expect(JSON.parse(localStorage.getItem(CHANNEL_SOUND_KEY) || '[]')).toEqual(['obshchii']);
+    expect(JSON.parse(localStorage.getItem(PREF_STORAGE.sound) || '[]')).toEqual(['obshchii']);
     s().toggleChannel('obshchii');
-    expect(localStorage.getItem(CHANNEL_SOUND_KEY)).toBe('[]');
+    expect(localStorage.getItem(PREF_STORAGE.sound)).toBe('[]');
   });
 
   // Счётчик вспышек к разрешению звука отношения не имеет: гасят звук, не строку.
@@ -308,7 +349,7 @@ describe('звук каналов', () => {
     s().notePing('obshchii');
     s().notePing('');
     expect(s().pings).toEqual({ obshchii: 2, flud: 1 });
-    expect(localStorage.getItem(CHANNEL_SOUND_KEY)).toBe(null);
+    expect(localStorage.getItem(PREF_STORAGE.sound)).toBe(null);
   });
 });
 

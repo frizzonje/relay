@@ -51,7 +51,8 @@ export function banAuthor(id: string, everywhere = false): Promise<ModerationRes
 /** Разбанить по отпечатку — той же ручкой, которой забаненный показан. */
 export function unban(fingerprint: string, server?: string): Promise<ModerationResult> {
   return ask<ModerationResult>(
-    (cb) => getSocket().emit('moderation-unban', { fingerprint, ...(server ? { server } : {}) }, cb),
+    (cb) =>
+      getSocket().emit('moderation-unban', { fingerprint, ...(server ? { server } : {}) }, cb),
     OFFLINE,
   );
 }
