@@ -195,6 +195,11 @@ export class AttachmentRow {
 // только в миграции MessageSearch: он GIN по выражению `to_tsvector(...)`, а
 // декоратор такого не выражает. Схема от этого не разъезжается (проверяется в
 // schema.test), но при чтении entities о нём легко забыть — потому и написано.
+// Четвёртый — `messages_mentions_idx` под счётчик упоминаний — объявлен и
+// здесь, и в миграции Mentions: колонку декоратор назвать умеет, а вот метод
+// (GIN) и класс операторов (`jsonb_path_ops`) — нет, и настоящий DDL живёт
+// там же, где вся остальная схема.
+@Index('messages_mentions_idx', ['mentions'])
 export class MessageRow {
   @PrimaryColumn({ type: 'uuid' })
   id!: string;
@@ -249,6 +254,18 @@ export class MessageRow {
 
   @Column({ type: 'jsonb', name: 'reply_to', nullable: true })
   replyTo!: { id: string; name: string; text: string } | null;
+
+  /**
+   * Кого назвали в реплике: отпечаток ключа (это и есть адресат) и ник, как он
+   * был написан. Снимок, как и цитата: человек переименуется — сказанное вчера
+   * не перепишется, а найти его упоминания отпечаток по-прежнему даст.
+   *
+   * Дефолт значением, а не выражением — по той же причине, что у `reactions`:
+   * jsonb TypeORM сверяет глубоким сравнением, и `() => "'[]'::jsonb"` он счёл
+   * бы расхождением со прочитанным из базы.
+   */
+  @Column({ type: 'jsonb', default: [] })
+  mentions!: { fingerprint: string; nick: string }[];
 
   /**
    * Время ставит база (`now()` при вставке), а не Node и тем более не клиент.

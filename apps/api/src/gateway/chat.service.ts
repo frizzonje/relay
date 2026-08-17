@@ -1,9 +1,15 @@
 import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
-import { AttachmentRow, MessageRow } from '../db/entities';
+import { AttachmentRow, IdentityRow, MessageRow } from '../db/entities';
 import type { Attachment } from '../uploads';
-import type { ChatMessage, ReactionMap, ReplyRef } from './protocol';
+import {
+  LIMIT,
+  type ChatMessage,
+  type MentionRef,
+  type ReactionMap,
+  type ReplyRef,
+} from './protocol';
 import { RegistryService } from './registry.service';
 
 /**
@@ -85,6 +91,36 @@ function tsquery(terms: string[]): string {
   return terms.map((term) => `${term}:*`).join(' & ');
 }
 
+/** Сколько имён показываем в подсказке после `@`. Список читают глазами. */
+export const MENTION_SUGGEST_LIMIT = 8;
+
+/**
+ * Кого из названных клиентом действительно назвали в этом тексте.
+ *
+ * Проверка ровно одна и она про видимость: упоминание обязано быть написано.
+ * Клиент присылает отпечатки — то есть адресатов, — и без этой сверки любой
+ * смог бы позвать человека, не написав его имени: беззвучный вызов, которого в
+ * ленте не видно ни ему, ни остальным. Ищем подстроку `@ник`, а не слово по
+ * границам: ники свободные, в них бывают и пробелы, и точки, и разбор «где тут
+ * кончается имя» дал бы второе место с правилами и вечное расхождение с тем,
+ * что человек выбрал в подсказке.
+ *
+ * Регистр не важен: написавший «@аня» позвал Аню и знает об этом.
+ */
+export function mentionedIn(text: string, people: MentionRef[]): MentionRef[] {
+  const haystack = text.toLowerCase();
+  const out: MentionRef[] = [];
+  const seen = new Set<string>();
+  for (const person of people) {
+    if (!person.nick || seen.has(person.fingerprint)) continue;
+    if (!haystack.includes('@' + person.nick.toLowerCase())) continue;
+    seen.add(person.fingerprint);
+    out.push({ fingerprint: person.fingerprint, nick: person.nick });
+    if (out.length >= LIMIT.mentions) break;
+  }
+  return out;
+}
+
 /**
  * Разрешённый набор реакций — дублирует REACTION_EMOJIS из `@relay/shared`
  * (api намеренно не зависит от пакета фронта, как и прочие константы).
@@ -113,6 +149,8 @@ export interface NewMessage {
   spoiler?: boolean;
   /** На какое сообщение отвечаем. Снимок цитаты снимается здесь. */
   replyToId?: string;
+  /** Кого назвали — уже сверенные с текстом (см. `mentionedIn`). */
+  mentions?: MentionRef[];
 }
 
 /** Страница ленты: реплики по возрастанию времени и есть ли что-то выше. */
@@ -186,6 +224,7 @@ function toMessage(row: MessageRow): ChatMessage {
     ...(Object.keys(reactions).length ? { reactions } : {}),
     ...(row.replyTo ? { replyTo: row.replyTo } : {}),
     ...(row.editedAt ? { editedTs: row.editedAt.getTime() } : {}),
+    ...(row.mentions?.length ? { mentions: row.mentions } : {}),
   };
 }
 
@@ -395,6 +434,7 @@ export class ChatService implements OnModuleInit {
         reactions: {},
         attachmentId: (await this.attachmentId(input.uploadId)) ?? null,
         replyTo: await this.replySnapshot(channelId, input.replyToId),
+        mentions: input.mentions ?? [],
         editedAt: null,
         authorIdentityId: input.identityId ?? null,
       })
@@ -434,13 +474,19 @@ export class ChatService implements OnModuleInit {
     return row?.authorIdentityId ?? null;
   }
 
-  /** Новый текст своей реплики. Возвращает время правки — тоже с часов базы. */
-  async edit(id: string, text: string): Promise<number> {
+  /**
+   * Новый текст своей реплики. Возвращает время правки — тоже с часов базы.
+   *
+   * Упоминания переписываются вместе с текстом, а не остаются от прежней
+   * редакции: имя из реплики могли убрать, и «упомянут» без имени в тексте —
+   * ровно тот беззвучный вызов, который не пускает `mentionedIn`.
+   */
+  async edit(id: string, text: string, mentions: MentionRef[]): Promise<number> {
     const res = await this.db
       .getRepository(MessageRow)
       .createQueryBuilder()
       .update()
-      .set({ text, editedAt: () => 'now()' })
+      .set({ text, mentions, editedAt: () => 'now()' })
       .where({ id })
       .returning('edited_at')
       .execute();
@@ -483,6 +529,79 @@ export class ChatService implements OnModuleInit {
   lastTs(slug: string): number {
     const channelId = this.channelId(slug);
     return (channelId && this.lastActivity.get(channelId)) || 0;
+  }
+
+  // ── Упоминания ────────────────────────────────────────────────────────────
+
+  /**
+   * Личности по отпечаткам ключей — то, чем клиент называет упомянутых.
+   *
+   * Ник берётся отсюда, а не из тела сообщения: иначе рядом с чужим лицом можно
+   * было бы написать любое имя, и снимок упоминания врал бы про того, кого
+   * адресует.
+   */
+  async peopleByFingerprint(fingerprints: string[]): Promise<MentionRef[]> {
+    if (!fingerprints.length) return [];
+    const rows = await this.db
+      .getRepository(IdentityRow)
+      .createQueryBuilder('i')
+      .select(['i.fingerprint AS fingerprint', 'i.nick AS nick'])
+      .where('i.fingerprint IN (:...fingerprints)', { fingerprints })
+      .getRawMany<MentionRef>();
+    return rows;
+  }
+
+  /**
+   * Кого предложить после набранного `@`: те, кто говорил в этих каналах, — от
+   * недавних к давним.
+   *
+   * Список людей берётся из сказанного, а не из таблицы личностей целиком, и
+   * это не оптимизация. Личности в relay не состоят в сервере (членства нет
+   * вовсе — см. роли), поэтому «все, кто есть в инсталляции» означало бы
+   * подсказку из посторонних, а заодно раздачу всякому вошедшему полного
+   * списка людей. Кто здесь говорил — тот здесь и есть.
+   */
+  async mentionCandidates(channelIds: string[], prefix: string): Promise<MentionRef[]> {
+    if (!channelIds.length) return [];
+    // ILIKE — искать по началу имени, не различая регистр. Спецсимволы шаблона
+    // экранируем: `%` в набранном человеком префиксе иначе означал бы «любой
+    // хвост», то есть подсказку из всех подряд.
+    const pattern = prefix.replace(/[\\%_]/g, (c) => '\\' + c) + '%';
+    return this.db
+      .getRepository(MessageRow)
+      .createQueryBuilder('m')
+      .innerJoin(IdentityRow, 'i', 'i.id = m.author_identity_id')
+      .select(['i.fingerprint AS fingerprint', 'i.nick AS nick'])
+      .where('m.channel_id IN (:...channelIds)', { channelIds })
+      .andWhere('i.nick ILIKE :pattern', { pattern })
+      .groupBy('i.fingerprint')
+      .addGroupBy('i.nick')
+      .orderBy('MAX(m.created_at)', 'DESC')
+      .limit(MENTION_SUGGEST_LIMIT)
+      .getRawMany<MentionRef>();
+  }
+
+  /**
+   * Непрочитанные упоминания: id канала → сколько раз человека там назвали
+   * после того, как он этот канал дочитал.
+   *
+   * Своё не считается. Написать собственное имя не значит позвать себя, а
+   * счётчик, который человек зажигает себе сам, — это ошибка, о которой он
+   * подумает на тебя.
+   */
+  async mentionCounts(identityId: string, fingerprint: string): Promise<Map<string, number>> {
+    if (!identityId || !fingerprint) return new Map();
+    const rows: { channel_id: string; n: string }[] = await this.db.query(
+      `SELECT m."channel_id" AS channel_id, count(*) AS n
+         FROM "messages" m
+         LEFT JOIN "reads" r ON r."channel_id" = m."channel_id" AND r."identity_id" = $1
+        WHERE m."mentions" @> $2::jsonb
+          AND m."author_identity_id" IS DISTINCT FROM $1
+          AND (r."read_at" IS NULL OR m."created_at" > r."read_at")
+        GROUP BY m."channel_id"`,
+      [identityId, JSON.stringify([{ fingerprint }])],
+    );
+    return new Map(rows.map((row) => [row.channel_id, Number(row.n)]));
   }
 
   /** Знаем ли мы такую реакцию (набор закрытый — произвольные эмодзи не носим). */

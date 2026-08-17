@@ -20,7 +20,7 @@ import { RolesService } from '../identity/roles.service';
 import { sfuHealthy } from '../sfu/sfu-health';
 import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
 import { UploadsService } from '../uploads';
-import { ChatService, searchTerms } from './chat.service';
+import { ChatService, MENTION_SUGGEST_LIMIT, mentionedIn, searchTerms } from './chat.service';
 import {
   MAIN_SERVER_ID,
   MAX_CHANNELS,
@@ -77,6 +77,9 @@ import {
   type ModerationBansResult,
   type ModerationResult,
   type ModerationUnbanPayload,
+  type MentionRef,
+  type MentionSuggestPayload,
+  type MentionSuggestResult,
   type PrefsSetPayload,
   type ReadMarkPayload,
   type GuestKickResult,
@@ -473,6 +476,10 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       // серверу то, что прочитал и настроил без личности, а не только принять.
       client.emit('reads', { marks: this.marksBySlug(marks), full: true });
       client.emit('prefs', { values, full: true });
+      // Упоминания — после отметок чтения и не случайно: счётчик считается
+      // «сколько раз назвали после того, как канал дочитан», и клиенту он
+      // приезжает уже посчитанным, поверх известных ему отметок.
+      await this.sendMentions(client);
     } catch (e) {
       // Личное — не то, без чего приложение не работает: без отметок канал
       // просто выглядит непрочитанным. Падать на этом (и уж тем более рвать
@@ -819,6 +826,10 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       // чужого входа-выхода: присутствие теперь режется по видимости, и
       // прошлую рассылку этот сокет получил ещё запертым.
       client.emit('voice-presence', this.presenceFor(client, this.buildVoicePresence()));
+      // …и счётчики упоминаний в них: снимок на подключении собирался, когда
+      // эти каналы были ещё не видны, и «тебя звали» в них молчало бы до
+      // следующего захода.
+      void this.sendMentions(client);
       // Пропуск на будущие подключения: с ним разблокировка переживает
       // реконнект, а пароль остаётся там, где ему и место, — у человека.
       // Хэш перечитываем: пока считался scrypt, пароль могли сменить, и
@@ -1896,6 +1907,126 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     return { ok: true, hits, more, terms };
   }
 
+  /**
+   * Кого предложить после набранного `@`.
+   *
+   * Список собирает сервер, и в него попадают только те, кому этот канал виден:
+   * подсказать человека, который не может прочитать канал, значит предложить
+   * позвать его в комнату за запертой дверью. Себя в подсказке нет — позвать
+   * себя нельзя, и место в списке из восьми имён этим не тратится.
+   */
+  @SubscribeMessage('mention-suggest')
+  async handleMentionSuggest(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: MentionSuggestPayload,
+  ): Promise<MentionSuggestResult> {
+    const empty = { ok: true as const, people: [] };
+    if (!this.allow(client) || this.isGuest(client)) return empty;
+    const room = client.data.chatRoom as string | undefined;
+    if (!room) return empty;
+    const here = this.registry.channels.find(
+      (c) => c.type === 'text' && c.slug === this.chat.slug(room),
+    );
+    if (!here || !this.canSee(client, here)) return empty;
+
+    const prefix = trimmed(payload?.prefix, LIMIT.tag).toLowerCase();
+    const me = this.speaker(client)?.fingerprint;
+    const seen = new Set<string>();
+    const people: MentionSuggestResult['people'] = [];
+
+    // Сначала те, кто сейчас на связи: для них упоминание — не запись в
+    // историю, а обращение, которое они увидят сию минуту.
+    for (const sock of this.server.sockets.sockets.values()) {
+      const who = this.speaker(sock);
+      if (!who || who.fingerprint === me || seen.has(who.fingerprint)) continue;
+      if (this.isGuest(sock) || !this.canSee(sock, here)) continue;
+      if (prefix && !who.nick.toLowerCase().startsWith(prefix)) continue;
+      seen.add(who.fingerprint);
+      people.push({ fingerprint: who.fingerprint, nick: who.nick, online: true });
+    }
+
+    // Затем — говорившие на этом сервере, в тех его каналах, что видно
+    // спрашивающему: звать через канал человека, о котором ты знаешь только по
+    // соседнему каналу, — обычное дело.
+    const channels = this.registry.channels.filter(
+      (c) => c.type === 'text' && c.serverId === here.serverId && this.canSee(client, c),
+    );
+    const spoke = await this.chat.mentionCandidates(
+      channels.map((c) => c.id),
+      prefix,
+    );
+    for (const person of spoke) {
+      if (person.fingerprint === me || seen.has(person.fingerprint)) continue;
+      seen.add(person.fingerprint);
+      people.push({ ...person, online: false });
+    }
+
+    return { ok: true, people: people.slice(0, MENTION_SUGGEST_LIMIT) };
+  }
+
+  /**
+   * Кого назвали в этом тексте: клиент присылает отпечатки выбранных им людей,
+   * сервер оставляет тех, чьё имя в тексте и правда написано.
+   *
+   * Ник в снимок берётся из базы, а не из тела сообщения: иначе рядом с чужим
+   * лицом можно было бы написать любое имя.
+   */
+  private async resolveMentions(text: string, claimed: unknown): Promise<MentionRef[]> {
+    if (!text || !Array.isArray(claimed) || !claimed.length) return [];
+    const fingerprints = [
+      ...new Set(
+        claimed
+          .slice(0, LIMIT.mentions)
+          .map((value) => trimmed(value, LIMIT.fingerprint))
+          .filter(Boolean),
+      ),
+    ];
+    if (!fingerprints.length) return [];
+    return mentionedIn(text, await this.chat.peopleByFingerprint(fingerprints));
+  }
+
+  /**
+   * Сказать названным, что их назвали. Летит на все устройства человека — тем
+   * же порядком, что и отметки чтения: канал, в котором тебя позвали, обязан
+   * загореться и на телефоне.
+   *
+   * Себе не звоним (написать собственное имя — не вызов), гостю по инвайту
+   * тоже: у него нет личности, а значит и счётчика, который это зажигает.
+   * Тому, кому канал не виден, — тем более: событие несёт слаг, а слаг канала
+   * закрытого сервера сам по себе часть секрета.
+   */
+  private pingMentions(from: Socket, mentions: MentionRef[], slug: string, ts: number): void {
+    if (!mentions.length) return;
+    const channel = this.registry.channels.find((c) => c.type === 'text' && c.slug === slug);
+    if (!channel) return;
+    const author = this.speaker(from)?.fingerprint;
+    const targets = new Set(mentions.map((m) => m.fingerprint));
+    for (const sock of this.server.sockets.sockets.values()) {
+      const who = this.speaker(sock)?.fingerprint;
+      if (!who || who === author || !targets.has(who)) continue;
+      if (this.isGuest(sock) || !this.canSee(sock, channel)) continue;
+      sock.emit('mention', { slug, ts });
+    }
+  }
+
+  /**
+   * Снимок непрочитанных упоминаний по каналам. Считается в базе, а не
+   * копится в памяти: счётчик обязан пережить и рестарт api, и смену
+   * устройства, — иначе «тебя звали» существовало бы ровно до перезагрузки
+   * страницы.
+   */
+  private async sendMentions(client: Socket): Promise<void> {
+    const me = this.speaker(client);
+    if (!me) return;
+    const counts = await this.chat.mentionCounts(me.id, me.fingerprint);
+    const bySlug: Record<string, number> = {};
+    for (const channel of this.registry.channels) {
+      const n = counts.get(channel.id);
+      if (n && this.canSee(client, channel)) bySlug[channel.slug] = n;
+    }
+    client.emit('mentions', { counts: bySlug });
+  }
+
   @SubscribeMessage('chat-leave')
   handleChatLeave(@ConnectedSocket() client: Socket) {
     this.leaveChatRoom(client);
@@ -1914,6 +2045,8 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const uploadId = str(payload?.uploadId);
     if (!text && !(await this.uploads.exists(uploadId))) return;
 
+    const mentions = await this.resolveMentions(text, payload?.mentions);
+
     // Снимок цитаты, вложение и время назначает хранилище: время — потому что
     // по нему же строится курсор ленты, и оно обязано быть одних часов с ней.
     const msg = await this.chat.add(this.chat.slug(room), {
@@ -1925,11 +2058,13 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       uploadId,
       spoiler: payload?.spoiler === true,
       replyToId: str(payload?.replyTo),
+      mentions,
     });
     // Канал удалили, пока сообщение шло, — писать его некуда.
     if (!msg) return;
 
     this.server.to(room).emit('chat', msg);
+    this.pingMentions(client, mentions, this.chat.slug(room), msg.ts);
     // Лёгкий пинг активности: сайдбар зажигает «непрочитано» на закрытых сейчас
     // каналах. Только слаг и время, без содержимого. Рассылаем не всем подряд, а
     // тем, кому канал виден: слаг канала закрытого сервера — часть секрета, и
@@ -1994,8 +2129,21 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     if (!msg) return;
     if (!this.ownsMessage(client, msg)) return;
 
-    const editedTs = await this.chat.edit(id, text);
-    this.server.to(room).emit('chat-edited', { id, text, editedTs });
+    const mentions = await this.resolveMentions(text, payload?.mentions);
+    const editedTs = await this.chat.edit(id, text, mentions);
+    this.server.to(room).emit('chat-edited', { id, text, editedTs, mentions });
+
+    // Позвали правкой — значит позвали. Молчать здесь означало бы, что имя,
+    // дописанное через минуту после отправки, увидит только тот, кто и так
+    // читает канал, — то есть ровно не тот, кого звали. Уже названным второй
+    // раз не звоним: правка опечатки — не повод повторить вызов.
+    const already = new Set((msg.mentions ?? []).map((m) => m.fingerprint));
+    this.pingMentions(
+      client,
+      mentions.filter((m) => !already.has(m.fingerprint)),
+      this.chat.slug(room),
+      editedTs,
+    );
   }
 
   // Удаление сообщения: своего — автором, любого — модератором сервера, которому

@@ -40,6 +40,13 @@ export const LIMIT = {
   message: 500,
   /** Поисковый запрос — заведомо длиннее любого осмысленного и короче реплики. */
   search: 100,
+  /** Отпечаток ключа: адресат упоминания и цель разбана. */
+  fingerprint: 64,
+  /**
+   * Сколько имён носит одна реплика. Восемь — это уже не разговор с людьми, а
+   * рассылка; больше принимать незачем, и лишнее просто не доедет.
+   */
+  mentions: 8,
   /** Диагностическая веха звонка и её пояснение — только в лог. */
   diagEvent: 48,
   diagDetail: 200,
@@ -94,6 +101,13 @@ export interface ChatPayload {
   uploadId?: unknown;
   replyTo?: unknown;
   spoiler?: unknown;
+  /**
+   * Кого имел в виду отправитель — отпечатками ключей, а не именами: имена
+   * свободные и не уникальные, и «@Аня» в инсталляции с двумя Анями адресовало
+   * бы обеих или наугад одну. Клиент называет их, выбрав из подсказки, а сервер
+   * сверяет, что названный и правда назван в тексте (см. `mentionedIn`).
+   */
+  mentions?: unknown;
 }
 
 /**
@@ -132,6 +146,13 @@ export interface ChatSearchPayload {
 export interface ChatEditPayload {
   id?: unknown;
   text?: unknown;
+  /** Правка переписывает и упоминания: имя в тексте могло появиться или уйти. */
+  mentions?: unknown;
+}
+
+/** Кого предложить после набранного `@`. Пустой префикс — «покажи всех». */
+export interface MentionSuggestPayload {
+  prefix?: unknown;
 }
 
 export interface ChatDeletePayload {
@@ -302,6 +323,16 @@ export type ChatSearchResult = {
   terms: string[];
 };
 
+/**
+ * Кого можно назвать здесь. `online` — человек сейчас на связи; такие идут
+ * первыми, потому что упоминание для них — не запись в историю, а обращение,
+ * которое они увидят сейчас.
+ */
+export type MentionSuggestResult = {
+  ok: true;
+  people: { fingerprint: string; nick: string; online: boolean }[];
+};
+
 export type ServerDeleteResult =
   | { ok: true }
   | {
@@ -364,6 +395,16 @@ export interface ReplyRef {
   text: string;
 }
 
+/**
+ * Названный в реплике: отпечаток его ключа и ник, как он был написан. Ник тут
+ * не украшение — по нему клиент находит в тексте то самое слово и рисует его
+ * упоминанием; текущее имя человека к этому моменту может быть уже другим.
+ */
+export interface MentionRef {
+  fingerprint: string;
+  nick: string;
+}
+
 export interface ChatMessage {
   id?: string;
   name: string;
@@ -381,6 +422,8 @@ export interface ChatMessage {
   reactions?: ReactionMap;
   replyTo?: ReplyRef;
   editedTs?: number;
+  /** Кого в ней назвали. Пусто — не назвали никого, и ключа в реплике нет. */
+  mentions?: MentionRef[];
 }
 
 /**

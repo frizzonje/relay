@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { DataSource } from 'typeorm';
-import { AttachmentRow, MessageRow } from '../db/entities';
+import { AttachmentRow, IdentityRow, MessageRow, ReadRow } from '../db/entities';
 import { resetDatabase, testDatabase } from '../db/testing';
 import {
   AROUND_HALF,
@@ -9,6 +9,7 @@ import {
   PAGE_SIZE,
   SEARCH_PAGE_SIZE,
   isUuid,
+  mentionedIn,
   searchTerms,
 } from './chat.service';
 import { RegistryService } from './registry.service';
@@ -389,6 +390,234 @@ describe('вложение', () => {
     const open = await chat.add('obshchii', { name: 'А', text: '', uploadId: 'up-1' });
     expect(hidden?.attachment?.spoiler).toBe(true);
     expect(open?.attachment?.spoiler).toBeUndefined();
+  });
+});
+
+describe('упоминания', () => {
+  /** Личность в базе — упоминание адресует её, а не написанное имя. */
+  async function person(nick: string): Promise<{ id: string; fingerprint: string; nick: string }> {
+    const id = randomUUID();
+    const key = randomUUID().replace(/-/g, '');
+    const fingerprint = key.slice(0, 16);
+    await db.getRepository(IdentityRow).insert({
+      id,
+      publicKey: key,
+      fingerprint,
+      nick,
+      createdAt: new Date(),
+      lastSeenAt: null,
+    });
+    return { id, fingerprint, nick };
+  }
+
+  /** Второй текстовый канал: счётчик считает по каналам, а не общей кучей. */
+  async function secondChannel(): Promise<void> {
+    registry.channels.push({
+      id: 'text-kuhnya',
+      serverId: 'relay-main',
+      type: 'text',
+      name: 'кухня',
+      slug: 'kuhnya',
+      removable: true,
+    });
+    await registry.persist();
+  }
+
+  describe('названным считается только написанный', () => {
+    it('имя в тексте — упоминание; имени нет — нет и упоминания', () => {
+      const anya = { fingerprint: 'f-anya', nick: 'Аня' };
+      const boris = { fingerprint: 'f-boris', nick: 'Борис' };
+      // Клиент назвал обоих, а написал одного: беззвучный вызов — не вызов.
+      expect(mentionedIn('@Аня, ты идёшь?', [anya, boris])).toEqual([anya]);
+    });
+
+    it('регистр не важен — написавший «@аня» позвал Аню и знает это', () => {
+      const anya = { fingerprint: 'f-anya', nick: 'Аня' };
+      expect(mentionedIn('привет, @аня', [anya])).toEqual([anya]);
+    });
+
+    it('ник с пробелом ищется целиком, а не по первому слову', () => {
+      const anya = { fingerprint: 'f-anya', nick: 'Аня К' };
+      expect(mentionedIn('@Аня К, привет', [anya])).toEqual([anya]);
+      expect(mentionedIn('@Аня, привет', [anya])).toEqual([]);
+    });
+
+    it('один и тот же человек, названный дважды, — одно упоминание', () => {
+      const anya = { fingerprint: 'f-anya', nick: 'Аня' };
+      expect(mentionedIn('@Аня @Аня', [anya, anya])).toHaveLength(1);
+    });
+
+    it('больше восьми имён в одной реплике не носим', () => {
+      const many = Array.from({ length: 20 }, (_, i) => ({
+        fingerprint: `f-${i}`,
+        nick: `имя${i}`,
+      }));
+      expect(mentionedIn(many.map((p) => '@' + p.nick).join(' '), many)).toHaveLength(8);
+    });
+  });
+
+  it('упоминание уезжает с репликой и переживает рестарт', async () => {
+    const anya = await person('Аня');
+    const msg = await chat.add('obshchii', {
+      name: 'Борис',
+      text: '@Аня, ты идёшь?',
+      mentions: [{ fingerprint: anya.fingerprint, nick: anya.nick }],
+    });
+    expect(msg?.mentions).toEqual([{ fingerprint: anya.fingerprint, nick: anya.nick }]);
+
+    const after = await restart();
+    const [restored] = (await after.history('obshchii')).messages;
+    expect(restored.mentions).toEqual([{ fingerprint: anya.fingerprint, nick: anya.nick }]);
+  });
+
+  it('реплика без упоминаний ключа не носит вовсе', async () => {
+    const msg = await say('просто текст');
+    expect(msg.mentions).toBeUndefined();
+  });
+
+  it('правка переписывает упоминания вместе с текстом', async () => {
+    const anya = await person('Аня');
+    const msg = await chat.add('obshchii', {
+      name: 'Борис',
+      text: '@Аня, ты идёшь?',
+      mentions: [{ fingerprint: anya.fingerprint, nick: anya.nick }],
+    });
+    // Имя убрали — упоминание обязано уйти с ним: иначе счётчик у Ани горел бы
+    // из-за реплики, в которой её больше нет.
+    await chat.edit(msg!.id!, 'а вообще неважно', []);
+    const [edited] = (await chat.history('obshchii')).messages;
+    expect(edited.mentions).toBeUndefined();
+  });
+
+  it('ник в снимке берётся из базы, а не из тела сообщения', async () => {
+    const anya = await person('Аня');
+    const found = await chat.peopleByFingerprint([anya.fingerprint]);
+    expect(found).toEqual([{ fingerprint: anya.fingerprint, nick: 'Аня' }]);
+  });
+
+  describe('счётчик непрочитанных упоминаний', () => {
+    it('считает названное после отметки чтения и по каналам врозь', async () => {
+      const anya = await person('Аня');
+      const boris = await person('Борис');
+      await secondChannel();
+      const mention = [{ fingerprint: anya.fingerprint, nick: anya.nick }];
+
+      await chat.add('obshchii', {
+        name: 'Борис',
+        identityId: boris.id,
+        text: '@Аня раз',
+        mentions: mention,
+      });
+      await chat.add('obshchii', {
+        name: 'Борис',
+        identityId: boris.id,
+        text: '@Аня два',
+        mentions: mention,
+      });
+      await chat.add('kuhnya', {
+        name: 'Борис',
+        identityId: boris.id,
+        text: '@Аня три',
+        mentions: mention,
+      });
+
+      const counts = await chat.mentionCounts(anya.id, anya.fingerprint);
+      expect(counts.get('text-obshchii')).toBe(2);
+      expect(counts.get('text-kuhnya')).toBe(1);
+    });
+
+    it('дочитанный канал гасит свой счётчик', async () => {
+      const anya = await person('Аня');
+      const boris = await person('Борис');
+      const mention = [{ fingerprint: anya.fingerprint, nick: anya.nick }];
+      const first = await chat.add('obshchii', {
+        name: 'Борис',
+        identityId: boris.id,
+        text: '@Аня раз',
+        mentions: mention,
+      });
+      await db
+        .getRepository(ReadRow)
+        .insert({ identityId: anya.id, channelId: 'text-obshchii', readAt: new Date(first!.ts) });
+
+      expect((await chat.mentionCounts(anya.id, anya.fingerprint)).get('text-obshchii')).toBe(
+        undefined,
+      );
+
+      await chat.add('obshchii', {
+        name: 'Борис',
+        identityId: boris.id,
+        text: '@Аня два',
+        mentions: mention,
+      });
+      expect((await chat.mentionCounts(anya.id, anya.fingerprint)).get('text-obshchii')).toBe(1);
+    });
+
+    it('своё имя в своей реплике себя не зовёт', async () => {
+      const anya = await person('Аня');
+      await chat.add('obshchii', {
+        name: 'Аня',
+        identityId: anya.id,
+        text: 'меня зовут @Аня',
+        mentions: [{ fingerprint: anya.fingerprint, nick: anya.nick }],
+      });
+      expect((await chat.mentionCounts(anya.id, anya.fingerprint)).size).toBe(0);
+    });
+
+    it('удалённая реплика уносит упоминание с собой', async () => {
+      const anya = await person('Аня');
+      const boris = await person('Борис');
+      const msg = await chat.add('obshchii', {
+        name: 'Борис',
+        identityId: boris.id,
+        text: '@Аня',
+        mentions: [{ fingerprint: anya.fingerprint, nick: anya.nick }],
+      });
+      await chat.remove(msg!.id!);
+      expect((await chat.mentionCounts(anya.id, anya.fingerprint)).size).toBe(0);
+    });
+  });
+
+  describe('кого предлагать после «@»', () => {
+    it('говоривших в этих каналах, от недавних к давним', async () => {
+      const anya = await person('Аня');
+      const boris = await person('Борис');
+      await chat.add('obshchii', { name: 'Аня', identityId: anya.id, text: 'раз' });
+      await chat.add('obshchii', { name: 'Борис', identityId: boris.id, text: 'два' });
+
+      const people = await chat.mentionCandidates(['text-obshchii'], '');
+      expect(people.map((p) => p.nick)).toEqual(['Борис', 'Аня']);
+    });
+
+    it('по началу имени и не различая регистр', async () => {
+      const anya = await person('Аня');
+      await person('Борис');
+      await chat.add('obshchii', { name: 'Аня', identityId: anya.id, text: 'раз' });
+
+      expect((await chat.mentionCandidates(['text-obshchii'], 'ан')).map((p) => p.nick)).toEqual([
+        'Аня',
+      ]);
+      // Борис в канале не говорил — предлагать его тут не из чего.
+      expect(await chat.mentionCandidates(['text-obshchii'], 'бор')).toEqual([]);
+    });
+
+    it('один человек — одна строка, сколько бы он ни говорил', async () => {
+      const anya = await person('Аня');
+      for (let i = 0; i < 5; i += 1) {
+        await chat.add('obshchii', { name: 'Аня', identityId: anya.id, text: `${i}` });
+      }
+      expect(await chat.mentionCandidates(['text-obshchii'], '')).toHaveLength(1);
+    });
+
+    it('«%» в набранном — это символ, а не «покажи всех»', async () => {
+      const anya = await person('Аня');
+      await chat.add('obshchii', { name: 'Аня', identityId: anya.id, text: 'раз' });
+      expect(await chat.mentionCandidates(['text-obshchii'], '%')).toEqual([]);
+    });
+
+    it('без каналов спрашивать некого', async () => {
+      expect(await chat.mentionCandidates([], 'ан')).toEqual([]);
+    });
   });
 });
 
