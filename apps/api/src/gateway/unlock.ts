@@ -1,4 +1,4 @@
-import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 
 /**
@@ -89,6 +89,73 @@ export async function verifyServerPassword(password: string, stored: string): Pr
   }
   const actual = await scryptGate.run(() => scryptAsync(password, Buffer.from(saltHex, 'hex'), 32));
   return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+// ── Пропуск в разблокированный сервер ────────────────────────────────────
+//
+// Разблокировка обязана переживать реконнект — ровно по той же причине, что и
+// счётчик неудач выше: на сокете она не значит ничего. Сокет рвётся сам по
+// себе (спящий ноутбук, смена сети, перезапуск api), после чего набор
+// разблокировок пуст, а переспросить пароль не у кого — клиент его не хранит.
+// Человек остаётся в канале, которого для сервера больше не существует.
+//
+// Держать пароль в браузере, чтобы слать заново, — худший из выходов: пароль
+// закрытого сервера общий на всех, и localStorage у него самое неподходящее
+// место. Вместо этого сервер выдаёт подписанный пропуск: он говорит «пароль
+// этого сервера предъявляли» и не даёт узнать, какой именно.
+//
+// Ключ подписи — сам `passwordHash` сервера. Это то же решение, что у куки
+// relay_pass (см. auth.ts): смена пароля меняет хэш, а с ним и ключ, и все
+// выданные пропуска умирают в тот же миг — отзывать нечего и незачем.
+const UNLOCK_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+function unlockHmac(message: string, passwordHash: string): string {
+  return createHmac('sha256', 'relay-unlock-v1:' + passwordHash)
+    .update(message)
+    .digest('base64url');
+}
+
+/** Формат: `u1.<b64url(serverId)>.<exp>.<sig>`. */
+export function issueUnlockToken(
+  serverId: string,
+  passwordHash: string,
+): { token: string; exp: number } {
+  const exp = Date.now() + UNLOCK_TOKEN_TTL_MS;
+  const prefix = `u1.${Buffer.from(serverId, 'utf8').toString('base64url')}.${exp}`;
+  return { token: `${prefix}.${unlockHmac(prefix, passwordHash)}`, exp };
+}
+
+/**
+ * Проверка пропуска. Id сервера читается из самого токена, а хэш под него
+ * достаётся вызывающим — оттого и колбэк: подпись без правильного хэша не
+ * проверить, а брать хэш «откуда-нибудь» здесь нельзя. Возвращает id сервера,
+ * которому пропуск действительно выдан, или null.
+ *
+ * `hashOf` возвращает undefined и для несуществующего сервера, и для сервера
+ * без пароля. Второй случай — не ошибка: сервер открыли для всех, пока пропуск
+ * лежал у клиента. Разблокировать там нечего, и пропуск просто ни к чему.
+ */
+export function verifyUnlockToken(
+  token: string,
+  hashOf: (serverId: string) => string | undefined,
+): string | null {
+  const parts = token.split('.');
+  if (parts.length !== 4 || parts[0] !== 'u1') return null;
+  const exp = Number(parts[2]);
+  if (!Number.isFinite(exp) || exp < Date.now()) return null;
+  let serverId: string;
+  try {
+    serverId = Buffer.from(parts[1], 'base64url').toString('utf8');
+  } catch {
+    return null;
+  }
+  if (!serverId || serverId.includes('�')) return null;
+  const passwordHash = hashOf(serverId);
+  if (!passwordHash) return null;
+  const expected = Buffer.from(unlockHmac(parts.slice(0, -1).join('.'), passwordHash));
+  const actual = Buffer.from(parts[3]);
+  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null;
+  return serverId;
 }
 
 /**

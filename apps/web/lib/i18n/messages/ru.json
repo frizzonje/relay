@@ -509,6 +509,7 @@
   "voice.toast.micSwitchFailed": "Не удалось переключить микрофон: {reason}.",
   "voice.toast.micSwitched": "Микрофон переключён: {device}",
   "voice.toast.micSwitched.fallback": "устройство",
+  "voice.toast.locked": "Канал закрыт: сервер требует пароль. Введите его заново, чтобы вернуться в эфир.",
   "voice.toast.mode.p2p": "прямые звонки",
   "voice.toast.mode.sfu": "медиасервер",
   "voice.toast.modeSwitched": "Канал переключён на {mode}…",

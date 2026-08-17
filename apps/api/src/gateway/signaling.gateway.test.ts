@@ -65,7 +65,14 @@ function makeGateway(saved: PersistedRegistry = {}) {
 function connect(
   gw: SignalingGateway,
   server: FakeServer,
-  opts: { id?: string; clientId?: string; guest?: string; ip?: string; ua?: string } = {},
+  opts: {
+    id?: string;
+    clientId?: string;
+    guest?: string;
+    ip?: string;
+    ua?: string;
+    unlock?: string[];
+  } = {},
 ) {
   const sock = server.connect({
     id: opts.id,
@@ -74,6 +81,7 @@ function connect(
     auth: {
       ...(opts.clientId ? { clientId: opts.clientId } : {}),
       ...(opts.guest ? { guest: opts.guest } : {}),
+      ...(opts.unlock ? { unlock: opts.unlock } : {}),
     },
   });
   gw.handleConnection(asSocket(sock));
@@ -397,7 +405,7 @@ describe('server-unlock', () => {
     guest.clear();
 
     await gw.handleServerUnlock(asSocket(guest), { id: 'srv', password: 'пароль' });
-    expect(guest.last('server-unlock-result')).toEqual({ id: 'srv', ok: true });
+    expect(guest.last('server-unlock-result')).toMatchObject({ id: 'srv', ok: true });
     expect((guest.last('channels') as { slug: string }[]).map((c) => c.slug)).toContain(
       'тайный-чат',
     );
@@ -432,7 +440,7 @@ describe('server-unlock', () => {
     await gw.handleServerUnlock(asSocket(first), { id: 'srv', password: 'пароль' });
     const second = connect(gw, server, { id: 'second' });
     await gw.handleServerUnlock(asSocket(second), { id: 'srv', password: 'пароль' });
-    expect(second.last('server-unlock-result')).toEqual({ id: 'srv', ok: true });
+    expect(second.last('server-unlock-result')).toMatchObject({ id: 'srv', ok: true });
   });
 
   it('после порога неудач адрес уходит в простой — хэш больше не считается', async () => {
@@ -461,7 +469,85 @@ describe('server-unlock', () => {
     // А сосед по другому адресу не пострадал.
     const neighbour = connect(gw, server, { id: 'neighbour', ip: '8.8.8.8' });
     await gw.handleServerUnlock(asSocket(neighbour), { id: 'srv', password: 'пароль' });
-    expect(neighbour.last('server-unlock-result')).toEqual({ id: 'srv', ok: true });
+    expect(neighbour.last('server-unlock-result')).toMatchObject({ id: 'srv', ok: true });
+  });
+
+  // Регрессия. Разблокировка жила только на сокете, а сокет рвётся сам по себе.
+  // После реконнекта реестр приезжал без каналов закрытого сервера (сайдбар
+  // показывал их «сиротами» на главном), а `join` в них молча отбивался: клиент
+  // считал себя в канале, второй участник оставался в SFU, комната
+  // расщеплялась по транспортам — и обе стороны молчали.
+  //
+  // Переигрывать пароль на connect клиент умел и раньше, но не успевал: ответ
+  // ждёт scrypt, а `join` уходит сразу. Поэтому пропуск и предъявляется в
+  // handshake — до первой рассылки реестра.
+  it('пропуск в handshake переживает реконнект: каналы видны сразу, без ввода пароля', async () => {
+    const { gw, server } = await withLocked();
+    const first = connect(gw, server, { id: 'first' });
+    await gw.handleServerUnlock(asSocket(first), { id: 'srv', password: 'пароль' });
+    const { token } = first.last('server-unlock-result') as { token: string };
+    expect(token).toBeTruthy();
+
+    // Тот же человек после обрыва: новый сокет, пароля никто не вводил.
+    const again = server.connect({ id: 'again', auth: { unlock: [token] } });
+    gw.handleConnection(asSocket(again));
+    expect((again.last('channels') as { slug: string }[]).map((c) => c.slug)).toContain(
+      'тайный-чат',
+    );
+  });
+
+  it('без пропуска после реконнекта каналов закрытого сервера не видно', async () => {
+    const { gw, server } = await withLocked();
+    const bare = server.connect({ id: 'bare', auth: {} });
+    gw.handleConnection(asSocket(bare));
+    expect((bare.last('channels') as { slug: string }[]).map((c) => c.slug)).not.toContain(
+      'тайный-чат',
+    );
+  });
+
+  it('чужой и битый пропуск не открывают ничего', async () => {
+    const { gw, server } = await withLocked();
+    const sock = server.connect({
+      id: 'liar',
+      auth: { unlock: ['u1.c3J2.99999999999999.подделка', 'мусор', ''] },
+    });
+    gw.handleConnection(asSocket(sock));
+    expect((sock.last('channels') as { slug: string }[]).map((c) => c.slug)).not.toContain(
+      'тайный-чат',
+    );
+  });
+
+  it('пропуск удалённого сервера не открывает пересозданный с тем же id', async () => {
+    const { gw, server, owner } = await withLocked();
+    const a = connect(gw, server, { id: 'a' });
+    await gw.handleServerUnlock(asSocket(a), { id: 'srv', password: 'пароль' });
+    const { token } = a.last('server-unlock-result') as { token: string };
+
+    // Сервер снесли и завели заново под тем же id и другим паролем: соль у
+    // нового хэша своя, а с ней и ключ подписи — прежний пропуск ничей.
+    gw.handleServerDelete(asSocket(owner), { id: 'srv' });
+    await gw.handleServerCreate(asSocket(owner), {
+      id: 'srv',
+      name: 'тайный',
+      password: 'другой',
+    });
+    gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'тайный чат' });
+    settle();
+
+    const stale = server.connect({ id: 'stale', auth: { unlock: [token] } });
+    gw.handleConnection(asSocket(stale));
+    expect((stale.last('channels') as { slug: string }[]).map((c) => c.slug)).not.toContain(
+      'тайный-чат',
+    );
+  });
+
+  it('отказ на входе в закрытый канал слышен, а не нем', async () => {
+    const { gw, server, owner } = await withLocked();
+    gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'voice', name: 'тайный зов' });
+    settle();
+    const outsider = connect(gw, server, { id: 'outsider' });
+    gw.handleJoin(asSocket(outsider), { room: 'тайный-зов', name: 'чужак' });
+    expect(outsider.last('voice-locked')).toEqual({ room: 'тайный-зов' });
   });
 
   it('гость пароли не подбирает', async () => {

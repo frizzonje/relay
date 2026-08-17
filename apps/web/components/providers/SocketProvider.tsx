@@ -12,6 +12,12 @@ import { useUnreadStore, LAST_READ_KEY } from '@/stores/unread';
 import { useChannelsStore } from '@/stores/channels';
 import { useServersStore } from '@/stores/servers';
 import { forgetServerPassword, storedServerPasswords, unlockServer } from '@/lib/servers';
+import {
+  dropUnlockToken,
+  hasUnlockToken,
+  saveUnlockToken,
+  unlockTokenIds,
+} from '@/lib/unlock-tokens';
 import { notifyMessage } from '@/lib/notify';
 import { tx } from '@/lib/i18n';
 
@@ -166,10 +172,14 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     socket.on('servers', (list) => {
       if (!Array.isArray(list)) return;
       useServersStore.getState().setServers(list);
-      // Пароли серверов, которых больше нет (удалили), выметаем из localStorage.
+      // Пропуска и пароли серверов, которых больше нет (удалили), выметаем из
+      // localStorage: предъявлять их некому, а ездить в handshake они будут.
       const ids = new Set(list.map((s) => s?.id));
       for (const { id } of storedServerPasswords()) {
         if (!ids.has(id)) forgetServerPassword(id);
+      }
+      for (const id of unlockTokenIds()) {
+        if (!ids.has(id)) dropUnlockToken(id);
       }
     });
 
@@ -217,10 +227,16 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // Ответ на ввод пароля закрытого сервера. Успех — помечаем разблокированным;
     // если модалка ждала именно его — закрываем и открываем сервер. Неверный —
     // пишем ошибку в модалку (или молча, если это была авто-разблокировка) и
-    // забываем сохранённый пароль.
-    socket.on('server-unlock-result', ({ id, ok }) => {
+    // забываем сохранённое.
+    socket.on('server-unlock-result', ({ id, ok, token }) => {
       const s = useServersStore.getState();
       if (ok) {
+        // Пропуск пришёл — дальше разблокировка едет в handshake и успевает
+        // до первой рассылки реестра. Пароль в хранилище с этого момента лишний.
+        if (token) {
+          saveUnlockToken(id, token);
+          forgetServerPassword(id);
+        }
         s.markUnlocked(id);
         if (s.unlockTargetId === id) {
           s.closeUnlock();
@@ -228,14 +244,25 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         }
       } else {
         forgetServerPassword(id);
+        dropUnlockToken(id);
         if (s.unlockTargetId === id) s.setUnlockError('unlockServer.error.wrongPassword');
       }
     });
 
     socket.on('connect', () => {
-      // Авто-разблокировка закрытых серверов сохранёнными паролями (после reconnect
-      // сокет-сессия новая — разблокировки надо повторить).
-      for (const { id, password } of storedServerPasswords()) unlockServer(id, password);
+      // Разблокировки едут в handshake пропусками (см. lib/socket) и успевают
+      // до первой рассылки реестра. Сюда доходят только серверы без пропуска —
+      // пароли, сохранённые прошлой версией клиента. Разблокируем ими один
+      // раз: в ответ придёт пропуск, а пароль будет стёрт.
+      //
+      // Переигрывать пароли здесь и раньше было единственным механизмом — и
+      // именно он опаздывал. Ответ на `server-unlock` ждёт scrypt (намеренно
+      // дорогой, да ещё и в очереди на два места), а `join` в голосовой канал
+      // уходит сразу же — и отбивался, потому что сокет к тому моменту ещё
+      // заперт. Пропуск в handshake эту гонку убирает совсем.
+      for (const { id, password } of storedServerPasswords()) {
+        if (!hasUnlockToken(id)) unlockServer(id, password);
+      }
       const room = ui().textRoom;
       if (room) {
         // У сокета новый id, история придёт заново — чистим ленту перед подпиской.
