@@ -234,11 +234,12 @@ What lives where:
 | Chat messages | Postgres, for `RETENTION_DAYS` days | yes, until the retention window passes |
 | Uploaded attachments | `uploads` volume, one row per file in Postgres | yes, as long as their message lives |
 | TLS certificates | `caddy_data` volume | yes |
-| Your `@`-tag, volume levels, unread state | browser `localStorage` | yes, per browser |
+| Unread marks, channel sound, per-person volume | Postgres, against your identity | yes, on every device you sign in from |
+| Microphone, headphones, camera, hotkeys | browser `localStorage` | yes, on this device only |
 
 Retention is a promise, not a cleanup job: messages older than `RETENTION_DAYS` (14 by default) are deleted every hour, and a file goes with the message that carried it. `0` means the installation keeps nothing. An upload nobody ever sent is swept a day later.
 
-`relay backup` snapshots the database dump and both volumes **and** the configuration next to them (`.env` with all its secrets, the compose file, the Caddy config) — a machine rebuilt from one of these tarballs comes back as it was, which was not true of the volumes alone. Accounts don't exist: access is one shared `SITE_PASSWORD`, and identity is the `@`-tag a visitor picks after entering it.
+`relay backup` snapshots the database dump and both volumes **and** the configuration next to them (`.env` with all its secrets, the compose file, the Caddy config) — a machine rebuilt from one of these tarballs comes back as it was, which was not true of the volumes alone. Accounts don't exist: access is one shared `SITE_PASSWORD`, and a person is a key their own device holds — nothing to register and nothing to recover.
 
 ## Localization
 
