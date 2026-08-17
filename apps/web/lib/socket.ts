@@ -1,6 +1,7 @@
 import { io, type Socket } from 'socket.io-client';
 import type { ClientToServerEvents, ServerToClientEvents } from '@relay/shared';
 import { loadClientId } from '@/lib/identity';
+import { loadUnlockTokens } from '@/lib/unlock-tokens';
 
 export type RelaySocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -38,9 +39,19 @@ export function getSocket(): RelaySocket {
       // управляемыми (audit B2), и выгоняет «призрака» прошлой вкладки из
       // эфира. Место ему именно здесь: одно объявление на соединение вместо
       // поля в каждом сообщении.
+      // unlock — пропуска в закрытые серверы (см. lib/unlock-tokens). Едут в
+      // handshake, а не отдельным сообщением после подключения: сервер решает
+      // видимость каналов уже на connect, и опоздавший пропуск означал бы
+      // реестр без своих закрытых серверов — с пропавшими каналами и отказом
+      // на входе в них.
       auth: (cb) => {
         const guest = guestTokenFromLocation();
-        cb({ clientId: loadClientId(), ...(guest ? { guest } : {}) });
+        const unlock = loadUnlockTokens();
+        cb({
+          clientId: loadClientId(),
+          ...(guest ? { guest } : {}),
+          ...(unlock.length ? { unlock } : {}),
+        });
       },
     });
   }

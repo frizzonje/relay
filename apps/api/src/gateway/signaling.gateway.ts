@@ -38,7 +38,14 @@ import {
   ownedBy,
   publicChannel,
 } from './ownership';
-import { UnlockAttempts, clientIp, hashServerPassword, verifyServerPassword } from './unlock';
+import {
+  UnlockAttempts,
+  clientIp,
+  hashServerPassword,
+  issueUnlockToken,
+  verifyServerPassword,
+  verifyUnlockToken,
+} from './unlock';
 import {
   ANON_NAME,
   LIMIT,
@@ -429,6 +436,11 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // Набор серверов, разблокированных этим сокетом (закрытые под паролем).
     // `??=` — чтобы восстановление сессии (CSR) не сбросило уже введённые пароли.
     (client.data.unlocked as Set<string>) ??= new Set<string>();
+    // Пропуска, выданные за уже введённые пароли (см. ./unlock). Читаем их
+    // ЗДЕСЬ, до первой рассылки реестра: разберись мы отдельным сообщением
+    // после подключения — клиент успел бы получить реестр без своих закрытых
+    // серверов, а вместе с ним и полную картину «каналы пропали».
+    this.restoreUnlocked(client);
     // Новому клиенту сразу шлём реестры серверов и каналов и кто где в голосовых.
     // Серверы — публичная форма (без хэшей, с флагом locked); каналы — только
     // видимые ему (закрытые серверы скрыты до ввода пароля).
@@ -533,6 +545,32 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   // Пароль сервера принят — запоминаем разблокировку на этом сокете.
   private markUnlocked(client: Socket, serverId: string) {
     this.unlockedOf(client)?.add(serverId);
+  }
+
+  /**
+   * Восстановить разблокировки по пропускам из handshake. Пропуск подписан
+   * хэшем пароля своего сервера (см. ./unlock), так что сменённый пароль
+   * отзывает его сам — проверять тут больше нечего.
+   *
+   * Битые и просроченные пропуска молча пропускаем: клиент предъявляет всё, что
+   * у него лежит, и ровно так же выглядит пропуск сервера, который успели
+   * открыть, удалить или перепаролить. Отвечать на каждый значило бы
+   * рассказывать по одному токену, что стало с сервером, которого спросивший
+   * не видит.
+   */
+  private restoreUnlocked(client: Socket) {
+    const raw = (client.handshake.auth as { unlock?: unknown } | undefined)?.unlock;
+    if (!Array.isArray(raw)) return;
+    // Столько же, сколько серверов вообще может быть: больше валидных пропусков
+    // не бывает, а перебирать присланное без предела незачем.
+    for (const item of raw.slice(0, MAX_SERVERS)) {
+      if (typeof item !== 'string' || !item) continue;
+      const id = verifyUnlockToken(item, (serverId) => {
+        const srv = this.registry.servers.find((s) => s.id === serverId);
+        return srv?.passwordHash;
+      });
+      if (id) this.markUnlocked(client, id);
+    }
   }
 
   // Открыт ли сервер этому сокету: открытый — всем, закрытый — только тому,
@@ -781,6 +819,16 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       // чужого входа-выхода: присутствие теперь режется по видимости, и
       // прошлую рассылку этот сокет получил ещё запертым.
       client.emit('voice-presence', this.presenceFor(client, this.buildVoicePresence()));
+      // Пропуск на будущие подключения: с ним разблокировка переживает
+      // реконнект, а пароль остаётся там, где ему и место, — у человека.
+      // Хэш перечитываем: пока считался scrypt, пароль могли сменить, и
+      // подписать пропуск прежним значило бы выдать заведомо мёртвый.
+      const fresh = this.registry.servers.find((s) => s.id === id);
+      if (fresh?.passwordHash) {
+        const { token } = issueUnlockToken(id, fresh.passwordHash);
+        client.emit('server-unlock-result', { id, ok, token });
+        return;
+      }
     }
     client.emit('server-unlock-result', { id, ok });
   }
@@ -1514,6 +1562,11 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // разговором, либо инвайт-комната, и запирать их не за что.
     if (!this.isGuest(client) && !this.mayEnter(client, room)) {
       this.logger.warn(`voice: join to locked room "${room}" refused for ${client.id}`);
+      // Отказ обязан быть слышен. Молчащий `return` клиент не отличал от
+      // удавшегося входа: он считал себя в канале, для остальных его там не
+      // было, и разъезд по транспортам довершал дело — вместо «введи пароль»
+      // человек получал тишину без объяснений.
+      client.emit('voice-locked', { room });
       return;
     }
     // Имя называет сервер, если сокет — личность; тело сообщения остаётся

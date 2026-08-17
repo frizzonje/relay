@@ -611,6 +611,7 @@
   "voice.toast.micSwitchFailed": "Could not switch the microphone: {reason}.",
   "voice.toast.micSwitched": "Microphone switched: {device}",
   "voice.toast.micSwitched.fallback": "device",
+  "voice.toast.locked": "This channel is locked: the server wants its password. Enter it again to get back on the air.",
   "voice.toast.mode.p2p": "direct calls",
   "voice.toast.mode.sfu": "the media server",
   "voice.toast.modeSwitched": "Channel switched to {mode}…",

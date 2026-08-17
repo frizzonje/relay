@@ -4,7 +4,9 @@ import {
   UnlockAttempts,
   clientIp,
   hashServerPassword,
+  issueUnlockToken,
   verifyServerPassword,
+  verifyUnlockToken,
 } from './unlock';
 
 /**
@@ -176,5 +178,65 @@ describe('UnlockAttempts', () => {
     a.fail('ip', 'srv', 0);
     a.forgetServer('srv');
     expect(a.blockedUntil('ip', 'srv', 0)).toBe(0);
+  });
+});
+
+/**
+ * Пропуск в закрытый сервер. Он существует ровно затем, чтобы разблокировка
+ * пережила реконнект, не заставляя браузер хранить пароль, — поэтому важны два
+ * его свойства: подделать нельзя и смена пароля убивает его сама.
+ */
+describe('пропуск в закрытый сервер', () => {
+  const HASH = 'соль:хэш';
+  const hashOf = (id: string) => (id === 'srv' ? HASH : undefined);
+
+  it('свой пропуск проверяется и называет свой сервер', () => {
+    const { token } = issueUnlockToken('srv', HASH);
+    expect(verifyUnlockToken(token, hashOf)).toBe('srv');
+  });
+
+  it('id сервера переживает не-ASCII', () => {
+    const { token } = issueUnlockToken('сервер-1', HASH);
+    expect(verifyUnlockToken(token, () => HASH)).toBe('сервер-1');
+  });
+
+  it('смена пароля отзывает пропуск: ключ подписи — сам хэш', () => {
+    const { token } = issueUnlockToken('srv', HASH);
+    expect(verifyUnlockToken(token, () => 'соль:другой-хэш')).toBeNull();
+  });
+
+  it('сервер без пароля (или удалённый) пропуска не признаёт', () => {
+    const { token } = issueUnlockToken('srv', HASH);
+    expect(verifyUnlockToken(token, () => undefined)).toBeNull();
+  });
+
+  it('пропуск на один сервер не открывает другой', () => {
+    const { token } = issueUnlockToken('другой', HASH);
+    expect(verifyUnlockToken(token, hashOf)).toBeNull();
+  });
+
+  it('подпись не подделать, подменив тело', () => {
+    const { token } = issueUnlockToken('srv', HASH);
+    const parts = token.split('.');
+    const forged = [
+      parts[0],
+      Buffer.from('srv', 'utf8').toString('base64url'),
+      String(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000),
+      parts[3],
+    ].join('.');
+    expect(verifyUnlockToken(forged, hashOf)).toBeNull();
+  });
+
+  it('просроченный пропуск не принимается', () => {
+    const { token } = issueUnlockToken('srv', HASH);
+    const parts = token.split('.');
+    const expired = [parts[0], parts[1], String(Date.now() - 1), parts[3]].join('.');
+    expect(verifyUnlockToken(expired, hashOf)).toBeNull();
+  });
+
+  it('мусор вместо пропуска — просто null, без исключений', () => {
+    for (const bad of ['', 'мусор', 'u1.a.b', 'u2.a.1.b', 'u1...', 'u1.!!!.1.x']) {
+      expect(verifyUnlockToken(bad, hashOf)).toBeNull();
+    }
   });
 });
