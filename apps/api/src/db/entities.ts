@@ -5,6 +5,7 @@ import {
   Index,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryColumn,
 } from 'typeorm';
 
@@ -296,6 +297,18 @@ export class MessageRow {
 
   @Column({ type: 'timestamptz', name: 'edited_at', nullable: true })
   editedAt!: Date | null;
+
+  /**
+   * Закрепление этой реплики — список, в котором бывает ноль строк или одна:
+   * ключ таблицы `pins` — сам id сообщения. Списком, а не связью «один к
+   * одному», намеренно: `@OneToOne` попросил бы у базы отдельное ограничение
+   * уникальности поверх первичного ключа, которого в миграции нет, и схема
+   * начала бы расходиться с классами на ровном месте (см. `schema.test.ts`).
+   *
+   * Лента подтягивает его слева и по наличию строки рисует пометку.
+   */
+  @OneToMany(() => PinRow, (pin) => pin.message)
+  pins!: PinRow[];
 }
 
 // ── Личность (слой 2) ───────────────────────────────────────────────────────
@@ -514,7 +527,7 @@ export class PinRow {
   @PrimaryColumn({ type: 'uuid', name: 'message_id' })
   messageId!: string;
 
-  @ManyToOne(() => MessageRow, { onDelete: 'CASCADE' })
+  @ManyToOne(() => MessageRow, (message) => message.pins, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'message_id' })
   message!: MessageRow;
 

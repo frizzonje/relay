@@ -3377,3 +3377,157 @@ describe('упоминания', () => {
     });
   });
 });
+
+describe('закреплённые', () => {
+  /** Свой сервер, канал в нём и чужая реплика — то, что закрепляет хозяйка. */
+  async function ownChannel() {
+    const { gw, server } = await makeGateway();
+    const host = await personCookie('Хозяйка');
+    const guest = await personCookie('Гость');
+    const h = await connectAs(gw, server, host.cookie, { id: 'h' });
+    await ownServer(gw, h);
+    const g = await connectAs(gw, server, guest.cookie, { id: 'g' });
+    const id = await say(gw, g, 'болталка', 'важное слово');
+    await gw.handleChatJoin(asSocket(h), { room: 'болталка' });
+    server.clearAll();
+    return { gw, server, h, g, id };
+  }
+
+  it('модератор закрепляет, и это видят все в канале', async () => {
+    const { gw, h, g, id } = await ownChannel();
+
+    expect(await gw.handleChatPin(asSocket(h), { id, on: true })).toEqual({
+      ok: true,
+      pinned: true,
+      count: 1,
+    });
+    // Число уезжает готовым: складывать его самому пришлось бы и тому, кто
+    // ленту не открывал, — и оно бы разъехалось.
+    expect(g.last('chat-pinned')).toEqual({ id, pinned: true, count: 1 });
+  });
+
+  it('вошедший видит пометку в ленте и число в шапке', async () => {
+    const { gw, server, h, id } = await ownChannel();
+    await gw.handleChatPin(asSocket(h), { id, on: true });
+
+    const fresh = connect(gw, server, { id: 'fresh' });
+    await gw.handleChatJoin(asSocket(fresh), { room: 'болталка' });
+    const page = fresh.last('chat-history') as {
+      pins: number;
+      messages: { text: string; pinned?: true }[];
+    };
+    expect(page.pins).toBe(1);
+    expect(page.messages[0]).toMatchObject({ text: 'важное слово', pinned: true });
+  });
+
+  it('список закреплённого отдаётся по запросу', async () => {
+    const { gw, h, g, id } = await ownChannel();
+    await gw.handleChatPin(asSocket(h), { id, on: true });
+
+    // Спрашивать может любой, кто в канале: закрепление — то, что канал
+    // показывает всем, и прятать его от читателей значило бы прятать шапку.
+    const res = (await gw.handleChatPins(asSocket(g))) as {
+      ok: true;
+      pins: { id: string; text: string }[];
+    };
+    expect(res.ok).toBe(true);
+    expect(res.pins.map((m) => m.text)).toEqual(['важное слово']);
+  });
+
+  it('открепление возвращает канал в прежний вид', async () => {
+    const { gw, h, g, id } = await ownChannel();
+    await gw.handleChatPin(asSocket(h), { id, on: true });
+
+    expect(await gw.handleChatPin(asSocket(h), { id, on: false })).toEqual({
+      ok: true,
+      pinned: false,
+      count: 0,
+    });
+    expect(g.last('chat-pinned')).toEqual({ id, pinned: false, count: 0 });
+    expect(await gw.handleChatPins(asSocket(h))).toEqual({ ok: true, pins: [] });
+  });
+
+  it('не модератору закрепление недоступно — даже своё', async () => {
+    const { gw, h, g, id } = await ownChannel();
+
+    // Закрепление меняет канал для всех и вынимает реплику из-под ретенции:
+    // это распоряжение чужой историей, а не пометка для себя.
+    expect(await gw.handleChatPin(asSocket(g), { id, on: true })).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+    expect(h.got('chat-pinned')).toBe(false);
+  });
+
+  it('на главном сервере закрепляет только владелец инсталляции', async () => {
+    // Создателя у главного сервера нет и быть не может: без владельца там не
+    // закрепляет никто, иначе шапка общего канала досталась бы первому вошедшему.
+    const { gw, server, owner } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const boss = await personCookie('Хозяин');
+    const a = await connectAs(gw, server, anya.cookie, { id: 'a' });
+    const id = await say(gw, a, 'obshchii', 'моё слово');
+
+    expect(await gw.handleChatPin(asSocket(a), { id, on: true })).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+
+    await makeOwner(owner, boss.identityId);
+    const b = await connectAs(gw, server, boss.cookie, { id: 'b' });
+    await gw.handleChatJoin(asSocket(b), { room: 'obshchii' });
+    expect(await gw.handleChatPin(asSocket(b), { id, on: true })).toMatchObject({ ok: true });
+  });
+
+  it('удаление закреплённого само снимает закрепление', async () => {
+    const { gw, h, g, id } = await ownChannel();
+    await gw.handleChatPin(asSocket(h), { id, on: true });
+    g.clear();
+
+    await gw.handleChatDelete(asSocket(h), { id });
+    expect(g.last('chat-deleted')).toEqual({ id });
+    // Число в шапке про каскад в базе само не узнает.
+    expect(g.last('chat-pinned')).toEqual({ id, pinned: false, count: 0 });
+  });
+
+  it('удаление незакреплённого лишнего не рассылает', async () => {
+    const { gw, h, g, id } = await ownChannel();
+    g.clear();
+    await gw.handleChatDelete(asSocket(h), { id });
+    expect(g.got('chat-pinned')).toBe(false);
+  });
+
+  it('несуществующая реплика — «нет такой», а не молчание', async () => {
+    const { gw, h } = await ownChannel();
+    expect(await gw.handleChatPin(asSocket(h), { id: 'нет-такого', on: true })).toEqual({
+      ok: false,
+      error: 'not-found',
+    });
+    expect(await gw.handleChatPin(asSocket(h), { id: 'нет-такого', on: false })).toEqual({
+      ok: false,
+      error: 'not-found',
+    });
+    expect(await gw.handleChatPin(asSocket(h), { on: true })).toEqual({
+      ok: false,
+      error: 'not-found',
+    });
+  });
+
+  it('вне канала и гостю по инвайту закреплять нечего', async () => {
+    const { gw, server } = await makeGateway();
+    const loner = connect(gw, server, { id: 'loner' });
+    expect(await gw.handleChatPin(asSocket(loner), { id: 'x', on: true })).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+    expect(await gw.handleChatPins(asSocket(loner))).toEqual({ ok: false });
+
+    const { token } = issueGuestToken('voice-obshchii');
+    const guest = connect(gw, server, { guest: token });
+    expect(await gw.handleChatPin(asSocket(guest), { id: 'x', on: true })).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+    expect(await gw.handleChatPins(asSocket(guest))).toEqual({ ok: false });
+  });
+});

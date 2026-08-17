@@ -136,6 +136,13 @@ export interface ChatMessage {
   editedTs?: number;
   /** Кого назвали в реплике. Пусто — никого, и ключа в реплике нет. */
   mentions?: MentionRef[];
+  /**
+   * Реплика закреплена. Видно это прямо в ленте, а не только в списке
+   * закреплённого, потому что закрепление — единственное исключение из
+   * ретенции: человеку положено знать, какая строка переживёт четырнадцать
+   * дней, а какая исчезнет.
+   */
+  pinned?: true;
 }
 
 /**
@@ -686,6 +693,38 @@ export interface ChatDeletePayload {
   id: string;
 }
 
+/**
+ * Закрепить (`on: true`) или открепить реплику. Состояние называется явно, а не
+ * выводится сервером из текущего: лента клиента бывает старше действительности
+ * на одно чужое действие, и «переключить» сняло бы то, что человек ставил.
+ */
+export interface ChatPinPayload {
+  id: string;
+  on: boolean;
+}
+
+/**
+ * Ответ на закрепление. `limit` — единственный отказ, с которым человеку есть
+ * что делать: открепить лишнее. `forbidden` — канал не свой: закрепление меняет
+ * канал для всех и вынимает реплику из-под ретенции, а это модерация.
+ */
+export type ChatPinResult =
+  | { ok: true; pinned: boolean; count: number }
+  | { ok: false; error: 'forbidden' | 'not-found' | 'limit' };
+
+/** Закреплённое канала целиком: их не больше потолка, страниц не нужно. */
+export type ChatPinsResult = { ok: true; pins: ChatMessage[] } | { ok: false };
+
+/**
+ * Сколько реплик можно закрепить в одном канале — потолок сервера, клиент
+ * знает его, чтобы объяснить отказ до того, как получит его от сервера.
+ *
+ * Число здесь не про место на диске: закрепление — единственный способ оставить
+ * сказанное жить дольше ретенции, и без потолка четырнадцать дней стали бы
+ * пожеланием.
+ */
+export const PIN_LIMIT = 50;
+
 /** Тогл реакции: повторная отправка того же эмодзи снимает её. */
 export interface ChatReactPayload {
   id: string;
@@ -711,6 +750,12 @@ export interface ChatHistoryPage {
   slug: string;
   messages: ChatMessage[];
   more: boolean;
+  /**
+   * Сколько в канале закреплено. Число едет со страницей, а сам список — по
+   * запросу: шапке нужно только оно, а полсотни реплик, которых, может, и не
+   * откроют, — груз на каждый вход в канал.
+   */
+  pins?: number;
 }
 
 export type ChatHistoryMoreResult = { ok: true; messages: ChatMessage[]; more: boolean };
@@ -866,6 +911,10 @@ export interface ClientToServerEvents {
   /** «Печатает…» — клиент шлёт с троттлингом, серверу тело не нужно. */
   'chat-typing': () => void;
   'chat-react': (payload: ChatReactPayload) => void;
+  /** Закрепить или открепить реплику — право модератора сервера. */
+  'chat-pin': (payload: ChatPinPayload, cb: (res: ChatPinResult) => void) => void;
+  /** Список закреплённого открытого канала — спрашивается, когда его открывают. */
+  'chat-pins': (cb: (res: ChatPinsResult) => void) => void;
   /**
    * Подгрузить страницу выше уже показанной. Курсор — время и id самой верхней
    * реплики на экране; сервер по нему ничего не хранит.
@@ -981,6 +1030,8 @@ export interface ServerToClientEvents {
   'chat-edited': (payload: ChatEditRelay) => void;
   /** Сообщение удалили — убрать из ленты по id. */
   'chat-deleted': (payload: ChatDeleteRelay) => void;
+  /** Реплику закрепили или открепили — обновить пометку и число в шапке. */
+  'chat-pinned': (payload: ChatPinnedRelay) => void;
   /** Кто-то печатает в открытом канале (кроме тебя) — показать индикатор. */
   'chat-typing': (payload: ChatTypingRelay) => void;
   /**
@@ -1091,6 +1142,17 @@ export interface ChatEditRelay {
 /** Удаление сообщения — id, всем в канале. */
 export interface ChatDeleteRelay {
   id: string;
+}
+
+/**
+ * Реплику закрепили или открепили — всем в канале. `count` присылается готовым,
+ * а не выводится клиентом сложением: иначе число в шапке пришлось бы держать
+ * верным у того, кто ленту и не открывал, — и оно бы разъезжалось.
+ */
+export interface ChatPinnedRelay {
+  id: string;
+  pinned: boolean;
+  count: number;
 }
 
 /** «Печатает…»: тег того, кто печатает (себе сервер это событие не шлёт). */

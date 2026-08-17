@@ -70,6 +70,9 @@ import {
   type ChatAroundPayload,
   type ChatSearchPayload,
   type ChatPayload,
+  type ChatPinPayload,
+  type ChatPinResult,
+  type ChatPinsResult,
   type ChatReactPayload,
   type GuestKickPayload,
   type ModerationBanPayload,
@@ -1794,8 +1797,11 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     client.data.chatName = name || ANON_NAME;
 
     // Новичку — последняя страница канала. Не вся история: она больше не
-    // помещается в один снимок, и остальное он подтянет вверх сам.
-    client.emit('chat-history', { slug, ...(await this.chat.history(slug)) });
+    // помещается в один снимок, и остальное он подтянет вверх сам. Вместе с ней
+    // — сколько здесь закреплено: число рисуется в шапке сразу, а сам список
+    // спрашивают, только когда его открывают.
+    const [page, pins] = await Promise.all([this.chat.history(slug), this.chat.pinCount(slug)]);
+    client.emit('chat-history', { slug, ...page, pins });
     this.emitRoster(room);
   }
 
@@ -2164,12 +2170,77 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const id = str(payload?.id);
     if (!id) return;
 
-    const msg = await this.chat.find(this.chat.slug(room), id);
+    const slug = this.chat.slug(room);
+    const msg = await this.chat.find(slug, id);
     if (!msg) return;
     if (!this.ownsMessage(client, msg) && !this.moderatesRoom(client, room)) return;
 
     if (!(await this.chat.remove(id))) return;
     this.server.to(room).emit('chat-deleted', { id });
+
+    // Удалили закреплённое — закрепление ушло вместе с ним (ON DELETE CASCADE),
+    // а число в шапке про это не знает. Считать его клиенту самому значило бы
+    // требовать, чтобы каждый держал у себя список закреплённого целиком — ради
+    // одного вычитания.
+    if (msg.pinned) {
+      this.server
+        .to(room)
+        .emit('chat-pinned', { id, pinned: false, count: await this.chat.pinCount(slug) });
+    }
+  }
+
+  /**
+   * Закрепить или открепить реплику.
+   *
+   * Право то же, что и на удаление чужого, — модерация сервера, и это не
+   * строгость ради строгости. Закрепление меняет канал для всех, кто в него
+   * зайдёт, и вдобавок вынимает реплику из-под ретенции: это единственный
+   * способ оставить сказанное жить дольше четырнадцати дней. Раздай мы его
+   * каждому вошедшему — и срок хранения перестал бы что-либо значить, а шапка
+   * канала стала бы доской объявлений для случайного гостя.
+   */
+  @SubscribeMessage('chat-pin')
+  async handleChatPin(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ChatPinPayload,
+  ): Promise<ChatPinResult> {
+    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
+    const room = client.data.chatRoom as string | undefined;
+    if (!room) return { ok: false, error: 'forbidden' };
+    const id = str(payload?.id);
+    if (!id) return { ok: false, error: 'not-found' };
+    if (!this.moderatesRoom(client, room)) return { ok: false, error: 'forbidden' };
+
+    const slug = this.chat.slug(room);
+    // «Закрепить» приходит явно, а не выводится из того, что клиент видит у
+    // себя: его лента бывает старше действительности на одно чужое действие,
+    // и «переключить» сняло бы то, что человек только что хотел поставить.
+    const on = payload?.on === true;
+
+    if (on) {
+      const res = await this.chat.pin(slug, id, this.speaker(client)?.id ?? null);
+      if (res === 'gone') return { ok: false, error: 'not-found' };
+      if (res === 'limit') return { ok: false, error: 'limit' };
+    } else if (!(await this.chat.unpin(slug, id))) {
+      return { ok: false, error: 'not-found' };
+    }
+
+    const count = await this.chat.pinCount(slug);
+    this.server.to(room).emit('chat-pinned', { id, pinned: on, count });
+    return { ok: true, pinned: on, count };
+  }
+
+  /**
+   * Закреплённое канала списком — по запросу, а не в снимке при входе:
+   * закреплённых бывает полсотни, и слать их каждому входящему в канал ради
+   * поповера, который откроют однажды, незачем.
+   */
+  @SubscribeMessage('chat-pins')
+  async handleChatPins(@ConnectedSocket() client: Socket): Promise<ChatPinsResult> {
+    if (!this.allow(client) || this.isGuest(client)) return { ok: false };
+    const room = client.data.chatRoom as string | undefined;
+    if (!room) return { ok: false };
+    return { ok: true, pins: await this.chat.pinned(this.chat.slug(room)) };
   }
 
   // «Печатает…»: клиент шлёт с троттлингом, релеим остальным в канале (себе — нет).

@@ -7,6 +7,7 @@ import {
   AROUND_HALF,
   ChatService,
   PAGE_SIZE,
+  PIN_LIMIT,
   SEARCH_PAGE_SIZE,
   isUuid,
   mentionedIn,
@@ -58,6 +59,33 @@ async function say(text: string, name = 'А') {
   return msg;
 }
 
+/**
+ * Длинная лента с заведомо разным временем реплик — по секунде на каждую.
+ *
+ * Тесным циклом из `say()` её набирать нельзя, и это не про скорость. Время
+ * пишется с точностью до миллисекунды, в одну миллисекунду при быстрой вставке
+ * попадают две реплики, а порядок ленты внутри такой ничьей задаёт id — то есть
+ * жребий. Проверка «страница вернула ровно эти десять» начинала бы падать раз в
+ * несколько прогонов, и падала бы на пагинации, которая ни при чём. Что сами
+ * ничьи ленту не рвут, проверяется отдельно и намеренно.
+ */
+async function series(count: number, text: (i: number) => string): Promise<void> {
+  const base = Date.UTC(2024, 0, 1);
+  await db.getRepository(MessageRow).insert(
+    Array.from({ length: count }, (_, i) => ({
+      id: randomUUID(),
+      channelId: 'text-obshchii',
+      authorName: 'А',
+      text: text(i),
+      system: false,
+      spoiler: false,
+      reactions: {},
+      mentions: [],
+      createdAt: new Date(base + i * 1000),
+    })),
+  );
+}
+
 describe('переписка переживает рестарт', () => {
   it('сообщение читается новым процессом', async () => {
     await say('привет');
@@ -85,7 +113,7 @@ describe('переписка переживает рестарт', () => {
 
 describe('страницы ленты', () => {
   beforeEach(async () => {
-    for (let i = 0; i < PAGE_SIZE + 10; i += 1) await say(`${i}`);
+    await series(PAGE_SIZE + 10, (i) => `${i}`);
   });
 
   it('вход в канал отдаёт последнюю страницу и честное «выше есть ещё»', async () => {
@@ -194,7 +222,7 @@ describe('поиск по истории', () => {
   });
 
   it('свежее первым, и страница листается курсором', async () => {
-    for (let i = 0; i < SEARCH_PAGE_SIZE + 3; i += 1) await say(`дача номер ${i}`);
+    await series(SEARCH_PAGE_SIZE + 3, (i) => `дача номер ${i}`);
 
     const first = await chat.search(['text-obshchii'], 'дача');
     expect(first.hits).toHaveLength(SEARCH_PAGE_SIZE);
@@ -252,7 +280,7 @@ describe('поиск по истории', () => {
 
 describe('переход к найденному', () => {
   beforeEach(async () => {
-    for (let i = 0; i < AROUND_HALF * 3; i += 1) await say(`${i}`);
+    await series(AROUND_HALF * 3, (i) => `${i}`);
   });
 
   it('окно показывает соседей сверху и снизу', async () => {
@@ -618,6 +646,122 @@ describe('упоминания', () => {
     it('без каналов спрашивать некого', async () => {
       expect(await chat.mentionCandidates([], 'ан')).toEqual([]);
     });
+  });
+});
+
+describe('закреплённые', () => {
+  it('пометка видна в самой ленте, а не только в списке', async () => {
+    const msg = await say('правила канала');
+    expect(await chat.pin('obshchii', msg.id!, null)).toBe('ok');
+
+    const [shown] = (await chat.history('obshchii')).messages;
+    expect(shown.pinned).toBe(true);
+    // И после рестарта: закрепление живёт в базе, а не в памяти процесса.
+    const after = await restart();
+    expect((await after.history('obshchii')).messages[0].pinned).toBe(true);
+  });
+
+  it('открепление снимает пометку и уменьшает счёт', async () => {
+    const msg = await say('уже не важное');
+    await chat.pin('obshchii', msg.id!, null);
+    expect(await chat.pinCount('obshchii')).toBe(1);
+
+    expect(await chat.unpin('obshchii', msg.id!)).toBe(true);
+    expect(await chat.pinCount('obshchii')).toBe(0);
+    expect((await chat.history('obshchii')).messages[0].pinned).toBeUndefined();
+    // Второй раз откреплять нечего — и это не ошибка, а честное «его не было».
+    expect(await chat.unpin('obshchii', msg.id!)).toBe(false);
+  });
+
+  it('список идёт от последнего закрепления к первому', async () => {
+    const first = await say('раз');
+    const second = await say('два');
+    await chat.pin('obshchii', first.id!, null);
+    await chat.pin('obshchii', second.id!, null);
+
+    // Не по времени самих реплик: закрепляют, чтобы не потерять, и последнее
+    // закреплённое почти всегда и есть то, что ищут.
+    expect((await chat.pinned('obshchii')).map((m) => m.text)).toEqual(['два', 'раз']);
+  });
+
+  it('повторное закрепление безвредно и не удваивает счёт', async () => {
+    const msg = await say('важное');
+    expect(await chat.pin('obshchii', msg.id!, null)).toBe('ok');
+    expect(await chat.pin('obshchii', msg.id!, null)).toBe('ok');
+    expect(await chat.pinCount('obshchii')).toBe(1);
+    expect(await chat.pinned('obshchii')).toHaveLength(1);
+  });
+
+  it('потолок канала — отказ, а не молчаливое «закрепили»', async () => {
+    for (let i = 0; i < PIN_LIMIT; i += 1) {
+      const msg = await say(`важное ${i}`);
+      expect(await chat.pin('obshchii', msg.id!, null)).toBe('ok');
+    }
+    const extra = await say('и ещё одно');
+    expect(await chat.pin('obshchii', extra.id!, null)).toBe('limit');
+    expect(await chat.pinCount('obshchii')).toBe(PIN_LIMIT);
+
+    // Открепили одно — место освободилось.
+    const [top] = await chat.pinned('obshchii');
+    await chat.unpin('obshchii', top.id!);
+    expect(await chat.pin('obshchii', extra.id!, null)).toBe('ok');
+  });
+
+  it('закреплённое соседнего канала здесь не считается и не показывается', async () => {
+    registry.channels.push({
+      id: 'text-kuhnya',
+      serverId: 'relay-main',
+      type: 'text',
+      name: 'кухня',
+      slug: 'kuhnya',
+      removable: true,
+    });
+    await registry.persist();
+
+    const here = await say('важное');
+    const there = await chat.add('kuhnya', { name: 'Б', text: 'важное на кухне' });
+    await chat.pin('obshchii', here.id!, null);
+    await chat.pin('kuhnya', there!.id!, null);
+
+    expect(await chat.pinCount('obshchii')).toBe(1);
+    expect((await chat.pinned('obshchii')).map((m) => m.text)).toEqual(['важное']);
+    // И открепить чужое, назвав свой канал, тоже нельзя: канал в паре с id —
+    // не украшение запроса, а проверка.
+    expect(await chat.unpin('obshchii', there!.id!)).toBe(false);
+  });
+
+  it('системную строку не закрепить', async () => {
+    const id = randomUUID();
+    await db.getRepository(MessageRow).insert({
+      id,
+      channelId: 'text-obshchii',
+      authorName: 'система',
+      text: 'история за этот срок удалена',
+      system: true,
+      spoiler: false,
+      reactions: {},
+      mentions: [],
+    });
+    // Такая строка — след самой ретенции, и обещать ей, что она ретенцию
+    // переживёт, значило бы обещать бессмыслицу.
+    expect(await chat.pin('obshchii', id, null)).toBe('gone');
+  });
+
+  it('несуществующая реплика и мусор в id — «нет такой», а не ошибка базы', async () => {
+    expect(await chat.pin('obshchii', randomUUID(), null)).toBe('gone');
+    expect(await chat.pin('obshchii', 'нет-такого', null)).toBe('gone');
+    expect(await chat.pin('нет-канала', randomUUID(), null)).toBe('gone');
+    expect(await chat.unpin('obshchii', 'нет-такого')).toBe(false);
+    expect(await chat.pinned('нет-канала')).toEqual([]);
+  });
+
+  it('удалённая реплика уносит закрепление с собой', async () => {
+    const msg = await say('важное');
+    await chat.pin('obshchii', msg.id!, null);
+    await chat.remove(msg.id!);
+
+    expect(await chat.pinCount('obshchii')).toBe(0);
+    expect(await chat.pinned('obshchii')).toEqual([]);
   });
 });
 

@@ -1,7 +1,7 @@
 import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
-import { AttachmentRow, IdentityRow, MessageRow } from '../db/entities';
+import { AttachmentRow, IdentityRow, MessageRow, PinRow } from '../db/entities';
 import type { Attachment } from '../uploads';
 import {
   LIMIT,
@@ -90,6 +90,16 @@ export function searchTerms(query: string): string[] {
 function tsquery(terms: string[]): string {
   return terms.map((term) => `${term}:*`).join(' & ');
 }
+
+/**
+ * Сколько реплик можно закрепить в канале.
+ *
+ * Потолок здесь не про экономию места и не про длину поповера. Закрепление —
+ * единственный способ оставить сообщение жить дольше ретенции, и без числа
+ * четырнадцать дней превратились бы в пожелание: канал, где закреплено всё,
+ * хранит всё вечно. Полсотни — это уже не «важное», а вторая лента.
+ */
+export const PIN_LIMIT = 50;
 
 /** Сколько имён показываем в подсказке после `@`. Список читают глазами. */
 export const MENTION_SUGGEST_LIMIT = 8;
@@ -225,6 +235,7 @@ function toMessage(row: MessageRow): ChatMessage {
     ...(row.replyTo ? { replyTo: row.replyTo } : {}),
     ...(row.editedAt ? { editedTs: row.editedAt.getTime() } : {}),
     ...(row.mentions?.length ? { mentions: row.mentions } : {}),
+    ...(row.pins?.length ? { pinned: true as const } : {}),
   };
 }
 
@@ -295,6 +306,7 @@ export class ChatService implements OnModuleInit {
       .createQueryBuilder('m')
       .leftJoinAndSelect('m.attachment', 'a')
       .leftJoinAndSelect('m.authorIdentity', 'ai')
+      .leftJoinAndSelect('m.pins', 'pin')
       .where('m.channel_id = :channelId', { channelId })
       .andWhere('(m.created_at, m.id) > (:afterAt, :afterId)', {
         afterAt: new Date(afterTs),
@@ -322,7 +334,7 @@ export class ChatService implements OnModuleInit {
     if (!channelId || !isUuid(id)) return empty;
     const target = await this.db.getRepository(MessageRow).findOne({
       where: { id, channelId },
-      relations: { attachment: true, authorIdentity: true },
+      relations: { attachment: true, authorIdentity: true, pins: true },
     });
     // Реплики нет — её удалили, пока человек читал результаты поиска. Пустое
     // окно здесь честнее последней страницы канала: «нашли, но показать нечего»
@@ -336,6 +348,7 @@ export class ChatService implements OnModuleInit {
         .createQueryBuilder('m')
         .leftJoinAndSelect('m.attachment', 'a')
         .leftJoinAndSelect('m.authorIdentity', 'ai')
+        .leftJoinAndSelect('m.pins', 'pin')
         .where('m.channel_id = :channelId', { channelId })
         .andWhere('(m.created_at, m.id) < (:at, :id)', { at, id })
         .orderBy('m.createdAt', 'DESC')
@@ -347,6 +360,7 @@ export class ChatService implements OnModuleInit {
         .createQueryBuilder('m')
         .leftJoinAndSelect('m.attachment', 'a')
         .leftJoinAndSelect('m.authorIdentity', 'ai')
+        .leftJoinAndSelect('m.pins', 'pin')
         .where('m.channel_id = :channelId', { channelId })
         .andWhere('(m.created_at, m.id) > (:at, :id)', { at, id })
         .orderBy('m.createdAt', 'ASC')
@@ -380,6 +394,7 @@ export class ChatService implements OnModuleInit {
       .createQueryBuilder('m')
       .leftJoinAndSelect('m.attachment', 'a')
       .leftJoinAndSelect('m.authorIdentity', 'ai')
+      .leftJoinAndSelect('m.pins', 'pin')
       .where('m.channel_id IN (:...channelIds)', { channelIds })
       // Системные строки — «история истекла», «удалено владельцем» — не то, что
       // человек искал: он ищет сказанное людьми.
@@ -531,6 +546,82 @@ export class ChatService implements OnModuleInit {
     return (channelId && this.lastActivity.get(channelId)) || 0;
   }
 
+  // ── Закреплённые ──────────────────────────────────────────────────────────
+
+  /**
+   * Закрепить реплику. `ok` — закреплена (или уже была: повтор безвреден),
+   * `limit` — в канале уже `PIN_LIMIT`, `gone` — такой реплики здесь нет.
+   *
+   * Системные строки не закрепляем: «история истекла» и «удалено владельцем» —
+   * это следы событий, а закрепление обещает пережить ретенцию, то есть ровно
+   * то событие, о котором такая строка и сообщает.
+   */
+  async pin(slug: string, id: string, by: string | null): Promise<'ok' | 'limit' | 'gone'> {
+    const channelId = this.channelId(slug);
+    if (!channelId || !isUuid(id)) return 'gone';
+    const exists = await this.db
+      .getRepository(MessageRow)
+      .findOne({ where: { id, channelId, system: false }, select: { id: true } });
+    if (!exists) return 'gone';
+
+    // Счёт и вставка одним запросом. Посчитай мы отдельно, между «в канале ещё
+    // есть место» и самой вставкой помещалось бы чужое закрепление, и потолок
+    // стал бы потолком, который иногда пропускает лишнее.
+    const rows: { message_id: string }[] = await this.db.query(
+      `INSERT INTO "pins" ("message_id", "channel_id", "pinned_by")
+            SELECT $1, $2, $3
+             WHERE (SELECT count(*) FROM "pins" WHERE "channel_id" = $2) < ${PIN_LIMIT}
+       ON CONFLICT ("message_id") DO NOTHING
+         RETURNING "message_id"`,
+      [id, channelId, by],
+    );
+    if (rows.length) return 'ok';
+
+    // Строк ноль по одной из двух причин, и они разные: уже закреплено (тогда
+    // человек получил, что хотел) или упёрлись в потолок (тогда ему есть что
+    // с этим сделать).
+    const already = await this.db.getRepository(PinRow).countBy({ messageId: id });
+    return already ? 'ok' : 'limit';
+  }
+
+  /** Снять закрепление. `false` — его и не было. */
+  async unpin(slug: string, id: string): Promise<boolean> {
+    const channelId = this.channelId(slug);
+    if (!channelId || !isUuid(id)) return false;
+    const res = await this.db.getRepository(PinRow).delete({ messageId: id, channelId });
+    return (res.affected ?? 0) > 0;
+  }
+
+  /** Сколько закреплено в канале — число для шапки. */
+  async pinCount(slug: string): Promise<number> {
+    const channelId = this.channelId(slug);
+    if (!channelId) return 0;
+    return this.db.getRepository(PinRow).countBy({ channelId });
+  }
+
+  /**
+   * Закреплённое канала целиком — страниц здесь нет и не нужно: их не больше
+   * `PIN_LIMIT`. Порядок — от последнего закрепления к первому, а не по времени
+   * самих реплик: закрепляют, чтобы не потерять, и последнее закреплённое почти
+   * всегда и есть то, что ищут.
+   */
+  async pinned(slug: string): Promise<ChatMessage[]> {
+    const channelId = this.channelId(slug);
+    if (!channelId) return [];
+    const rows = await this.db
+      .getRepository(MessageRow)
+      .createQueryBuilder('m')
+      .leftJoinAndSelect('m.attachment', 'a')
+      .leftJoinAndSelect('m.authorIdentity', 'ai')
+      .innerJoinAndSelect('m.pins', 'pin')
+      .where('m.channel_id = :channelId', { channelId })
+      .orderBy('pin.pinned_at', 'DESC')
+      .addOrderBy('m.id', 'DESC')
+      .limit(PIN_LIMIT)
+      .getMany();
+    return rows.map(toMessage);
+  }
+
   // ── Упоминания ────────────────────────────────────────────────────────────
 
   /**
@@ -651,6 +742,7 @@ export class ChatService implements OnModuleInit {
         .createQueryBuilder('m')
         .leftJoinAndSelect('m.attachment', 'a')
         .leftJoinAndSelect('m.authorIdentity', 'ai')
+        .leftJoinAndSelect('m.pins', 'pin')
         .orderBy('m.createdAt', 'DESC')
         .addOrderBy('m.id', 'DESC')
         // `limit`, а не `take`: вложение — связь «многие к одному», лишних строк
@@ -674,7 +766,7 @@ export class ChatService implements OnModuleInit {
     if (!channelId || !isUuid(id)) return undefined;
     const row = await this.db.getRepository(MessageRow).findOne({
       where: { id, channelId, ...(includeSystem ? {} : { system: false }) },
-      relations: { attachment: true, authorIdentity: true },
+      relations: { attachment: true, authorIdentity: true, pins: true },
     });
     return row ? toMessage(row) : undefined;
   }
