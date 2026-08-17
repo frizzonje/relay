@@ -319,6 +319,15 @@
   "members.state.speaking": "говорит",
   "members.title.inChannel": "В канале",
   "members.title.online": "В сети",
+  "mention.count": {
+    "one": "{count} упоминание",
+    "few": "{count} упоминания",
+    "many": "{count} упоминаний",
+    "other": "{count} упоминания"
+  },
+  "mention.empty": "Никого с таким именем здесь нет.",
+  "mention.online": "Сейчас здесь",
+  "mention.title": "Кого позвать",
   "menu.clipboardBlocked.copy": "Движок не даёт скопировать через меню — сработает с клавиатуры ({shortcut}).",
   "menu.clipboardBlocked.paste": "Движок не даёт вставить через меню — сработает с клавиатуры ({shortcut}).",
   "menu.copy": "Копировать",

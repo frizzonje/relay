@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { REACTION_EMOJIS, type ChatMessage, type ReplyRef } from '@relay/shared';
+import { REACTION_EMOJIS, type ChatMessage, type MentionRef, type ReplyRef } from '@relay/shared';
 import { cn } from '@/lib/utils';
 import { Icon } from '@/components/ui/icon';
 import { copyText, openContextMenu } from '@/lib/context-menu';
@@ -11,6 +11,7 @@ import { avatarStyle } from '@/lib/avatar';
 import { Identicon } from '@/components/ui/Identicon';
 import { fmtClock } from '@/lib/format';
 import { renderMarkdownMini } from '@/lib/markdown';
+import { mentions } from '@/lib/mentions';
 import { getSocket } from '@/lib/socket';
 import { useDismiss } from '@/lib/use-dismiss';
 import { MessageAttachment } from '@/components/chat/MessageAttachment';
@@ -78,11 +79,19 @@ function fitsBelow(trigger: HTMLElement | null): boolean {
   return bottom - trigger.getBoundingClientRect().bottom >= 48;
 }
 
-/** Текст сообщения с markdown-мини (жирный / код / авто-ссылки). */
-function MessageText({ text }: { text: string }) {
+/** Текст сообщения с markdown-мини (жирный / код / упоминания / авто-ссылки). */
+function MessageText({
+  text,
+  mentions,
+  me,
+}: {
+  text: string;
+  mentions?: MentionRef[];
+  me?: string;
+}) {
   return (
     <div className="whitespace-pre-wrap break-words text-[15px] leading-[1.4] text-text">
-      {renderMarkdownMini(text)}
+      {renderMarkdownMini(text, mentions ?? [], me)}
     </div>
   );
 }
@@ -427,6 +436,7 @@ export const Message = memo(function Message({
   msg,
   mine,
   me,
+  myFingerprint,
   enter,
   editing,
   moderated,
@@ -442,6 +452,11 @@ export const Message = memo(function Message({
   msg: ChatMessage;
   mine: boolean;
   me: string;
+  /**
+   * Отпечаток читающего. Им сверяются упоминания: имена не уникальны, и «тебя
+   * назвали» по совпадению подписи зажигалось бы у тёзки.
+   */
+  myFingerprint?: string;
   enter: boolean;
   editing: boolean;
   /**
@@ -463,6 +478,8 @@ export const Message = memo(function Message({
   const t = useT();
   // Счётчик «мышь ушла с сообщения» — по нему AddReaction закрывает свой пикер.
   const [leaveTick, setLeaveTick] = useState(0);
+  // Назвали именно тебя — не тёзку: сверяется отпечаток, а не подпись.
+  const mentioned = !mine && mentions(msg.mentions, myFingerprint);
   const anim = {
     variants: chatMessage,
     initial: enter ? ('hidden' as const) : false,
@@ -555,8 +572,15 @@ export const Message = memo(function Message({
     >
       {/* Карточка обжимается по содержимому (flex-ребёнок без flex-1) — не
           растягивается на всю страницу; подсветка ховера обнимает только её.
-          В режиме правки даём умеренную фиксированную ширину под textarea. */}
-      <div className="flex min-w-0 max-w-[min(100%,720px)] gap-3 rounded-[10px] px-2.5 py-1.5 transition-colors group-hover:bg-white/[0.03]">
+          В режиме правки даём умеренную фиксированную ширину под textarea.
+          Реплика, в которой назвали тебя, подсвечена и в спокойном состоянии:
+          это то, что глаз ищет, пролистывая пропущенный разговор. */}
+      <div
+        className={cn(
+          'flex min-w-0 max-w-[min(100%,720px)] gap-3 rounded-[10px] px-2.5 py-1.5 transition-colors group-hover:bg-white/[0.03]',
+          mentioned && 'bg-accent-strong/[0.08] shadow-[inset_2px_0_0_var(--color-accent-strong)]',
+        )}
+      >
         {/* Лицо автора рисуется из отпечатка его ключа, а не из имени: имена
             свободные и не уникальные, и градиент по имени у двух разных «Ань»
             совпал бы — то есть показывал бы ровно обратное тому, зачем он тут.
@@ -598,7 +622,9 @@ export const Message = memo(function Message({
             />
           ) : (
             <>
-              {msg.text && <MessageText text={msg.text} />}
+              {msg.text && (
+                <MessageText text={msg.text} mentions={msg.mentions} me={myFingerprint} />
+              )}
               {msg.attachment && <MessageAttachment att={msg.attachment} />}
             </>
           )}

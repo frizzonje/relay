@@ -14,7 +14,7 @@ import { useChannelsStore } from '@/stores/channels';
 import { useHostsStore } from '@/stores/hosts';
 import { useUiStore } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
-import { useUnreadStore, isChannelUnread } from '@/stores/unread';
+import { useUnreadStore, channelMentions, isChannelUnread } from '@/stores/unread';
 import { AddHostDialog } from '@/components/layout/AddHostDialog';
 import { RemoveHostDialog } from '@/components/layout/RemoveHostDialog';
 import { CreateServerDialog } from '@/components/layout/CreateServerDialog';
@@ -35,6 +35,35 @@ function Pill({ active, unread }: { active: boolean; unread?: boolean }) {
         unread && !active && 'h-2 opacity-100',
       )}
     />
+  );
+}
+
+/**
+ * Счётчик упоминаний на значке сервера: сумма по его текстовым каналам.
+ *
+ * Пилюля слева говорит «здесь есть непрочитанное», и этого мало: пропустить
+ * разговор — обычное дело, пропустить обращение к себе — нет. Поэтому число, и
+ * поэтому оно не гаснет на открытом сервере: звали, скорее всего, в соседнем
+ * его канале.
+ */
+function MentionBadge({ serverId }: { serverId: string }) {
+  const t = useT();
+  const channels = useChannelsStore((s) => s.channels);
+  const count = useUnreadStore((s) =>
+    channels.reduce(
+      (sum, c) =>
+        c.serverId === serverId && c.type === 'text' ? sum + channelMentions(s, c.slug) : sum,
+      0,
+    ),
+  );
+  if (!count) return null;
+  return (
+    <span
+      title={t('mention.count', { count })}
+      className="pointer-events-none absolute -bottom-0.5 -right-0.5 z-10 min-w-[18px] rounded-full border-2 border-bg-app bg-danger px-1 text-center text-[10px] font-bold leading-[14px] tabular-nums text-white"
+    >
+      {count > 99 ? '99+' : count}
+    </span>
   );
 }
 
@@ -141,6 +170,7 @@ export function ServerRail() {
       {/* Главный сервер — relay: наш знак mesh-триады на чистой брендовой плашке */}
       <div className="group/srv relative">
         <Pill active={activeServerId === mainId} unread={mainUnread} />
+        <MentionBadge serverId={mainId} />
         <button
           onClick={() => setActiveServer(main?.id ?? MAIN_SERVER_ID)}
           aria-label={main?.name ?? 'relay'}
@@ -306,6 +336,7 @@ function ServerIcon({
   return (
     <div className="group/srv relative">
       <Pill active={active} unread={hasUnread} />
+      <MentionBadge serverId={server.id} />
       <button
         onClick={onClick}
         aria-label={locked ? t('rail.server.locked', { name: server.name }) : server.name}

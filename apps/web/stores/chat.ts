@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ChatMessage, ReactionMap } from '@relay/shared';
+import type { ChatMessage, MentionRef, ReactionMap } from '@relay/shared';
 
 /**
  * Состояние открытого текстового канала: лента сообщений, состав и кто печатает.
@@ -47,7 +47,8 @@ interface ChatState {
   setRoster: (names: string[]) => void;
   setTyping: (names: string[]) => void;
   applyReaction: (id: string, reactions: ReactionMap) => void;
-  applyEdit: (id: string, text: string, editedTs: number) => void;
+  /** Правка: текст, время и упоминания новой редакции (имя могли и убрать). */
+  applyEdit: (id: string, text: string, editedTs: number, mentions?: MentionRef[]) => void;
   applyDelete: (id: string) => void;
 }
 
@@ -111,9 +112,11 @@ export const useChatStore = create<ChatState>((set) => ({
     set((s) => ({
       messages: s.messages.map((m) => (m.id === id ? { ...m, reactions } : m)),
     })),
-  applyEdit: (id, text, editedTs) =>
+  applyEdit: (id, text, editedTs, mentions) =>
     set((s) => ({
-      messages: s.messages.map((m) => (m.id === id ? { ...m, text, editedTs } : m)),
+      messages: s.messages.map((m) =>
+        m.id === id ? { ...m, text, editedTs, mentions: mentions ?? [] } : m,
+      ),
     })),
   applyDelete: (id) => set((s) => ({ messages: s.messages.filter((m) => m.id !== id) })),
 }));

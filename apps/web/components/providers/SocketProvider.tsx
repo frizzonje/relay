@@ -20,7 +20,7 @@ import {
   saveUnlockToken,
   unlockTokenIds,
 } from '@/lib/unlock-tokens';
-import { notifyMessage } from '@/lib/notify';
+import { notifyMention, notifyMessage } from '@/lib/notify';
 import { useNotifyStore } from '@/stores/notify';
 import { adoptPrefs, onPref } from '@/lib/prefs';
 import { tx } from '@/lib/i18n';
@@ -138,9 +138,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       if (!openSlug() || !id) return;
       chat().applyReaction(id, reactions ?? {});
     });
-    socket.on('chat-edited', ({ id, text, editedTs }) => {
+    socket.on('chat-edited', ({ id, text, editedTs, mentions }) => {
       if (!openSlug() || !id) return;
-      chat().applyEdit(id, text, editedTs);
+      chat().applyEdit(id, text, editedTs, mentions);
     });
     socket.on('chat-deleted', ({ id }) => {
       if (!openSlug() || !id) return;
@@ -162,6 +162,28 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       // Закрытый сейчас канал: писать в него мы не могли, значит сообщение
       // чужое — автора для этого спрашивать не у кого и не нужно.
       notifyMessage(slug);
+    });
+
+    // Тебя назвали. Событие приходит раньше пинга активности (тот копится 80 мс
+    // на сервере), поэтому время канала отмечаем прямо здесь — иначе «дочитал»
+    // в открытом канале означало бы «дочитал до предыдущей реплики», и вызов
+    // остался бы висеть непрочитанным в канале, в который человек смотрит.
+    socket.on('mention', ({ slug, ts }) => {
+      if (!slug || typeof ts !== 'number') return;
+      unread().noteActivity(slug, ts);
+      if (slug === openSlug() && watching()) {
+        unread().readNow(slug);
+        return;
+      }
+      unread().noteMention(slug);
+      notifyMention(slug);
+    });
+
+    // Снимок счётчиков: сколько раз тебя звали в каждом канале и не прочитано.
+    // Считает его сервер — по базе и отметкам чтения, то есть с оглядкой на все
+    // твои устройства сразу.
+    socket.on('mentions', ({ counts }) => {
+      if (counts && typeof counts === 'object') unread().seedMentions(counts);
     });
 
     // Канал закрылся под нами: его удалили (или он не пережил наш реконнект).
@@ -399,6 +421,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('chat-typing');
       socket.off('chat-activity');
       socket.off('chat-closed');
+      socket.off('mention');
+      socket.off('mentions');
       socket.off('reads');
       socket.off('prefs');
       socket.off('servers');

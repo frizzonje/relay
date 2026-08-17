@@ -8,7 +8,7 @@ import { useHostsStore } from './hosts';
 import { PREF_STORAGE } from '@/lib/prefs';
 import { isChannelLoud, useNotifyStore } from './notify';
 import { isServerUnlocked, useServersStore } from './servers';
-import { LAST_READ_KEY, isChannelUnread, useUnreadStore } from './unread';
+import { LAST_READ_KEY, channelMentions, isChannelUnread, useUnreadStore } from './unread';
 
 /**
  * Сторы интерфейса. Самый содержательный здесь — «непрочитанное»: время в нём
@@ -19,7 +19,13 @@ import { LAST_READ_KEY, isChannelUnread, useUnreadStore } from './unread';
 
 beforeEach(() => {
   localStorage.clear();
-  useUnreadStore.setState({ activity: {}, lastRead: {}, divider: {}, atBottom: true });
+  useUnreadStore.setState({
+    activity: {},
+    lastRead: {},
+    divider: {},
+    mentions: {},
+    atBottom: true,
+  });
   useChatStore.getState().reset();
   useChannelsStore.setState({ channels: DEFAULT_CHANNELS });
   useServersStore.setState({
@@ -191,6 +197,55 @@ describe('непрочитанное', () => {
     s().setAtBottom(false);
     expect(useUnreadStore.getState().atBottom).toBe(false);
     expect(before.atBottom).toBe(true);
+  });
+
+  describe('счётчик упоминаний', () => {
+    it('растёт на каждом вызове и гаснет, когда канал дочитан', () => {
+      s().noteMention('obshchii');
+      s().noteMention('obshchii');
+      expect(channelMentions(s(), 'obshchii')).toBe(2);
+
+      s().noteActivity('obshchii', 1000);
+      s().readNow('obshchii');
+      expect(channelMentions(s(), 'obshchii')).toBe(0);
+    });
+
+    it('гаснет и тогда, когда отметка чтения не сдвинулась', () => {
+      // Снимок счётчиков приезжает после отметок: канал уже дочитан, и «тебя
+      // звали» осталось бы гореть в прочитанном.
+      s().noteActivity('obshchii', 1000);
+      s().readNow('obshchii');
+      s().noteMention('obshchii');
+      s().readNow('obshchii');
+      expect(channelMentions(s(), 'obshchii')).toBe(0);
+    });
+
+    it('вход в канал гасит его счётчик', () => {
+      s().noteMention('obshchii');
+      s().openChannel('obshchii');
+      expect(channelMentions(s(), 'obshchii')).toBe(0);
+    });
+
+    it('дочитано на другом устройстве — погасло и здесь', () => {
+      s().noteMention('obshchii');
+      s().noteMention('флуд');
+      s().adoptMarks({ obshchii: 5000 });
+      expect(channelMentions(s(), 'obshchii')).toBe(0);
+      // Соседний канал при этом не трогаем: там не читали.
+      expect(channelMentions(s(), 'флуд')).toBe(1);
+    });
+
+    it('снимок с сервера заменяет счётчики, а не складывается с ними', () => {
+      s().noteMention('obshchii');
+      s().seedMentions({ флуд: 3 });
+      expect(channelMentions(s(), 'obshchii')).toBe(0);
+      expect(channelMentions(s(), 'флуд')).toBe(3);
+    });
+
+    it('мусор в снимке ничего не зажигает', () => {
+      s().seedMentions({ obshchii: 0, флуд: -2, чат: 'много' as unknown as number });
+      expect(s().mentions).toEqual({});
+    });
   });
 });
 

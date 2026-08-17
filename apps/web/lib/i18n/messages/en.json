@@ -303,6 +303,13 @@
   "members.state.speaking": "speaking",
   "members.title.inChannel": "In channel",
   "members.title.online": "Online",
+  "mention.count": {
+    "one": "{count} mention",
+    "other": "{count} mentions"
+  },
+  "mention.empty": "Nobody by that name here.",
+  "mention.online": "Here right now",
+  "mention.title": "Who to mention",
   "menu.clipboardBlocked.copy": "The engine will not copy from a menu — the keyboard works ({shortcut}).",
   "menu.clipboardBlocked.paste": "The engine will not paste from a menu — the keyboard works ({shortcut}).",
   "menu.copy": "Copy",

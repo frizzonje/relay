@@ -28,7 +28,14 @@ import { myName } from '@/stores/ui';
 import { BanAuthorDialog, type BanTarget } from '@/components/chat/BanAuthorDialog';
 import { DeleteMessageDialog } from '@/components/chat/DeleteMessageDialog';
 import { Message, UnreadDivider } from '@/components/chat/Message';
+import {
+  MentionPicker,
+  useMentionSuggest,
+  type MentionCandidate,
+} from '@/components/chat/MentionPicker';
 import { SearchPanel } from '@/components/chat/SearchPanel';
+import { insertMention, typedMention, writtenIn } from '@/lib/mentions';
+import { useIdentityStore } from '@/stores/identity';
 import { tx, useRichT, useT } from '@/lib/i18n';
 
 interface PendingFile {
@@ -143,6 +150,12 @@ export function ChatPanel() {
   const moderated = channelServer?.moderated === true;
 
   const [text, setText] = useState('');
+  // Что человек набирает после «@» прямо сейчас, и кто в списке выбран
+  // стрелками. Живёт здесь, а не в самой подсказке: клавиши приходят в поле
+  // ввода, и разводить их обработку по двум компонентам значило бы держать
+  // выбранную строку в одном месте, а Enter — в другом.
+  const [mentionToken, setMentionToken] = useState<{ at: number; query: string } | null>(null);
+  const [mentionActive, setMentionActive] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [pending, setPending] = useState<PendingFile[]>([]);
   const [reply, setReply] = useState<Draft | null>(null);
@@ -170,8 +183,16 @@ export function ChatPanel() {
   const pinnedFor = useRef<string | null>(null);
   const dragDepth = useRef(0);
   const lastTypingSent = useRef(0);
+  // Кого человек выбрал в подсказке за время этого черновика. Отпечатки, а не
+  // имена: тёзки различаются только ими. Из списка на отправку уедут те, чьё
+  // имя в тексте и правда осталось (writtenIn) — выбрал и стёр значит передумал.
+  const picked = useRef<MentionCandidate[]>([]);
 
   const me = callsign.trim() || t('common.anonymous');
+  // Отпечаток свой, а не подпись: «тебя назвали» по совпадению имён зажигалось
+  // бы у тёзки, а лица у них разные (см. Identicon).
+  const myFingerprint = useIdentityStore((s) => s.me?.fingerprint);
+  const suggest = useMentionSuggest(mentionToken?.query ?? null);
 
   // Анимируем вход сообщений только после прогрузки истории. Отметку «прочитано
   // до» на смену канала ставит SocketProvider (openChannel) — до того, как сюда
@@ -183,6 +204,11 @@ export function ChatPanel() {
     setEditingId(null);
     setPendingDelete(null);
     setAtBottom(true);
+    // Открытую подсказку закрываем: она про канал, из которого ушли. Выбранных
+    // не забываем — недописанный черновик переезжает вместе с человеком, и
+    // забыть за него, кого он назвал, значило бы молча расстричь упоминание в
+    // тексте, который остался на экране.
+    setMentionToken(null);
     const raf = requestAnimationFrame(() => requestAnimationFrame(() => setEnterAnim(true)));
     return () => cancelAnimationFrame(raf);
   }, [textRoom]);
@@ -379,7 +405,16 @@ export function ChatPanel() {
   }, []);
 
   const submitEdit = useCallback((id: string, newText: string) => {
-    getSocket().emit('chat-edit', { id, text: newText });
+    // Правка везёт с собой прежних названных: сервер оставит из них тех, чьё
+    // имя в новом тексте осталось. Не пошли мы их вовсе — правка опечатки
+    // молча расстригла бы упоминания, и позванный человек перестал бы быть
+    // позванным задним числом.
+    const was = useChatStore.getState().messages.find((m) => m.id === id)?.mentions ?? [];
+    getSocket().emit('chat-edit', {
+      id,
+      text: newText,
+      ...(was.length ? { mentions: was.map((m) => m.fingerprint) } : {}),
+    });
     setEditingId(null);
   }, []);
 
@@ -404,9 +439,15 @@ export function ChatPanel() {
     if (!t && pending.length === 0) return;
     const files = pending;
     const replyId = reply?.id;
+    // Из выбранного в подсказке уезжает только то, чьё имя осталось в тексте.
+    // Сервер проверит это же ещё раз — здесь мы просто не отправляем заведомо
+    // лишнего, а не «доверяем клиенту».
+    const named = writtenIn(t, picked.current).map((p) => p.fingerprint);
+    picked.current = [];
     setPending([]);
     setText('');
     setReply(null);
+    setMentionToken(null);
 
     // Ответ вешаем на текстовое сообщение; если текста нет — на первый файл.
     for (let i = 0; i < files.length; i++) {
@@ -415,7 +456,13 @@ export function ChatPanel() {
       await uploadAndSend(p, useReply);
       if (p.previewUrl) URL.revokeObjectURL(p.previewUrl);
     }
-    if (t) getSocket().emit('chat-message', { text: t, ...(replyId ? { replyTo: replyId } : {}) });
+    if (t) {
+      getSocket().emit('chat-message', {
+        text: t,
+        ...(replyId ? { replyTo: replyId } : {}),
+        ...(named.length ? { mentions: named } : {}),
+      });
+    }
   }
 
   async function uploadAndSend(p: PendingFile, replyToId?: string) {
@@ -490,12 +537,57 @@ export function ChatPanel() {
     addFiles(imageFiles);
   }
 
-  function onType(v: string) {
+  function onType(v: string, caret: number) {
     setText(v);
+    const token = typedMention(v, caret);
+    // Сравниваем по значению: тот же набранный кусок не должен обнулять выбор
+    // стрелками на каждой перерисовке.
+    setMentionToken((prev) =>
+      prev?.at === token?.at && prev?.query === token?.query ? prev : token,
+    );
+    if (token?.query !== mentionToken?.query) setMentionActive(0);
     const now = Date.now();
     if (v && now - lastTypingSent.current > 2500) {
       lastTypingSent.current = now;
       getSocket().emit('chat-typing');
+    }
+  }
+
+  /** Выбрали человека в подсказке — подставляем его имя вместо набранного. */
+  function pickMention(person: MentionCandidate) {
+    if (!mentionToken) return;
+    const next = insertMention(text, mentionToken, person.nick);
+    picked.current = [...picked.current, person];
+    setText(next.text);
+    setMentionToken(null);
+    setMentionActive(0);
+    // Курсор — за подставленным именем: человек продолжает фразу, а не ищет,
+    // куда его унесло.
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(next.caret, next.caret);
+    });
+  }
+
+  /**
+   * Клавиши подсказки. Пока она открыта, стрелки и Enter принадлежат ей —
+   * иначе Enter отправлял бы реплику с недобранным именем, ровно в тот момент,
+   * когда человек выбирает из списка.
+   */
+  function onComposerKey(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!mentionToken || !suggest.people.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      setMentionActive((i) => (i + step + suggest.people.length) % suggest.people.length);
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      pickMention(suggest.people[mentionActive] ?? suggest.people[0]);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setMentionToken(null);
     }
   }
 
@@ -574,6 +666,7 @@ export function ChatPanel() {
               msg={m}
               mine={!m.system && m.name === me}
               me={me}
+              myFingerprint={myFingerprint}
               enter={enterAnim}
               editing={editingId === m.id}
               onReply={startReply}
@@ -698,8 +791,17 @@ export function ChatPanel() {
         />
         <form
           onSubmit={send}
-          className="flex items-center gap-1 rounded-2xl bg-bg-active px-2 py-1.5 ring-1 ring-line transition-shadow focus-within:ring-2 focus-within:ring-line-strong"
+          className="relative flex items-center gap-1 rounded-2xl bg-bg-active px-2 py-1.5 ring-1 ring-line transition-shadow focus-within:ring-2 focus-within:ring-line-strong"
         >
+          {mentionToken && (
+            <MentionPicker
+              people={suggest.people}
+              active={mentionActive}
+              asked={suggest.asked}
+              onPick={pickMention}
+              onHover={setMentionActive}
+            />
+          )}
           <input ref={fileRef} type="file" hidden multiple onChange={onFiles} />
           <button
             type="button"
@@ -716,7 +818,20 @@ export function ChatPanel() {
           <input
             ref={inputRef}
             value={text}
-            onChange={(e) => onType(e.target.value)}
+            onChange={(e) =>
+              onType(e.target.value, e.target.selectionStart ?? e.target.value.length)
+            }
+            onKeyDown={onComposerKey}
+            // Клик и стрелки двигают курсор, не меняя текста: подсказка обязана
+            // появляться и исчезать вместе с ним, а не только на наборе.
+            onSelect={(e) => {
+              const el = e.currentTarget;
+              const token = typedMention(el.value, el.selectionStart ?? 0);
+              setMentionToken((prev) =>
+                prev?.at === token?.at && prev?.query === token?.query ? prev : token,
+              );
+            }}
+            onBlur={() => setMentionToken(null)}
             onPaste={onPaste}
             maxLength={500}
             autoComplete="off"

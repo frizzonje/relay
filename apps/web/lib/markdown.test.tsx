@@ -95,3 +95,39 @@ describe('обычный текст', () => {
     expect(html(text)).toBe(html(text));
   });
 });
+
+describe('упоминания', () => {
+  const anya = { fingerprint: 'f-anya', nick: 'Аня' };
+  const call = (text: string, me?: string) =>
+    renderToStaticMarkup(<>{renderMarkdownMini(text, [anya], me)}</>);
+
+  it('названное имя выделяется, остальной текст остаётся текстом', () => {
+    const out = call('@Аня, ты идёшь?');
+    expect(out).toContain('<span');
+    expect(out).toContain('@Аня');
+    expect(out).toContain('ты идёшь?');
+  });
+
+  it('своё имя выделено сильнее чужого — это и есть повод посмотреть сюда', () => {
+    expect(call('@Аня', 'f-anya')).not.toBe(call('@Аня', 'f-boris'));
+  });
+
+  it('внутри кода никого не зовут', () => {
+    // Бэктики выключают разбор целиком, и упоминание тут ничем не отличается
+    // от жирного: в примере кода «@Аня» — это просто строка.
+    const out = call('`@Аня`');
+    expect(out).toContain('<code');
+    expect(out).not.toContain('<span');
+  });
+
+  it('внутри жирного — зовут', () => {
+    const out = call('**@Аня**');
+    expect(out).toContain('<strong');
+    expect(out).toContain('<span');
+  });
+
+  it('имя, которого нет в списке, остаётся текстом', () => {
+    // Упоминанием слово делает выбор в подсказке, а не похожесть на имя.
+    expect(call('@Борис')).toBe('@Борис');
+  });
+});

@@ -19,6 +19,10 @@ import { getSocket } from '@/lib/socket';
  *    совпадать с `lastRead`, иначе линия исчезала бы ровно тогда, когда нужна.
  *  • `atBottom` — лента прокручена к низу. Отскроллен вверх — входящие не
  *    считаются прочитанными (см. `watching()` в SocketProvider).
+ *  • `mentions` — сколько раз в канале назвали тебя после отметки чтения.
+ *    Живёт здесь, а не отдельным стором, ровно потому, что гаснет тем же
+ *    движением: канал дочитан — значит и звавшее в нём прочитано. Считает его
+ *    сервер (снимок на входе), а живьём он растёт на событии `mention`.
  *
  * Канал не прочитан, когда activity[slug] > lastRead[slug].
  *
@@ -78,10 +82,19 @@ function tellServer(slug: string, ts: number) {
   }
 }
 
+/** Забыть счётчик упоминаний канала. Пустой ключ не заводим — так их не видно. */
+function forgetMentions(mentions: Marks, slug: string): Marks | null {
+  if (!mentions[slug]) return null;
+  const next = { ...mentions };
+  delete next[slug];
+  return next;
+}
+
 interface UnreadState {
   activity: Marks;
   lastRead: Marks;
   divider: Marks;
+  mentions: Marks;
   atBottom: boolean;
   /** Пришёл пинг активности канала. */
   noteActivity: (slug: string, ts: number) => void;
@@ -96,6 +109,10 @@ interface UnreadState {
    *  окажется под ней. */
   pauseAt: (slug: string) => void;
   setAtBottom: (atBottom: boolean) => void;
+  /** Тебя назвали в этом канале прямо сейчас. */
+  noteMention: (slug: string) => void;
+  /** Снимок счётчиков с сервера: он считает их по базе, а не по этой вкладке. */
+  seedMentions: (counts: Record<string, number>) => void;
   /** Отметки чтения из соседней вкладки (событие `storage`). */
   adoptLastRead: (raw: string | null) => void;
   /**
@@ -112,6 +129,7 @@ export const useUnreadStore = create<UnreadState>((set, get) => ({
   activity: {},
   lastRead: loadLastRead(),
   divider: {},
+  mentions: {},
   atBottom: true,
 
   noteActivity: (slug, ts) =>
@@ -135,11 +153,15 @@ export const useUnreadStore = create<UnreadState>((set, get) => ({
   readNow: (slug) =>
     set((s) => {
       const seen = s.activity[slug] ?? 0;
-      if (!slug || (s.lastRead[slug] ?? 0) >= seen) return s;
+      // Счётчик упоминаний гасим и тогда, когда отметка не сдвинулась: канал
+      // могли дочитать раньше, чем сервер прислал снимок, — и «тебя звали»
+      // осталось бы гореть в дочитанном канале.
+      const mentions = forgetMentions(s.mentions, slug);
+      if (!slug || (s.lastRead[slug] ?? 0) >= seen) return mentions ? { mentions } : s;
       const lastRead = { ...s.lastRead, [slug]: seen };
       saveLastRead(lastRead);
       tellServer(slug, seen);
-      return { lastRead };
+      return { lastRead, ...(mentions ? { mentions } : {}) };
     }),
 
   openChannel: (slug) =>
@@ -149,11 +171,12 @@ export const useUnreadStore = create<UnreadState>((set, get) => ({
       const seen = s.activity[slug] ?? 0;
       // Линию «новые» ставим ДО того, как погасим точку, — на прежней отметке.
       const divider = { ...s.divider, [slug]: mark };
-      if (mark >= seen) return { divider };
+      const mentions = forgetMentions(s.mentions, slug);
+      if (mark >= seen) return { divider, ...(mentions ? { mentions } : {}) };
       const lastRead = { ...s.lastRead, [slug]: seen };
       saveLastRead(lastRead);
       tellServer(slug, seen);
-      return { divider, lastRead };
+      return { divider, lastRead, ...(mentions ? { mentions } : {}) };
     }),
 
   pauseAt: (slug) =>
@@ -166,33 +189,53 @@ export const useUnreadStore = create<UnreadState>((set, get) => ({
 
   setAtBottom: (atBottom) => set((s) => (s.atBottom === atBottom ? s : { atBottom })),
 
+  noteMention: (slug) =>
+    set((s) => (slug ? { mentions: { ...s.mentions, [slug]: (s.mentions[slug] ?? 0) + 1 } } : s)),
+
+  // Снимок заменяет счётчики целиком, а не складывается с ними: сервер считает
+  // их по базе и по отметкам чтения, то есть знает про все устройства сразу, а
+  // эта вкладка — только про то, что видела своими глазами.
+  seedMentions: (counts) =>
+    set(() => {
+      const mentions: Marks = {};
+      for (const [slug, n] of Object.entries(counts ?? {})) {
+        if (typeof n === 'number' && n > 0) mentions[slug] = n;
+      }
+      return { mentions };
+    }),
+
   adoptLastRead: (raw) =>
     set((s) => {
       const incoming = parseMarks(raw);
       const lastRead = { ...s.lastRead };
+      const mentions = { ...s.mentions };
       let changed = false;
       for (const [slug, ts] of Object.entries(incoming)) {
         if ((lastRead[slug] ?? 0) >= ts) continue;
         lastRead[slug] = ts;
+        delete mentions[slug];
         changed = true;
       }
       // Пришло из localStorage — обратно не пишем, иначе вкладки зациклятся.
-      return changed ? { lastRead } : s;
+      return changed ? { lastRead, mentions } : s;
     }),
 
   adoptMarks: (incoming, opts = {}) => {
     const before = get().lastRead;
     const lastRead = { ...before };
+    const mentions = { ...get().mentions };
     let changed = false;
     for (const [slug, ts] of Object.entries(incoming ?? {})) {
       if (!Number.isFinite(ts) || (lastRead[slug] ?? 0) >= ts) continue;
       lastRead[slug] = ts;
+      // Дочитал на другом устройстве — значит прочитал и то, где тебя звали.
+      delete mentions[slug];
       changed = true;
     }
     if (changed) {
       // В кэш пишем: он отвечает в первый кадр следующей загрузки, до сокета.
       saveLastRead(lastRead);
-      set({ lastRead });
+      set({ lastRead, mentions });
     }
     // Своё, о чём сервер не знает. Это прочитанное «до личности»: в этом
     // браузере человек читал каналы ещё до того, как у него появился ключ.
@@ -212,4 +255,9 @@ export const useUnreadStore = create<UnreadState>((set, get) => ({
 /** Канал не прочитан: активность новее отметки чтения. Селектор для сайдбара. */
 export function isChannelUnread(s: UnreadState, slug: string): boolean {
   return (s.activity[slug] ?? 0) > (s.lastRead[slug] ?? 0);
+}
+
+/** Сколько раз тебя назвали в этом канале и ещё не прочитано. */
+export function channelMentions(s: UnreadState, slug: string): number {
+  return s.mentions[slug] ?? 0;
 }

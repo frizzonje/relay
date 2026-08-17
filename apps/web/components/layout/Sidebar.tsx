@@ -10,7 +10,7 @@ import { listItem, springLayout } from '@/lib/motion';
 import { useUiStore } from '@/stores/ui';
 import { useChannelsStore } from '@/stores/channels';
 import { useServersStore } from '@/stores/servers';
-import { useUnreadStore, isChannelUnread } from '@/stores/unread';
+import { useUnreadStore, channelMentions, isChannelUnread } from '@/stores/unread';
 import { useNotifyStore, isChannelLoud } from '@/stores/notify';
 import { MAIN_SERVER_ID } from '@/lib/constants';
 import { useRichT, useT } from '@/lib/i18n';
@@ -127,6 +127,10 @@ function ChannelPing({ slug }: { slug: string }) {
  */
 function TextChannelLabel({ slug, name, active }: { slug: string; name: string; active: boolean }) {
   const unread = useUnreadStore((s) => !active && isChannelUnread(s, slug));
+  // Счётчик упоминаний — числом, а не точкой: «в канале что-то пишут» и «тебя
+  // там звали дважды» — разные новости, и вторая стоит того, чтобы её считать.
+  const mentions = useUnreadStore((s) => (active ? 0 : channelMentions(s, slug)));
+  const t = useT();
   return (
     <>
       <span
@@ -138,6 +142,14 @@ function TextChannelLabel({ slug, name, active }: { slug: string; name: string; 
       />
       <span className={cn('text-text-muted/70', unread && 'text-text/80')}>#</span>
       <span className={cn('truncate', unread && 'font-medium text-text-header')}>{name}</span>
+      {mentions > 0 && (
+        <span
+          title={t('mention.count', { count: mentions })}
+          className="ml-auto shrink-0 rounded-full bg-danger px-1.5 py-px text-[11px] font-bold leading-[1.35] tabular-nums text-white"
+        >
+          {mentions > 99 ? '99+' : mentions}
+        </span>
+      )}
     </>
   );
 }
