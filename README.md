@@ -32,6 +32,7 @@ Want to build from source or hack on it? See [Quick start](#quick-start-from-sou
 - **Text channels** — replies, editing, deletion, typing indicators, reactions, attachments up to 25 MB. History is kept in Postgres for `RETENTION_DAYS` (14 by default) and pulled upward a page at a time — see [Data and persistence](#data-and-persistence)
 - **Search over history** — full-text search across a channel or a whole server (Ctrl/⌘ + F), matching from the beginning of a word; a result opens the message in its own channel, surrounded by what was said around it
 - **Mentions** — `@name` picked from a suggestion list addresses the person, not the text: their key is what the message carries, so a rename never breaks it. The named person gets a counter on the channel and on the server rail, a sound even in a silenced channel, and the message itself highlighted when they open it
+- **Pinned messages** — the only exception to retention: a pinned message stays when the rest of the channel is swept. The channel's owner pins from the message menu, everyone sees the mark in the feed and the count in the header, and the list behind it leads back to what was said
 - **Servers and channels** — create/delete on the fly, optional per-server password, shared registry for all members, invite links with guest tokens. Renaming and deleting is limited to the device that created the entry; if that browser is gone, `relay disown` on the host hands the entry back to everyone
 - **Closed perimeter** — single login password (HMAC cookie), one origin behind Caddy, automatic TLS via Let's Encrypt
 - **Interface in English and Russian** — resolved server-side from the browser's `Accept-Language` on the first visit (so the first paint is already right), remembered in a cookie, switchable in Settings → Appearance. Adding a language is one JSON file — see [Localization](#localization)
@@ -239,7 +240,7 @@ What lives where:
 | Unread marks, channel sound, per-person volume | Postgres, against your identity | yes, on every device you sign in from |
 | Microphone, headphones, camera, hotkeys | browser `localStorage` | yes, on this device only |
 
-Retention is a promise, not a cleanup job: messages older than `RETENTION_DAYS` (14 by default) are deleted every hour, and a file goes with the message that carried it. `0` means the installation keeps nothing. An upload nobody ever sent is swept a day later.
+Retention is a promise, not a cleanup job: messages older than `RETENTION_DAYS` (14 by default) are deleted every hour, and a file goes with the message that carried it. `0` means the installation keeps nothing. An upload nobody ever sent is swept a day later. Pinned messages are the single exception, and they are an explicit one: a person said "this stays". Up to 50 per channel, pinned and unpinned by whoever moderates the server — unpin it and it falls back under the same fourteen days as everything else.
 
 `relay backup` snapshots the database dump and both volumes **and** the configuration next to them (`.env` with all its secrets, the compose file, the Caddy config) — a machine rebuilt from one of these tarballs comes back as it was, which was not true of the volumes alone. Accounts don't exist: access is one shared `SITE_PASSWORD`, and a person is a key their own device holds — nothing to register and nothing to recover.
 
