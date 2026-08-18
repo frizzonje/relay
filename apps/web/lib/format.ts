@@ -75,3 +75,16 @@ export function fmtBytes(n?: number): string {
     maximumFractionDigits: digits,
   }).format(value);
 }
+
+/**
+ * Короткий отпечаток для показа рядом с лицом: `6668·7aad`.
+ *
+ * Целиком отпечаток занимает девятнадцать знаков и в строку списка не влезает,
+ * а нужен он там не для доказательства (доказывает подпись), а чтобы глазами
+ * отличить двух тёзок. Первых четырёх байт для этого довольно, и точка вместо
+ * дефиса — чтобы обрезанное не путали с полным.
+ */
+export function shortFingerprint(fingerprint: string): string {
+  const groups = (fingerprint.match(/[0-9a-f]{4}/gi) ?? []).slice(0, 2);
+  return groups.length ? groups.join('·') : fingerprint;
+}

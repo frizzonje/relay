@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ChatMessage, MentionRef, ReactionMap } from '@relay/shared';
+import type { ChatMessage, MentionRef, ReactionMap, RosterPerson } from '@relay/shared';
 
 /**
  * Состояние открытого текстового канала: лента сообщений, состав и кто печатает.
@@ -9,7 +9,8 @@ import type { ChatMessage, MentionRef, ReactionMap } from '@relay/shared';
  */
 interface ChatState {
   messages: ChatMessage[];
-  roster: string[];
+  /** Кто в канале: люди с лицами, а не строки с именами (см. RosterPerson). */
+  roster: RosterPerson[];
   /** Теги тех, кто прямо сейчас печатает в открытом канале (кроме тебя). */
   typing: string[];
   /**
@@ -44,7 +45,7 @@ interface ChatState {
   setJump: (id: string | null) => void;
   setLoadingMore: (value: boolean) => void;
   setLoadingAfter: (value: boolean) => void;
-  setRoster: (names: string[]) => void;
+  setRoster: (people: RosterPerson[]) => void;
   setTyping: (names: string[]) => void;
   applyReaction: (id: string, reactions: ReactionMap) => void;
   /** Правка: текст, время и упоминания новой редакции (имя могли и убрать). */
@@ -108,7 +109,7 @@ export const useChatStore = create<ChatState>((set) => ({
       return { messages: [...fresh, ...s.messages], more, loadingMore: false };
     }),
   setLoadingMore: (value) => set({ loadingMore: value }),
-  setRoster: (names) => set({ roster: names }),
+  setRoster: (people) => set({ roster: people }),
   setTyping: (names) => set({ typing: names }),
   applyReaction: (id, reactions) =>
     set((s) => ({

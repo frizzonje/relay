@@ -7,6 +7,8 @@ import { navTitle, springLayout } from '@/lib/motion';
 import { Icon } from '@/components/ui/icon';
 import { AnimatedCount } from '@/components/ui/AnimatedCount';
 import { avatarStyle } from '@/lib/avatar';
+import { Identicon } from '@/components/ui/Identicon';
+import type { RosterPerson } from '@relay/shared';
 import { useUiStore, type MobilePanel } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import { useChatStore } from '@/stores/chat';
@@ -23,15 +25,15 @@ const DEPTH: Record<MobilePanel, number> = { nav: 0, stage: 1, people: 2 };
  * (как тап по шапке чата в мессенджерах открывает карточку собеседников).
  */
 function PeopleButton({
-  names,
+  people,
   onClick,
   label,
 }: {
-  names: string[];
+  people: RosterPerson[];
   onClick: () => void;
   label: string;
 }) {
-  const shown = names.slice(0, 3);
+  const shown = people.slice(0, 3);
   return (
     <button
       type="button"
@@ -42,17 +44,25 @@ function PeopleButton({
       {shown.length > 0 ? (
         <span className="flex -space-x-2">
           <AnimatePresence initial={false} mode="popLayout">
-            {shown.map((n) => (
+            {shown.map((p) => (
               <motion.span
-                key={n}
+                key={p.fingerprint || `nick:${p.nick}`}
                 layout
                 initial={{ opacity: 0, scale: 0.6 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.6 }}
                 transition={springLayout}
-                className="h-6 w-6 rounded-full bg-cover bg-center ring-2 ring-bg-sidebar"
-                style={avatarStyle(n)}
-              />
+                className="block rounded-full ring-2 ring-bg-sidebar"
+              >
+                {p.fingerprint ? (
+                  <Identicon fingerprint={p.fingerprint} size={24} />
+                ) : (
+                  <span
+                    className="block h-6 w-6 rounded-full bg-cover bg-center"
+                    style={avatarStyle(p.nick)}
+                  />
+                )}
+              </motion.span>
             ))}
           </AnimatePresence>
         </span>
@@ -62,7 +72,7 @@ function PeopleButton({
         </span>
       )}
       <span className="text-[13px] font-semibold tabular-nums text-text">
-        <AnimatedCount value={names.length} />
+        <AnimatedCount value={people.length} />
       </span>
     </button>
   );
@@ -118,7 +128,12 @@ export function MobileNav() {
   if (effective === 'nav') return null;
 
   const people = effective === 'people';
-  const names = view === 'voice' ? tiles.map((tile) => tile.name) : roster;
+  // В голосе состав — плитки звонка, в тексте — ростер; и то и другое уже люди
+  // с лицами, так что шапке остаётся привести их к одному виду.
+  const crowd: RosterPerson[] =
+    view === 'voice'
+      ? tiles.map((tile) => ({ nick: tile.name, fingerprint: tile.fingerprint }))
+      : roster;
 
   // Заголовок и подпись экрана. key — по нему AnimatePresence меняет заголовок.
   let key: string;
@@ -220,7 +235,7 @@ export function MobileNav() {
 
         {hasPeople && !people && (
           <PeopleButton
-            names={names}
+            people={crowd}
             label={t('mobile.people')}
             onClick={() => setPanel('people')}
           />

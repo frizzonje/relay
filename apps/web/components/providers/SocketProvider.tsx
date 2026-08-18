@@ -135,9 +135,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       // только когда его открывают (см. stores/pins).
       pins().setCount(typeof page.pins === 'number' ? page.pins : 0);
     });
-    socket.on('chat-roster', (names) => {
-      if (!openSlug() || !Array.isArray(names)) return;
-      chat().setRoster(names);
+    socket.on('chat-roster', (people) => {
+      if (!openSlug() || !Array.isArray(people)) return;
+      chat().setRoster(people);
     });
     socket.on('chat-reaction', ({ id, reactions }) => {
       if (!openSlug() || !id) return;

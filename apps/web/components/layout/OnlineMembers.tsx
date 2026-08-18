@@ -7,6 +7,8 @@ import { AnimatedCount } from '@/components/ui/AnimatedCount';
 import { useUiStore } from '@/stores/ui';
 import { useChatStore } from '@/stores/chat';
 import { avatarStyle } from '@/lib/avatar';
+import { Identicon } from '@/components/ui/Identicon';
+import { shortFingerprint } from '@/lib/format';
 import { useRichT, useT } from '@/lib/i18n';
 
 /**
@@ -32,9 +34,12 @@ export function OnlineMembers() {
       </h3>
       <div className="flex-1 overflow-y-auto px-2 py-3">
         <AnimatePresence initial={false}>
-          {roster.map((name) => (
+          {roster.map(({ nick, fingerprint }) => (
             <motion.div
-              key={name}
+              // Ключ строки — отпечаток: имена не уникальны, и два тёзки
+              // делили бы одну строку списка, мигая друг другом при каждом
+              // изменении состава.
+              key={fingerprint || `nick:${nick}`}
               layout
               variants={listItem}
               initial="hidden"
@@ -43,17 +48,30 @@ export function OnlineMembers() {
               transition={springLayout}
               className="flex items-center gap-2.5 rounded-[8px] px-2 py-1.5 transition-colors hover:bg-bg-hover"
             >
-              <div
-                className="relative h-8 w-8 shrink-0 rounded-full after:absolute after:-bottom-0.5 after:-right-0.5 after:h-[11px] after:w-[11px] after:rounded-full after:border-2 after:border-bg-sidebar after:bg-ok after:content-['']"
-                style={avatarStyle(name)}
-              />
-              <div
-                className={cn(
-                  'min-w-0 flex-1 truncate text-[14px]',
-                  name === me ? 'font-semibold text-text-header' : 'text-text',
+              <div className="relative h-8 w-8 shrink-0 after:absolute after:-bottom-0.5 after:-right-0.5 after:h-[11px] after:w-[11px] after:rounded-full after:border-2 after:border-bg-sidebar after:bg-ok after:content-['']">
+                {fingerprint ? (
+                  <Identicon fingerprint={fingerprint} size={32} />
+                ) : (
+                  <div className="h-full w-full rounded-full" style={avatarStyle(nick)} />
                 )}
-              >
-                {name === me ? t('common.you', { name }) : name}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div
+                  className={cn(
+                    'truncate text-[14px]',
+                    nick === me ? 'font-semibold text-text-header' : 'text-text',
+                  )}
+                >
+                  {nick === me ? t('common.you', { name: nick }) : nick}
+                </div>
+                {/* Картинка для узнавания, текст для сверки: лицо запоминают
+                    боковым зрением, а спорный случай разбирают по отпечатку —
+                    и тогда его надо иметь под рукой, а не в тултипе. */}
+                {fingerprint && (
+                  <div className="truncate font-mono text-[10px] tracking-[0.06em] text-text-faint">
+                    {shortFingerprint(fingerprint)}
+                  </div>
+                )}
               </div>
             </motion.div>
           ))}
