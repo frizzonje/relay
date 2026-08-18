@@ -1,5 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
-import { DEFAULT_RETENTION_DAYS, retentionDays } from './db/retention.service';
+import { retention, type RetentionMode } from './db/retention.service';
 import { sfuHealthy } from './sfu/sfu-health';
 
 interface IceServer {
@@ -22,6 +22,7 @@ export class ConfigController {
     iceServers: IceServer[];
     sfu: { available: boolean };
     retentionDays: number;
+    retentionMode: RetentionMode;
   }> {
     const iceServers: IceServer[] = [];
 
@@ -69,14 +70,15 @@ export class ConfigController {
     // health-пинг: лежащий контейнер не должен собирать звонки на себя.
     const sfu = { available: await sfuHealthy() };
 
-    // Сколько дней живёт переписка. Клиенту это нужно не для красоты: без срока
-    // он не может объяснить человеку, куда делся верх ленты, и «начало канала»
+    // Что будет с перепиской. Клиенту это нужно не для красоты: без срока он не
+    // может объяснить человеку, куда делся верх ленты, и «начало канала»
     // выглядит одинаково с «дальше уже удалено».
-    const days = retentionDays();
+    const policy = retention();
     return {
       iceServers,
       sfu,
-      retentionDays: Number.isNaN(days) ? DEFAULT_RETENTION_DAYS : days,
+      retentionDays: policy.mode === 'days' ? policy.days : 0,
+      retentionMode: policy.mode,
     };
   }
 }

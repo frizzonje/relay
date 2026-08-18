@@ -60,6 +60,7 @@
   "chat.edit.aria": "Editing a message",
   "chat.edit.cancel": "Cancel editing",
   "chat.edited": "(edited)",
+  "chat.history.ephemeral": "This installation keeps no history: messages are gone within the minute.",
   "chat.history.edge": "Messages older than {days} days are deleted.",
   "chat.history.loading": "Loading earlier messages…",
   "chat.image.open": "Open image: {name}",

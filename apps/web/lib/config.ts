@@ -1,4 +1,4 @@
-import type { ConfigResponse, IceServer } from '@relay/shared';
+import type { ConfigResponse, IceServer, RetentionMode } from '@relay/shared';
 import { guestTokenFromLocation } from './socket';
 
 /**
@@ -53,11 +53,16 @@ export async function isSfuAvailable(): Promise<boolean> {
 }
 
 /**
- * Сколько дней инсталляция хранит переписку. `0` — не хранит вовсе; сервер
- * старой версии поля не пришлёт, и тогда честнее не показывать ничего, чем
- * назвать выдуманный срок.
+ * Что инсталляция делает с историей: сколько дней хранит, хранит ли без срока
+ * или не хранит вовсе. Сервер прошлой версии режима не пришлёт — тогда судим
+ * по дням, как раньше, а при полном молчании молчим и мы: не показать ничего
+ * честнее, чем назвать выдуманный срок.
  */
-export async function getRetentionDays(): Promise<number> {
-  const days = (await getConfig()).retentionDays;
-  return typeof days === 'number' && days >= 0 ? days : 0;
+export async function getRetention(): Promise<{ days: number; mode: RetentionMode }> {
+  const data = await getConfig();
+  const days = typeof data.retentionDays === 'number' && data.retentionDays > 0
+    ? data.retentionDays
+    : 0;
+  const mode = data.retentionMode ?? (days > 0 ? 'days' : 'forever');
+  return { days, mode };
 }

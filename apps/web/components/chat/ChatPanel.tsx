@@ -16,7 +16,7 @@ import { Icon } from '@/components/ui/icon';
 import { fmtBytes } from '@/lib/format';
 import { getSocket } from '@/lib/socket';
 import { ask } from '@/lib/channels';
-import { useRetentionDays } from '@/lib/use-sfu';
+import { useRetention } from '@/lib/use-sfu';
 import { useUiStore } from '@/stores/ui';
 import { useChannelsStore } from '@/stores/channels';
 import { useChatStore } from '@/stores/chat';
@@ -140,7 +140,7 @@ export function ChatPanel() {
   const jump = useChatStore((s) => s.jump);
   const searchOpen = useSearchStore((s) => s.open);
   const pinsOpen = usePinsStore((s) => s.open);
-  const retentionDays = useRetentionDays();
+  const retention = useRetention();
   // Право модерировать приходит с сервера — флагом на сервере реестра, которому
   // принадлежит открытый канал. Вычислять его здесь было бы гаданием: у
   // главного сервера создателя нет, и «моё» там истинно у всех.
@@ -671,10 +671,16 @@ export function ChatPanel() {
             {rt('chat.start', {
               channel: <b className="text-text-header">#{textLabel}</b>,
             })}
-            {retentionDays > 0 && (
+            {/* Край ленты объясняет себя тремя разными способами, потому что
+                «выше уже удалено», «выше ничего и не было» и «здесь вообще не
+                хранят» — три разные вещи для того, кто сюда смотрит. */}
+            {retention.mode === 'days' && (
               <div className="pt-1 text-text-muted/70">
-                {t('chat.history.edge', { days: retentionDays })}
+                {t('chat.history.edge', { days: retention.days })}
               </div>
+            )}
+            {retention.mode === 'ephemeral' && (
+              <div className="pt-1 text-text-muted/70">{t('chat.history.ephemeral')}</div>
             )}
           </div>
         )}
@@ -698,7 +704,7 @@ export function ChatPanel() {
               onBan={banAuthor}
               onJumpTo={jumpTo}
               onPin={pinMessage}
-              retentionDays={retentionDays}
+              retentionDays={retention.days}
             />
           </div>
         ))}

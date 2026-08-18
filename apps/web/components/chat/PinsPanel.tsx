@@ -6,7 +6,7 @@ import { Icon } from '@/components/ui/icon';
 import { Identicon } from '@/components/ui/Identicon';
 import { fmtDayTime } from '@/lib/format';
 import { useT } from '@/lib/i18n';
-import { useRetentionDays } from '@/lib/use-sfu';
+import { useRetention } from '@/lib/use-sfu';
 import { usePinsStore } from '@/stores/pins';
 
 /**
@@ -85,7 +85,7 @@ export function PinsPanel({
   const loading = usePinsStore((s) => s.loading);
   const asked = usePinsStore((s) => s.asked);
   const failed = usePinsStore((s) => s.failed);
-  const retentionDays = useRetentionDays();
+  const { days: retentionDays } = useRetention();
 
   return (
     <AnimatePresence>

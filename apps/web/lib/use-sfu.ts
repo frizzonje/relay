@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { getRetentionDays, isSfuAvailable } from '@/lib/config';
+import type { RetentionMode } from '@relay/shared';
+import { getRetention, isSfuAvailable } from '@/lib/config';
 
 /**
  * Поднят ли медиасервер (профиль `sfu`). Пока ответ не пришёл — `false`:
@@ -24,19 +25,25 @@ export function useSfuAvailable(): boolean {
 }
 
 /**
- * Срок хранения переписки в днях (0 — не показывать). Тот же кэшированный
- * запрос, что и у медиасервера: конфиг тянется один раз на сессию.
+ * Что инсталляция делает с историей — срок в днях и сам режим. Тот же
+ * кэшированный запрос, что и у медиасервера: конфиг тянется раз на сессию.
  */
-export function useRetentionDays(): number {
-  const [days, setDays] = useState(0);
+export function useRetention(): { days: number; mode: RetentionMode } {
+  const [state, setState] = useState<{ days: number; mode: RetentionMode }>({
+    // До ответа сервера — «без срока»: это единственный вариант, при котором
+    // интерфейс не обещает ничего. Ошибись мы в другую сторону, край ленты на
+    // мгновение объявил бы удалённым то, что цело.
+    days: 0,
+    mode: 'forever',
+  });
   useEffect(() => {
     let alive = true;
-    void getRetentionDays().then((v) => {
-      if (alive) setDays(v);
+    void getRetention().then((v) => {
+      if (alive) setState(v);
     });
     return () => {
       alive = false;
     };
   }, []);
-  return days;
+  return state;
 }
