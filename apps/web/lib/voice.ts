@@ -1694,13 +1694,22 @@ function teardownPeerAudio() {
  * тот обновит presence голосового канала и ростер текстового, а собеседникам
  * разошлёт peer-renamed (подписи наших плиток у них).
  */
-export function renameSelf(name: string) {
+/**
+ * Переписать подпись своей плитки. Отдельно от `renameSelf`: ровно это же нужно
+ * устройству, которое узнало о смене имени с другого своего устройства, — а
+ * просить там сервер уже не о чем, он сам об этом и рассказал.
+ */
+export function relabelSelf(name: string) {
   const t = tiles.get('local');
   const label = msg('common.you', { name });
   if (t && t.name !== label) {
     tiles.set('local', { ...t, name: label });
     syncTiles();
   }
+}
+
+export function renameSelf(name: string) {
+  relabelSelf(name);
   socket().emit('rename', { name });
 }
 
@@ -2134,6 +2143,19 @@ export function initVoice() {
         mode: msg(mode === 'sfu' ? 'voice.toast.mode.sfu' : 'voice.toast.mode.p2p'),
       }),
     );
+    // Мы уже на том транспорте, который канал только что объявил, — ехать
+    // некуда. Переезд стоит секунд тишины на ровном месте: он снимает плитки и
+    // пересобирает все соединения заново. Чаще всего это случается с тем, кто
+    // и так звонил напрямую (медиасервер не поднялся у него одного), а владелец
+    // как раз поэтому канал и переключил. Транспорта нет вовсе — значит идёт
+    // заход или переезд, и гадать нечего: едем.
+    const settled = mode === 'sfu' ? transport === sfuTransport : transport === meshTransport;
+    if (settled) {
+      // Круг ожидания вернувшегося медиасервера ждать больше нечего: канал
+      // прямой. Иначе он так и стучался бы в api каждые пять секунд.
+      if (mode === 'p2p') cancelSfuRetry();
+      return;
+    }
     void remigrate();
   });
 
@@ -2190,7 +2212,10 @@ export function initVoice() {
       void remigrate();
       return;
     }
-    s.emit('join', { room, name: myName(), clientId: loadClientId() });
+    // Транспорт называем и здесь: до сюда доходит только mesh (у SFU выше свой
+    // путь — ему нужен новый пропуск), но сервер, которому не сказали, гадает по
+    // выданному пропуску, а гадание про транспорт стоит целого канала.
+    s.emit('join', { room, name: myName(), clientId: loadClientId(), transport: 'p2p' });
     setStatus('voice.status.connected', { room });
   });
 

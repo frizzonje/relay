@@ -3,7 +3,7 @@
 import { useEffect, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import { getSocket } from '@/lib/socket';
-import { initVoice } from '@/lib/voice';
+import { initVoice, relabelSelf } from '@/lib/voice';
 import { initHotkeys } from '@/lib/hotkeys';
 import { initDesktopBridge } from '@/lib/desktop';
 import { useUiStore, myName } from '@/stores/ui';
@@ -311,6 +311,18 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       if (values && typeof values === 'object') adoptPrefs(values, { full });
     });
 
+    // Имя сменили на другом устройстве этого же человека. Имя принадлежит
+    // личности, а не вкладке: не приняв его здесь, эта вкладка до перезахода
+    // подписывала бы его реплики прежним именем — и спорила бы с собственным
+    // ростером, где сервер уже написал новое.
+    socket.on('renamed', ({ name }) => {
+      if (typeof name !== 'string') return;
+      useIdentityStore.getState().adoptNick(name);
+      // И подпись своей плитки, если мы сейчас в эфире: остальным сервер уже
+      // разослал новое имя, и одна плитка со старым — это спор с самим собой.
+      relabelSelf(name);
+    });
+
     // Бан на всю инсталляцию приходит двумя путями, и оба нужны. Живым
     // событием — пока сокет ещё держится, чтобы экран сменился на глазах; и
     // отказом двери при следующей попытке — там сокет не подключается вовсе, и
@@ -439,6 +451,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('mentions');
       socket.off('reads');
       socket.off('prefs');
+      socket.off('renamed');
       socket.off('servers');
       socket.off('server-unlock-result');
       socket.off('channels');

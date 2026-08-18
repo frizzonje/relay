@@ -1671,6 +1671,42 @@ describe('join / leave', () => {
     expect(c.data.transport).toBe('p2p');
   });
 
+  it('пропуск в медиасервер не переживает уход из канала', async () => {
+    // Сервер догадывается о транспорте клиента, который его не называет, по
+    // выданному пропуску. Пропуск, забытый от прошлого канала, превращает
+    // обычный p2p-звонок в «расщеплённый»: остальные видят участника «через
+    // медиасервер» и получают красное «тебя не слышат» в исправном канале.
+    process.env.SFU_URL = 'https://relay.example/sfu';
+    process.env.SFU_SECRET = 'секрет';
+    const { gw, server } = await makeGateway();
+    const a = connect(gw, server, { id: 'a' });
+
+    await gw.handleSfuToken(asSocket(a), { room: 'voice-obshchii-sfu', name: 'A' });
+    gw.handleJoin(asSocket(a), { room: 'voice-obshchii-sfu', name: 'A' });
+    expect(a.data.transport).toBe('sfu');
+
+    // Ушёл в обычный канал. Клиент прошлой версии транспорт не называет.
+    gw.handleLeave(asSocket(a));
+    gw.handleJoin(asSocket(a), { room: 'voice-obshchii', name: 'A' });
+    expect(a.data.transport).toBe('p2p');
+  });
+
+  it('отказ в пропуске стирает прошлый — иначе он врёт про транспорт', async () => {
+    // Переход без выхода: клиент спрашивает пропуск в новый канал и получает
+    // «это не sfu-канал». Этого ответа достаточно, чтобы прежний пропуск
+    // перестал что-либо значить.
+    process.env.SFU_URL = 'https://relay.example/sfu';
+    process.env.SFU_SECRET = 'секрет';
+    const { gw, server } = await makeGateway();
+    const a = connect(gw, server, { id: 'a' });
+    await gw.handleSfuToken(asSocket(a), { room: 'voice-obshchii-sfu', name: 'A' });
+
+    const denied = await gw.handleSfuToken(asSocket(a), { room: 'voice-obshchii', name: 'A' });
+    expect(denied).toMatchObject({ ok: false, error: 'not-sfu' });
+    gw.handleJoin(asSocket(a), { room: 'voice-obshchii', name: 'A' });
+    expect(a.data.transport).toBe('p2p');
+  });
+
   it('расщепление комнаты по транспортам попадает в лог', async () => {
     const warn = vi.spyOn(Logger.prototype, 'warn');
     const { gw, server } = await makeGateway();
@@ -1965,6 +2001,40 @@ describe('rename', () => {
     settle();
     const presence = b.last('voice-presence') as Record<string, { name: string }[]>;
     expect(presence['voice-obshchii'].map((p) => p.name)).toContain('Новое');
+  });
+
+  it('новое имя доезжает до всех устройств человека, а не до одного', async () => {
+    // Имя принадлежит личности. Переименовавшись с телефона, человек обязан
+    // смениться и в той комнате, где сидит его же десктоп: до этой правки
+    // второе устройство несло старое имя до перезахода — и в подписи плитки,
+    // и в ростере, и в presence.
+    const { gw, server, identities } = await makeGateway();
+    const { cookie } = await personCookie('Аня');
+    const phone = await connectAs(gw, server, cookie, { id: 'phone' });
+    const desk = await connectAs(gw, server, cookie, { id: 'desk' });
+    const other = connect(gw, server, { id: 'other' });
+
+    gw.handleJoin(asSocket(desk), { room: 'voice-obshchii' });
+    gw.handleJoin(asSocket(other), { room: 'voice-obshchii', name: 'Борис' });
+    await gw.handleChatJoin(asSocket(desk), { room: 'obshchii' });
+    settle();
+    server.clearAll();
+
+    const speaker = phone.data.identity as { id: string };
+    await identities.rename(speaker.id, 'Аня-Б');
+    await gw.handleRename(asSocket(phone), { name: 'Аня-Б' });
+    settle();
+
+    // Комната узнаёт о смене от того устройства, которое в ней сидит: id в
+    // событии — это id плитки, и id телефона переименовал бы не ту.
+    expect(other.last('peer-renamed')).toEqual({ id: 'desk', name: 'Аня-Б' });
+    expect(desk.last('chat-roster')).toEqual([{ nick: 'Аня-Б', fingerprint: expect.any(String) }]);
+    const presence = other.last('voice-presence') as Record<string, { name: string }[]>;
+    expect(presence['voice-obshchii'].map((p) => p.name)).toContain('Аня-Б');
+    // И сам экран второго устройства: без этого он до перезахода подписывает
+    // реплики прежним именем, споря с ростером, который сервер уже переписал.
+    expect(desk.last('renamed')).toEqual({ name: 'Аня-Б' });
+    expect(phone.got('renamed')).toBe(false);
   });
 
   it('пустое имя и то же имя ничего не меняют', async () => {

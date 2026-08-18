@@ -1492,12 +1492,26 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() payload: SfuTokenPayload,
   ): Promise<SfuTokenResult> {
     if (!this.allow(client)) return { ok: false, error: 'forbidden' };
+    // Отказ обязан стирать прошлый пропуск, и это не уборка ради порядка.
+    // Пропуск — единственное, чем сервер догадывается о транспорте клиента,
+    // который его не называет (бандл прошлой версии). Не сотри мы его, человек,
+    // ушедший из sfu-канала в обычный, остался бы в presence помечен как «через
+    // медиасервер» — и весь канал, работающий прекрасно, получил бы красное
+    // «тебя не слышат» на пустом месте. Пропуск описывает СЛЕДУЮЩИЙ вход, и
+    // отказ в нём — такой же ответ, как выдача.
+    const forget = () => {
+      client.data.sfuPassRoom = undefined;
+    };
     const url = (process.env.SFU_URL ?? '').trim();
-    if (!url || !sfuSecret()) return { ok: false, error: 'unavailable' };
+    if (!url || !sfuSecret()) {
+      forget();
+      return { ok: false, error: 'unavailable' };
+    }
     // Настроен — не значит жив: пропуск в лежащий медиасервер собирает комнату
     // в расщеплённое «вижу, но не слышу». Пинг с коротким кэшем, sfu-health.ts.
     if (!(await sfuHealthy())) {
       this.logger.warn(`sfu-token denied (sfu down) for ${client.id}`);
+      forget();
       return { ok: false, error: 'unavailable' };
     }
     // Комната приходит в запросе: клиенту нужно знать транспорт ДО `join`,
@@ -1506,9 +1520,13 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // сокета, так что назваться чужим id нельзя.
     const asked = trimmed(payload?.room, LIMIT.slug);
     const room = asked || (typeof client.data.room === 'string' ? client.data.room : '');
-    if (!room) return { ok: false, error: 'not-in-room' };
+    if (!room) {
+      forget();
+      return { ok: false, error: 'not-in-room' };
+    }
     // Гость «пришит» к своему каналу — чужую комнату не спросит.
     if (this.isGuest(client) && room !== client.data.guestRoom) {
+      forget();
       return { ok: false, error: 'forbidden' };
     }
     // Режим канала — не декорация: пропуск выдаём только тем каналам, что
@@ -1519,7 +1537,10 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const channel = (this.isGuest(client) ? this.registry.channels : this.channelsFor(client)).find(
       (c) => c.type === 'voice' && c.slug === room,
     );
-    if (!channel || channel.mode !== 'sfu') return { ok: false, error: 'not-sfu' };
+    if (!channel || channel.mode !== 'sfu') {
+      forget();
+      return { ok: false, error: 'not-sfu' };
+    }
     // Имя берём из запроса: пропуск спрашивают ДО `join`, и client.data.name в
     // этот момент ещё пуст (заполнен он только при пере-выдаче во время звонка).
     // Лимит — тот же, что у `join`.
@@ -1749,20 +1770,43 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       ? ((await this.identities.nickOf(speaker.id)) ?? speaker.nick)
       : trimmed(payload?.name, LIMIT.tag);
     if (!name) return;
-    if (speaker) speaker.nick = name;
 
-    const room = client.data.room as string | undefined;
-    if (room && client.data.name !== name) {
-      client.data.name = name;
-      client.to(room).emit('peer-renamed', { id: client.id, name });
-      this.broadcastVoicePresence();
+    // Имя принадлежит личности, а не сокету, — значит и менять его надо у всех
+    // сокетов этой личности. Иначе человек, переименовавшийся с телефона,
+    // остаётся прежним для комнаты, в которой сидит его же десктоп: подписи
+    // плиток, ростер и presence там нарисованы по данным ТОГО сокета, а он о
+    // смене не узнаёт до перезахода. У того, кто вошёл без ключа, устройство
+    // ровно одно — им и ограничиваемся.
+    const targets = speaker ? this.socketsOf(speaker.id) : [client];
+    const rosters = new Set<string>();
+    let presence = false;
+
+    for (const sock of targets) {
+      const own = this.speaker(sock);
+      if (own) own.nick = name;
+
+      const room = sock.data.room as string | undefined;
+      if (room && sock.data.name !== name) {
+        sock.data.name = name;
+        // От имени того сокета, который в комнате и сидит: id в событии — это
+        // id плитки, и подставить сюда id переименовавшегося устройства значит
+        // переименовать не ту плитку (или ничью).
+        sock.to(room).emit('peer-renamed', { id: sock.id, name });
+        presence = true;
+      }
+
+      const chatRoom = sock.data.chatRoom as string | undefined;
+      if (chatRoom && sock.data.chatName !== name) {
+        sock.data.chatName = name;
+        rosters.add(chatRoom);
+      }
+
+      // Самому устройству-инициатору говорить нечего: оно и так знает.
+      if (sock.id !== client.id) sock.emit('renamed', { name });
     }
 
-    const chatRoom = client.data.chatRoom as string | undefined;
-    if (chatRoom && client.data.chatName !== name) {
-      client.data.chatName = name;
-      this.emitRoster(chatRoom);
-    }
+    for (const room of rosters) this.emitRoster(room);
+    if (presence) this.broadcastVoicePresence();
   }
 
   // ===== Текстовый канал =====
@@ -2356,6 +2400,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       client.leave(room);
       client.data.room = undefined;
       client.data.transport = undefined;
+      // Пропуск выписан на комнату, из которой мы только что вышли (см.
+      // handleSfuToken): дальше он способен только соврать про транспорт.
+      client.data.sfuPassRoom = undefined;
       const clientId = client.data.clientId as string | undefined;
       if (clientId && this.voiceMembers.get(clientId)?.id === client.id) {
         this.voiceMembers.delete(clientId);

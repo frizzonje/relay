@@ -328,6 +328,22 @@ describe('смена режима канала', () => {
     expect(joins()[2][1]).toMatchObject({ transport: 'p2p' });
   });
 
+  it('канал объявили прямым, а мы и так звоним напрямую — звук не рвём', async () => {
+    // Обычная развязка: у одного медиасервер не поднялся, он уехал в p2p, и
+    // владелец ради него переключил канал. Переезжать ему некуда, а переезд —
+    // это снятые плитки и пересобранные соединения, то есть секунды тишины за
+    // событие, которое его не касается.
+    ticketAnswer = { ok: false, error: 'not-sfu' };
+    await voice.joinVoice('room-x', 'Канал');
+    const before = joins().length;
+
+    handlers['voice-mode']({ room: 'room-x', mode: 'p2p' });
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(joins()).toHaveLength(before); // ни одного повторного join
+    expect(sfuCalls).toEqual([]);
+  });
+
   it('два переключения подряд не оставляют позади первый транспорт', async () => {
     ticketAnswer = { ok: false, error: 'not-sfu' };
     await voice.joinVoice('room-x', 'Канал');

@@ -49,6 +49,11 @@ interface IdentityState {
   name: (nick: string) => Promise<boolean>;
   /** Сменить имя потом. `false` — сервер не принял, показывать нечего. */
   rename: (nick: string) => Promise<boolean>;
+  /**
+   * Имя сменили на другом устройстве той же личности — принять как своё.
+   * Ходить на сервер незачем: он это и рассказал.
+   */
+  adoptNick: (nick: string) => void;
 }
 
 /** Ошибка любого происхождения → причина, у которой есть свой экран. */
@@ -139,6 +144,12 @@ export const useIdentityStore = create<IdentityState>((set, get) => {
         set({ failure, status: fatal(failure) ? 'failed' : 'naming' });
         return false;
       }
+    },
+
+    adoptNick: (nick) => {
+      const me = get().me;
+      if (!me || !nick || me.nick === nick) return;
+      adopt({ ...me, nick }, get().status);
     },
 
     rename: async (nick) => {
