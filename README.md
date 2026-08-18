@@ -36,7 +36,7 @@ Want to build from source or hack on it? See [Quick start](#quick-start-from-sou
 - **Mentions** — `@name` picked from a suggestion list addresses the person, not the text: their key is what the message carries, so a rename never breaks it. The named person gets a counter on the channel and on the server rail, a sound even in a silenced channel, and the message itself highlighted when they open it
 - **Pinned messages** — the only exception to retention: a pinned message stays when the rest of the channel is swept. The channel's owner pins from the message menu, everyone sees the mark in the feed and the count in the header, and the list behind it leads back to what was said
 - **Servers and channels** — create/delete on the fly, optional per-server password, shared registry for all members, invite links with guest tokens. Renaming and deleting is limited to the device that created the entry; if that browser is gone, `relay disown` on the host hands the entry back to everyone
-- **Closed perimeter** — single login password (HMAC cookie), one origin behind Caddy, automatic TLS via Let's Encrypt
+- **Closed perimeter** — single login password (HMAC cookie), one origin behind Caddy, automatic TLS via Let's Encrypt. What that does and does not cover: [Privacy and encryption](#privacy-and-encryption)
 - **Interface in English and Russian** — resolved server-side from the browser's `Accept-Language` on the first visit (so the first paint is already right), remembered in a cookie, switchable in Settings → Appearance. Adding a language is one JSON file — see [Localization](#localization)
 - **TURN profile** — coturn for calls behind strict NAT (mobile networks, CGNAT), including TURN over TLS on 5349
 - **Native clients** — desktop (Tauri) with tray, global push-to-talk hotkey and auto-updates on Windows and macOS (on Linux the shell is chat-only — see [Clients](#clients)); iOS in progress
@@ -54,6 +54,27 @@ Voice channels created by members carry a `mode` that its creator can flip from 
 | Requires | nothing | `--profile sfu` + `SFU_SECRET` |
 
 The media server is optional by design: an installation without it stays fully functional. If the SFU is down or disabled, `sfu` channels fall back to P2P automatically and warn in the UI. Design note behind the split (Russian): [docs/plans/old/sfu.md](docs/plans/old/sfu.md).
+
+## Privacy and encryption
+
+Short answer: **relay is not end-to-end encrypted, and 1.0 does not pretend to be.** What it gives you instead is a server that belongs to you. Here is the whole picture, because "private" means nothing without it:
+
+| | In transit | Readable on the server |
+|---|---|---|
+| Everything between a browser and the server | TLS, automatic | — |
+| Voice and video in a `p2p` channel | DTLS-SRTP, straight between participants | **no** — the media never reaches the server |
+| Voice and video in an `sfu` channel | DTLS-SRTP to the media server and out again | yes — an SFU has to decrypt in order to route |
+| Text messages and attachments | TLS | yes — Postgres and the `uploads` volume hold them in the clear |
+
+Which is to say:
+
+- **Nobody between you and the server reads anything.** TLS covers every connection, calls included, on a certificate the installer takes for you.
+- **A `p2p` call never touches the server.** Signaling goes through it, media does not. The exception is a call behind strict NAT, where coturn relays: it forwards a stream it has no keys for, so it can tell that you are talking and to whom — not what you say.
+- **Whoever has root on the server can read the text.** That is what makes search, moderation, and history that newcomers can actually read possible at all.
+
+The last line is the trade, and it was made on purpose rather than forgotten. End-to-end encryption would bring its own channel type, key rotation, history unreadable to anyone who joins later, and no search — that is a different product, not a flag to flip; the reasoning is written out in [docs/plans/relay-1.0.md](docs/plans/relay-1.0.md). If it comes back, it comes back as its own release and not as a footnote to this one.
+
+**So the question relay actually asks you is who runs the server** — and the answer self-hosting is built around is "you do". Beyond that, `RETENTION_DAYS` decides how long there is anything to read at all (see [Data and persistence](#data-and-persistence)); `ephemeral` plus `p2p` channels is the closest relay comes to leaving nothing behind.
 
 ## Clients
 
@@ -216,7 +237,7 @@ CI (`.github/workflows/ci.yml`) runs the same three groups on pushes to `main`/`
 | `SITE_PASSWORD` | _(empty)_ | Login password. Shared by api and web. Empty → auth disabled |
 | `POSTGRES_PASSWORD` | — | **Required.** Between api and Postgres, never typed by a person — `install.sh` and `relay update` generate it. `initdb` reads it once, when the volume is created: changing it later only breaks api's login |
 | `DATABASE_URL` | assembled from `POSTGRES_PASSWORD` | Set it whole only for a database outside this stack, or for a hand-picked password containing `@ / : ?` |
-| `RETENTION_DAYS` | `14` | How long messages and their attachments live. `0` keeps nothing |
+| `RETENTION_DAYS` | `14` | How long messages and their attachments live. `0` (or `forever`) keeps everything with no limit; `ephemeral` keeps nothing at all |
 | `DOMAIN` | `localhost` | Host for Caddy. `localhost` → self-signed CA, real domain → Let's Encrypt. A public IP also gets a Let's Encrypt certificate, but needs the issuer block `install.sh` writes into `tls-mode.caddy` |
 | `SERVER_HOST` | `localhost` | Host for the ICE config and coturn realm |
 | `TURN_USERNAME` | `webrtc` | TURN user |
@@ -258,7 +279,17 @@ What lives where:
 | Unread marks, channel sound, per-person volume | Postgres, against your identity | yes, on every device you sign in from |
 | Microphone, headphones, camera, hotkeys | browser `localStorage` | yes, on this device only |
 
-Retention is a promise, not a cleanup job: messages older than `RETENTION_DAYS` (14 by default) are deleted every hour, and a file goes with the message that carried it. `0` means the installation keeps nothing. An upload nobody ever sent is swept a day later. Pinned messages are the single exception, and they are an explicit one: a person said "this stays". Up to 50 per channel, pinned and unpinned by whoever moderates the server — unpin it and it falls back under the same fourteen days as everything else.
+Retention is a promise, not a cleanup job: messages older than `RETENTION_DAYS` (14 by default) are deleted every hour, and a file goes with the message that carried it. An upload nobody ever sent is swept a day later.
+
+The setting takes a word as readily as a number, and the words are the point:
+
+| `RETENTION_DAYS` | What the installation promises |
+|---|---|
+| a positive number | messages live that many days |
+| `0`, `forever`, `never` | nothing is ever deleted by age |
+| `ephemeral` | nothing is kept — messages are gone within the minute |
+
+`0` means **no limit**, not "no history". It is the reading everyone expects from a `0` and the safe one of the two: history you did not want is deleted by lowering the number, history deleted by a misread setting is not coming back. Turning the conversation off entirely is a deliberate word, not a number you might type by accident. Whichever you pick, api says it in plain words in its log on every start, so `relay logs api` always answers "what happens to what we say here". Pinned messages are the single exception, and they are an explicit one: a person said "this stays". Up to 50 per channel, pinned and unpinned by whoever moderates the server — unpin it and it falls back under the same fourteen days as everything else.
 
 `relay backup` snapshots the database dump and both volumes **and** the configuration next to them (`.env` with all its secrets, the compose file, the Caddy config) — a machine rebuilt from one of these tarballs comes back as it was, which was not true of the volumes alone. Accounts don't exist: access is one shared `SITE_PASSWORD`, and a person is a key their own device holds — nothing to register and nothing to recover.
 
