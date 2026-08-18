@@ -24,7 +24,11 @@ RUN pnpm deploy --filter @relay/api --prod /deploy
 # ── Stage 4: минимальный runtime ─────────────────────────────────────────────
 FROM node:20-alpine AS runtime
 WORKDIR /app
-ENV NODE_ENV=production PORT=3000
+# Номер релиза, под которым собран образ: релизный workflow передаёт тег,
+# сборка из исходников оставляет пустым. Пустое значение — честный ответ
+# «номера нет», и api отдаёт именно его, а не выдуманное число.
+ARG RELAY_VERSION=""
+ENV NODE_ENV=production PORT=3000 RELAY_VERSION=$RELAY_VERSION
 COPY --from=pruner /deploy .
 # Приложение — не root (audit S6). su-exec — то, чем точка входа опускается с
 # root после того, как отдала том uploads пользователю node: named volume

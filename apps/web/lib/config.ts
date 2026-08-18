@@ -66,3 +66,12 @@ export async function getRetention(): Promise<{ days: number; mode: RetentionMod
   const mode = data.retentionMode ?? (days > 0 ? 'days' : 'forever');
   return { days, mode };
 }
+
+/**
+ * Версия сервера. Пустая строка — инсталляция собрана из исходников, номера у
+ * неё нет; сервер прошлой версии поля не пришлёт вовсе, и это тот же случай.
+ */
+export async function getServerVersion(): Promise<string> {
+  const v = (await getConfig()).version;
+  return typeof v === 'string' ? v.trim() : '';
+}

@@ -9,7 +9,11 @@ RUN pnpm install --frozen-lockfile
 
 # ── Stage 2: сборка Next.js (standalone output) ───────────────────────────────
 FROM deps AS builder
-ENV NEXT_TELEMETRY_DISABLED=1
+# Версия попадает в бандл на сборке, а не в рантайме: браузер держит уже
+# скачанный код, и его номер — единственное, чем вкладка, пережившая
+# обновление, отличается от свежей. NEXT_PUBLIC_, потому что читает клиент.
+ARG RELAY_VERSION=""
+ENV NEXT_TELEMETRY_DISABLED=1 NEXT_PUBLIC_RELAY_VERSION=$RELAY_VERSION
 COPY apps/web ./apps/web
 COPY packages/shared ./packages/shared
 # @relay/shared — TS-исходник; next.config.mjs → transpilePackages компилирует его inline.

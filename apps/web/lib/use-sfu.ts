@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { RetentionMode } from '@relay/shared';
-import { getRetention, isSfuAvailable } from '@/lib/config';
+import { getRetention, getServerVersion, isSfuAvailable } from '@/lib/config';
 
 /**
  * Поднят ли медиасервер (профиль `sfu`). Пока ответ не пришёл — `false`:
@@ -46,4 +46,23 @@ export function useRetention(): { days: number; mode: RetentionMode } {
     };
   }, []);
   return state;
+}
+
+/**
+ * Версия сервера, когда она доедет. `null` — «ещё не спросили»: пока ответа
+ * нет, сверять её с версией клиента нельзя, и «расходятся» показывать тоже —
+ * иначе About обвинял бы инсталляцию в рассинхроне каждый раз при открытии.
+ */
+export function useServerVersion(): string | null {
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void getServerVersion().then((v) => {
+      if (alive) setVersion(v);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return version;
 }

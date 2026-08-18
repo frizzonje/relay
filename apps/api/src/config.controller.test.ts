@@ -12,7 +12,14 @@ import { ConfigController } from './config.controller';
  * которого нет. Всё это видно только в бою, поэтому проверяем на столе.
  */
 
-const ENV = ['TURN_CREDENTIAL', 'TURN_USERNAME', 'TURN_URLS', 'STUN_URLS', 'SERVER_HOST'] as const;
+const ENV = [
+  'TURN_CREDENTIAL',
+  'TURN_USERNAME',
+  'TURN_URLS',
+  'STUN_URLS',
+  'SERVER_HOST',
+  'RELAY_VERSION',
+] as const;
 
 beforeEach(() => {
   for (const key of ENV) delete process.env[key];
@@ -107,5 +114,37 @@ describe('признак медиасервера', () => {
   it('живой health-пинг — только тогда available', async () => {
     sfuHealthy.mockResolvedValue(true);
     expect((await read()).sfu).toEqual({ available: true });
+  });
+});
+
+/**
+ * Версия живёт здесь, а не в публичном `/api/health`: сверять её с клиентом
+ * нужно тому, кто уже вошёл, а раздавать номер сборки всем подряд незачем.
+ */
+describe('версия сервера', () => {
+  it('уходит клиенту той, с какой собран образ', async () => {
+    process.env.RELAY_VERSION = '1.0.0';
+    expect((await read()).version).toBe('1.0.0');
+  });
+
+  it('сборка из исходников отдаёт пустую строку, а не выдуманный номер', async () => {
+    expect((await read()).version).toBe('');
+  });
+});
+
+describe('ретенция наружу', () => {
+  it('дни едут числом и режимом сразу — по числу одному их не различить', async () => {
+    process.env.RETENTION_DAYS = '30';
+    const cfg = await read();
+    expect(cfg).toMatchObject({ retentionDays: 30, retentionMode: 'days' });
+    delete process.env.RETENTION_DAYS;
+  });
+
+  it('«без срока» и «не хранить» — разные режимы при одинаковом нуле дней', async () => {
+    process.env.RETENTION_DAYS = 'forever';
+    expect(await read()).toMatchObject({ retentionDays: 0, retentionMode: 'forever' });
+    process.env.RETENTION_DAYS = 'ephemeral';
+    expect(await read()).toMatchObject({ retentionDays: 0, retentionMode: 'ephemeral' });
+    delete process.env.RETENTION_DAYS;
   });
 });

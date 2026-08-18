@@ -1,6 +1,7 @@
 import { Controller, Get } from '@nestjs/common';
 import { retention, type RetentionMode } from './db/retention.service';
 import { sfuHealthy } from './sfu/sfu-health';
+import { serverVersion } from './version';
 
 interface IceServer {
   urls: string[];
@@ -23,6 +24,7 @@ export class ConfigController {
     sfu: { available: boolean };
     retentionDays: number;
     retentionMode: RetentionMode;
+    version: string;
   }> {
     const iceServers: IceServer[] = [];
 
@@ -79,6 +81,10 @@ export class ConfigController {
       sfu,
       retentionDays: policy.mode === 'days' ? policy.days : 0,
       retentionMode: policy.mode,
+      // Версия живёт здесь, а не в публичном `/api/health`: номер сборки
+      // нужен тому, кто уже вошёл (свериться с клиентом), и не нужен
+      // никому снаружи — раздавать его всем подряд незачем.
+      version: serverVersion(),
     };
   }
 }

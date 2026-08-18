@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { Icon } from '@/components/ui/icon';
 import { springTab, tabPanel } from '@/lib/motion';
+import { AboutPanel } from '@/components/layout/AboutPanel';
 import { DevicesPanel } from '@/components/layout/DevicesPanel';
 import {
   checkForUpdates,
@@ -43,7 +44,7 @@ import {
   getMicLevel,
 } from '@/lib/voice';
 
-type Tab = 'av' | 'appearance' | 'hotkeys' | 'app' | 'account';
+type Tab = 'av' | 'appearance' | 'hotkeys' | 'app' | 'account' | 'about';
 
 const TABS: { id: Tab; label: MessageKey; desktopOnly?: boolean }[] = [
   { id: 'av', label: 'settings.tab.av' },
@@ -52,6 +53,7 @@ const TABS: { id: Tab; label: MessageKey; desktopOnly?: boolean }[] = [
   // Настройки самой оболочки (автозапуск): в браузере показывать нечего.
   { id: 'app', label: 'settings.tab.app', desktopOnly: true },
   { id: 'account', label: 'settings.tab.account' },
+  { id: 'about', label: 'settings.tab.about' },
 ];
 
 /** Стилизованный native <select> с шевроном — общая обёртка для селектов настроек. */
@@ -759,6 +761,8 @@ export function SettingsDialog({
                 <AppTab />
               ) : tab === 'account' ? (
                 <DevicesPanel />
+              ) : tab === 'about' ? (
+                <AboutPanel />
               ) : (
                 <Placeholder>{t('settings.placeholder')}</Placeholder>
               )}

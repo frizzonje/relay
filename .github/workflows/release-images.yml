@@ -265,6 +265,10 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ matrix.image }}:${{ needs.meta.outputs.version }}
+          # Тот же номер, что в теге образа: About сверяет его с версией
+          # клиента, и разойтись они не должны из-за способа сборки.
+          build-args: |
+            RELAY_VERSION=${{ needs.meta.outputs.version }}
           cache-from: type=gha,scope=${{ matrix.app }}
           cache-to: type=gha,mode=max,scope=${{ matrix.app }}
 
