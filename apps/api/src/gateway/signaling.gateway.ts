@@ -98,6 +98,7 @@ import {
   type ServerUnlockPayload,
   type SfuTokenPayload,
   type SfuTokenResult,
+  type RosterPerson,
   type SignalPayload,
   type VoiceDiagPayload,
   type VoicePresenceEntry,
@@ -2440,12 +2441,29 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.emitRoster(room);
   }
 
-  // Состав текстового канала — рассылаем всем участникам
+  /**
+   * Состав текстового канала — рассылаем всем участникам.
+   *
+   * Список людей, а не сокетов: 1.0 разрешает одной личности войти с телефона и
+   * с ноутбука разом, и без склейки по отпечатку она стояла бы в составе дважды
+   * — двумя строками с одинаковым лицом и одинаковым именем. Гостей по инвайту
+   * склеивать нечем и не нужно: у них нет ключа, и каждый сам по себе.
+   */
   private emitRoster(room: string) {
     const ids = this.server.sockets.adapter.rooms.get(room) ?? new Set<string>();
-    const names = [...ids]
-      .map((id) => this.server.sockets.sockets.get(id)?.data.chatName as string | undefined)
-      .filter((n): n is string => !!n);
-    this.server.to(room).emit('chat-roster', names);
+    const people: RosterPerson[] = [];
+    const seen = new Set<string>();
+    for (const id of ids) {
+      const sock = this.server.sockets.sockets.get(id);
+      const nick = sock?.data.chatName as string | undefined;
+      if (!nick) continue;
+      const fingerprint = (sock?.data.identity as Speaker | undefined)?.fingerprint;
+      if (fingerprint) {
+        if (seen.has(fingerprint)) continue;
+        seen.add(fingerprint);
+      }
+      people.push(fingerprint ? { nick, fingerprint } : { nick });
+    }
+    this.server.to(room).emit('chat-roster', people);
   }
 }

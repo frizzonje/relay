@@ -442,6 +442,17 @@ export interface MentionRef {
   nick: string;
 }
 
+/**
+ * Кто сейчас в текстовом канале. Человек, а не сокет и не строка с именем:
+ * имена свободные и не уникальные, а одна личность может сидеть с двух
+ * устройств — склеивает их отпечаток (см. `emitRoster`). У гостя по инвайту
+ * отпечатка нет, ключа ему не выдавали.
+ */
+export interface RosterPerson {
+  nick: string;
+  fingerprint?: string;
+}
+
 export interface ChatMessage {
   id?: string;
   name: string;

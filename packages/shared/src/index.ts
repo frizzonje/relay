@@ -688,6 +688,20 @@ export type MentionSuggestResult = {
   people: { fingerprint: string; nick: string; online: boolean }[];
 };
 
+/**
+ * Кто сейчас в текстовом канале. Не строка с именем, а человек: имена в relay
+ * свободные и не уникальные, и список из одних имён не отличает двух «Ань» —
+ * ни на глаз, ни в коде. Отпечаток даёт лицо (см. web/lib/identicon) и заодно
+ * служит ключом: одна личность, вошедшая с двух устройств, — одна строка.
+ *
+ * У гостя по инвайту отпечатка нет: ключа ему не выдавали. Такой стоит в списке
+ * сам по себе, лицом ему остаётся градиент по имени.
+ */
+export interface RosterPerson {
+  nick: string;
+  fingerprint?: string;
+}
+
 /** Удаление своего сообщения — по id. Автор проверяется по тегу. */
 export interface ChatDeletePayload {
   id: string;
@@ -1037,7 +1051,7 @@ export interface ServerToClientEvents {
   'voice-presence': (presence: VoicePresence) => void;
   chat: (message: ChatMessage) => void;
   'chat-history': (page: ChatHistoryPage) => void;
-  'chat-roster': (names: string[]) => void;
+  'chat-roster': (people: RosterPerson[]) => void;
   'chat-reaction': (payload: ChatReactionRelay) => void;
   /** Сообщение отредактировали — обновить текст и показать пометку «изменено». */
   'chat-edited': (payload: ChatEditRelay) => void;

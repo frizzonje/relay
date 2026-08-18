@@ -1961,7 +1961,7 @@ describe('rename', () => {
 
     gw.handleRename(asSocket(a), { name: 'Новое' });
     expect(b.last('peer-renamed')).toEqual({ id: 'a', name: 'Новое' });
-    expect(a.last('chat-roster')).toEqual(['Новое']);
+    expect(a.last('chat-roster')).toEqual([{ nick: 'Новое' }]);
     settle();
     const presence = b.last('voice-presence') as Record<string, { name: string }[]>;
     expect(presence['voice-obshchii'].map((p) => p.name)).toContain('Новое');
@@ -1996,7 +1996,38 @@ describe('chat-join', () => {
       messages: [expect.objectContaining({ text: 'первое' })],
       more: false,
     });
-    expect(b.last('chat-roster')).toEqual(['A', 'B']);
+    expect(b.last('chat-roster')).toEqual([{ nick: 'A' }, { nick: 'B' }]);
+  });
+
+  it('в составе — человек с лицом, а не имя строкой', async () => {
+    const { gw, server } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const a = await connectAs(gw, server, anya.cookie, { id: 'a' });
+    await gw.handleChatJoin(asSocket(a), { room: 'obshchii', name: 'Аня' });
+    expect(a.last('chat-roster')).toEqual([{ nick: 'Аня', fingerprint: anya.fingerprint }]);
+  });
+
+  it('одна личность с двух устройств — одна строка в составе', async () => {
+    // 1.0 разрешает войти с телефона и с ноутбука разом. Без склейки по
+    // отпечатку человек стоял бы в списке дважды — двумя строками с одинаковым
+    // лицом и одинаковым именем, и «в сети — 2» на одного присутствующего.
+    const { gw, server } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const phone = await connectAs(gw, server, anya.cookie, { id: 'phone' });
+    const laptop = await connectAs(gw, server, anya.cookie, { id: 'laptop' });
+    await gw.handleChatJoin(asSocket(phone), { room: 'obshchii', name: 'Аня' });
+    await gw.handleChatJoin(asSocket(laptop), { room: 'obshchii', name: 'Аня' });
+    expect(laptop.last('chat-roster')).toEqual([{ nick: 'Аня', fingerprint: anya.fingerprint }]);
+  });
+
+  it('гостей по инвайту склеивать нечем — каждый сам по себе', async () => {
+    // У них нет ключа, и два одноимённых гостя — это и правда два человека.
+    const { gw, server } = await makeGateway();
+    const a = connect(gw, server, { id: 'a' });
+    const b = connect(gw, server, { id: 'b' });
+    await gw.handleChatJoin(asSocket(a), { room: 'obshchii', name: 'Аня' });
+    await gw.handleChatJoin(asSocket(b), { room: 'obshchii', name: 'Аня' });
+    expect(b.last('chat-roster')).toEqual([{ nick: 'Аня' }, { nick: 'Аня' }]);
   });
 
   it('несуществующий канал отвечает chat-closed, а не тишиной', async () => {
@@ -2063,7 +2094,7 @@ describe('chat-join', () => {
     await gw.handleChatJoin(asSocket(b), { room: 'obshchii', name: 'B' });
     b.clear();
     gw.handleChatLeave(asSocket(a));
-    expect(b.last('chat-roster')).toEqual(['B']);
+    expect(b.last('chat-roster')).toEqual([{ nick: 'B' }]);
   });
 
   it('гость в текстовые каналы не заходит', async () => {
