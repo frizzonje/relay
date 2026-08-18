@@ -2984,14 +2984,29 @@ describe('личное: непрочитанное и настройки', () =>
    * состоянием он ходит в базу). Время здесь поддельное, поэтому крутим его
    * асинхронно: только так настоящий запрос в Postgres успевает вернуться.
    */
-  async function until(check: () => boolean): Promise<void> {
-    for (let i = 0; i < 200 && !check(); i += 1) await vi.advanceTimersByTimeAsync(5);
+  /**
+   * Ждать, пока произойдёт то, чего ждём, — и упасть, если не дождались.
+   *
+   * Молчаливая сдача по таймауту здесь дороже, чем кажется: следом обычно идёт
+   * `clear()` или проверка «этого не приходило», и не дождавшийся `until`
+   * превращает их в бессмыслицу — снимок приезжает уже после очистки и
+   * выглядит эхом, которого не было. Такое падает не там, где сломано, и не
+   * тогда, когда сломано: на спокойной машине зелено, на загруженной нет.
+   */
+  async function until(check: () => boolean, what = 'ожидаемое событие'): Promise<void> {
+    for (let i = 0; i < 400 && !check(); i += 1) await vi.advanceTimersByTimeAsync(5);
+    if (!check()) throw new Error(`не дождались: ${what}`);
+  }
+
+  /** Дать случиться всему, что собиралось, — когда ждать нечего по существу. */
+  async function quiet(): Promise<void> {
+    for (let i = 0; i < 400; i += 1) await vi.advanceTimersByTimeAsync(5);
   }
 
   /** Подключиться и дождаться, пока приедет снимок личного. */
   async function personal(gw: SignalingGateway, server: FakeServer, cookie: string, id: string) {
     const sock = await connectAs(gw, server, cookie, { id, keep: true });
-    await until(() => sock.got('prefs'));
+    await until(() => sock.got('prefs'), `снимок личного для ${id}`);
     sock.clear();
     return sock;
   }
@@ -3004,7 +3019,7 @@ describe('личное: непрочитанное и настройки', () =>
     await prefs.set(anya.identityId, 'sound', [channel.slug]);
 
     const a = await connectAs(gw, server, anya.cookie, { id: 'a', keep: true });
-    await until(() => a.got('prefs'));
+    await until(() => a.got('prefs'), 'снимок личного');
     // В протоколе канал зовётся слагом, в базе отметка живёт по id: иначе
     // переименование канала объявляло бы его непрочитанным у всех разом.
     expect(a.last('reads')).toEqual({ marks: { [channel.slug]: 5_000 }, full: true });
@@ -3012,7 +3027,7 @@ describe('личное: непрочитанное и настройки', () =>
 
     // Без личности общего между устройствами нет — и слать нечего.
     const stranger = connect(gw, server, { id: 's' });
-    await until(() => false);
+    await quiet();
     expect(stranger.got('reads')).toBe(false);
     expect(stranger.got('prefs')).toBe(false);
   });
@@ -3260,8 +3275,9 @@ describe('переход к найденному', () => {
 
 describe('упоминания', () => {
   /** Дождаться того, что гейтвей делает после подключения асинхронно. */
-  async function until(check: () => boolean): Promise<void> {
-    for (let i = 0; i < 200 && !check(); i += 1) await vi.advanceTimersByTimeAsync(5);
+  async function until(check: () => boolean, what = 'ожидаемое событие'): Promise<void> {
+    for (let i = 0; i < 400 && !check(); i += 1) await vi.advanceTimersByTimeAsync(5);
+    if (!check()) throw new Error(`не дождались: ${what}`);
   }
 
   /** Двое в одном канале — минимум, на котором упоминание кого-то означает. */
@@ -3385,7 +3401,7 @@ describe('упоминания', () => {
     await gw.handleChatMessage(asSocket(b), { text: '@Аня!', mentions: [anya.fingerprint] });
 
     const again = await connectAs(gw, server, anya.cookie, { id: 'again', keep: true });
-    await until(() => again.got('mentions'));
+    await until(() => again.got('mentions'), 'счётчик упоминаний');
     expect(again.last('mentions')).toEqual({ counts: { obshchii: 1 } });
   });
 
@@ -3404,13 +3420,13 @@ describe('упоминания', () => {
     });
 
     const a = await connectAs(gw, server, anya.cookie, { id: 'a', keep: true });
-    await until(() => a.got('mentions'));
+    await until(() => a.got('mentions'), 'счётчик упоминаний');
     // Пока сервер заперт, о его каналах ей знать неоткуда.
     expect(a.last('mentions')).toEqual({ counts: {} });
 
     a.clear();
     await gw.handleServerUnlock(asSocket(a), { id: 'srv', password: 'пароль' });
-    await until(() => a.got('mentions'));
+    await until(() => a.got('mentions'), 'счётчик упоминаний');
     expect(a.last('mentions')).toEqual({ counts: { тайны: 1 } });
   });
 
