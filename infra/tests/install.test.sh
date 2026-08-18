@@ -47,6 +47,13 @@ cat >/stub/docker <<'DOCKER'
 #!/usr/bin/env bash
 echo "$*" >>/tmp/docker.log
 case "$*" in
+  *"tar czf /out/"*)
+    # The upgrade takes a backup through this. It has to leave a file behind —
+    # the installer trusts the file, not docker's exit code.
+    all="$*"
+    outdir="$(echo "$all" | sed -n 's#.*-v \([^ ]*\):/out .*#\1#p')"
+    name="${all##*tar czf /out/}"; name="${name%% *}"
+    if [ -n "$outdir" ] && [ -n "$name" ]; then echo archive >"$outdir/$name"; fi ;;
   *pull*)
     # Only the first pull fails: the pinned tag has no images, the :latest
     # fallback does. Failing every pull would test nothing but `die`.
@@ -66,11 +73,18 @@ if [ -n "${STUB_REINSTALL:-}" ]; then
   mkdir -p /opt/relay
   printf 'SITE_PASSWORD=old\nPOSTGRES_PASSWORD=the-one-initdb-baked-in\n' >/opt/relay/.env
 fi
+# A server installed before 1.0: same shape, but its compose file has no db
+# service — which is what makes this run an upgrade rather than an install.
+if [ -n "${STUB_OLD_STACK:-}" ]; then
+  mkdir -p /opt/relay
+  printf 'SITE_PASSWORD=old\n' >/opt/relay/.env
+  awk '/^  db:/{skip=1} /^  api:/{skip=0} !skip' /repo/docker-compose.prod.yml >/opt/relay/docker-compose.prod.yml
+fi
 # Answers: domain? y / which? relay.test / not resolving, use anyway? y /
 # set password? n(generate) / TURN? y / SFU? y
 # The sleep keeps the pty's write end open: util-linux `script` tears the
 # session down on stdin EOF, which would kill the installer mid-question.
-{ printf 'y\ny\nrelay.test\ny\n\ny\ny\n'; sleep 120; } | script -qec "bash /tmp/install.sh" /dev/null
+{ printf 'y\ny\nrelay.test\ny\n\ny\ny\ny\n'; sleep 120; } | script -qec "bash /tmp/install.sh" /dev/null
 echo "INSTALLER_EXIT=$?"
 INNER
 chmod +x "$INNER_SH"
@@ -103,6 +117,17 @@ check "installer finished cleanly" "INSTALLER_EXIT=0" "$(echo "$OUT" | grep -o '
 has  "the password initdb baked in survives" "POSTGRES_PASSWORD=the-one-initdb-baked-in" "$OUT"
 has  "and says so" "Keeping the existing database password" "$OUT"
 check "exactly one of them in .env" "1" "$(echo "$OUT" | grep -c '^POSTGRES_PASSWORD=' | tr -d ' ')"
+
+echo
+echo "── upgrading a server that predates the database"
+OUT="$(run -e STUB_LATEST=1.0.0 -e STUB_OLD_STACK=1)"
+check "installer finished cleanly" "INSTALLER_EXIT=0" "$(echo "$OUT" | grep -o 'INSTALLER_EXIT=[0-9]*')"
+has  "it says this is an upgrade, not a fresh install" "already installed here" "$OUT"
+has  "and what it costs: history starts being kept" "RETENTION_DAYS days" "$OUT"
+has  "and that names are picked again" "picks a name" "$OUT"
+has  "a backup was taken before anything moved" "Backup: /opt/relay/backups/relay-backup-before-1.0-" "$OUT"
+has  "and it says how to go back" "relay restore /opt/relay/backups/" "$OUT"
+has  "the stack file was replaced afterwards" "Stack files downloaded" "$OUT"
 
 echo
 echo "── a release too old to carry the new files falls back to the branch"

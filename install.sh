@@ -317,6 +317,57 @@ else
     warn "No published release found — installing from ${RELAY_REF} and following :latest."
   fi
 fi
+# ── 7b. An installation from before the database ─────────────────────────────
+# Re-running the installer is the way over to 1.0 for every server installed
+# before it: their `relay update` only pulls images, and an image cannot bring a
+# service with it. So this is where the major upgrade actually happens — and a
+# major that changes how long people's words are kept is not something to do
+# silently on the way past.
+DB_RE='^  db:[[:space:]]*$'
+if [ -f "$INSTALL_DIR/$COMPOSE_FILE" ] && ! grep -qE "$DB_RE" "$INSTALL_DIR/$COMPOSE_FILE" \
+   && grep -qE "$DB_RE" "$STAGE/$COMPOSE_FILE"; then
+  hr
+  printf '%s  relay is already installed here, from before the database existed.%s\n' "$B" "$N"
+  printf '%s  This run upgrades it. What changes for the people using it:%s\n' "$B" "$N"
+  hr
+  printf '  · A Postgres service joins the stack. One more container on this machine.\n'
+  printf '  · The conversation stops evaporating on restart and starts being kept —\n'
+  printf '    for RETENTION_DAYS days, 14 unless you set otherwise. Older messages,\n'
+  printf '    and the files attached to them, are deleted from then on.\n'
+  printf '  · People become keys instead of names in a browser: everyone picks a name\n'
+  printf '    once more on their next visit. Servers, channels, uploaded files and\n'
+  printf '    certificates stay exactly where they are.\n\n'
+  ask_yn "Upgrade this installation?" "Y" || die "Aborted. Nothing has been changed."
+
+  # The archive is taken here, before a single file moves, and in the layout the
+  # new `relay restore` reads — so "we backed you up" means a command you can
+  # actually run, not a tarball you would have to unpack by hand.
+  info "Backing up volumes and configuration first…"
+  BK="$INSTALL_DIR/backups"; mkdir -p "$BK"
+  CFG="$(mktemp -d)"
+  for f in .env "$COMPOSE_FILE" Caddyfile tls-mode.caddy coturn-entrypoint.sh relay-cli.sh; do
+    if [ -f "$INSTALL_DIR/$f" ]; then cp -p "$INSTALL_DIR/$f" "$CFG/"; fi
+  done
+  ARCHIVE="relay-backup-before-1.0-$(date +%Y%m%d-%H%M%S).tar.gz"
+  # Volume names come from the compose project (`name: relay`), which has been
+  # the same since the first release. A missing volume here is not a reason to
+  # stop: a server that never had a call has no uploads volume, and refusing to
+  # upgrade it over an empty directory would be absurd.
+  docker run --rm \
+    -v relay_uploads:/snap/u:ro -v relay_caddy_data:/snap/c:ro \
+    -v "$CFG":/snap/cfg:ro -v "$BK":/out \
+    alpine tar czf "/out/$ARCHIVE" -C /snap . >/dev/null 2>&1 || true
+  # The file, not docker's exit code: this has to be true, not reported.
+  if [ -s "$BK/$ARCHIVE" ]; then
+    chmod 600 "$BK/$ARCHIVE"
+    ok "Backup: $BK/$ARCHIVE"
+    printf '  %sIf 1.0 does not suit you: relay restore %s/%s%s\n' "$DIM" "$BK" "$ARCHIVE" "$N"
+  else
+    warn "Could not take a backup (are the volumes there?). Continuing without one."
+  fi
+  rm -rf "$CFG"
+fi
+
 cp -p "$STAGE"/* "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/relay-cli.sh" "$INSTALL_DIR/coturn-entrypoint.sh"
 ok "Stack files downloaded"

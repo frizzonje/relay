@@ -79,6 +79,25 @@ check "and no half-backup was left behind" "1" "$(ls "$D"/backups/relay-backup-*
 mv "$BIN/docker.real-stub" "$BIN/docker"
 
 echo
+echo "── a stack from before the database backs up anyway"
+# The installations that most need an archive are the ones about to be handed a
+# database — `relay update` takes one on the way into 1.0. Demanding a dump from
+# a stack that has no db service would fail exactly there.
+cp "$D/docker-compose.prod.yml" "$WORK/compose.keep"
+awk '/^  db:/{skip=1} /^  api:/{skip=0} !skip' "$WORK/compose.keep" >"$D/docker-compose.prod.yml"
+: >"$WORK/compose.log"
+OUT="$(relay backup)"
+PRE="$(ls -t "$D"/backups/relay-backup-*.tar.gz 2>/dev/null | head -1)"
+check "an archive was still written" "yes" "$([ -n "$PRE" ] && echo yes || echo no)"
+check "it says what is in it" "yes" "$(echo "$OUT" | grep -q 'files and configuration only' && echo yes || echo no)"
+check "no dump was attempted" "no" "$(grep -q 'pg_dump' "$WORK/compose.log" && echo yes || echo no)"
+check "and the archive carries the uploads and the config" "yes" \
+  "$(tar tzf "$PRE" | grep -qxF ./cfg/.env && tar tzf "$PRE" | grep -qxF ./u/photo.jpg && echo yes || echo no)"
+check "with no empty dump inside it" "no" "$(tar tzf "$PRE" | grep -qxF ./db.sql && echo yes || echo no)"
+cp "$WORK/compose.keep" "$D/docker-compose.prod.yml"
+rm -f "$PRE"
+
+echo
 echo "── restore puts it back, config included"
 # Destroy everything the way a dead machine would — except the data directory,
 # which is left behind on purpose: a restore has to clear it, or the cluster

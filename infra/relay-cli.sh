@@ -34,8 +34,31 @@ info() { printf '%s▸%s %s\n' "$CYN" "$N" "$*"; }
 ok()   { printf '%s✓%s %s\n' "$GRN" "$N" "$*"; }
 warn() { printf '%s!%s %s\n' "$YLW" "$N" "$*" >&2; }
 die()  { printf '%s✗ %s%s\n' "$RED" "$*" "$N" >&2; exit 1; }
+hr()   { printf '%s────────────────────────────────────────────────────────%s\n' "$DIM" "$N"; }
 
 cd "$DIR" 2>/dev/null || die "Stack directory $DIR is gone. Re-run the installer."
+
+# Where a question gets asked. The terminal, never stdin: this runs out of
+# runbooks and over ssh with a heredoc, and a `read` from stdin there answers
+# itself with whatever came next in the script. Overridable for the same reason
+# install.sh keeps the path in a variable — so the prompts can be driven by a
+# test without a terminal. It is not a way around a confirmation; `-y` is.
+TTY="${RELAY_TTY:-/dev/tty}"
+
+# ── Temporary directories ────────────────────────────────────────────────────
+# One EXIT trap for the whole script, not one per command. A second `trap ...
+# EXIT` replaces the first, and the update path now calls the backup path —
+# which is exactly where a per-command trap would quietly stop cleaning up the
+# staging directory it was written for.
+CLEANUP=''
+sweep() { CLEANUP="${CLEANUP}${1}"$'\n'; }
+cleanup() {
+  local path
+  while IFS= read -r path; do
+    if [ -n "$path" ]; then rm -rf "$path"; fi
+  done <<<"$CLEANUP"
+}
+trap cleanup EXIT
 
 # ── .env as data ─────────────────────────────────────────────────────────────
 # Read, never source. Values here are passwords chosen by people, and `.` would
@@ -123,21 +146,23 @@ VOL_PGDATA="${RELAY_VOL_PGDATA:-relay_pgdata}"
 PG_USER=relay
 PG_DB=relay
 
-# Secrets the stack cannot start without, generated on demand rather than
-# demanded of the user. `relay update` calls this before it validates the new
-# compose file: an installation from before the database existed has no
-# POSTGRES_PASSWORD in .env, and the 1.0 compose file refuses to interpolate
-# without one — so the upgrade would fail at the validation step with a message
-# about parsing, which is true and useless.
-ensure_secret() {
-  local key="$1"
-  if [ -n "$(env_get "$key")" ]; then return 0; fi
+# Secrets the stack cannot start without, generated rather than demanded of the
+# user. `relay update` needs one before it validates the new compose file: an
+# installation from before the database existed has no POSTGRES_PASSWORD in
+# .env, and the 1.0 compose file refuses to interpolate without one — so the
+# upgrade would fail at the validation step with a message about parsing, which
+# is true and useless.
+#
+# Generating and storing are separate on purpose. Validation happens before the
+# person has agreed to a major upgrade, and an update that gets declined must
+# not leave a new line behind in .env: "nothing has been changed" is either true
+# or it is not worth printing.
+new_secret() {
   local val
   if command -v openssl >/dev/null 2>&1; then val="$(openssl rand -hex 24)"
   else val="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"; fi
-  [ -n "$val" ] || die "Could not generate $key (no openssl and no /dev/urandom?)."
-  env_set "$key" "$val"
-  info "Generated ${key} (new in this version)."
+  [ -n "$val" ] || die "Could not generate a secret (no openssl and no /dev/urandom?)."
+  printf '%s' "$val"
 }
 
 # Wait for the database to accept connections. initdb on a first start takes a
@@ -152,9 +177,25 @@ wait_for_db() {
   return 1
 }
 
+# Does this compose file run a database? Asked of a file rather than of docker
+# because it has to be answerable about a file that has not been installed yet —
+# the one just downloaded into the staging directory.
+has_db_service() { grep -qE '^  db:[[:space:]]*$' "$1" 2>/dev/null; }
+
+# The major of a version, or an empty string when there is no version to read.
+# An installation that follows :latest has no number at all, which is precisely
+# why the check below does not rest on this alone.
+major_of() { case "$1" in [0-9]*) printf '%s' "${1%%.*}" ;; *) : ;; esac; }
+
 # ── update ───────────────────────────────────────────────────────────────────
 cmd_update() {
-  local want="${1:-}" cur prev stage backup name path url tls_src
+  local want='' yes='' arg cur prev stage backup name path url tls_src major ans pg
+  for arg in "$@"; do
+    case "$arg" in
+      -y|--yes) yes=1 ;;
+      *) want="$arg" ;;
+    esac
+  done
   cur="$(env_get RELAY_VERSION)"; cur="${cur:-latest}"
   prev="$cur"
 
@@ -177,8 +218,7 @@ cmd_update() {
   # Download everything before touching anything. A stack half-replaced by a
   # dropped connection is worse than one not replaced at all.
   stage="$(mktemp -d "$DIR/.update.XXXXXX")"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$stage'" EXIT
+  sweep "$stage"
   while read -r name path; do
     [ -n "$name" ] || continue
     url="$(raw_url "$want" "$path")"
@@ -194,17 +234,67 @@ cmd_update() {
   curl -fsSL --max-time 60 "$(raw_url "$want" "$tls_src")" -o "$stage/tls-mode.caddy" \
     || die "Cannot download $tls_src from ${want}. Nothing has been changed."
 
-  # Before validation, not after: the check below runs the downloaded compose
-  # file against this installation's .env, and a file that needs a secret the
-  # .env has never had would be reported as unparseable.
-  ensure_secret POSTGRES_PASSWORD
+  # Held, not stored: see new_secret. Written to .env further down, once this
+  # update is actually going to happen.
+  pg=''
+  if [ -z "$(env_get POSTGRES_PASSWORD)" ]; then pg="$(new_secret)"; fi
 
   # A truncated compose file passes the non-empty check and fails at `up`, by
   # which point the old one is already gone. Ask compose itself instead.
   ( cd "$stage" && cp "$ENV_FILE" .env 2>/dev/null || true
+    if [ -n "$pg" ]; then printf 'POSTGRES_PASSWORD=%s\n' "$pg" >>.env; fi
     docker compose -f "$CF" config -q >/dev/null 2>&1 ) \
     || die "The downloaded compose file does not parse. Nothing has been changed."
   rm -f "$stage/.env"
+
+  # ── Is this a major? ───────────────────────────────────────────────────────
+  # Two questions asked of two different things, because neither answers alone.
+  # The numbers know it when there are two of them — and an installation that
+  # follows :latest has none. The files always know it: a stack that has no
+  # database and is being handed one is crossing 1.0 whatever it calls itself,
+  # and that transition changes what happens to people's data.
+  major=''
+  if ! has_db_service "$DIR/$CF" && has_db_service "$stage/$CF"; then major=db; fi
+  if [ -z "$major" ] && [ -n "$(major_of "$cur")" ] && [ -n "$(major_of "$want")" ] \
+     && [ "$(major_of "$cur")" != "$(major_of "$want")" ]; then major=version; fi
+
+  if [ -n "$major" ]; then
+    hr
+    printf '%s  This is a major upgrade: %s → %s%s\n' "$B" "$cur" "$want" "$N"
+    hr
+    if [ "$major" = db ]; then
+      # Said in terms of what people will notice, not of what changes in the
+      # compose file. The third line is the one that gets remembered wrong:
+      # servers, channels, files and certificates stay — names do not.
+      printf '  · A Postgres service joins the stack. One more container on this machine,\n'
+      printf '    tuned for a small VM; add swap if this box has under ~1.5 GB of RAM.\n'
+      printf '  · The conversation stops evaporating on restart and starts being kept —\n'
+      printf '    for RETENTION_DAYS days, 14 unless you set otherwise. Older messages,\n'
+      printf '    and the files attached to them, are deleted from then on.\n'
+      printf '  · People become keys instead of names in a browser: everyone picks a name\n'
+      printf '    once more on their next visit. Servers, channels, uploaded files and\n'
+      printf '    certificates stay exactly where they are.\n'
+    else
+      printf '  Major versions are allowed to change stored data. Read the release notes\n'
+      printf '  for %s before continuing: https://github.com/%s/releases\n' "$want" "$REPO"
+    fi
+    printf '\n  A full backup is taken first, and rolling back is two commands:\n'
+    printf '    %srelay update %s%s   then   %srelay restore <backups/...tar.gz>%s\n\n' "$B" "$prev" "$N" "$B" "$N"
+    if [ -z "$yes" ]; then
+      printf 'Type %syes%s to continue: ' "$B" "$N"
+      IFS= read -r ans <"$TTY" || ans=''
+      [ "$ans" = "yes" ] || die "Aborted. Nothing has been changed."
+    fi
+    # Before the files move, while the old stack is still the running one: this
+    # is the archive that makes the rollback above real rather than theoretical.
+    info "Taking a backup before the upgrade…"
+    make_backup "relay-backup-before-${want}-$(date +%Y%m%d-%H%M%S).tar.gz"
+  fi
+
+  if [ -n "$pg" ]; then
+    env_set POSTGRES_PASSWORD "$pg"
+    info "Generated POSTGRES_PASSWORD (new in this version)."
+  fi
 
   backup="$DIR/backups/stack-$(date +%Y%m%d-%H%M%S)"
   mkdir -p "$backup"
@@ -256,13 +346,16 @@ _rollback() {
 # secrets in .env were unrecoverable (audit B7.3). Since 1.0 the same question
 # has a third part: the conversation lives in Postgres, so the archive carries a
 # dump of it too.
-cmd_backup() {
-  local out stage name
+cmd_backup() { make_backup "relay-backup-$(date +%Y%m%d-%H%M%S).tar.gz"; }
+
+# The archive itself. Separate from the command because `relay update` takes one
+# too, on the way into a major — and an upgrade that says "backed up first" has
+# to mean the same archive `relay restore` reads, not a near-copy of it.
+make_backup() {
+  local out="$1" stage name dbmount=()
   mkdir -p "$DIR/backups"
-  out="relay-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
   stage="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$stage'" EXIT
+  sweep "$stage"
   mkdir -p "$stage/cfg"
   for name in $CONFIG_FILES; do
     if [ -f "$DIR/$name" ]; then cp -p "$DIR/$name" "$stage/cfg/"; fi
@@ -272,11 +365,20 @@ cmd_backup() {
   # data directory of a *running* cluster gives a torn snapshot — files written
   # while the copy walks them — and the result restores, starts, and is wrong.
   # pg_dump reads inside one transaction, so it is consistent by construction.
-  info "Dumping the database…"
-  dc exec -T db pg_dump -U "$PG_USER" -d "$PG_DB" --clean --if-exists >"$stage/db.sql" 2>"$stage/db.err" \
-    || die "Could not dump the database: $(tr -d '\r' <"$stage/db.err" | tail -n1). Is the stack up? ('relay up')"
-  [ -s "$stage/db.sql" ] || die "The database dump came back empty. Nothing was written."
-  rm -f "$stage/db.err"
+  # A stack from before 1.0 has no database to dump, and that is not an error:
+  # the whole reason to take this archive is that the installation is about to
+  # get one. Without this branch the pre-upgrade backup would fail on exactly
+  # the installations that need it most.
+  if has_db_service "$DIR/$CF"; then
+    info "Dumping the database…"
+    dc exec -T db pg_dump -U "$PG_USER" -d "$PG_DB" --clean --if-exists >"$stage/db.sql" 2>"$stage/db.err" \
+      || die "Could not dump the database: $(tr -d '\r' <"$stage/db.err" | tail -n1). Is the stack up? ('relay up')"
+    [ -s "$stage/db.sql" ] || die "The database dump came back empty. Nothing was written."
+    rm -f "$stage/db.err"
+    dbmount=(-v "$stage/db.sql:/snap/db.sql:ro")
+  else
+    warn "No database in this stack — the archive holds files and configuration only."
+  fi
 
   # Everything is mounted under one root so the archive needs a single -C:
   # busybox tar (this is alpine) does not take -C between file arguments.
@@ -284,7 +386,7 @@ cmd_backup() {
     -v "$VOL_UPLOADS":/snap/u:ro \
     -v "$VOL_CADDY":/snap/c:ro \
     -v "$stage/cfg":/snap/cfg:ro \
-    -v "$stage/db.sql":/snap/db.sql:ro \
+    ${dbmount[@]+"${dbmount[@]}"} \
     -v "$DIR/backups":/out \
     alpine tar czf "/out/$out" -C /snap . \
     || die "Backup failed."
@@ -307,18 +409,16 @@ cmd_restore() {
   file="$(cd "$(dirname "$file")" && pwd)/$(basename "$file")"
 
   tmp="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmp'" EXIT
+  sweep "$tmp"
   tar xzf "$file" -C "$tmp" || die "Cannot read $file as a tar.gz archive."
   [ -d "$tmp/u" ] && [ -d "$tmp/cfg" ] || die "$file does not look like a relay backup (no u/ and cfg/ inside)."
 
-  # /dev/tty rather than stdin, for the same reason install.sh reads from it:
-  # this gets run under `curl | bash` and out of runbooks. -y is for the second
-  # case — a restore driven by a script has already been decided by a person.
+  # The terminal rather than stdin (see TTY above). -y is for a restore driven
+  # by a script — that one has already been decided by a person.
   if [ -z "$yes" ]; then
     warn "This replaces uploads, certificates and every config file in $DIR."
     printf 'Type %syes%s to continue: ' "$B" "$N"
-    IFS= read -r ans </dev/tty || ans=''
+    IFS= read -r ans <"$TTY" || ans=''
     [ "$ans" = "yes" ] || die "Aborted."
   fi
 
@@ -484,7 +584,7 @@ case "${1:-}" in
   logs)    shift; dc logs -f --tail=100 "$@" ;;
   ps)      dc ps ;;
   pull)    dc pull ;;
-  update)  shift; cmd_update "${1:-}" ;;
+  update)  shift; cmd_update "$@" ;;
   backup)  cmd_backup ;;
   restore) shift; cmd_restore "$@" ;;
   config)  ${EDITOR:-nano} "$ENV_FILE" && echo "Run: relay up   (to apply)" ;;
@@ -500,9 +600,12 @@ relay — control CLI (stack in $DIR)
   relay up | down | restart | ps
   relay logs [service]     follow logs
   relay version            installed version, newest release, active profiles
-  relay update [version]   move to the newest release (or a given one, which is
+  relay update [-y] [version]
+                           move to the newest release (or a given one, which is
                            also how you roll back); refreshes compose, Caddy and
-                           this CLI to match, then pulls images
+                           this CLI to match, then pulls images. A major upgrade
+                           says what it changes, backs the installation up and
+                           asks first; -y answers for a script
   relay config             edit .env, then 'relay up' to apply
   relay backup             snapshot volumes AND config into backups/
   relay restore [-y] <f>   put a backup back, config included
