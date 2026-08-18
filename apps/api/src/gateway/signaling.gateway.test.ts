@@ -710,7 +710,15 @@ describe('server-unlock', () => {
 
   it('отказ на входе в закрытый канал слышен, а не нем', async () => {
     const { gw, server, owner } = await withLocked();
-    gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'voice', name: 'тайный зов' });
+    // Ждём именно запись, а не таймеры: `settle` крутит фейковые часы и о
+    // незавершённой записи в базу ничего не знает. Без `await` канала в реестре
+    // может ещё не быть — а незнакомую комнату запирать не за что, и тест
+    // проваливался бы ровно на загруженной машине, где запись отстаёт.
+    await gw.handleChannelCreate(asSocket(owner), {
+      serverId: 'srv',
+      type: 'voice',
+      name: 'тайный зов',
+    });
     settle();
     const outsider = connect(gw, server, { id: 'outsider' });
     gw.handleJoin(asSocket(outsider), { room: 'тайный-зов', name: 'чужак' });
