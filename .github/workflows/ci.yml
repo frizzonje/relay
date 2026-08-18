@@ -142,8 +142,8 @@ jobs:
             -v "$PWD":/work -w /work/e2e \
             -e BASE_URL=https://relay.test -e SITE_PASSWORD=testpass123 -e CI=1 \
             -e E2E_PHASE=write -e E2E_MARK="$GITHUB_RUN_ID-survives-restart" \
-            mcr.microsoft.com/playwright:v1.49.0-noble \
-            sh -c 'npm install --no-save @playwright/test@1.49.0 && npx playwright test'
+            mcr.microsoft.com/playwright:v1.55.0-noble \
+            sh -c 'npm install --no-save @playwright/test@1.55.0 && npx playwright test'
 
       # The whole point of 1.0's first layer: the chat stops evaporating. Only a
       # real restart proves it — a message written before the process died has
@@ -162,8 +162,8 @@ jobs:
             -v "$PWD":/work -w /work/e2e \
             -e BASE_URL=https://relay.test -e SITE_PASSWORD=testpass123 -e CI=1 \
             -e E2E_PHASE=read -e E2E_MARK="$GITHUB_RUN_ID-survives-restart" \
-            mcr.microsoft.com/playwright:v1.49.0-noble \
-            sh -c 'npm install --no-save @playwright/test@1.49.0 && npx playwright test tests/persistence.spec.ts'
+            mcr.microsoft.com/playwright:v1.55.0-noble \
+            sh -c 'npm install --no-save @playwright/test@1.55.0 && npx playwright test tests/persistence.spec.ts'
       - name: Tear down
         if: always()
         run: docker compose -f docker-compose.yml -f infra/docker-compose.e2e.yml down -v
