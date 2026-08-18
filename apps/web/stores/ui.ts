@@ -19,6 +19,19 @@ export type MobilePanel = 'nav' | 'stage' | 'people';
 
 interface UiState {
   view: ShellView;
+  /**
+   * Вид, чья сцена сейчас НА ЭКРАНЕ. Отстаёт от `view` на время ухода старой
+   * сцены и переставляется самой сценой, когда та догасла (Stage,
+   * `onExitComplete`), — а не по таймеру: рядом со сменой канала главный поток
+   * бывает занят на сотни миллисекунд, и таймер в этот момент срабатывает не
+   * тогда же, когда идёт анимация.
+   *
+   * Нужен там, где от вида зависит РАСКЛАДКА вокруг сцены: колонка состава
+   * забирает свою ширину именно у неё, и менять эту ширину можно только в тот
+   * промежуток, когда на сцене не видно ни старого, ни нового.
+   */
+  stageView: ShellView;
+  setStageView: (view: ShellView) => void;
   textRoom: string | null;
   textLabel: string;
   voiceRoom: string | null;
@@ -46,6 +59,8 @@ interface UiState {
 
 export const useUiStore = create<UiState>((set, get) => ({
   view: 'lobby',
+  stageView: 'lobby',
+  setStageView: (view) => set({ stageView: view }),
   textRoom: null,
   textLabel: '',
   voiceRoom: null,

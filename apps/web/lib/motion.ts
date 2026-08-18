@@ -6,6 +6,13 @@ import type { Transition, Variants } from 'framer-motion';
  * <MotionConfig reducedMotion="user"> в app/providers.tsx (prefers-reduced-motion).
  */
 
+/**
+ * Сколько гаснет и проявляется сцена (лобби ↔ канал). Короче обычного: за это
+ * время не только меняется картинка, но и переставляется раскладка вокруг неё
+ * (колонка состава забирает ширину у сцены), а раскладка ждать не любит.
+ */
+export const STAGE_FADE_MS = 160;
+
 /** Пружина для layout-перестроек — тот же профиль, что на видеоплитках. */
 export const springLayout: Transition = { type: 'spring', stiffness: 360, damping: 34 };
 

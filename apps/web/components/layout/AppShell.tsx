@@ -44,6 +44,7 @@ const panelFade = {
 export function AppShell() {
   const panel = useUiStore((s) => s.mobilePanel);
   const view = useUiStore((s) => s.view);
+  const stageView = useUiStore((s) => s.stageView);
   const textRoom = useUiStore((s) => s.textRoom);
   const voiceRoom = useUiStore((s) => s.voiceRoom);
   const setMobilePanel = useUiStore((s) => s.setMobilePanel);
@@ -87,6 +88,15 @@ export function AppShell() {
   const hasPeople = view === 'voice' || view === 'text';
   const effective: MobilePanel = panel === 'people' && !hasPeople ? 'stage' : panel;
 
+  // Ширину колонка состава меняет не вместе со сменой вида, а когда сцена
+  // догасла (`stageView`). Место она забирает у сцены, и раньше это
+  // происходило под ЕЩЁ ВИДИМЫМ лобби: карточка состояния сервера на глазах
+  // съезжала к центру нового, узкого места, а на неширокoм окне ещё и
+  // ужималась — за мгновение до того, как исчезнуть вовсе. Само содержимое
+  // колонки при этом решает за себя: лишние доли секунды оно обрезано нулевой
+  // шириной, а не показано впустую.
+  const roomForPeople = stageView === 'voice' || stageView === 'text';
+
   // На десктопе видны все колонки разом — там анимации смены панели быть не должно.
   const shown = (which: MobilePanel) => (mobile ? (effective === which ? 'in' : 'out') : 'in');
 
@@ -119,7 +129,11 @@ export function AppShell() {
         {/* Состав: голосовой (Members) или текстовый (OnlineMembers) — рендерится
             один в зависимости от вида; на мобиле занимает всю ширину */}
         <Panel
-          className={cn('shrink-0 max-md:w-full', effective !== 'people' && 'max-md:hidden')}
+          className={cn(
+            'shrink-0 overflow-hidden max-md:w-full',
+            roomForPeople ? 'md:w-[232px]' : 'md:w-0',
+            effective !== 'people' && 'max-md:hidden',
+          )}
           state={shown('people')}
         >
           <Members />
