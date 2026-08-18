@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Icon } from '@/components/ui/icon';
 import { cn } from '@/lib/utils';
 import { avatarGradient } from '@/lib/avatar';
+import { Identicon } from '@/components/ui/Identicon';
 import {
   clearFocus,
   toggleFocus,
@@ -629,11 +630,20 @@ export const VideoTile = memo(function VideoTile({
       >
         {/* мягкий холодный ореол за аватаром (нейтральная палитра relay) */}
         <div className="pointer-events-none absolute h-[58%] w-[58%] rounded-full bg-accent/10 blur-[55px]" />
-        {/* аватар: кольцо, тень, тихое «дыхание» (motion-safe) */}
-        <div
-          className="relative h-[92px] w-[92px] rounded-full bg-cover bg-center shadow-[0_10px_34px_rgba(0,0,0,0.55)] ring-2 ring-white/15 motion-safe:animate-[avatarBreath_4.5s_ease-in-out_infinite]"
-          style={{ background: avatarGradient(tile.name) }}
-        />
+        {/* Лицо ключа: кольцо и тень — здесь, а само поле живёт своей жизнью
+            (см. lib/identicon). Отдельного «дыхания» ему не нужно: оно и так
+            наплывает, а когда человек говорит — бьётся поясами. Гостю по
+            инвайту ключа не выдавали, ему остаётся градиент по имени. */}
+        <div className="relative rounded-full shadow-[0_10px_34px_rgba(0,0,0,0.55)] ring-2 ring-white/15">
+          {tile.fingerprint ? (
+            <Identicon fingerprint={tile.fingerprint} size={92} speaking={speaking} />
+          ) : (
+            <div
+              className="h-[92px] w-[92px] rounded-full bg-cover bg-center motion-safe:animate-[avatarBreath_4.5s_ease-in-out_infinite]"
+              style={{ background: avatarGradient(tile.name) }}
+            />
+          )}
+        </div>
       </div>
 
       {/* Поля кадра заливаем его же размытым продолжением — но только когда они

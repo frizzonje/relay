@@ -11,6 +11,7 @@ import {
   stopNativeScreenAudio,
 } from '@/lib/desktop-screen-audio';
 import { useUiStore, myName } from '@/stores/ui';
+import { useIdentityStore } from '@/stores/identity';
 import { loadClientId } from '@/lib/identity';
 import { readPref, setPref } from '@/lib/prefs';
 import { tx as msg } from '@/lib/i18n';
@@ -289,6 +290,11 @@ function addTile(id: string, name: string, stream: MediaStream | null, isLocal: 
       volume: saved.voice ?? 1,
       screenVolume: saved.screen ?? 1,
       hasScreenAudio: false,
+      // Своё лицо знаем сами, чужое — из presence, если он уже приехал; если
+      // нет, его подставит syncPeerRoles, когда приедет.
+      fingerprint: isLocal
+        ? (useIdentityStore.getState().me?.fingerprint ?? undefined)
+        : role?.fingerprint,
       guest: role?.guest,
       listen: role?.listen,
     });
@@ -1389,6 +1395,12 @@ function syncPeerRoles(presence: VoicePresence) {
     const t = tiles.get(p.id);
     if (t && guest && (t.guest !== true || t.listen !== (p.listen === true))) {
       tiles.set(p.id, { ...t, guest: true, listen: p.listen === true });
+      changed = true;
+    }
+    // Лицо приезжает тем же presence и точно так же может опоздать за плиткой.
+    // Без этого собеседник до конца звонка оставался бы безымянным пятном.
+    if (t && p.fingerprint && t.fingerprint !== p.fingerprint) {
+      tiles.set(p.id, { ...tiles.get(p.id)!, fingerprint: p.fingerprint });
       changed = true;
     }
     // Плитка могла встать раньше, чем приехало лицо: транспорт быстрее

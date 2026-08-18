@@ -8,6 +8,7 @@ import { listItem, springLayout } from '@/lib/motion';
 import { Icon } from '@/components/ui/icon';
 import { kickGuest } from '@/lib/voice';
 import { useVoiceStore } from '@/stores/voice';
+import { useUiStore } from '@/stores/ui';
 import { useT } from '@/lib/i18n';
 
 /**
@@ -27,6 +28,11 @@ export function VoiceMembers({ room }: { room: string }) {
   const t = useT();
   const members = useVoiceStore((s) => s.presence[room]);
   const myId = useVoiceStore((s) => s.myId);
+  // Кто говорит, мы слышим только в том канале, к которому подключены сами:
+  // в остальных состав виден, а звука нет. Зажигать там лица было бы враньём
+  // — и совпадением socket-id по чужим спискам заодно.
+  const joined = useUiStore((s) => s.voiceRoom) === room;
+  const speakingIds = useVoiceStore((s) => s.speakingIds);
 
   if (!members || members.length === 0) return null;
 
@@ -40,6 +46,8 @@ export function VoiceMembers({ room }: { room: string }) {
           // значок «без звука» читался бы как «сейчас включит обратно». Про его
           // права уже сказано бейджем рядом с именем.
           const muted = m.micOn === false && !m.listen;
+          // Своя плитка в списке говорящих зовётся 'local', чужие — по socket-id.
+          const speaking = joined && speakingIds.includes(me ? 'local' : m.id);
           return (
             <motion.div
               key={m.id}
@@ -54,7 +62,7 @@ export function VoiceMembers({ room }: { room: string }) {
               {/* Лицо ключа, если участник — личность (см. Message.tsx). */}
               <div className="relative h-[22px] w-[22px] shrink-0 after:absolute after:-bottom-px after:-right-px after:h-2 after:w-2 after:rounded-full after:border-2 after:border-bg-sidebar after:bg-ok after:content-['']">
                 {m.fingerprint ? (
-                  <Identicon fingerprint={m.fingerprint} size={22} className="rounded-[6px]" />
+                  <Identicon fingerprint={m.fingerprint} size={22} speaking={speaking} />
                 ) : (
                   <div className="h-full w-full rounded-full" style={avatarStyle(name)} />
                 )}

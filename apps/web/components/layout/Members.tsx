@@ -8,6 +8,7 @@ import { AnimatedCount } from '@/components/ui/AnimatedCount';
 import { useUiStore } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import { avatarStyle } from '@/lib/avatar';
+import { Identicon } from '@/components/ui/Identicon';
 import { useRichT, useT } from '@/lib/i18n';
 
 /**
@@ -54,14 +55,17 @@ export function Members() {
                 transition={springLayout}
                 className="flex items-center gap-2.5 rounded-[8px] px-2 py-1.5 transition-colors hover:bg-bg-hover"
               >
-                <div
-                  className={cn(
-                    'relative h-8 w-8 shrink-0 rounded-full',
-                    "after:absolute after:-bottom-0.5 after:-right-0.5 after:h-[11px] after:w-[11px] after:rounded-full after:border-2 after:border-bg-sidebar after:bg-ok after:content-['']",
-                    speaking && 'ring-2 ring-ok',
+                {/* Кольца вокруг лица нет намеренно: когда человек говорит,
+                    отзывается само изображение — поле бьётся поясами изнутри
+                    наружу. Обводка поверх этого была бы вторым индикатором
+                    одного и того же, а слово «говорит» стоит строкой ниже. */}
+                <div className="relative h-8 w-8 shrink-0 after:absolute after:-bottom-0.5 after:-right-0.5 after:h-[11px] after:w-[11px] after:rounded-full after:border-2 after:border-bg-sidebar after:bg-ok after:content-['']">
+                  {tile.fingerprint ? (
+                    <Identicon fingerprint={tile.fingerprint} size={32} speaking={speaking} />
+                  ) : (
+                    <div className="h-full w-full rounded-full" style={avatarStyle(tile.name)} />
                   )}
-                  style={avatarStyle(tile.name)}
-                />
+                </div>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[14px] font-medium text-text">{tile.name}</div>
                   <div

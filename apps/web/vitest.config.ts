@@ -10,7 +10,14 @@ export default defineConfig({
   },
   esbuild: { jsx: 'automatic' },
   test: {
-    include: ['lib/**/*.test.{ts,tsx}', 'stores/**/*.test.{ts,tsx}'],
+    // Компоненты сюда попали позже: почти всё, что стоит проверять, живёт в
+    // lib и stores, но есть вещи, которых там не поймать вовсе — например
+    // доезжает ли «человек говорит» из стора до самой картинки лица.
+    include: [
+      'lib/**/*.test.{ts,tsx}',
+      'stores/**/*.test.{ts,tsx}',
+      'components/**/*.test.{ts,tsx}',
+    ],
     // По умолчанию node; тесты, которым нужен DOM, объявляют jsdom через
     // // @vitest-environment jsdom в шапке файла.
     environment: 'node',
