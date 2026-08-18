@@ -308,6 +308,8 @@ Adding a language means two edits and no new code:
 
 Docs and code comments are in Russian; the two READMEs are the English-facing entry point.
 
+- [Changelog](CHANGELOG.md) — what each release changes on your machine
+
 - [Architecture](docs/architecture.md) — services, traffic, auth, signaling
 - [Frontend](docs/frontend.md) — components, stores, WebRTC client
 - [Backend](docs/backend.md) — NestJS, Socket.io gateway, REST
