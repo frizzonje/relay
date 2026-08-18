@@ -7,7 +7,6 @@ import { cn } from '@/lib/utils';
 import { Icon } from '@/components/ui/icon';
 import { springTab, tabPanel } from '@/lib/motion';
 import { DevicesPanel } from '@/components/layout/DevicesPanel';
-import { PersonalPanel } from '@/components/layout/PersonalPanel';
 import {
   checkForUpdates,
   installUpdate,
@@ -44,7 +43,7 @@ import {
   getMicLevel,
 } from '@/lib/voice';
 
-type Tab = 'av' | 'appearance' | 'hotkeys' | 'app' | 'personal' | 'account';
+type Tab = 'av' | 'appearance' | 'hotkeys' | 'app' | 'account';
 
 const TABS: { id: Tab; label: MessageKey; desktopOnly?: boolean }[] = [
   { id: 'av', label: 'settings.tab.av' },
@@ -52,9 +51,6 @@ const TABS: { id: Tab; label: MessageKey; desktopOnly?: boolean }[] = [
   { id: 'hotkeys', label: 'settings.tab.hotkeys' },
   // Настройки самой оболочки (автозапуск): в браузере показывать нечего.
   { id: 'app', label: 'settings.tab.app', desktopOnly: true },
-  // Не «уведомления», а «на всех устройствах»: раздел отвечает на вопрос,
-  // что из настроенного едет с личностью, а что остаётся на этой машине.
-  { id: 'personal', label: 'settings.tab.personal' },
   { id: 'account', label: 'settings.tab.account' },
 ];
 
@@ -763,8 +759,6 @@ export function SettingsDialog({
                 <AppTab />
               ) : tab === 'account' ? (
                 <DevicesPanel />
-              ) : tab === 'personal' ? (
-                <PersonalPanel />
               ) : (
                 <Placeholder>{t('settings.placeholder')}</Placeholder>
               )}

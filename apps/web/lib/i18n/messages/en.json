@@ -415,19 +415,6 @@
   "pair.link.title": "Link this device",
   "pair.link.waiting": "Waiting for the other device to let this one in…",
   "pair.retry": "Try again",
-  "personal.conflict": "Change the same thing on two devices at once and the last change wins — there is no way to merge two answers to one question, and pretending otherwise would be worse.",
-  "personal.intro": "These settings travel with you: the channels you let ring and the volume you set for each person are the same everywhere you sign in with your key. The microphone, the headphones and the hotkeys stay on this device — they describe this machine, not you.",
-  "personal.intro.noIdentity": "This browser holds no key, so these settings stay here and nowhere else. Get one and they will follow you to every device.",
-  "personal.sound": "Channels with sound",
-  "personal.sound.empty": "Nothing rings. Sound is turned on per channel, in the channel's own menu.",
-  "personal.sound.off": "Silence this channel",
-  "personal.volume": "People you turned up or down",
-  "personal.volume.count": {
-    "one": "{count} person sounds louder or quieter than the rest.",
-    "other": "{count} people sound louder or quieter than the rest."
-  },
-  "personal.volume.empty": "Everyone sounds as they are.",
-  "personal.volume.reset": "Reset every volume",
   "pins.action.pin": "Pin",
   "pins.action.unpin": "Unpin",
   "pins.count": {
@@ -532,7 +519,6 @@
   "settings.tab.appearance": "Appearance",
   "settings.tab.av": "Audio and video",
   "settings.tab.hotkeys": "Hotkeys",
-  "settings.tab.personal": "Across devices",
   "settings.title": "Settings",
   "settings.updates": "Updates",
   "settings.updates.available": "Version {version} is available",
