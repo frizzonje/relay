@@ -1,6 +1,6 @@
 {
   "name": "@relay/shared",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Общий контракт фронт↔бэк: socket-события, DTO, ICE, вложения, константы",
   "type": "module",

@@ -1,6 +1,6 @@
 {
   "name": "@relay/sfu",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "NestJS + mediasoup: медиасервер (SFU) для голосовых каналов relay",
   "scripts": {
