@@ -103,7 +103,7 @@ export function MentionPicker({
               i === active ? 'bg-bg-hover' : 'hover:bg-bg-hover/60',
             )}
           >
-            <Identicon fingerprint={person.fingerprint} size={22} className="shrink-0 rounded" />
+            <Identicon fingerprint={person.fingerprint} size={22} />
             <span className="min-w-0 flex-1 truncate text-[13.5px] text-text-header">
               {person.nick}
             </span>

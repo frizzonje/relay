@@ -64,11 +64,7 @@ export function DevicesPanel() {
   return (
     <div className="flex flex-col gap-5">
       <div className="flex items-center gap-3">
-        <Identicon
-          fingerprint={me?.fingerprint ?? ''}
-          size={44}
-          className="shrink-0 rounded-xl ring-1 ring-inset ring-white/10"
-        />
+        <Identicon fingerprint={me?.fingerprint ?? ''} size={44} />
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="truncate text-[15px] font-semibold text-text-header">@{me?.nick}</span>
@@ -105,11 +101,7 @@ export function DevicesPanel() {
             )}
           >
             <div className="flex items-center gap-3">
-              <Identicon
-                fingerprint={device.fingerprint}
-                size={34}
-                className="shrink-0 rounded-lg ring-1 ring-inset ring-white/10"
-              />
+              <Identicon fingerprint={device.fingerprint} size={34} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="truncate text-[14px] font-medium text-text-header">

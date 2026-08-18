@@ -46,11 +46,7 @@ function Pin({
         <span className="text-[11px] text-text-muted">{fmtDayTime(msg.ts)}</span>
         <div className="mt-1.5 flex items-start gap-2">
           {msg.fingerprint ? (
-            <Identicon
-              fingerprint={msg.fingerprint}
-              size={20}
-              className="mt-0.5 shrink-0 rounded"
-            />
+            <Identicon fingerprint={msg.fingerprint} size={20} still className="mt-0.5" />
           ) : (
             <span className="mt-0.5 h-5 w-5 shrink-0 rounded-full bg-bg-active" aria-hidden />
           )}

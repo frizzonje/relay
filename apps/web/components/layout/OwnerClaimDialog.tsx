@@ -70,11 +70,7 @@ export function OwnerClaimDialog() {
         {(phase.kind === 'offer' || phase.kind === 'claiming') && (
           <div className="flex flex-col gap-3">
             <div className="flex items-center gap-3 rounded-[10px] border border-line bg-bg-elev/60 px-3.5 py-3">
-              <Identicon
-                fingerprint={me?.fingerprint ?? ''}
-                size={38}
-                className="shrink-0 rounded-lg ring-1 ring-inset ring-white/10"
-              />
+              <Identicon fingerprint={me?.fingerprint ?? ''} size={38} />
               <div className="min-w-0">
                 <div className="truncate text-[14px] font-medium text-text-header">@{me?.nick}</div>
                 <div className="font-mono text-[11px] tracking-[0.08em] text-text-muted">

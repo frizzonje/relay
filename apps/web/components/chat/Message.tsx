@@ -623,7 +623,12 @@ export const Message = memo(function Message({
             fingerprint={msg.fingerprint}
             size={38}
             title={msg.fingerprint}
-            className="mt-0.5 shrink-0 rounded-[10px]"
+            // Лицо в ленте не дышит, и это правило, а не экономия: движение у
+            // нас значит «человек здесь сейчас». Под сказанным час назад оно
+            // обещало бы присутствие, которого нет, — а заодно заставляло бы
+            // пересчитывать полсотни размытых полей на каждом кадре прокрутки.
+            still
+            className="mt-0.5"
           />
         ) : (
           <div

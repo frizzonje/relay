@@ -111,11 +111,7 @@ export function AdmitDeviceDialog() {
             <div className="flex items-center gap-3 rounded-[10px] border border-line bg-bg-elev/60 px-3.5 py-3">
               {/* Лицо ключа — то же, что новичок показывает у себя на экране:
                   сверяют глазами именно его, а не имя устройства. */}
-              <Identicon
-                fingerprint={phase.offer.fingerprint}
-                size={38}
-                className="shrink-0 rounded-lg ring-1 ring-inset ring-white/10"
-              />
+              <Identicon fingerprint={phase.offer.fingerprint} size={38} />
               <div className="min-w-0">
                 <div className="truncate text-[14px] font-medium text-text-header">
                   {phase.offer.deviceName}

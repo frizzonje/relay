@@ -79,11 +79,7 @@ export function BannedDialog({
                 key={entry.fingerprint}
                 className="flex items-center gap-3 rounded-[10px] border border-line bg-bg-elev/60 px-3.5 py-3"
               >
-                <Identicon
-                  fingerprint={entry.fingerprint}
-                  size={34}
-                  className="shrink-0 rounded-lg ring-1 ring-inset ring-white/10"
-                />
+                <Identicon fingerprint={entry.fingerprint} size={34} />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[14px] font-medium text-text-header">
                     {entry.nick}

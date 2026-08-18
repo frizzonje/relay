@@ -113,9 +113,9 @@ export function IdentityGate() {
                 initial={{ scale: 0.85, opacity: 0.4 }}
                 animate={{ scale: 1, opacity: 1 }}
                 transition={{ type: 'spring', stiffness: 320, damping: 22 }}
-                className="rounded-2xl ring-2 ring-white/15 shadow-[0_6px_18px_rgba(0,0,0,0.45)]"
+                className="rounded-full ring-2 ring-white/15 shadow-[0_10px_30px_rgba(0,0,0,0.5)]"
               >
-                <Identicon fingerprint={me?.fingerprint ?? ''} size={64} className="rounded-2xl" />
+                <Identicon fingerprint={me?.fingerprint ?? ''} size={84} />
               </motion.div>
             </div>
 

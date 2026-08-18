@@ -726,12 +726,7 @@ export function Sidebar() {
         {/* Лицо своего ключа, а не картинка по имени: имена не уникальны, и
             узнавать себя по тому, что можно занять, незачем. */}
         <div className="relative h-[34px] w-[34px] shrink-0 after:absolute after:-bottom-0.5 after:-right-0.5 after:h-3 after:w-3 after:rounded-full after:border-[3px] after:border-bg-deep after:bg-ok after:content-['']">
-          <Identicon
-            fingerprint={fingerprint}
-            size={34}
-            title={fingerprint}
-            className="rounded-lg ring-1 ring-inset ring-white/10"
-          />
+          <Identicon fingerprint={fingerprint} size={34} title={fingerprint} />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center">
