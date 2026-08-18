@@ -14,6 +14,8 @@ curl -fsSL https://raw.githubusercontent.com/frizzonje/relay/main/install.sh | b
 
 It installs Docker, asks for your domain, login password, TURN and the media server, pulls prebuilt images, opens the firewall, and starts everything — then hands you a `relay` CLI (`relay update`, `relay logs`, `relay config`, `relay backup`, `relay restore`, `relay disown`). The stack lives in `/opt/relay`, pinned to the release it installed: `relay up` after a reboot starts what you were running, and moving to a new version is `relay update` and nothing else.
 
+**What it needs:** a 1 GB / 1 core VM is enough, and that is the machine the stack is tuned for — Postgres ships with settings for a box where it is the only tenant, so this one is given its own (`shared_buffers=64MB`, `max_connections=30`, no parallel workers; see `docker-compose.prod.yml`). Give it **2 GB of swap** anyway: with none, the first busy evening ends with the kernel killing one container, which reads as "relay restarts at random" and never as "add swap". Reserve ~3 GB of disk for images, uploads and the database. The installer measures all three and says so if they are tight.
+
 **No domain?** Say so and the installer takes a Let's Encrypt certificate for the server's IP address instead — real HTTPS at `https://<your-ip>`, no browser warnings, nothing to buy. Such certificates are only valid for six days by design, so Caddy renews them every couple of days on its own. If issuance fails (port 80 closed, address behind NAT), the stack still comes up with a self-signed certificate.
 
 > [!TIP]
@@ -128,8 +130,24 @@ relay backup            # volumes AND config (including .env) into one tarball
 relay restore <file>    # put that tarball back
 ```
 
+A **major** upgrade behaves differently, on purpose: `relay update` says what the new version changes for the people using the installation, takes a full backup first, and asks for a typed `yes` before it touches anything (`-y` answers for a script). Rolling back is then two commands — `relay update <old version>` and `relay restore <the archive it just took>`.
+
 > [!IMPORTANT]
 > Installations made before this existed have a `relay` CLI that only pulls images and can therefore never update itself. Re-run the installer once on those; it keeps your `.env`, backing up the old one beside it.
+
+#### Moving an existing server to 1.0
+
+1.0 adds a database service to the stack, and a service is not something an image can bring with it. Everything installed before it follows the `:latest` tag, so `:latest` is deliberately **not** moved to 1.0 — a server running 0.x keeps running 0.x until its owner decides otherwise, instead of falling over on the next `relay up`.
+
+The way over is one command, the same one that installed it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/frizzonje/relay/main/install.sh | bash
+```
+
+It keeps `.env` (backing the old one up beside it), adds the database service, generates the password it needs, and installs the current CLI — after which `relay update` moves the whole stack on its own, majors included. Take a `relay backup` first if the machine holds anything you would miss.
+
+What the people on that server will notice: the conversation stops evaporating on restart and starts being kept for `RETENTION_DAYS` days (14 by default), and everyone picks a name once more, because a person is now a key on their device rather than a string in their browser. Servers, channels, uploaded files and certificates stay exactly where they are.
 
 ## Run and test locally
 
