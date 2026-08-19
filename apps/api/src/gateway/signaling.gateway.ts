@@ -12,6 +12,7 @@ import {
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import type { AppServer, AppSocket } from './socket-data';
 import { ChatSessions } from './chat-sessions';
+import { BROADCAST_DEBOUNCE_MS, Directory } from './directory';
 import { Perimeter } from './perimeter';
 import { VoiceSessions } from './voice-sessions';
 import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
@@ -158,11 +159,6 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   private readonly logger = new Logger(SignalingGateway.name);
 
   /**
-   * Владелец голосовой сессии. Заводится здесь, а не приезжает от Nest: своих
-   * зависимостей у него нет, а спрашивает он у гейтвея ровно то, чем гейтвей и
-   * владеет, — личность, гостевой контур и видимость каналов.
-   */
-  /**
    * Контур доступа. Заводится здесь по той же причине, что и голосовая сессия:
    * зависимости у него настоящие (реестр, личности, права), но приезжают они
    * гейтвею от Nest, а не ему.
@@ -176,11 +172,28 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.logger,
   );
 
+  /**
+   * Витрина реестра: каким каждый сокет видит серверы и каналы. Отдельно от
+   * самого реестра, потому что у каждого сокета она своя — от введённых
+   * паролей до собственных записей, — и вся цена рассылки лежит на ней.
+   */
+  private readonly directory = new Directory(
+    this.registry,
+    this.chat,
+    this.perimeter,
+    () => this.server,
+  );
+
   /** Владелец чат-сессии: принадлежность сокета к ленте и подпись в ней. */
   private readonly chats = new ChatSessions(() => this.server, {
     fingerprintOf: (sock) => this.perimeter.speaker(sock)?.fingerprint,
   });
 
+  /**
+   * Владелец голосовой сессии. Заводится здесь, а не приезжает от Nest: своих
+   * зависимостей у него нет, а спрашивает он ровно то, чем владеют соседи по
+   * этому же списку, — личность, гостевой контур и видимость каналов.
+   */
   private readonly voice = new VoiceSessions(
     () => this.server,
     {
@@ -233,8 +246,8 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    */
   async syncOwner(): Promise<void> {
     await this.perimeter.resyncOwner();
-    this.broadcastServers();
-    this.broadcastChannels();
+    this.directory.broadcastServers();
+    this.directory.broadcastChannels();
   }
 
   /**
@@ -262,11 +275,6 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   // коалесцируем рассылку в один emit за короткое окно вместо O(n) обхода+emit
   // на каждое событие. 80 мс незаметны на индикаторах мута/эфира.
 
-  // То же окно — реестру каналов и пингам активности чата. Обе рассылки идут по
-  // всем сокетам, и без коалесцирования работа растёт как квадрат их числа:
-  // каждое сообщение с каждого сокета — обход всех остальных.
-  private static readonly REGISTRY_DEBOUNCE_MS = 80;
-  private channelsTimer: ReturnType<typeof setTimeout> | null = null;
   // slug -> время последней реплики и сервер, под паролем которого канал лежит
   // (null — открытый или неизвестный). Видимость решаем в момент отправки
   // сообщения, а не при сбросе: канал за эти 80 мс могут удалить, и тогда его
@@ -322,8 +330,8 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // Новому клиенту сразу шлём реестры серверов и каналов и кто где в голосовых.
     // Серверы — публичная форма (без хэшей, с флагом locked); каналы — только
     // видимые ему (закрытые серверы скрыты до ввода пароля).
-    client.emit('servers', this.publicServersFor(client));
-    client.emit('channels', this.channelsFor(client));
+    client.emit('servers', this.directory.serversFor(client));
+    client.emit('channels', this.directory.channelsFor(client));
     client.emit('voice-presence', this.voice.snapshotFor(client));
     // Своё личное — отметки чтения и настройки. Отдельно от реестра и позже
     // него: за ними надо в базу, а реестр уже здесь, и задерживать первый кадр
@@ -378,107 +386,6 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     return out;
   }
 
-  // Публичная форма реестра серверов: без хэша пароля, с флагом `locked` и с
-  // `mine` — «этой записью управляешь ты». Наружу уходит именно флаг, а не
-  // clientId владельца: рассылать id значило бы раздавать всем то единственное,
-  // чем правило владения и держится (см. ./ownership).
-  private publicServersFor(client: AppSocket): PublicServer[] {
-    const banned = this.perimeter.bannedFrom(client);
-    const all = this.registry.publicServers(this.perimeter.claimant(client));
-    return banned?.size ? all.filter((s) => !banned.has(s.id)) : all;
-  }
-
-  // Каналы, видимые сокету: из закрытых серверов — только если он их разблокировал.
-  // Текстовым подмешиваем время последнего сообщения: по нему клиент зажигает
-  // «непрочитано» сразу после загрузки, не дожидаясь живого `chat-activity`.
-  private channelsFor(client: AppSocket): PublicChannel[] {
-    const who = this.perimeter.claimant(client);
-    return this.registry.channels
-      .filter((c) => this.perimeter.canSee(client, c))
-      .map((c) => publicChannel(c, who, c.type === 'text' ? this.chat.lastTs(c.slug) : 0));
-  }
-
-  /**
-   * Реестр серверов почти одинаков для всех: различает сокеты ровно один бит —
-   * `mine` у записей, созданных этим устройством. Поэтому и группируем по
-   * владению: у кого в реестре ничего своего нет (подавляющее большинство),
-   * получают один и тот же payload, а отдельная сборка достаётся только тем,
-   * кто прямо сейчас онлайн и чем-то владеет.
-   *
-   * Гости пропускаются, как и в рассылке каналов: по инвайту человек пришит к
-   * своему эфиру и реестра не получает вовсе — ни на подключении, ни правкой.
-   * Сама рассылка идёт на создание/удаление сервера, то есть считанные разы за
-   * сессию: обход сокетов здесь ничего не стоит (в отличие от каналов и
-   * активности чата, где он и разгонялся до квадрата — см. S4).
-   */
-  private broadcastServers() {
-    const owners = this.registry.ownerIds(this.registry.servers);
-    const byOwner = new Map<string, PublicServer[]>();
-    for (const sock of this.server.sockets.sockets.values()) {
-      if (this.perimeter.isGuest(sock)) continue;
-      const key = this.ownerKey(sock, owners);
-      let payload = byOwner.get(key);
-      if (!payload) {
-        payload = this.publicServersFor(sock);
-        byOwner.set(key, payload);
-      }
-      sock.emit('servers', payload);
-    }
-  }
-
-  // Чем этот сокет отличается от прочих с точки зрения реестра: своими записями
-  // и своими банами. Пустая строка — общая группа «не владелец, не забанен», в
-  // ней сидит подавляющее большинство. Владелец инсталляции — своя группа на
-  // всех: ему принадлежит всё, и второй такой на инсталляции невозможен.
-  //
-  // Баны обязаны быть в ключе: два сокета с одинаковым владением, но разными
-  // банами получают РАЗНЫЕ реестры, и общая группа отдала бы забаненному
-  // сервер, с которого его выгнали.
-  private ownerKey(client: AppSocket, owners: Set<string>): string {
-    const who = this.perimeter.claimant(client);
-    const banned = [...(this.perimeter.bannedFrom(client) ?? [])].sort().join('\u0004');
-    const mine = who.owner
-      ? '\u0003owner'
-      : [who.identityId, who.clientId].filter((id) => id && owners.has(id)).join('\u0002');
-    return banned ? `${mine}\u0005${banned}` : mine;
-  }
-
-  /**
-   * Каналы у каждого свои (закрытые серверы скрыты до пароля), поэтому рассылка
-   * пер-сокетная — и потому же она была самой дорогой в гейтвее: на каждую
-   * правку реестра полный обход сокетов, а внутри на каждый — фильтр всех
-   * каналов с поиском сервера по id.
-   *
-   * Считаем иначе. Набор каналов зависит ровно от двух вещей — какие закрытые
-   * серверы этот сокет разблокировал и какие каналы созданы им самим. Сокеты с
-   * одинаковой парой получают одинаковый ответ, и подавляющее большинство
-   * сидит в одной группе (ничего не разблокировано, ничем не владеет).
-   * Плюс дебаунс: правки реестра ходят пачками (создание сервера — это сразу
-   * servers + channels, удаление — каналы следом за сервером).
-   */
-  private broadcastChannels() {
-    if (this.channelsTimer) return;
-    this.channelsTimer = setTimeout(() => {
-      this.channelsTimer = null;
-      const owners = this.registry.ownerIds(this.registry.channels);
-      const byGroup = new Map<string, PublicChannel[]>();
-      for (const sock of this.server.sockets.sockets.values()) {
-        if (this.perimeter.isGuest(sock)) continue;
-        const key =
-          this.registry.visibilityKey(this.perimeter.unlockedOf(sock)) +
-          '\u0001' +
-          this.ownerKey(sock, owners);
-        let payload = byGroup.get(key);
-        if (!payload) {
-          payload = this.channelsFor(sock);
-          byGroup.set(key, payload);
-        }
-        sock.emit('channels', payload);
-      }
-    }, SignalingGateway.REGISTRY_DEBOUNCE_MS);
-    this.channelsTimer.unref?.();
-  }
-
   // ===== Реестр серверов =====
 
   @SubscribeMessage('server-create')
@@ -521,9 +428,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     });
     // Создатель знает пароль — сразу разблокируем сервер для его сокета.
     if (passwordHash) this.perimeter.markUnlocked(client, id);
-    this.broadcastServers();
+    this.directory.broadcastServers();
     // Раздаём каналы заново: у создателя новый сервер уже разблокирован.
-    this.broadcastChannels();
+    this.directory.broadcastChannels();
     await this.registry.persist();
   }
 
@@ -573,7 +480,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       this.perimeter.noteUnlockSuccess(client, id, srv.passwordHash, password);
       this.perimeter.markUnlocked(client, id);
       // Пароль подошёл — теперь этому сокету видны каналы сервера…
-      client.emit('channels', this.channelsFor(client));
+      client.emit('channels', this.directory.channelsFor(client));
       // …и состав их эфиров. Без этого строки каналов стоят пустыми до первого
       // чужого входа-выхода: присутствие теперь режется по видимости, и
       // прошлую рассылку этот сокет получил ещё запертым.
@@ -629,7 +536,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // Простой за неудачи вязался к этому id — новому серверу с тем же id он
     // достаться не должен.
     this.perimeter.forgetServer(id);
-    this.broadcastServers();
+    this.directory.broadcastServers();
 
     // Каналы удалённого сервера уходят вместе с ним — иначе повиснут сиротами.
     // Текстовые провожаем так же, как в channel-delete: стираем историю и
@@ -646,7 +553,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       }
       this.registry.channels.splice(i, 1);
     }
-    if (this.registry.channels.length !== before) this.broadcastChannels();
+    if (this.registry.channels.length !== before) this.directory.broadcastChannels();
     await this.registry.persist();
     return { ok: true };
   }
@@ -741,7 +648,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       ...(type === 'voice' && payload?.mode === 'sfu' ? { mode: 'sfu' as const } : {}),
     };
     this.registry.channels.push(channel);
-    this.broadcastChannels();
+    this.directory.broadcastChannels();
     await this.registry.persist();
   }
 
@@ -766,7 +673,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     if (channel.mode === next) return;
     if (next) channel.mode = next;
     else delete channel.mode;
-    this.broadcastChannels();
+    this.directory.broadcastChannels();
     // Отдельно — тем, кто прямо сейчас в этом канале: им нужно переехать на
     // другой транспорт. Реестра каналов для этого мало — гость по инвайту его
     // не получает, а переезжать обязан вместе со всеми.
@@ -847,7 +754,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     if ('error' in found) return { ok: false, error: found.error };
     if (found.channel.name === name) return { ok: true };
     found.channel.name = name;
-    this.broadcastChannels();
+    this.directory.broadcastChannels();
     await this.registry.persist();
     return { ok: true };
   }
@@ -887,7 +794,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       await this.reads.forget(channel.id);
     }
     this.registry.channels.splice(index, 1);
-    this.broadcastChannels();
+    this.directory.broadcastChannels();
     await this.registry.persist();
     return { ok: true };
   }
@@ -1090,8 +997,8 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       }
       this.perimeter.noteBannedFrom(sock, serverId);
       this.evictFrom(sock, serverId);
-      sock.emit('servers', this.publicServersFor(sock));
-      sock.emit('channels', this.channelsFor(sock));
+      sock.emit('servers', this.directory.serversFor(sock));
+      sock.emit('channels', this.directory.channelsFor(sock));
     }
   }
 
@@ -1100,8 +1007,8 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     if (serverId === null) return;
     for (const sock of this.perimeter.socketsOf(identityId)) {
       this.perimeter.bannedFrom(sock)?.delete(serverId);
-      sock.emit('servers', this.publicServersFor(sock));
-      sock.emit('channels', this.channelsFor(sock));
+      sock.emit('servers', this.directory.serversFor(sock));
+      sock.emit('channels', this.directory.channelsFor(sock));
     }
   }
 
@@ -1142,7 +1049,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const slug = trimmed(payload?.room, LIMIT.slug);
     // Канал должен существовать, быть голосовым и быть видимым этому сокету
     // (каналы закрытых серверов — только после ввода пароля).
-    const channel = this.channelsFor(client).find((c) => c.type === 'voice' && c.slug === slug);
+    const channel = this.directory.channelsFor(client).find((c) => c.type === 'voice' && c.slug === slug);
     if (!channel) return { ok: false, error: 'not-found' };
     const listen = this.isLockedChannel(slug);
     const { token, exp } = issueGuestToken(slug, { listen });
@@ -1241,7 +1148,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // Пропуск — только в видимый канал: закрытый сервер запирает и медиасервер,
     // иначе пароль обходится одним слагом. Гость идёт по своей комнате: реестра
     // у него нет, а к каналу он уже пришит проверкой выше.
-    const channel = (this.perimeter.isGuest(client) ? this.registry.channels : this.channelsFor(client)).find(
+    const channel = (this.perimeter.isGuest(client) ? this.registry.channels : this.directory.channelsFor(client)).find(
       (c) => c.type === 'voice' && c.slug === room,
     );
     if (!channel || channel.mode !== 'sfu') {
@@ -1482,7 +1389,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // неудачный вход не должен выбрасывать из той, где человек уже сидит.
     const known = this.registry.channels.some((c) => c.type === 'text' && c.slug === slug);
     const visible =
-      known && this.channelsFor(client).some((c) => c.type === 'text' && c.slug === slug);
+      known && this.directory.channelsFor(client).some((c) => c.type === 'text' && c.slug === slug);
     if (!visible) {
       if (!known) client.emit('chat-closed', { slug });
       return;
@@ -1800,7 +1707,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
           sock.emit('chat-activity', { slug, ts });
         }
       }
-    }, SignalingGateway.REGISTRY_DEBOUNCE_MS);
+    }, BROADCAST_DEBOUNCE_MS);
     this.activityTimer.unref?.();
   }
 
