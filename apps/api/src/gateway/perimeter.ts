@@ -154,6 +154,24 @@ export class Perimeter {
     };
   }
 
+  /**
+   * Имя, под которым сокет говорит. С личностью его называет сервер, а тело
+   * сообщения не спрашивают вовсе: иначе identicon рядом с ником оставался бы
+   * украшением — представиться чужим именем можно было бы одним `join`.
+   */
+  nameFor(client: AppSocket, claimed: string | undefined): string | undefined {
+    return this.speaker(client)?.nick ?? claimed;
+  }
+
+  /**
+   * Устройство, с которого пришёл сокет: clientId из handshake, положенный на
+   * сокет при подключении. Одна точка входа на все реестровые действия — в
+   * отдельных сообщениях его не спрашиваем и им не верим (см. ./ownership).
+   */
+  deviceOf(client: AppSocket): string | undefined {
+    return client.data.clientId;
+  }
+
   /** Есть ли у сокета власть над инсталляцией. */
   isOwner(client: AppSocket): boolean {
     return client.data.owner === true;

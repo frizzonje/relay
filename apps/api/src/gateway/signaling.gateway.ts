@@ -9,24 +9,23 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
-import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { AppServer, AppSocket } from './socket-data';
 import { ChatSessions } from './chat-sessions';
 import { BROADCAST_DEBOUNCE_MS, Directory } from './directory';
 import { Mentions } from './mentions';
 import { Moderation } from './moderation';
+import { VoiceHandlers } from './voice.handlers';
 import { Perimeter } from './perimeter';
 import { VoiceSessions } from './voice-sessions';
 import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
-import { IdentityService, type Speaker } from '../identity/identity.service';
+import { IdentityService } from '../identity/identity.service';
 import { OwnerService } from '../identity/owner.service';
 import { PrefsService } from '../identity/prefs.service';
 import { ReadsService } from '../identity/reads.service';
 import { RolesService } from '../identity/roles.service';
-import { sfuHealthy } from '../sfu/sfu-health';
-import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
 import { UploadsService } from '../uploads';
-import { ChatService, MENTION_SUGGEST_LIMIT, mentionedIn, searchTerms } from './chat.service';
+import { ChatService, MENTION_SUGGEST_LIMIT, searchTerms } from './chat.service';
 import {
   MAIN_SERVER_ID,
   MAX_CHANNELS,
@@ -34,28 +33,18 @@ import {
   RegistryService,
   slugifyChannel,
 } from './registry.service';
-import { Channel, ServerEntry, VoiceMode } from './registry';
+import { Channel, VoiceMode } from './registry';
 import {
-  type Claimant,
-  type PublicChannel,
-  type PublicServer,
-  moderatedBy,
   normalizeClientId,
   ownedBy,
-  publicChannel,
 } from './ownership';
 import {
-  UnlockAttempts,
   clientIp,
   hashServerPassword,
   issueUnlockToken,
-  verifyServerPassword,
-  verifyUnlockToken,
 } from './unlock';
 import {
-  ANON_NAME,
   LIMIT,
-  optional,
   str,
   trimmed,
   type ChannelCreatePayload,
@@ -87,7 +76,6 @@ import {
   type ModerationBansResult,
   type ModerationResult,
   type ModerationUnbanPayload,
-  type MentionRef,
   type MentionSuggestPayload,
   type MentionSuggestResult,
   type PrefsSetPayload,
@@ -104,10 +92,8 @@ import {
   type ServerUnlockPayload,
   type SfuTokenPayload,
   type SfuTokenResult,
-  type RosterPerson,
   type SignalPayload,
   type VoiceDiagPayload,
-  type VoicePresenceEntry,
 } from './protocol';
 
 /**
@@ -116,19 +102,6 @@ import {
  * строке показывает экран «вас забанили», а не бесконечное «переподключаюсь».
  */
 export const BANNED_ERROR = 'banned';
-
-// Строка для лога: без переводов строк (чтобы клиент не подделал чужие записи)
-// и лишних пробелов.
-function oneLine(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
-}
-
-// Устройство, с которого пришёл сокет: clientId из handshake, положенный в
-// client.data на подключении. Одна точка входа на все реестровые действия —
-// в отдельных сообщениях его не спрашиваем и им не верим (см. ./ownership).
-function deviceId(client: AppSocket): string | undefined {
-  return client.data.clientId;
-}
 
 @WebSocketGateway({
   // origin: '*' — дефолт для прода (единый origin за Caddy, кука sameSite=lax не
@@ -209,6 +182,16 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.logger,
   );
 
+  /** Обработчики разговора: вход, выход, негоциация, пропуск в медиасервер. */
+  private readonly voiceHandlers = new VoiceHandlers(
+    this.registry,
+    this.voice,
+    this.perimeter,
+    this.directory,
+    () => this.server,
+    this.logger,
+  );
+
   /** Упоминания: кого назвали, кому сказать, сколько накопилось. */
   private readonly mentions = new Mentions(
     this.registry,
@@ -283,15 +266,6 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const sockets = this.perimeter.socketsOfDevice(deviceId);
     for (const socket of sockets) socket.disconnect(true);
     return sockets.length;
-  }
-
-  /**
-   * Имя, под которым сокет говорит. С личностью его называет сервер, а тело
-   * сообщения не спрашивают вовсе: иначе identicon рядом с ником оставался бы
-   * украшением — представиться чужим именем можно было бы одним `join`.
-   */
-  private nameOf(client: AppSocket, claimed: string | undefined): string | undefined {
-    return this.perimeter.speaker(client)?.nick ?? claimed;
   }
 
   // Presence меняется пачками (заход нескольких, серия media-update) —
@@ -735,7 +709,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    */
   private creatorOf(client: AppSocket): { creatorIdentityId: string } | { creatorId?: string } {
     const identityId = this.perimeter.speaker(client)?.id;
-    return identityId ? { creatorIdentityId: identityId } : { creatorId: deviceId(client) };
+    return identityId ? { creatorIdentityId: identityId } : { creatorId: this.perimeter.deviceOf(client) };
   }
 
   // Живой срез канала для диалога подтверждения (сколько человек внутри,
@@ -1022,207 +996,44 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     return { ok: true };
   }
 
-  // ===== Пропуск в медиасервер =====
+  // ===== Разговор =====
 
-  // Пропуск на namespace /sfu: короткоживущий подписанный токен + адрес
-  // медиасервера. Комнату и peerId берём из состояния сокета, а не из запроса —
-  // напроситься в чужой канал или назваться чужим id так нельзя. Гость проходит
-  // на общих основаниях: он уже «пришит» к своей комнате.
   @SubscribeMessage('sfu-token')
-  async handleSfuToken(
+  handleSfuToken(
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: SfuTokenPayload,
   ): Promise<SfuTokenResult> {
-    if (!this.perimeter.allow(client)) return { ok: false, error: 'forbidden' };
-    // Отказ обязан стирать прошлый пропуск, и это не уборка ради порядка.
-    // Пропуск — единственное, чем сервер догадывается о транспорте клиента,
-    // который его не называет (бандл прошлой версии). Не сотри мы его, человек,
-    // ушедший из sfu-канала в обычный, остался бы в presence помечен как «через
-    // медиасервер» — и весь канал, работающий прекрасно, получил бы красное
-    // «тебя не слышат» на пустом месте. Пропуск описывает СЛЕДУЮЩИЙ вход, и
-    // отказ в нём — такой же ответ, как выдача.
-    const forget = () => this.voice.forgetPass(client);
-    const url = (process.env.SFU_URL ?? '').trim();
-    if (!url || !sfuSecret()) {
-      forget();
-      return { ok: false, error: 'unavailable' };
-    }
-    // Настроен — не значит жив: пропуск в лежащий медиасервер собирает комнату
-    // в расщеплённое «вижу, но не слышу». Пинг с коротким кэшем, sfu-health.ts.
-    if (!(await sfuHealthy())) {
-      this.logger.warn(`sfu-token denied (sfu down) for ${client.id}`);
-      forget();
-      return { ok: false, error: 'unavailable' };
-    }
-    // Комната приходит в запросе: клиенту нужно знать транспорт ДО `join`,
-    // иначе он пропустит ответный `peers`. Секрета в ней нет — войти в любой
-    // голосовой канал он и так вправе, а `peerId` по-прежнему берётся из
-    // сокета, так что назваться чужим id нельзя.
-    const asked = trimmed(payload?.room, LIMIT.slug);
-    const room = asked || this.voice.roomOf(client) || '';
-    if (!room) {
-      forget();
-      return { ok: false, error: 'not-in-room' };
-    }
-    // Гость «пришит» к своему каналу — чужую комнату не спросит.
-    if (this.perimeter.isGuest(client) && room !== this.perimeter.guestRoom(client)) {
-      forget();
-      return { ok: false, error: 'forbidden' };
-    }
-    // Режим канала — не декорация: пропуск выдаём только тем каналам, что
-    // помечены sfu. Дефолтные (всегда p2p) отсюда уходят ни с чем.
-    // Пропуск — только в видимый канал: закрытый сервер запирает и медиасервер,
-    // иначе пароль обходится одним слагом. Гость идёт по своей комнате: реестра
-    // у него нет, а к каналу он уже пришит проверкой выше.
-    const channel = (this.perimeter.isGuest(client) ? this.registry.channels : this.directory.channelsFor(client)).find(
-      (c) => c.type === 'voice' && c.slug === room,
-    );
-    if (!channel || channel.mode !== 'sfu') {
-      forget();
-      return { ok: false, error: 'not-sfu' };
-    }
-    // Имя берём из запроса: пропуск спрашивают ДО `join`, и client.data.name в
-    // этот момент ещё пуст (заполнен он только при пере-выдаче во время звонка).
-    // Лимит — тот же, что у `join`.
-    const askedName = trimmed(payload?.name, LIMIT.tag);
-    const name = askedName || this.voice.nameOf(client) || '';
-    // Слушателю пропуск выдаём тот же, но с клеймом: медиасервер откажет ему в
-    // produce. Клиент у гостя свой — запрет обязан жить там, где течёт медиа.
-    const { token, exp } = issueSfuToken({
-      room,
-      peerId: client.id,
-      name,
-      listen: this.perimeter.isListener(client),
-    });
-    // Запоминаем выдачу: клиент, не умеющий сообщать транспорт в `join` (бандл
-    // прошлой версии), иначе сошёл бы за p2p — и остальные съехали бы в прямые
-    // звонки, разъехавшись с ним по-настоящему. Пропуск — лучшее, что о таком
-    // клиенте известно: за ним идут в медиасервер.
-    this.voice.grantPass(client, room);
-    this.logger.log(`sfu-token issued to ${name || '?'} (${client.id}) room "${room}"`);
-    return { ok: true, token, exp, url };
+    return this.voiceHandlers.sfuToken(client, payload);
   }
 
-  // ===== Диагностика звонков =====
-
-  // Клиентские вехи звонка (выбор транспорта, фолбэк в p2p, обрывы) — в лог
-  // сервера. Все эти решения клиент принимает молча у себя, сервер видит лишь
-  // их отсутствие — а «телефон в канале, но не слышно» разбирают назавтра по
-  // серверному логу, клиентская консоль к тому моменту мертва. Только лог,
-  // никакой логики: верить содержимому на слово нельзя.
   @SubscribeMessage('voice-diag')
   handleVoiceDiag(@ConnectedSocket() client: AppSocket, @MessageBody() payload: VoiceDiagPayload) {
-    if (!this.perimeter.allowDiag(client)) return;
-    const event = oneLine(str(payload?.event)).slice(0, LIMIT.diagEvent);
-    if (!event) return;
-    const detail = oneLine(str(payload?.detail)).slice(0, LIMIT.diagDetail);
-    const name = client.data.name || '?';
-    this.logger.log(`diag ${name} (${client.id}): ${event}${detail ? ` ${detail}` : ''}`);
+    this.voiceHandlers.diag(client, payload);
   }
 
   @SubscribeMessage('join')
   handleJoin(@ConnectedSocket() client: AppSocket, @MessageBody() payload: JoinPayload) {
-    if (!this.perimeter.allow(client)) return;
-    const room = trimmed(payload?.room, LIMIT.slug);
-    if (!room) return;
-    // Гость «пришит» к каналу из своего токена — другие комнаты недоступны.
-    if (this.perimeter.isGuest(client) && room !== this.perimeter.guestRoom(client)) return;
-    // Выгнанный не возвращается, пока не истечёт пауза (см. handleGuestKick).
-    // Проверяем и здесь, а не только в handshake: сокет мог быть открыт до
-    // того, как его выгнали, — тогда `join` был бы дверью с другой стороны.
-    if (this.perimeter.isGuest(client) && this.perimeter.guestBanned(client, room)) {
-      client.emit('kicked', { room });
-      return;
-    }
-    // Канал закрытого сервера — только для тех, кто ввёл пароль. Комнату, которой
-    // в реестре нет вовсе, пропускаем: это либо канал, удалённый под живым
-    // разговором, либо инвайт-комната, и запирать их не за что.
-    if (!this.perimeter.isGuest(client) && !this.perimeter.mayEnter(client, room)) {
-      this.logger.warn(`voice: join to locked room "${room}" refused for ${client.id}`);
-      // Отказ обязан быть слышен. Молчащий `return` клиент не отличал от
-      // удавшегося входа: он считал себя в канале, для остальных его там не
-      // было, и разъезд по транспортам довершал дело — вместо «введи пароль»
-      // человек получал тишину без объяснений.
-      client.emit('voice-locked', { room });
-      return;
-    }
-    // Имя называет сервер, если сокет — личность; тело сообщения остаётся
-    // именем только у гостя по инвайту.
-    const name = this.nameOf(client, optional(payload?.name, LIMIT.tag));
-    // Устройство: сначала handshake (см. handleConnection), и только если там
-    // пусто — поле payload. Порядок именно такой, и он важен: по этому же id
-    // решается владение серверами и каналами, а `??` не даёт перебить уже
-    // названное — иначе владельцем можно было бы представиться одним
-    // `voice-join` посреди сессии.
-    //
-    // Совсем закрыть эту дверь нельзя: клиент прошлой версии шлёт clientId
-    // только здесь, и без него не выгнать «призрака» его прошлой вкладки. Так
-    // что назваться первым join'ом сокет, промолчавший в handshake, всё же
-    // может — но ровно один раз, и не большего, чем то же самое поле в
-    // handshake, которое ничем не защищено и защищать не пытается.
-    const clientId = deviceId(client) ?? normalizeClientId(payload?.clientId);
-    // Транспорт называет сам клиент: сервер знает лишь режим канала, а решение
-    // принимает клиент — и оно может разойтись с режимом (медиасервер не
-    // поднялся у него одного, нативный iOS про SFU вовсе не знает). Клиент
-    // прошлой версии поля не пришлёт — за него отвечает выданный пропуск:
-    // считать такого p2p нельзя, остальные съехали бы в прямые звонки и
-    // разъехались бы с ним уже по-настоящему.
-    const transport = this.voice.transportFor(client, payload?.transport, room);
-
-    // Вход: выход из прошлой комнаты, выселение «призрака» своего же устройства
-    // и сбор соседей — всё это один неделимый порядок, и живёт он в VoiceSessions.
-    const peers = this.voice.enter(client, { room, name, transport, clientId });
-
-    // Новичку — список тех, кто уже в канале (он шлёт им offer'ы),
-    // остальным — уведомление о пополнении
-    client.emit('peers', peers);
-    client.to(room).emit('peer-joined', {
-      id: client.id,
-      name,
-      ...(this.perimeter.speaker(client) ? { fingerprint: this.perimeter.speaker(client)?.fingerprint } : {}),
-      ...(this.perimeter.isGuest(client) ? { guest: true } : {}),
-      ...(this.perimeter.isListener(client) ? { listen: true } : {}),
-    });
-    this.voice.broadcast();
-    // UA — в лог: «телефон не слышит» первым делом упирается в вопрос, ЧТО это
-    // за клиент был (мобильный Safari? нативное приложение? старый бандл?).
-    const ua = oneLine(String(client.handshake.headers['user-agent'] ?? '')).slice(0, 120);
-    this.logger.log(
-      `voice: ${name || '?'} (${client.id}${this.perimeter.isGuest(client) ? ', guest' : ''}) joined "${room}" via ${transport} ua="${ua}"`,
-    );
-    // Разъехались в транспортах — участники друг друга не слышат вообще.
-    // Клиенты разберутся сами (мелкая комната съедет в p2p целиком), но в логе
-    // это должно быть видно сразу: снаружи такое выглядит как «он в канале, но
-    // молчит», и без строчки в логе разбирается только гаданием.
-    const split = this.voice.transportsInRoom(room);
-    if (split.size > 1) {
-      this.logger.warn(
-        `voice: room "${room}" is split across transports: ${[...split].join(' + ')}`,
-      );
-    }
+    this.voiceHandlers.join(client, payload);
   }
 
   @SubscribeMessage('leave')
   handleLeave(@ConnectedSocket() client: AppSocket) {
-    this.voice.leave(client);
+    this.voiceHandlers.leave(client);
   }
 
   @SubscribeMessage('offer')
   handleOffer(@ConnectedSocket() client: AppSocket, @MessageBody() payload: SignalPayload) {
-    this.relay(client, 'offer', payload?.to, {
-      name: client.data.name,
-      sdp: payload?.sdp,
-    });
+    this.voiceHandlers.offer(client, payload);
   }
 
   @SubscribeMessage('answer')
   handleAnswer(@ConnectedSocket() client: AppSocket, @MessageBody() payload: SignalPayload) {
-    this.relay(client, 'answer', payload?.to, { sdp: payload?.sdp });
+    this.voiceHandlers.answer(client, payload);
   }
 
   @SubscribeMessage('ice-candidate')
   handleIceCandidate(@ConnectedSocket() client: AppSocket, @MessageBody() payload: SignalPayload) {
-    this.relay(client, 'ice-candidate', payload?.to, { candidate: payload?.candidate });
+    this.voiceHandlers.iceCandidate(client, payload);
   }
 
   @SubscribeMessage('media-update')
@@ -1231,25 +1042,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody()
     payload: { camOn?: unknown; screenOn?: unknown; micOn?: unknown; deafened?: unknown },
   ) {
-    if (!this.perimeter.allow(client)) return;
-    const room = this.voice.roomOf(client);
-    if (!room) return;
-    // Мут/глушилку запоминает голосовая сессия — их раздаёт voice-presence
-    // (индикаторы в сайдбаре видят и те, кто сам не в эфире).
-    const changed = this.voice.setMedia(client, payload?.micOn, payload?.deafened);
-    client.to(room).emit('media-update', {
-      from: client.id,
-      camOn: payload?.camOn === true,
-      screenOn: payload?.screenOn === true,
-      ...this.voice.mediaOf(client),
-    });
-    // Presence несёт только мут/глушилку — камеру/экран (или повтор того же
-    // состояния) не гоним на весь сервер. Рассылаем лишь при реальной их смене.
-    if (changed) this.voice.broadcast();
+    this.voiceHandlers.mediaUpdate(client, payload);
   }
 
-  // Смена тега на лету: обновляем имя в голосовой комнате (presence + подписи
-  // плиток у собеседников) и в текстовом канале (ростер). Пустое имя игнорируем.
   /**
    * Человек переименовался. От личности это не «зовите меня так», а «сходите
    * перечитайте»: имя меняется обычным HTTP (`POST /api/identity/nick`), сокет
@@ -1304,7 +1099,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const slug = trimmed(payload?.room, LIMIT.slug);
     if (!slug) return;
     // Как и в голосовом: имя личности называет сервер (см. nameOf).
-    const name = this.nameOf(client, trimmed(payload?.name, LIMIT.tag));
+    const name = this.perimeter.nameFor(client, trimmed(payload?.name, LIMIT.tag));
 
     // В несуществующий канал не пускаем: комната-призрак принимала бы сообщения
     // и заново копила историю под удалённым слагом. Случая два, и они разные.
@@ -1761,14 +1556,5 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.voice.hold(client);
   }
 
-  // Пересылаем сигнал только участнику той же комнаты, что и отправитель
-  private relay(client: AppSocket, event: string, to: unknown, data: Record<string, unknown>) {
-    if (typeof to !== 'string') return;
-    const room = this.voice.roomOf(client);
-    if (!room) return;
-    const target = this.server.sockets.sockets.get(to);
-    if (!target || this.voice.roomOf(target) !== room) return;
-    target.emit(event, { from: client.id, ...data });
-  }
 
 }
