@@ -169,7 +169,6 @@ export class VoiceSessions {
 
     this.leave(client);
     if (clientId) this.evictGhost(clientId, client.id);
-    client.data.clientId = clientId;
 
     const peers = this.peersIn(room);
 

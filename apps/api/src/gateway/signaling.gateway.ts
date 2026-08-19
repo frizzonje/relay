@@ -34,9 +34,6 @@ import {
   RegistryService,
 } from './registry.service';
 import {
-  normalizeClientId,
-} from './ownership';
-import {
   type ChannelCreatePayload,
   type ChannelDeletePayload,
   type ChannelDeleteResult,
@@ -318,10 +315,6 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     return sockets.length;
   }
 
-  // Presence меняется пачками (заход нескольких, серия media-update) —
-  // коалесцируем рассылку в один emit за короткое окно вместо O(n) обхода+emit
-  // на каждое событие. 80 мс незаметны на индикаторах мута/эфира.
-
   // Socket.io цепляется к http-серверу мимо express-миддлвар,
   // поэтому пропуск проверяем прямо в handshake
   handleConnection(client: AppSocket) {
@@ -339,12 +332,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // эфир и текстовые каналы не трогаем, остальные нас и не «теряли».
     this.voice.resume(client);
     // Устройство, с которого пришли: по нему решается владение серверами и
-    // каналами (audit B2) и выгоняется «призрак» прошлой вкладки в эфире.
-    // Берём из handshake, а не из каждого сообщения: одна точка входа, и id
-    // владельца не нужно гонять по протоколу. Клиент прошлой версии поля не
-    // пришлёт — его записи останутся без владельца, как и всё, что создано до
-    // правила.
-    client.data.clientId = normalizeClientId(
+    // каналами и выгоняется «призрак» прошлой вкладки в эфире.
+    this.perimeter.rememberDevice(
+      client,
       (client.handshake.auth as { clientId?: unknown } | undefined)?.clientId,
     );
     if (guest) {

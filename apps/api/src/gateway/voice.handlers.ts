@@ -6,7 +6,6 @@ import type { RegistryService } from './registry.service';
 import type { VoiceSessions } from './voice-sessions';
 import { sfuHealthy } from '../sfu/sfu-health';
 import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
-import { normalizeClientId } from './ownership';
 import {
   LIMIT,
   optional,
@@ -174,18 +173,9 @@ export class VoiceHandlers {
     // Имя называет сервер, если сокет — личность; тело сообщения остаётся
     // именем только у гостя по инвайту.
     const name = this.perimeter.nameFor(client, optional(payload?.name, LIMIT.tag));
-    // Устройство: сначала handshake (см. handleConnection), и только если там
-    // пусто — поле payload. Порядок именно такой, и он важен: по этому же id
-    // решается владение серверами и каналами, а `??` не даёт перебить уже
-    // названное — иначе владельцем можно было бы представиться одним
-    // `voice-join` посреди сессии.
-    //
-    // Совсем закрыть эту дверь нельзя: клиент прошлой версии шлёт clientId
-    // только здесь, и без него не выгнать «призрака» его прошлой вкладки. Так
-    // что назваться первым join'ом сокет, промолчавший в handshake, всё же
-    // может — но ровно один раз, и не большего, чем то же самое поле в
-    // handshake, которое ничем не защищено и защищать не пытается.
-    const clientId = this.perimeter.deviceOf(client) ?? normalizeClientId(payload?.clientId);
+    // Устройство: сначала handshake (см. `handleConnection`), и только если
+    // там пусто — поле payload. Правило целиком — в `claimDevice`.
+    const clientId = this.perimeter.claimDevice(client, payload?.clientId);
     // Транспорт называет сам клиент: сервер знает лишь режим канала, а решение
     // принимает клиент — и оно может разойтись с режимом (медиасервер не
     // поднялся у него одного, нативный iOS про SFU вовсе не знает). Клиент

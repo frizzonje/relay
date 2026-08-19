@@ -6,7 +6,7 @@ import { RolesService } from '../identity/roles.service';
 import type { AppServer, AppSocket, TokenBucket } from './socket-data';
 import { Channel, ServerEntry } from './registry';
 import { MAX_SERVERS, RegistryService } from './registry.service';
-import { type Claimant } from './ownership';
+import { normalizeClientId, type Claimant } from './ownership';
 import { UnlockAttempts, clientIp, verifyServerPassword, verifyUnlockToken } from './unlock';
 
 /** Права гостя, приехавшие подписанными в токене приглашения. */
@@ -164,12 +164,35 @@ export class Perimeter {
   }
 
   /**
-   * Устройство, с которого пришёл сокет: clientId из handshake, положенный на
-   * сокет при подключении. Одна точка входа на все реестровые действия — в
-   * отдельных сообщениях его не спрашиваем и им не верим (см. ./ownership).
+   * Устройство, с которого пришёл сокет. Одна точка входа на все реестровые
+   * действия — в отдельных сообщениях его не спрашиваем и им не верим
+   * (см. ./ownership).
    */
   deviceOf(client: AppSocket): string | undefined {
     return client.data.clientId;
+  }
+
+  /**
+   * Запомнить устройство с handshake. По нему решается владение серверами и
+   * каналами (audit B2) и выгоняется «призрак» прошлой вкладки в эфире. Берём
+   * из handshake, а не из каждого сообщения: одна точка входа, и id владельца
+   * не нужно гонять по протоколу. Клиент прошлой версии поля не пришлёт — его
+   * записи останутся без владельца, как и всё, что создано до правила.
+   */
+  rememberDevice(client: AppSocket, raw: unknown): void {
+    client.data.clientId = normalizeClientId(raw);
+  }
+
+  /**
+   * То же, но из тела `join`, — и только если в handshake было пусто.
+   *
+   * Совсем закрыть эту дверь нельзя: клиент прошлой версии называет устройство
+   * только здесь, и без него не выгнать «призрака» его прошлой вкладки. Но
+   * `??=` не даёт перебить уже названное — иначе владельцем чужих серверов
+   * можно было бы представиться одним `join` посреди сессии.
+   */
+  claimDevice(client: AppSocket, raw: unknown): string | undefined {
+    return (client.data.clientId ??= normalizeClientId(raw));
   }
 
   /** Есть ли у сокета власть над инсталляцией. */
