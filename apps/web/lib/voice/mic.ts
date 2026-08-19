@@ -184,7 +184,12 @@ export async function ensureLocalStream(): Promise<void> {
  */
 function sentMicTrack(): MediaStreamTrack | null {
   const screenAudio = around.screenAudioTrack();
-  return around.stream()?.getAudioTracks().find((t) => t !== screenAudio) ?? null;
+  return (
+    around
+      .stream()
+      ?.getAudioTracks()
+      .find((t) => t !== screenAudio) ?? null
+  );
 }
 
 /**
@@ -477,10 +482,13 @@ export function loadMediaPrefs() {
 export function applyMute() {
   // Микрофон глушим, а звук демонстрации экрана — нет (он не зависит от микрофона)
   const screenAudio = around.screenAudioTrack();
-  around.stream()?.getAudioTracks().forEach((t) => {
-    if (t === screenAudio) return;
-    t.enabled = micOn;
-  });
+  around
+    .stream()
+    ?.getAudioTracks()
+    .forEach((t) => {
+      if (t === screenAudio) return;
+      t.enabled = micOn;
+    });
   around.syncStore();
 }
 

@@ -57,10 +57,7 @@ export class VoiceHandlers {
   // медиасервера. Комнату и peerId берём из состояния сокета, а не из запроса —
   // напроситься в чужой канал или назваться чужим id так нельзя. Гость проходит
   // на общих основаниях: он уже «пришит» к своей комнате.
-  async sfuToken(
-    client: AppSocket,
-    payload: SfuTokenPayload,
-  ): Promise<SfuTokenResult> {
+  async sfuToken(client: AppSocket, payload: SfuTokenPayload): Promise<SfuTokenResult> {
     if (!this.perimeter.allow(client)) return { ok: false, error: 'forbidden' };
     // Отказ обязан стирать прошлый пропуск, и это не уборка ради порядка.
     // Пропуск — единственное, чем сервер догадывается о транспорте клиента,
@@ -102,9 +99,9 @@ export class VoiceHandlers {
     // Пропуск — только в видимый канал: закрытый сервер запирает и медиасервер,
     // иначе пароль обходится одним слагом. Гость идёт по своей комнате: реестра
     // у него нет, а к каналу он уже пришит проверкой выше.
-    const channel = (this.perimeter.isGuest(client) ? this.registry.channels : this.directory.channelsFor(client)).find(
-      (c) => c.type === 'voice' && c.slug === room,
-    );
+    const channel = (
+      this.perimeter.isGuest(client) ? this.registry.channels : this.directory.channelsFor(client)
+    ).find((c) => c.type === 'voice' && c.slug === room);
     if (!channel || channel.mode !== 'sfu') {
       forget();
       return { ok: false, error: 'not-sfu' };
@@ -194,7 +191,9 @@ export class VoiceHandlers {
     client.to(room).emit('peer-joined', {
       id: client.id,
       name,
-      ...(this.perimeter.speaker(client) ? { fingerprint: this.perimeter.speaker(client)?.fingerprint } : {}),
+      ...(this.perimeter.speaker(client)
+        ? { fingerprint: this.perimeter.speaker(client)?.fingerprint }
+        : {}),
       ...(this.perimeter.isGuest(client) ? { guest: true } : {}),
       ...(this.perimeter.isListener(client) ? { listen: true } : {}),
     });

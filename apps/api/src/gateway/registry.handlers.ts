@@ -74,10 +74,7 @@ export class RegistryHandlers {
   }
 
   // ===== Реестр серверов =====
-  async createServer(
-    client: AppSocket,
-    payload: ServerCreatePayload,
-  ) {
+  async createServer(client: AppSocket, payload: ServerCreatePayload) {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     // id генерирует клиент — принимаем как есть (санитизируем длину), чтобы он мог
     // сразу открыть новый сервер и создавать в нём каналы, не дожидаясь ответа.
@@ -118,10 +115,7 @@ export class RegistryHandlers {
     this.directory.broadcastChannels();
     await this.registry.persist();
   }
-  async unlockServer(
-    client: AppSocket,
-    payload: ServerUnlockPayload,
-  ) {
+  async unlockServer(client: AppSocket, payload: ServerUnlockPayload) {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const id = str(payload?.id);
     const password = str(payload?.password);
@@ -185,11 +179,9 @@ export class RegistryHandlers {
     }
     client.emit('server-unlock-result', { id, ok });
   }
-  async deleteServer(
-    client: AppSocket,
-    payload: ServerDeletePayload,
-  ): Promise<ServerDeleteResult> {
-    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
+  async deleteServer(client: AppSocket, payload: ServerDeletePayload): Promise<ServerDeleteResult> {
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
+      return { ok: false, error: 'forbidden' };
     const id = str(payload?.id);
     if (!id) return { ok: false, error: 'not-found' };
     const idx = this.registry.servers.findIndex((s) => s.id === id && s.removable);
@@ -245,10 +237,7 @@ export class RegistryHandlers {
   // что у server-delete: срез нужен владельцу, которому сервер покажет кнопку,
   // а раздавать его каждому значило бы рассказывать всем, сколько написано в
   // чужих каналах.
-  async serverStats(
-    client: AppSocket,
-    payload: ServerStatsPayload,
-  ): Promise<ServerStatsResult> {
+  async serverStats(client: AppSocket, payload: ServerStatsPayload): Promise<ServerStatsResult> {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false };
     const id = str(payload?.id);
     const srv = this.registry.servers.find((s) => s.id === id);
@@ -286,10 +275,7 @@ export class RegistryHandlers {
   }
 
   // ===== Реестр каналов =====
-  async createChannel(
-    client: AppSocket,
-    payload: ChannelCreatePayload,
-  ) {
+  async createChannel(client: AppSocket, payload: ChannelCreatePayload) {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const type = payload?.type === 'voice' ? 'voice' : payload?.type === 'text' ? 'text' : null;
     if (!type) return;
@@ -333,10 +319,7 @@ export class RegistryHandlers {
   // Смена транспорта голосового канала. Права те же, что у channel-delete:
   // трогать можно только свои каналы (removable), дефолтные остаются на p2p —
   // они обязаны работать и без поднятого медиасервера.
-  async channelMode(
-    client: AppSocket,
-    payload: ChannelModePayload,
-  ) {
+  async channelMode(client: AppSocket, payload: ChannelModePayload) {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const id = str(payload?.id);
     const mode: VoiceMode | null =
@@ -378,7 +361,11 @@ export class RegistryHandlers {
    * введены и кто за ним стоит.
    */
   private editableChannel(client: AppSocket, id: string) {
-    return this.registry.editable(id, this.perimeter.unlockedOf(client), this.perimeter.claimant(client));
+    return this.registry.editable(
+      id,
+      this.perimeter.unlockedOf(client),
+      this.perimeter.claimant(client),
+    );
   }
 
   /**
@@ -389,17 +376,16 @@ export class RegistryHandlers {
    */
   private creatorOf(client: AppSocket): { creatorIdentityId: string } | { creatorId?: string } {
     const identityId = this.perimeter.speaker(client)?.id;
-    return identityId ? { creatorIdentityId: identityId } : { creatorId: this.perimeter.deviceOf(client) };
+    return identityId
+      ? { creatorIdentityId: identityId }
+      : { creatorId: this.perimeter.deviceOf(client) };
   }
 
   // Живой срез канала для диалога подтверждения (сколько человек внутри,
   // сколько сообщений пропадёт). Спрашивают по одному разу на открытие
   // диалога — рассылать это всем постоянно незачем. Права — как у правки:
   // срез канала с людьми и перепиской — это уже данные о нём, их не раздаём.
-  async channelStats(
-    client: AppSocket,
-    payload: ChannelStatsPayload,
-  ): Promise<ChannelStatsResult> {
+  async channelStats(client: AppSocket, payload: ChannelStatsPayload): Promise<ChannelStatsResult> {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false };
     const id = str(payload?.id);
     const found = this.editableChannel(client, id);
@@ -420,7 +406,8 @@ export class RegistryHandlers {
     client: AppSocket,
     payload: ChannelRenamePayload,
   ): Promise<ChannelRenameResult> {
-    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
+      return { ok: false, error: 'forbidden' };
     const id = str(payload?.id);
     const name = trimmed(payload?.name, LIMIT.name);
     if (!id) return { ok: false, error: 'not-found' };
@@ -437,7 +424,8 @@ export class RegistryHandlers {
     client: AppSocket,
     payload: ChannelDeletePayload,
   ): Promise<ChannelDeleteResult> {
-    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
+      return { ok: false, error: 'forbidden' };
     const id = str(payload?.id);
     if (!id) return { ok: false, error: 'not-found' };
     const found = this.editableChannel(client, id);
@@ -471,5 +459,4 @@ export class RegistryHandlers {
     await this.registry.persist();
     return { ok: true };
   }
-
 }

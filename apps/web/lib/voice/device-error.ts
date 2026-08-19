@@ -31,4 +31,3 @@ export function mediaErrorText(err: unknown): string {
       return e?.message || msg('media.error.unknown');
   }
 }
-

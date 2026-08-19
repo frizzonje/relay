@@ -60,9 +60,8 @@ export async function isSfuAvailable(): Promise<boolean> {
  */
 export async function getRetention(): Promise<{ days: number; mode: RetentionMode }> {
   const data = await getConfig();
-  const days = typeof data.retentionDays === 'number' && data.retentionDays > 0
-    ? data.retentionDays
-    : 0;
+  const days =
+    typeof data.retentionDays === 'number' && data.retentionDays > 0 ? data.retentionDays : 0;
   const mode = data.retentionMode ?? (days > 0 ? 'days' : 'forever');
   return { days, mode };
 }

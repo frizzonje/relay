@@ -42,11 +42,9 @@ export class ModerationHandlers {
    * его личности нет, за него ручается токен приглашения, и разговор с ним
    * заканчивается через `guest-kick`.
    */
-  async ban(
-    client: AppSocket,
-    payload: ModerationBanPayload,
-  ): Promise<ModerationResult> {
-    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
+  async ban(client: AppSocket, payload: ModerationBanPayload): Promise<ModerationResult> {
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
+      return { ok: false, error: 'forbidden' };
     const me = this.perimeter.speaker(client);
     if (!me) return { ok: false, error: 'forbidden' };
     const room = this.chats.roomOf(client);
@@ -54,7 +52,8 @@ export class ModerationHandlers {
     const channel = this.registry.channels.find(
       (c) => c.type === 'text' && c.slug === this.chat.slug(room),
     );
-    if (!channel || !this.moderation.mayModerate(client, channel)) return { ok: false, error: 'forbidden' };
+    if (!channel || !this.moderation.mayModerate(client, channel))
+      return { ok: false, error: 'forbidden' };
 
     const everywhere = payload?.everywhere === true;
     // Бан на всю инсталляцию — только владельцу: у создателя сервера власти
@@ -73,11 +72,9 @@ export class ModerationHandlers {
   }
 
   /** Разбанить по отпечатку — той же ручкой, которой забаненный показан. */
-  async unban(
-    client: AppSocket,
-    payload: ModerationUnbanPayload,
-  ): Promise<ModerationResult> {
-    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
+  async unban(client: AppSocket, payload: ModerationUnbanPayload): Promise<ModerationResult> {
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
+      return { ok: false, error: 'forbidden' };
     const scope = this.moderation.scopeFor(client, str(payload?.server));
     if (scope === undefined) return { ok: false, error: 'forbidden' };
     const identityId = await this.roles.byFingerprint(payload?.fingerprint);
@@ -88,14 +85,11 @@ export class ModerationHandlers {
   }
 
   /** Кто забанен: на этом сервере или, если сервер не назван, на инсталляции. */
-  async list(
-    client: AppSocket,
-    payload: ModerationBansPayload,
-  ): Promise<ModerationBansResult> {
-    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
+  async list(client: AppSocket, payload: ModerationBansPayload): Promise<ModerationBansResult> {
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
+      return { ok: false, error: 'forbidden' };
     const scope = this.moderation.scopeFor(client, str(payload?.server));
     if (scope === undefined) return { ok: false, error: 'forbidden' };
     return { ok: true, bans: await this.roles.bans(scope) };
   }
-
 }

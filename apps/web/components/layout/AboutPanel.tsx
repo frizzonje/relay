@@ -20,9 +20,7 @@ function Row({ label, value, dim }: { label: string; value: string; dim?: boolea
   return (
     <div className="flex items-baseline justify-between gap-4 py-1.5">
       <span className="text-[13px] text-text-muted">{label}</span>
-      <span
-        className={cn('font-mono text-[13px]', dim ? 'text-text-faint' : 'text-text-header')}
-      >
+      <span className={cn('font-mono text-[13px]', dim ? 'text-text-faint' : 'text-text-header')}>
         {value}
       </span>
     </div>

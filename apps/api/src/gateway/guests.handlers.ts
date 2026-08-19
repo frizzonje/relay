@@ -48,15 +48,15 @@ export class GuestHandlers {
   // канале держится на том же пароле, что и всё остальное, и ссылка,
   // раздающая право говорить, обошла бы его одним сообщением в чужом чате.
   // Слышать при этом гость должен: за этим его и звали.
-  createInvite(
-    client: AppSocket,
-    payload: InviteCreatePayload,
-  ): InviteCreateResult {
-    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
+  createInvite(client: AppSocket, payload: InviteCreatePayload): InviteCreateResult {
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
+      return { ok: false, error: 'forbidden' };
     const slug = trimmed(payload?.room, LIMIT.slug);
     // Канал должен существовать, быть голосовым и быть видимым этому сокету
     // (каналы закрытых серверов — только после ввода пароля).
-    const channel = this.directory.channelsFor(client).find((c) => c.type === 'voice' && c.slug === slug);
+    const channel = this.directory
+      .channelsFor(client)
+      .find((c) => c.type === 'voice' && c.slug === slug);
     if (!channel) return { ok: false, error: 'not-found' };
     const listen = this.isLockedChannel(slug);
     const { token, exp } = issueGuestToken(slug, { listen });
@@ -76,11 +76,9 @@ export class GuestHandlers {
    * ссылка, разосланная в чужой чат, становилась бы кнопкой «выгнать всех
    * остальных».
    */
-  kick(
-    client: AppSocket,
-    payload: GuestKickPayload,
-  ): GuestKickResult {
-    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
+  kick(client: AppSocket, payload: GuestKickPayload): GuestKickResult {
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
+      return { ok: false, error: 'forbidden' };
     const id = trimmed(payload?.id, LIMIT.id);
     const target = id ? this.server.sockets.sockets.get(id) : undefined;
     if (!target || !this.perimeter.isGuest(target)) return { ok: false, error: 'not-found' };
@@ -101,5 +99,4 @@ export class GuestHandlers {
     );
     return { ok: true };
   }
-
 }

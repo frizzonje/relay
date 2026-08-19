@@ -110,10 +110,7 @@ export class ChatHandlers {
    * Ответ уходит ack'ом, а не событием: страницу ждёт конкретный запрос, и
    * рассылать её в комнату незачем.
    */
-  async older(
-    client: AppSocket,
-    payload: ChatHistoryMorePayload,
-  ): Promise<ChatHistoryMoreResult> {
+  async older(client: AppSocket, payload: ChatHistoryMorePayload): Promise<ChatHistoryMoreResult> {
     const empty = { ok: true as const, messages: [], more: false };
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
     const room = this.chats.roomOf(client);
@@ -128,10 +125,7 @@ export class ChatHandlers {
    * Страница ниже показанной. Спрашивается только после перехода из поиска: у
    * живого конца канала ниже ничего нет, и обычное чтение сюда не приходит.
    */
-  async newer(
-    client: AppSocket,
-    payload: ChatHistoryAfterPayload,
-  ): Promise<ChatWindowResult> {
+  async newer(client: AppSocket, payload: ChatHistoryAfterPayload): Promise<ChatWindowResult> {
     const empty = { ok: true as const, messages: [], more: false, moreAfter: false };
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
     const room = this.chats.roomOf(client);
@@ -150,10 +144,7 @@ export class ChatHandlers {
    * права), а socket.io держит порядок событий одного сокета, так что к моменту
    * этого запроса комната уже та.
    */
-  async around(
-    client: AppSocket,
-    payload: ChatAroundPayload,
-  ): Promise<ChatWindowResult> {
+  async around(client: AppSocket, payload: ChatAroundPayload): Promise<ChatWindowResult> {
     const empty = { ok: true as const, messages: [], more: false, moreAfter: false };
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
     const room = this.chats.roomOf(client);
@@ -171,10 +162,7 @@ export class ChatHandlers {
    * отказ: искать в закрытом сервере, пароль от которого не введён, не
    * запрещено, там просто нечего найти.
    */
-  async search(
-    client: AppSocket,
-    payload: ChatSearchPayload,
-  ): Promise<ChatSearchResult> {
+  async search(client: AppSocket, payload: ChatSearchPayload): Promise<ChatSearchResult> {
     const empty = { ok: true as const, hits: [], more: false, terms: [] };
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
     const room = this.chats.roomOf(client);
@@ -192,7 +180,8 @@ export class ChatHandlers {
     const channels =
       scope === 'server'
         ? this.registry.channels.filter(
-            (c) => c.type === 'text' && c.serverId === here.serverId && this.perimeter.canSee(client, c),
+            (c) =>
+              c.type === 'text' && c.serverId === here.serverId && this.perimeter.canSee(client, c),
           )
         : [here];
 
@@ -385,10 +374,7 @@ export class ChatHandlers {
   //
   // Правка чужого при этом остаётся невозможной, и это не недосмотр: удалить
   // сказанное — модерация, переписать сказанное чужим именем — подлог.
-  async remove(
-    client: AppSocket,
-    payload: ChatDeletePayload,
-  ) {
+  async remove(client: AppSocket, payload: ChatDeletePayload) {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const room = this.chats.roomOf(client);
     if (!room) return;
@@ -424,11 +410,9 @@ export class ChatHandlers {
    * каждому вошедшему — и срок хранения перестал бы что-либо значить, а шапка
    * канала стала бы доской объявлений для случайного гостя.
    */
-  async pin(
-    client: AppSocket,
-    payload: ChatPinPayload,
-  ): Promise<ChatPinResult> {
-    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
+  async pin(client: AppSocket, payload: ChatPinPayload): Promise<ChatPinResult> {
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
+      return { ok: false, error: 'forbidden' };
     const room = this.chats.roomOf(client);
     if (!room) return { ok: false, error: 'forbidden' };
     const id = str(payload?.id);
@@ -459,10 +443,7 @@ export class ChatHandlers {
    * закреплённых бывает полсотни, и слать их каждому входящему в канал ради
    * поповера, который откроют однажды, незачем.
    */
-  async pins(
-    client: AppSocket,
-    payload: ChatPinsPayload,
-  ): Promise<ChatPinsResult> {
+  async pins(client: AppSocket, payload: ChatPinsPayload): Promise<ChatPinsResult> {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false };
     const room = this.chats.roomOf(client);
     if (!room) return { ok: false };
@@ -486,10 +467,7 @@ export class ChatHandlers {
 
   // Тогл реакции на сообщение: тег добавляется/снимается из набора по эмодзи.
   // Состояние храним в истории канала и рассылаем всем читающим — как и сами сообщения.
-  async react(
-    client: AppSocket,
-    payload: ChatReactPayload,
-  ) {
+  async react(client: AppSocket, payload: ChatReactPayload) {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const room = this.chats.roomOf(client);
     if (!room) return;
@@ -506,5 +484,4 @@ export class ChatHandlers {
 
     this.server.to(room).emit('chat-reaction', { id, reactions });
   }
-
 }

@@ -112,8 +112,7 @@ export class RetentionService implements OnModuleInit {
 
     void this.sweep();
     // Без срока хранения час подметания был бы часом хранения.
-    const interval =
-      policy.mode === 'ephemeral' ? SWEEP_INTERVAL_EPHEMERAL_MS : SWEEP_INTERVAL_MS;
+    const interval = policy.mode === 'ephemeral' ? SWEEP_INTERVAL_EPHEMERAL_MS : SWEEP_INTERVAL_MS;
     this.timer = setInterval(() => void this.sweep(), interval);
     this.timer.unref?.();
   }

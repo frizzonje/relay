@@ -82,7 +82,6 @@ export class PersonalHandlers {
     return out;
   }
 
-
   /**
    * «Этот канал дочитан до этого момента».
    *
@@ -92,10 +91,7 @@ export class PersonalHandlers {
    * погашена точка, и переспрашивать сервер, засчитал ли он прочтение, значило
    * бы держать индикатор в зависимости от сети.
    */
-  async readMark(
-    client: AppSocket,
-    payload: ReadMarkPayload,
-  ): Promise<void> {
+  async readMark(client: AppSocket, payload: ReadMarkPayload): Promise<void> {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const me = this.perimeter.speaker(client);
     if (!me) return;
@@ -119,10 +115,7 @@ export class PersonalHandlers {
    * Клиент шлёт лишь то, что сам же и понимает, а живого человека за неверным
    * ключом нет — объяснять некому.
    */
-  async setPref(
-    client: AppSocket,
-    payload: PrefsSetPayload,
-  ): Promise<void> {
+  async setPref(client: AppSocket, payload: PrefsSetPayload): Promise<void> {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const me = this.perimeter.speaker(client);
     if (!me) return;
@@ -132,7 +125,12 @@ export class PersonalHandlers {
   }
 
   /** Остальным устройствам того же человека — но не тому, кто это и сделал. */
-  private tellOtherDevices(client: AppSocket, identityId: string, event: string, data: unknown): void {
+  private tellOtherDevices(
+    client: AppSocket,
+    identityId: string,
+    event: string,
+    data: unknown,
+  ): void {
     for (const sock of this.perimeter.socketsOf(identityId)) {
       if (sock.id !== client.id) sock.emit(event, data);
     }
@@ -145,10 +143,7 @@ export class PersonalHandlers {
    * Иначе одним `rename` можно было бы назваться кем угодно посреди разговора —
    * и лицо рядом с ником перестало бы что-либо значить.
    */
-  async rename(
-    client: AppSocket,
-    payload: { name?: unknown },
-  ) {
+  async rename(client: AppSocket, payload: { name?: unknown }) {
     if (!this.perimeter.allow(client)) return;
     const speaker = this.perimeter.speaker(client);
     const name = speaker
@@ -182,5 +177,4 @@ export class PersonalHandlers {
     for (const room of rosters) this.chats.emitRoster(room);
     if (presence) this.voice.broadcast();
   }
-
 }

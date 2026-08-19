@@ -672,6 +672,4 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // выходим и уведомляем остальных. Так моргание сети не обрывает живой звонок.
     this.voice.hold(client);
   }
-
-
 }
