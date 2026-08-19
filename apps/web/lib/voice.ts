@@ -4,17 +4,11 @@ import { toast } from 'sonner';
 import type { VoicePresence } from '@relay/shared';
 import { getSocket } from '@/lib/socket';
 import { getSfx } from '@/lib/sfx';
-import {
-  isDesktopWindows,
-  notifyScreenPicker,
-  startNativeScreenAudio,
-  stopNativeScreenAudio,
-} from '@/lib/desktop-screen-audio';
 import { useUiStore, myName } from '@/stores/ui';
 import { loadClientId } from '@/lib/identity';
 import { tx as msg } from '@/lib/i18n';
 import type { MessageKey, Vars } from '@/lib/i18n/translate';
-import { useVoiceStore, type ScreenMode } from '@/stores/voice';
+import { useVoiceStore } from '@/stores/voice';
 import { createMeshTransport } from '@/lib/voice/mesh';
 import { voiceSupport } from '@/lib/voice-support';
 import { diag } from '@/lib/voice/diag';
@@ -50,6 +44,24 @@ import {
 // Микшер, устройство вывода и захват микрофона живут в своих файлах. Наружу
 // уезжают отсюда: компоненты знают один адрес, `@/lib/voice`.
 export { refreshSpeakers, resumeVoiceAudio, setSpeaker } from '@/lib/voice/output';
+import {
+  currentScreenMode,
+  currentVideoTrack,
+  initCamera,
+  isCamOn,
+  isScreenOn,
+  screenAudio,
+  screenDegradation,
+  teardownVideo,
+} from '@/lib/voice/camera';
+
+export {
+  refreshCameras,
+  setCamera,
+  setScreenMode,
+  toggleCamera,
+  toggleScreen,
+} from '@/lib/voice/camera';
 export {
   desktopPtt,
   getMicLevel,
@@ -114,42 +126,12 @@ const sfx = () => getSfx();
 // Константы медиа/SDP
 // ─────────────────────────────────────────────────────────────────────────
 
-const VIDEO_CONSTRAINTS: MediaTrackConstraints = {
-  width: { ideal: 1280 },
-  height: { ideal: 720 },
-  frameRate: { max: 30 },
-};
-
-const SCREEN_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
-  width: { ideal: 1920 },
-  height: { ideal: 1080 },
-  frameRate: { ideal: 60, max: 60 },
-};
-// echoCancellation: true — лекарство от «кенты слышат сами себя». При захвате
-// системного/вкладочного звука в микс попадают голоса собеседников, которые
-// играют из ДИНАМИКОВ ведущего; без AEC мы шлём их обратно — и каждый слышит
-// собственное эхо. Chrome прогоняет захват демонстрации через свой эхоканцеллер,
-// опираясь на то, что сам же воспроизводит (входящий WebRTC-звук), и вычитает его.
-// Полностью петля уходит только в наушниках — об этом ведущему стоит напомнить,
-// но AEC убирает основную часть и на колонках. noiseSuppression/autoGainControl
-// держим выключенными, чтобы не «жевать» музыку/фильм при показе.
-const SCREEN_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
-  echoCancellation: true,
-  noiseSuppression: false,
-  autoGainControl: false,
-};
 // ─────────────────────────────────────────────────────────────────────────
 // Императивное состояние дирижёра (модульные глобалы)
 // ─────────────────────────────────────────────────────────────────────────
 
 let room: string | null = null;
 let localStream: MediaStream | null = null;
-let camOn = false;
-let screenOn = false;
-let camTrack: MediaStreamTrack | null = null;
-let screenTrack: MediaStreamTrack | null = null;
-let screenAudioTrack: MediaStreamTrack | null = null;
-let screenMode: ScreenMode = 'quality';
 
 /**
  * Слушатель: мы пришли по инвайту в канал закрытого сервера. Слышим комнату,
@@ -160,9 +142,6 @@ let screenMode: ScreenMode = 'quality';
  * слушателя они отбрасывают). Ставится один раз гостевой сценой до входа.
  */
 let listenOnly = false;
-
-// localStorage-ключ выбранной камеры — применяется при следующем включении.
-const CAM_KEY = 'relay-cam-id';
 
 let initialized = false;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -212,10 +191,10 @@ function tx(): VoiceTransport {
  */
 const host: TransportHost = {
   localStream: () => localStream,
-  screenAudioTrack: () => screenAudioTrack,
+  screenAudioTrack: () => screenAudio(),
   videoTrack: () => currentVideoTrack(),
-  camOn: () => camOn,
-  screenOn: () => screenOn,
+  camOn: () => isCamOn(),
+  screenOn: () => isScreenOn(),
   screenDegradation: () => screenDegradation(),
 
   addTile,
@@ -251,10 +230,15 @@ let lastSpeakingKey = '';
  * voice-presence — индикаторы в сайдбаре видят даже те, кто сам не в эфире.
  */
 function broadcastMediaState() {
-  const on = camOn || screenOn;
+  const on = isCamOn() || isScreenOn();
   setTileVideoOn('local', on);
   if (room)
-    socket().emit('media-update', { camOn, screenOn, micOn: isMicOn(), deafened: !isSpeakersOn() });
+    socket().emit('media-update', {
+      camOn: isCamOn(),
+      screenOn: isScreenOn(),
+      micOn: isMicOn(),
+      deafened: !isSpeakersOn(),
+    });
 }
 
 function setStatus(key: MessageKey, vars?: Vars) {
@@ -311,63 +295,6 @@ export function toggleSpeakers() {
 
 // Был ли включён микрофон до «глушилки» — чтобы вернуть его при включении звука.
 let micWasOnBeforeDeafen = true;
-
-// ─── Камера: список устройств и выбор (модалка настроек) ───────────────────
-/** Обновляет список камер (videoinput) и активную камеру в сторе. */
-async function refreshCameraInfo() {
-  const store = useVoiceStore.getState();
-  const settings = camTrack?.getSettings?.();
-  const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(CAM_KEY) : null;
-  store.setCurrentCamera(settings?.deviceId ?? saved, camTrack?.label ?? '');
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    store.setCameras(devices.filter((d) => d.kind === 'videoinput'));
-  } catch {
-    /* enumerateDevices недоступен — список останется пустым */
-  }
-}
-
-/** Перечитать список камер (для UI). */
-export function refreshCameras() {
-  void refreshCameraInfo();
-}
-
-/**
- * Переключить камеру. Выбор запоминаем; если камера включена — перезапускаем её
- * с новым устройством (startCamera читает сохранённый deviceId).
- */
-export async function setCamera(deviceId: string) {
-  if (typeof localStorage !== 'undefined') localStorage.setItem(CAM_KEY, deviceId);
-  if (camOn) {
-    stopCamera();
-    await startCamera();
-    broadcastMediaState();
-    syncMediaState();
-  } else {
-    void refreshCameraInfo();
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// Демонстрация экрана: режим качество/ФПС
-// ─────────────────────────────────────────────────────────────────────────
-
-function screenDegradation(): RTCDegradationPreference {
-  return screenMode === 'fps' ? 'maintain-framerate' : 'maintain-resolution';
-}
-function screenContentHint(): string {
-  return screenMode === 'fps' ? 'motion' : 'detail';
-}
-
-export function setScreenMode(mode: ScreenMode) {
-  if (mode === screenMode) return;
-  screenMode = mode;
-  useVoiceStore.getState().setMedia({ screenMode });
-  // Применяем к уже идущей трансляции без переподписания SDP
-  if (!screenOn || !screenTrack) return;
-  screenTrack.contentHint = screenContentHint();
-  tx().retuneVideo();
-}
 
 // ─────────────────────────────────────────────────────────────────────────
 // Вступление в голосовой канал
@@ -790,22 +717,12 @@ export function leaveVoice(hard = true) {
   spokeAt.clear();
   lastSpeakingKey = '';
   useVoiceStore.getState().setSpeakingIds([]);
-  if (camTrack) {
-    camTrack.onended = null;
-    camTrack = null;
-  }
-  if (screenTrack) {
-    screenTrack.onended = null;
-    screenTrack = null;
-  }
-  screenAudioTrack = null;
-  screenOn = false;
+  teardownVideo();
   // Микрофон к следующему входу включаем, но глушилка переживает выход из эфира —
   // под ней микрофон остаётся выключенным (не слышишь — не говоришь). Слушателю
   // включать нечего: права говорить выход из канала ему не добавил.
   setMicOn(!listenOnly && isSpeakersOn());
   micWasOnBeforeDeafen = true;
-  camOn = false;
   syncMediaState();
 
   // Голос отключили, но текстовый канал мог остаться открытым — показываем его
@@ -852,7 +769,12 @@ export function showVoiceStage() {
 // ─────────────────────────────────────────────────────────────────────────
 
 function syncMediaState() {
-  useVoiceStore.getState().setMedia({ micOn: isMicOn(), camOn, screenOn, screenMode });
+  useVoiceStore.getState().setMedia({
+    micOn: isMicOn(),
+    camOn: isCamOn(),
+    screenOn: isScreenOn(),
+    screenMode: currentScreenMode(),
+  });
 }
 
 export function toggleMic() {
@@ -866,179 +788,6 @@ export function toggleMic() {
   }
   setMicOn(!isMicOn());
   broadcastMediaState();
-}
-
-// Что сейчас уходит собеседникам в общий видео-sender
-function currentVideoTrack(): MediaStreamTrack | null {
-  return screenOn ? screenTrack : camOn ? camTrack : null;
-}
-
-export async function toggleCamera() {
-  if (!localStream || listenOnly) return; // слушатель своего медиа не отдаёт
-  if (camOn) stopCamera();
-  else await startCamera();
-  broadcastMediaState();
-  syncMediaState();
-}
-
-async function startCamera() {
-  if (screenOn) stopScreen(); // экран и камера занимают один слот — взаимоисключают
-  const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(CAM_KEY) : null;
-  try {
-    let cam: MediaStream;
-    try {
-      cam = await navigator.mediaDevices.getUserMedia({
-        video: saved ? { ...VIDEO_CONSTRAINTS, deviceId: { exact: saved } } : VIDEO_CONSTRAINTS,
-      });
-    } catch (err) {
-      // Сохранённая камера пропала/занята — откатываемся на устройство по умолчанию
-      if ((err as { name?: string } | null)?.name !== 'OverconstrainedError') throw err;
-      cam = await navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS });
-    }
-    camTrack = cam.getVideoTracks()[0];
-  } catch (err) {
-    toast.error(msg('voice.toast.camUnavailable', { reason: mediaErrorText(err) }));
-    return;
-  }
-
-  camTrack.contentHint = 'motion';
-  // Камеру отняла система или выдернули устройство — корректно гасим у всех
-  camTrack.onended = () => {
-    stopCamera();
-    broadcastMediaState();
-    syncMediaState();
-    toast(msg('voice.toast.camStopped'));
-  };
-
-  localStream!.addTrack(camTrack);
-  camOn = true;
-  tx().publishVideo();
-  void refreshCameraInfo();
-}
-
-function stopCamera() {
-  if (camTrack) {
-    camTrack.onended = null;
-    camTrack.stop();
-    localStream?.removeTrack(camTrack);
-    camTrack = null;
-  }
-  tx().unpublishVideo();
-  camOn = false;
-}
-
-export async function toggleScreen() {
-  if (!localStream || listenOnly) return; // слушатель своего медиа не отдаёт
-  if (screenOn) stopScreen();
-  else await startScreen();
-  broadcastMediaState();
-  syncMediaState();
-}
-
-async function startScreen() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-    toast.error(msg('voice.toast.screenUnsupported'));
-    return;
-  }
-
-  // На десктоп-оболочке (Windows) звук экрана снимаем НАТИВНО, исключая процесс
-  // relay из захвата, — иначе getDisplayMedia тащит системный микс с голосами
-  // собеседников из динамиков, и они слышат сами себя. Тогда у getDisplayMedia
-  // просим только видео. См. lib/desktop-screen-audio.ts.
-  const nativeAudio = isDesktopWindows();
-
-  let display: MediaStream;
-  // Пока открыт нативный выбор источника, оболочка знает об этом: пикер рисует
-  // движок своим модальным окном, и после его закрытия окну нужна побудка
-  // (см. notifyScreenPicker). Закрытие отбиваем в finally — «Отмена» здесь
-  // такой же выход, как и удачный выбор.
-  notifyScreenPicker(true);
-  try {
-    display = await navigator.mediaDevices.getDisplayMedia({
-      video: SCREEN_VIDEO_CONSTRAINTS,
-      audio: nativeAudio ? false : SCREEN_AUDIO_CONSTRAINTS,
-    });
-  } catch (err) {
-    const e = err as { name?: string } | null;
-    // Пользователь просто закрыл выбор источника — это не ошибка, молчим
-    if (!(e && (e.name === 'NotAllowedError' || e.name === 'AbortError'))) {
-      toast.error(msg('voice.toast.screenFailed', { reason: mediaErrorText(err) }));
-    }
-    return;
-  } finally {
-    notifyScreenPicker(false);
-  }
-
-  // Экран реально получен — только теперь освобождаем видео-слот от камеры
-  if (camOn) stopCamera();
-
-  screenTrack = display.getVideoTracks()[0];
-  screenTrack.contentHint = screenContentHint();
-
-  if (nativeAudio) {
-    // Нативный захват без голосов relay. Может вернуть null (нативный путь
-    // недоступен) — тогда демонстрация просто без звука, это лучше эхо-петли.
-    screenAudioTrack = await startNativeScreenAudio();
-    if (screenAudioTrack) screenAudioTrack.contentHint = 'music';
-  } else {
-    screenAudioTrack = display.getAudioTracks()[0] || null;
-    // Звук демонстрации — это музыка/фильм: кодеку выгоднее музыкальный режим Opus
-    if (screenAudioTrack) {
-      screenAudioTrack.contentHint = 'music';
-      // EC по типу источника. Шеринг ВКЛАДКИ ('browser') захватывает звук только
-      // этой вкладки — голосов собеседников там нет (звонок в другой вкладке),
-      // эхо невозможно, поэтому снимаем AEC ради чистой музыки/фильма. Шеринг
-      // всего экрана/окна ('monitor'/'window') тащит системный микс с голосами из
-      // динамиков — там EC оставляем включённым (из SCREEN_AUDIO_CONSTRAINTS) как
-      // защиту от «кенты слышат сами себя». Неизвестный источник → не трогаем.
-      const surface = (screenTrack.getSettings() as MediaTrackSettings).displaySurface;
-      if (surface === 'browser') {
-        void screenAudioTrack
-          .applyConstraints({
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-          })
-          .catch(() => {});
-      }
-    }
-  }
-
-  // «Прекратить доступ» в нативной плашке браузера — корректно завершаем
-  screenTrack.onended = () => {
-    stopScreen();
-    broadcastMediaState();
-    syncMediaState();
-    toast(msg('voice.toast.screenEnded'));
-  };
-
-  localStream!.addTrack(screenTrack);
-  if (screenAudioTrack) localStream!.addTrack(screenAudioTrack);
-  screenOn = true;
-  tx().publishScreen();
-
-  // местную плитку не зеркалим и показываем целиком (см. .tile.local.screen)
-  setTileScreen('local', true);
-}
-
-function stopScreen() {
-  if (screenTrack) {
-    screenTrack.onended = null;
-    screenTrack.stop();
-    localStream?.removeTrack(screenTrack);
-    screenTrack = null;
-  }
-  if (screenAudioTrack) {
-    screenAudioTrack.stop();
-    localStream?.removeTrack(screenAudioTrack);
-    screenAudioTrack = null;
-  }
-  // Нативный захват (Windows) остановить отдельно: track.stop() глушит только
-  // web-часть графа, а не WASAPI-поток в оболочке. Вне Tauri — no-op.
-  void stopNativeScreenAudio();
-  tx().unpublishScreen();
-  screenOn = false;
-  setTileScreen('local', false);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1146,8 +895,20 @@ export function initVoice() {
     adopt: (stream) => {
       localStream = stream;
     },
-    screenAudioTrack: () => screenAudioTrack,
+    screenAudioTrack: screenAudio,
     replaceTrack: (from, to) => tx().replaceMicTrack(from, to),
+    syncStore: syncMediaState,
+    announce: broadcastMediaState,
+    deviceErrorText: mediaErrorText,
+  });
+  // Камера и экран делят один видео-слот у собеседников, а поток и транспорт —
+  // с микрофоном. Своего у них только сами дорожки.
+  initCamera({
+    stream: () => localStream,
+    maySend: () => !listenOnly,
+    publish: (what) => (what === 'camera' ? tx().publishVideo() : tx().publishScreen()),
+    unpublish: (what) => (what === 'camera' ? tx().unpublishVideo() : tx().unpublishScreen()),
+    retune: () => tx().retuneVideo(),
     syncStore: syncMediaState,
     announce: broadcastMediaState,
     deviceErrorText: mediaErrorText,
@@ -1163,7 +924,7 @@ export function initVoice() {
     // Новичок ещё не знает, что мы показываем экран/камеру: media-update летит
     // только на переключении. Повторяем текущее состояние, чтобы его плитка
     // сразу знала про наше видео (флаг videoOn), а не ждала косвенных сигналов.
-    if (camOn || screenOn) broadcastMediaState();
+    if (isCamOn() || isScreenOn()) broadcastMediaState();
   });
 
   s.on('media-update', ({ from, camOn: peerCam, screenOn: peerScreen }) => {
