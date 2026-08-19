@@ -12,14 +12,14 @@ import { useVoiceStore } from '@/stores/voice';
 import { createMeshTransport } from '@/lib/voice/mesh';
 import { voiceSupport } from '@/lib/voice-support';
 import { diag } from '@/lib/voice/diag';
+import { mediaErrorText } from '@/lib/voice/device-error';
+import { forgetSpeaker, resetSpeaking, startSpeakingWatch } from '@/lib/voice/speaking';
 import {
-  analyserRms,
   attachRemoteAudio,
   cleanupPeerAudio,
   detachRemoteAudio,
   initOutput,
   isSpeakersOn,
-  peerVoiceAnalysers,
   refreshOutputDevices,
   setPeerGain,
   setSpeakersOn,
@@ -29,12 +29,9 @@ import {
 import {
   applyMute,
   ensureLocalStream,
-  hasLocalAnalyser,
   initMic,
   isMicOn,
   loadMicThreshold,
-  micLevelNorm,
-  micRingThreshold,
   refreshMicInfo,
   setMicOn,
   startGate,
@@ -212,18 +209,6 @@ const host: TransportHost = {
   playSfx: (name) => sfx().play(name),
 };
 
-// ─── Детект «говорит сейчас» (обводка плитки, как в Discord) ──────────────
-// Снимаем RMS-уровень с анализаторов (свой микрофон + голос каждого собеседника)
-// и зажигаем обводку выше порога, удерживая её ещё чуть-чуть после паузы, чтобы
-// не мигала между словами.
-const VAD_THRESHOLD = 0.04; // RMS 0..1: речь обычно выше, тишина/шумодав — ниже
-const VAD_HANGOVER_MS = 300; // держим обводку после спада уровня
-const VAD_TICK_MS = 100;
-
-let vadTimer: ReturnType<typeof setInterval> | null = null;
-const spokeAt = new Map<string, number>();
-let lastSpeakingKey = '';
-
 /**
  * Обновляет videoOn локальной плитки и рассылает собеседникам полное медиасостояние
  * (видео + мут/глушилка). Сервер запоминает мут на сокете и раздаёт его через
@@ -243,33 +228,6 @@ function broadcastMediaState() {
 
 function setStatus(key: MessageKey, vars?: Vars) {
   useVoiceStore.getState().setStatus({ key, vars });
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// Доступ к камере/микрофону
-// ─────────────────────────────────────────────────────────────────────────
-
-function mediaErrorText(err: unknown): string {
-  const e = err as { name?: string; message?: string } | null;
-  switch (e?.name) {
-    case 'NotAllowedError':
-    case 'PermissionDeniedError':
-      return msg('media.error.denied');
-    case 'NotFoundError':
-    case 'DevicesNotFoundError':
-      return msg('media.error.notFound');
-    case 'NotReadableError':
-    case 'TrackStartError':
-      return msg('media.error.busy');
-    case 'OverconstrainedError':
-      return msg('media.error.constraints');
-    case 'SecurityError':
-      return msg('media.error.insecure');
-    case 'AbortError':
-      return msg('media.error.timeout');
-    default:
-      return e?.message || msg('media.error.unknown');
-  }
 }
 
 /**
@@ -714,9 +672,7 @@ export function leaveVoice(hard = true) {
     localStream = null;
   }
   teardownMic();
-  spokeAt.clear();
-  lastSpeakingKey = '';
-  useVoiceStore.getState().setSpeakingIds([]);
+  resetSpeaking();
   teardownVideo();
   // Микрофон к следующему входу включаем, но глушилка переживает выход из эфира —
   // под ней микрофон остаётся выключенным (не слышишь — не говоришь). Слушателю
@@ -791,75 +747,6 @@ export function toggleMic() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Индикация «говорит сейчас» (VAD): обводка плитки по уровню звука
-// ─────────────────────────────────────────────────────────────────────────
-
-// Своя обводка: уровень в шкале метра против порога (или пола без гейта), с
-// удержанием. На муте — мгновенно гаснет.
-function localSpeaking(now: number): boolean {
-  if (!isMicOn() || !hasLocalAnalyser()) {
-    spokeAt.delete('local');
-    return false;
-  }
-  if (micLevelNorm() >= micRingThreshold()) {
-    spokeAt.set('local', now);
-    return true;
-  }
-  const last = spokeAt.get('local');
-  return last != null && now - last < VAD_HANGOVER_MS;
-}
-
-// «Говорит ли сейчас» с учётом порога и удержания (hangover). gateOpen=false
-// (например, свой микрофон выключен) мгновенно гасит индикацию.
-function isSpeaking(
-  id: string,
-  an: AnalyserNode | null | undefined,
-  gateOpen: boolean,
-  now: number,
-) {
-  if (gateOpen && an && analyserRms(an) >= VAD_THRESHOLD) {
-    spokeAt.set(id, now);
-    return true;
-  }
-  if (!gateOpen) {
-    spokeAt.delete(id);
-    return false;
-  }
-  const last = spokeAt.get(id);
-  return last != null && now - last < VAD_HANGOVER_MS;
-}
-
-// Тик опроса уровней → список говорящих в стор (только при изменении состава).
-function updateSpeaking() {
-  if (!room) {
-    if (lastSpeakingKey) {
-      lastSpeakingKey = '';
-      spokeAt.clear();
-      useVoiceStore.getState().setSpeakingIds([]);
-    }
-    return;
-  }
-  const now = Date.now();
-  const ids: string[] = [];
-
-  // Себя — обводку зажигаем по тому же порогу, что открывает гейт (а без гейта —
-  // по небольшому полу), и только при включённом микрофоне.
-  if (localSpeaking(now)) ids.push('local');
-
-  // Собеседники — по голосовой дорожке (не по звуку демонстрации).
-  for (const [peerId, analyser] of peerVoiceAnalysers()) {
-    if (isSpeaking(peerId, analyser, true, now)) ids.push(peerId);
-  }
-
-  ids.sort();
-  const key = ids.join(',');
-  if (key !== lastSpeakingKey) {
-    lastSpeakingKey = key;
-    useVoiceStore.getState().setSpeakingIds(ids);
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────
 // Инициализация: socket-обработчики дирижёра (один раз на приложение).
 // Сигналинг медиа (offer/answer/ice/состав пиров) слушает транспорт — см.
 // его init(); здесь остаётся то, что от транспорта не зависит.
@@ -887,7 +774,7 @@ export function initVoice() {
   });
   // Микшер снимает узлы ушедшего сам, а вот «когда он в последний раз говорил»
   // — это уже обводка плитки, и живёт она здесь.
-  initOutput({ forgetSpeaker: (peerId) => spokeAt.delete(peerId) });
+  initOutput({ forgetSpeaker });
   // Микрофон кладёт свою дорожку в общий исходящий поток — тот же, куда потом
   // попадут камера и экран. Поток принадлежит дирижёру, поэтому спрашивается.
   initMic({
@@ -899,7 +786,6 @@ export function initVoice() {
     replaceTrack: (from, to) => tx().replaceMicTrack(from, to),
     syncStore: syncMediaState,
     announce: broadcastMediaState,
-    deviceErrorText: mediaErrorText,
   });
   // Камера и экран делят один видео-слот у собеседников, а поток и транспорт —
   // с микрофоном. Своего у них только сами дорожки.
@@ -911,7 +797,6 @@ export function initVoice() {
     retune: () => tx().retuneVideo(),
     syncStore: syncMediaState,
     announce: broadcastMediaState,
-    deviceErrorText: mediaErrorText,
   });
 
   const s = socket();
@@ -1048,7 +933,7 @@ export function initVoice() {
   if (!pingTimer) pingTimer = setInterval(() => tx().pollStats(), 3000);
 
   // Обводка «говорит сейчас» — частый, но дешёвый опрос анализаторов
-  if (!vadTimer) vadTimer = setInterval(updateSpeaking, VAD_TICK_MS);
+  startSpeakingWatch(() => room !== null);
 
   // Шумовой гейт микрофона — отдельный, более частый тик для быстрой атаки
   startGate();

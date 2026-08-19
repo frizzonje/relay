@@ -2,6 +2,7 @@
 
 import { toast } from 'sonner';
 import { tx as msg } from '@/lib/i18n';
+import { mediaErrorText } from '@/lib/voice/device-error';
 import {
   isDesktopWindows,
   notifyScreenPicker,
@@ -37,8 +38,6 @@ export interface CameraSurroundings {
   /** Витрина и собеседники: у нас включилось/выключилось видео. */
   syncStore(): void;
   announce(): void;
-  /** Человекочитаемая причина отказа устройства — формулировки общие с микрофоном. */
-  deviceErrorText(err: unknown): string;
 }
 
 let around: CameraSurroundings = {
@@ -49,7 +48,6 @@ let around: CameraSurroundings = {
   retune: () => {},
   syncStore: () => {},
   announce: () => {},
-  deviceErrorText: (err) => String(err),
 };
 
 export function initCamera(surroundings: CameraSurroundings): void {
@@ -199,7 +197,7 @@ async function startCamera() {
     }
     camTrack = cam.getVideoTracks()[0];
   } catch (err) {
-    toast.error(msg('voice.toast.camUnavailable', { reason: around.deviceErrorText(err) }));
+    toast.error(msg('voice.toast.camUnavailable', { reason: mediaErrorText(err) }));
     return;
   }
 
@@ -264,7 +262,7 @@ async function startScreen() {
     const e = err as { name?: string } | null;
     // Пользователь просто закрыл выбор источника — это не ошибка, молчим
     if (!(e && (e.name === 'NotAllowedError' || e.name === 'AbortError'))) {
-      toast.error(msg('voice.toast.screenFailed', { reason: around.deviceErrorText(err) }));
+      toast.error(msg('voice.toast.screenFailed', { reason: mediaErrorText(err) }));
     }
     return;
   } finally {

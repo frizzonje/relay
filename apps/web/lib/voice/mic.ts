@@ -2,6 +2,7 @@
 
 import { toast } from 'sonner';
 import { tx as msg } from '@/lib/i18n';
+import { mediaErrorText } from '@/lib/voice/device-error';
 import { useVoiceStore } from '@/stores/voice';
 import {
   ANALYSER_FFT_SIZE,
@@ -46,8 +47,6 @@ export interface MicSurroundings {
   syncStore(): void;
   /** …и рассказать собеседникам (мут виден в presence у всех, даже вне эфира). */
   announce(): void;
-  /** Человекочитаемая причина отказа устройства — формулировки общие с камерой. */
-  deviceErrorText(err: unknown): string;
 }
 
 let around: MicSurroundings = {
@@ -57,7 +56,6 @@ let around: MicSurroundings = {
   replaceTrack: () => {},
   syncStore: () => {},
   announce: () => {},
-  deviceErrorText: (err) => String(err),
 };
 
 export function initMic(surroundings: MicSurroundings): void {
@@ -322,7 +320,7 @@ export async function setMic(deviceId: string) {
         : audioConstraints(),
     });
   } catch (err) {
-    toast.error(msg('voice.toast.micSwitchFailed', { reason: around.deviceErrorText(err) }));
+    toast.error(msg('voice.toast.micSwitchFailed', { reason: mediaErrorText(err) }));
     return;
   }
 
