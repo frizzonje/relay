@@ -11,15 +11,45 @@ import {
   stopNativeScreenAudio,
 } from '@/lib/desktop-screen-audio';
 import { useUiStore, myName } from '@/stores/ui';
-import { useIdentityStore } from '@/stores/identity';
 import { loadClientId } from '@/lib/identity';
-import { readPref, setPref } from '@/lib/prefs';
 import { tx as msg } from '@/lib/i18n';
 import type { MessageKey, Vars } from '@/lib/i18n/translate';
-import { useVoiceStore, type ScreenMode, type TileNet, type VoiceTile } from '@/stores/voice';
+import { useVoiceStore, type ScreenMode } from '@/stores/voice';
 import { createMeshTransport } from '@/lib/voice/mesh';
 import { voiceSupport } from '@/lib/voice-support';
 import type { TransportHost, VoiceTicket, VoiceTransport } from '@/lib/voice/types';
+import {
+  addTile,
+  clearFocus,
+  clearTiles,
+  dropRemoteTiles,
+  initTiles,
+  relabelSelf as relabelTile,
+  remoteCount,
+  removeTile,
+  renameTile,
+  roleOf,
+  savePeerVol,
+  setTileNet,
+  setTileScreen,
+  setTileScreenAudio,
+  setTileState,
+  setTileVideoOn,
+  syncPeerRoles,
+  tileOf,
+} from '@/lib/voice/tiles';
+
+// Плитки, роли собеседников, громкости и крупный план живут в `voice/tiles.ts`
+// — это витрина, и дирижёру от неё нужно только уметь её звать. Наружу они
+// уезжают отсюда же: компоненты знают один адрес, `@/lib/voice`.
+export {
+  clearFocus,
+  PEER_VOL_MAX,
+  setFocus,
+  setPeerScreenVolume,
+  setPeerVolume,
+  toggleFocus,
+} from '@/lib/voice/tiles';
 
 const sfx = () => getSfx();
 
@@ -79,7 +109,6 @@ let camTrack: MediaStreamTrack | null = null;
 let screenTrack: MediaStreamTrack | null = null;
 let screenAudioTrack: MediaStreamTrack | null = null;
 let screenMode: ScreenMode = 'quality';
-let focusedTileId: string | null = null;
 
 /**
  * Слушатель: мы пришли по инвайту в канал закрытого сервера. Слышим комнату,
@@ -218,155 +247,6 @@ const host: TransportHost = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────
-// Витрина: плитки в стор (addTile/removeTile/setTileState)
-// ─────────────────────────────────────────────────────────────────────────
-
-const tiles = new Map<string, VoiceTile>();
-
-/**
- * Кто с нами в комнате — из presence: гость по инвайту, слушатель, и отпечаток
- * ключа (лицо человека). Плитка и presence приезжают в непредсказуемом порядке
- * (плитку заводит транспорт, роли — сигналинг), поэтому карта живёт отдельно:
- * `addTile` берёт из неё что успело приехать, а свежий presence правит уже
- * стоящие плитки.
- */
-const peerRoles = new Map<string, { guest: boolean; listen: boolean; fingerprint?: string }>();
-
-// ─────────────────────────────────────────────────────────────────────────
-// Персональная громкость собеседников. Ползунок ходит 0–3 (0–300%), значение
-// применяется к GainNode как есть (без урезания).
-//
-// Запоминаем по ОТПЕЧАТКУ ключа, а не по имени: имена в relay свободные и не
-// уникальные, и «этот долбик на 200%» по имени означал бы, что выкрученная
-// громкость достаётся любому тёзке. Гостю по инвайту отпечатка не выдают —
-// для него ключом остаётся имя, другого у него нет.
-//
-// Сама настройка принадлежит человеку и едет с ним на другие устройства
-// (lib/prefs); localStorage под ней остался кэшем, поэтому записанное прежними
-// версиями по имени продолжает работать как запасной вариант.
-export const PEER_VOL_MAX = 3;
-type PeerVol = { voice?: number; screen?: number };
-
-function loadPeerVols(): Record<string, PeerVol> {
-  const value = readPref<unknown>('volume', {});
-  return value && typeof value === 'object' ? (value as Record<string, PeerVol>) : {};
-}
-
-/** Чем этот собеседник записан в настройках: отпечаток, а у гостя — имя. */
-function volumeKey(peerId: string, name: string): string {
-  return peerRoles.get(peerId)?.fingerprint || name;
-}
-
-/** Сохранённая громкость: по отпечатку, а если его нет — по имени (старые записи). */
-function peerVol(peerId: string, name: string): PeerVol {
-  const all = loadPeerVols();
-  return all[volumeKey(peerId, name)] ?? all[name] ?? {};
-}
-
-function savePeerVol(peerId: string, name: string, patch: PeerVol) {
-  const key = volumeKey(peerId, name);
-  if (!key) return;
-  const all = loadPeerVols();
-  setPref('volume', { ...all, [key]: { ...all[key], ...patch } });
-}
-
-function syncTiles() {
-  useVoiceStore.getState().setTiles([...tiles.values()]);
-}
-
-function addTile(id: string, name: string, stream: MediaStream | null, isLocal: boolean) {
-  const existing = tiles.get(id);
-  if (!existing) {
-    // Для собеседника восстанавливаем ранее выкрученную ему громкость.
-    const saved = isLocal ? {} : peerVol(id, name);
-    const role = isLocal ? undefined : peerRoles.get(id);
-    tiles.set(id, {
-      id,
-      name,
-      stream,
-      state: '' as const,
-      isLocal,
-      screen: false,
-      volume: saved.voice ?? 1,
-      screenVolume: saved.screen ?? 1,
-      hasScreenAudio: false,
-      // Своё лицо знаем сами, чужое — из presence, если он уже приехал; если
-      // нет, его подставит syncPeerRoles, когда приедет.
-      fingerprint: isLocal
-        ? (useIdentityStore.getState().me?.fingerprint ?? undefined)
-        : role?.fingerprint,
-      guest: role?.guest,
-      listen: role?.listen,
-    });
-  } else if (stream && existing.stream !== stream) {
-    tiles.set(id, { ...existing, stream });
-  } else {
-    return; // нечего менять
-  }
-  syncTiles();
-}
-
-function setTileState(id: string, state: MessageKey | '') {
-  const t = tiles.get(id);
-  if (!t || t.state === state) return;
-  tiles.set(id, { ...t, state });
-  syncTiles();
-}
-
-function setTileScreen(id: string, screen: boolean) {
-  const t = tiles.get(id);
-  if (!t || t.screen === screen) return;
-  tiles.set(id, { ...t, screen });
-  syncTiles();
-}
-
-function setTileVideoOn(id: string, on: boolean) {
-  const t = tiles.get(id);
-  if (!t || t.videoOn === on) return;
-  tiles.set(id, { ...t, videoOn: on });
-  syncTiles();
-}
-
-function setTileScreenAudio(id: string, on: boolean) {
-  const t = tiles.get(id);
-  if (!t || t.hasScreenAudio === on) return;
-  tiles.set(id, { ...t, hasScreenAudio: on });
-  syncTiles();
-}
-
-// Качество связи меняется каждые 3 с — обновляем плитку, только если реально
-// сдвинулись округлённые метрики (иначе лишний ре-рендер всей сетки на тик).
-function setTileNet(id: string, net: TileNet) {
-  const t = tiles.get(id);
-  if (!t) return;
-  const p = t.net;
-  if (
-    p &&
-    p.grade === net.grade &&
-    p.rttMs === net.rttMs &&
-    p.lossPct === net.lossPct &&
-    p.jitterMs === net.jitterMs &&
-    p.relay === net.relay &&
-    p.sendKbps === net.sendKbps &&
-    p.recvKbps === net.recvKbps &&
-    p.videoRes === net.videoRes &&
-    p.fps === net.fps &&
-    p.codec === net.codec
-  )
-    return;
-  tiles.set(id, { ...t, net });
-  syncTiles();
-}
-
-/** Собеседник ушёл (или транспорт снял соединение) — убираем его целиком. */
-function removeTile(id: string) {
-  cleanupPeerAudio(id);
-  if (focusedTileId === id) clearFocus();
-  tiles.delete(id);
-  syncTiles();
-}
-
-// ─────────────────────────────────────────────────────────────────────────
 // Микшер входящего звука (Web Audio): независимая громкость голоса и
 // демонстрации каждого собеседника. Каждую входящую аудиодорожку гоним через
 // собственный GainNode → destination; чужой <video> при этом заглушён (muted),
@@ -495,7 +375,7 @@ function reassignAudioRoles(peerId: string) {
   const pa = peerAudio.get(peerId);
   if (!pa) return;
   const sorted = [...pa.entries.values()].sort((a, b) => cmpMid(a.mid, b.mid));
-  const t = tiles.get(peerId);
+  const t = tileOf(peerId);
   const voiceVol = t?.volume ?? 1;
   const screenVol = t?.screenVolume ?? 1;
   pa.micGain = null;
@@ -526,7 +406,7 @@ function attachRemoteAudio(
   // нами нет, и «он не вправе говорить» здесь держится только на этой строчке:
   // клиент у гостя свой, дорожку он может собрать любую — а звучать она будет
   // ровно там, где её примут. Не примем.
-  if (peerRoles.get(peerId)?.listen) {
+  if (roleOf(peerId)?.listen) {
     diag('listener audio dropped', peerId);
     return;
   }
@@ -599,32 +479,6 @@ function cleanupPeerAudio(peerId: string) {
   pa.sink.remove();
   peerAudio.delete(peerId);
   spokeAt.delete(peerId);
-}
-
-/** Громкость голоса собеседника, 0–3 (1 = 100%). Дёргается из VideoTile. */
-export function setPeerVolume(peerId: string, vol: number) {
-  const v = Math.max(0, Math.min(PEER_VOL_MAX, vol));
-  const pa = peerAudio.get(peerId);
-  if (pa?.micGain) pa.micGain.gain.value = v;
-  const t = tiles.get(peerId);
-  if (t) {
-    tiles.set(peerId, { ...t, volume: v });
-    savePeerVol(peerId, t.name, { voice: v }); // запоминаем на следующий заход
-    syncTiles();
-  }
-}
-
-/** Громкость звука демонстрации собеседника, 0–3 (1 = 100%). */
-export function setPeerScreenVolume(peerId: string, vol: number) {
-  const v = Math.max(0, Math.min(PEER_VOL_MAX, vol));
-  const pa = peerAudio.get(peerId);
-  if (pa?.screenGain) pa.screenGain.gain.value = v;
-  const t = tiles.get(peerId);
-  if (t) {
-    tiles.set(peerId, { ...t, screenVolume: v });
-    savePeerVol(peerId, t.name, { screen: v });
-    syncTiles();
-  }
 }
 
 /**
@@ -1176,21 +1030,6 @@ const MESH_FALLBACK_MAX_PEERS = 3;
 const SFU_RETRY_MS = 5000;
 let sfuRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
-function remoteCount(): number {
-  return tiles.size - (tiles.has('local') ? 1 : 0);
-}
-
-/** Снять плитки собеседников (при переезде их соберёт заново новый транспорт). */
-function dropRemoteTiles() {
-  for (const id of [...tiles.keys()]) if (id !== 'local') removeTile(id);
-}
-
-/**
- * Снять транспорты — ОБА, а не только активный. Активным всегда числится ровно
- * один, но забытый второй — это не «неиспользуемый объект»: у него живой сокет и
- * наш микрофон в чужой комнате. Один такой хвост стоит дороже лишнего вызова
- * `leave()` по пустому транспорту (он идемпотентен).
- */
 function leaveTransports() {
   meshTransport?.leave();
   sfuTransport?.leave();
@@ -1366,7 +1205,7 @@ function scheduleSplitCheck(ms: number) {
 function onPresence(presence: VoicePresence) {
   useVoiceStore.getState().setPresence(presence);
   lastPresence = presence;
-  syncPeerRoles(presence);
+  syncPeerRoles(presence, room);
   if (!room) {
     splitHandled = false;
     cancelSplitCheck();
@@ -1378,64 +1217,6 @@ function onPresence(presence: VoicePresence) {
     return;
   }
   evaluateSplit();
-}
-
-/**
- * Кто в нашей комнате гость и кто из гостей только слушает. Нужно двум местам:
- * микшеру (звук слушателя не принимаем вовсе) и плиткам (подпись и «выгнать»).
- * Роль приезжает с presence, поэтому здесь же правим уже стоящие плитки —
- * транспорт мог завести их раньше.
- */
-function syncPeerRoles(presence: VoicePresence) {
-  peerRoles.clear();
-  let changed = false;
-  for (const p of (room && presence[room]) || []) {
-    const guest = p.guest === true;
-    peerRoles.set(p.id, { guest, listen: p.listen === true, fingerprint: p.fingerprint });
-    const t = tiles.get(p.id);
-    if (t && guest && (t.guest !== true || t.listen !== (p.listen === true))) {
-      tiles.set(p.id, { ...t, guest: true, listen: p.listen === true });
-      changed = true;
-    }
-    // Лицо приезжает тем же presence и точно так же может опоздать за плиткой.
-    // Без этого собеседник до конца звонка оставался бы безымянным пятном.
-    if (t && p.fingerprint && t.fingerprint !== p.fingerprint) {
-      tiles.set(p.id, { ...tiles.get(p.id)!, fingerprint: p.fingerprint });
-      changed = true;
-    }
-    // Плитка могла встать раньше, чем приехало лицо: транспорт быстрее
-    // сигналинга. Тогда громкость искали по имени и не нашли — ищем ещё раз,
-    // теперь по отпечатку. Иначе выкрученная человеку громкость возвращалась
-    // бы через раз, и понять почему было бы невозможно.
-    if (t && p.fingerprint) applySavedVolume(p.id, t.name);
-  }
-  // Гостем перестать быть нельзя, а вот уйти — можно: плитка пережившего своего
-  // хозяина флага осталась бы помеченной.
-  for (const t of tiles.values()) {
-    if (t.guest && !peerRoles.get(t.id)?.guest) {
-      tiles.set(t.id, { ...t, guest: undefined, listen: undefined });
-      changed = true;
-    }
-  }
-  if (changed) syncTiles();
-}
-
-/**
- * Применить сохранённую громкость к уже стоящей плитке — не записывая ничего
- * обратно: это не выбор человека, а восстановление сделанного им раньше.
- */
-function applySavedVolume(peerId: string, name: string) {
-  const t = tiles.get(peerId);
-  if (!t || t.isLocal) return;
-  const saved = peerVol(peerId, name);
-  const voice = saved.voice ?? 1;
-  const screen = saved.screen ?? 1;
-  if (t.volume === voice && t.screenVolume === screen) return;
-  const pa = peerAudio.get(peerId);
-  if (pa?.micGain) pa.micGain.gain.value = voice;
-  if (pa?.screenGain) pa.screenGain.gain.value = screen;
-  tiles.set(peerId, { ...t, volume: voice, screenVolume: screen });
-  syncTiles();
 }
 
 /**
@@ -1617,8 +1398,7 @@ export function leaveVoice(hard = true) {
   leaveTransports(); // следующий вход выберет транспорт заново
   teardownPeerAudio();
   clearFocus();
-  tiles.clear();
-  syncTiles();
+  clearTiles();
   room = null;
 
   if (!hard) return;
@@ -1695,17 +1475,11 @@ function teardownPeerAudio() {
  * разошлёт peer-renamed (подписи наших плиток у них).
  */
 /**
- * Переписать подпись своей плитки. Отдельно от `renameSelf`: ровно это же нужно
- * устройству, которое узнало о смене имени с другого своего устройства, — а
- * просить там сервер уже не о чем, он сам об этом и рассказал.
+ * Подпись своей плитки. Ярлык собирает дирижёр: «ты» рядом с именем — это его
+ * формулировка, а не свойство плитки.
  */
 export function relabelSelf(name: string) {
-  const t = tiles.get('local');
-  const label = msg('common.you', { name });
-  if (t && t.name !== label) {
-    tiles.set('local', { ...t, name: label });
-    syncTiles();
-  }
+  relabelTile(msg('common.you', { name }));
 }
 
 export function renameSelf(name: string) {
@@ -1928,29 +1702,6 @@ function stopScreen() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Театр-режим и полноэкранный режим плитки
-// ─────────────────────────────────────────────────────────────────────────
-
-export function toggleFocus(id: string) {
-  if (focusedTileId === id) clearFocus();
-  else setFocus(id);
-}
-
-export function setFocus(id: string) {
-  if (!tiles.has(id)) return;
-  focusedTileId = id;
-  useVoiceStore.getState().setFocus(id);
-  tx().focusChanged?.(id); // SFU: крупной плитке — верхний слой simulcast
-}
-
-export function clearFocus() {
-  if (!focusedTileId) return;
-  focusedTileId = null;
-  useVoiceStore.getState().setFocus(null);
-  tx().focusChanged?.(null);
-}
-
-// ─────────────────────────────────────────────────────────────────────────
 // Индикация «говорит сейчас» (VAD): обводка плитки по уровню звука
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -2095,6 +1846,19 @@ export function initVoice() {
     void refreshSpeakerInfo();
   });
 
+  // Витрина плиток — то, чего она сама не знает: звук пира, его громкость и
+  // крупный план. Всё трое принадлежат микшеру и транспорту, поэтому и
+  // спрашиваются, а не берутся.
+  initTiles({
+    dropAudio: cleanupPeerAudio,
+    setGain: (peerId, kind, value) => {
+      const pa = peerAudio.get(peerId);
+      const gain = kind === 'voice' ? pa?.micGain : pa?.screenGain;
+      if (gain) gain.gain.value = value;
+    },
+    focusChanged: (id) => tx().focusChanged?.(id),
+  });
+
   const s = socket();
 
   mesh().init(); // mesh слушает сигналинг всегда — он же и транспорт по умолчанию
@@ -2119,17 +1883,16 @@ export function initVoice() {
   // Собеседник сменил тег — обновляем подпись его плитки и имя пира.
   s.on('peer-renamed', ({ id, name }) => {
     tx().renamePeer(id, name);
-    const t = tiles.get(id);
+    const t = tileOf(id);
     if (t && t.name !== name) {
       // Имя сменилось — переносим сохранённую громкость на новое, чтобы
       // выкрученные проценты не потерялись. Касается это только гостя по
       // инвайту: отпечатка ему не выдают, и имя — единственный его ключ. У
       // человека с ключом громкость записана на отпечаток и переименования
       // не замечает вовсе.
-      if (!peerRoles.get(id)?.fingerprint && (t.volume !== 1 || t.screenVolume !== 1))
+      if (!roleOf(id)?.fingerprint && (t.volume !== 1 || t.screenVolume !== 1))
         savePeerVol(id, name, { voice: t.volume, screen: t.screenVolume });
-      tiles.set(id, { ...t, name });
-      syncTiles();
+      renameTile(id, name);
     }
   });
 
