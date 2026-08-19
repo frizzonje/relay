@@ -1,66 +1,26 @@
-import { test, expect, type Page, type Browser, type BrowserContext } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
+import {
+  createServer,
+  openChannel,
+  openServer,
+  person,
+  say,
+  secondDevice,
+  unique,
+} from '../fixtures/stand';
 
 /**
  * Непрочитанное и настройки на личности — то, ради чего они на неё и переехали:
  * прочитал на одном устройстве, и на другом прочитано.
  *
  * «Второе устройство» здесь — новый контекст с той же сессионной кукой
- * личности. Пустые localStorage и IndexedDB и есть то единственное, чем второй
- * компьютер отличается от первого: всё, что он знает про непрочитанное и
- * настройки, он получает от сервера. Настоящую связку по QR тут не гоняем —
- * она проверяется отдельно и к синхронизации отношения не имеет.
+ * личности (см. `secondDevice`). Настоящую связку по QR тут не гоняем — она
+ * проверяется отдельно и к синхронизации отношения не имеет.
  *
  * Что нужно стенду: поднятый стек (см. заголовок playwright.config) и
- * , если ворота инсталляции включены.
- *
- * Стенд должен быть чистым: тест заводит свой сервер с каналом, и оставшийся
- * от прошлого прогона канал с тем же именем спутает и людей, и проверки.
+ * `SITE_PASSWORD`, если ворота инсталляции включены. Чистить стенд между
+ * прогонами не нужно: имена берутся через `unique` (см. fixtures/stand).
  */
-
-const PASSWORD = process.env.SITE_PASSWORD || '';
-const BASE = process.env.BASE_URL || 'https://localhost';
-
-async function person(browser: Browser, nick: string): Promise<Page> {
-  const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
-  await ctx.addCookies([{ name: 'relay-lang', value: 'en', url: BASE }]);
-  const page = await ctx.newPage();
-  await page.goto('/');
-
-  // Ворота инсталляции, если они есть.
-  const pass = page.getByPlaceholder('Password');
-  if (PASSWORD && (await pass.isVisible().catch(() => false))) {
-    await pass.fill(PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-  }
-
-  const retry = page.getByRole('button', { name: 'Try again' });
-  if (await retry.isVisible().catch(() => false)) {
-    await retry.click();
-    await page.waitForTimeout(1500);
-  }
-  const cont = page.getByRole('button', { name: 'Continue' });
-  await cont.waitFor({ state: 'visible', timeout: 25_000 }).catch(() => {});
-  if (await cont.isVisible().catch(() => false)) {
-    await page.locator('form input').first().fill(nick);
-    await cont.click();
-    await cont.waitFor({ state: 'detached', timeout: 20_000 }).catch(() => {});
-  }
-  await expect(page.getByText('общий', { exact: true })).toBeVisible({ timeout: 20_000 });
-  await page.evaluate(() => document.querySelectorAll('nextjs-portal').forEach((n) => n.remove()));
-  return page;
-}
-
-/** Второе устройство того же человека: та же личность, пустое хранилище. */
-async function secondDevice(browser: Browser, from: Page): Promise<Page> {
-  const cookies = (await from.context().cookies()).filter((c) => c.name !== 'relay-lang');
-  const ctx: BrowserContext = await browser.newContext({ ignoreHTTPSErrors: true });
-  await ctx.addCookies([{ name: 'relay-lang', value: 'en', url: BASE }, ...cookies]);
-  const page = await ctx.newPage();
-  await page.goto('/');
-  await expect(page.getByText('общий', { exact: true })).toBeVisible({ timeout: 25_000 });
-  await page.evaluate(() => document.querySelectorAll('nextjs-portal').forEach((n) => n.remove()));
-  return page;
-}
 
 /**
  * Горит ли точка «непрочитано» у канала. Спрашиваем так же, как её видит
@@ -105,50 +65,39 @@ function channelSoundTitle(page: Page, channel: string): Promise<string | null> 
 
 test('прочитанное на одном устройстве прочитано и на другом', async ({ browser }) => {
   test.setTimeout(180_000);
-  const anya = await person(browser, 'Аня');
-  const boris = await person(browser, 'Борис');
+  const kitchen = unique('Кухня');
+  const room = unique('болталка');
+
+  const anya = await person(browser, unique('Аня'));
+  const boris = await person(browser, unique('Борис'));
 
   // Свой сервер с каналом: в открытом «общем» первое устройство прочитало бы
   // сказанное само собой, и проверять было бы нечего.
-  await anya.locator('button[aria-label="Create a server"]').click();
-  await anya.getByPlaceholder('My server').fill('Кухня');
-  await anya.getByRole('button', { name: 'Create server' }).click();
-  const chName = anya.getByPlaceholder('new-channel');
-  await chName.waitFor({ state: 'visible', timeout: 15_000 });
-  await chName.fill('болталка');
-  await anya.getByRole('button', { name: 'Create channel' }).click();
-  await anya.waitForTimeout(1500);
+  await createServer(anya, kitchen, room);
 
   // Борис заходит на этот сервер и что-то говорит.
-  await boris.reload();
-  await boris.waitForTimeout(2000);
-  await boris.locator('button[aria-label*="Кухня"], button[title*="Кухня"]').first().click();
-  await boris.waitForTimeout(1000);
-  await boris.getByText('болталка', { exact: true }).click();
-  const composer = boris.getByPlaceholder(/^message #/);
-  await expect(composer).toBeVisible({ timeout: 15_000 });
-  await composer.fill('первое слово');
-  await composer.press('Enter');
+  await openServer(boris, kitchen);
+  await openChannel(boris, room);
+  await say(boris, 'первое слово');
   await expect(boris.getByText('первое слово').first()).toBeVisible({ timeout: 10_000 });
 
   // Второе устройство Ани: пустое хранилище, всё непрочитанное — с сервера.
   const laptop = await secondDevice(browser, anya);
-  await laptop.locator('button[aria-label*="Кухня"], button[title*="Кухня"]').first().click();
-  await waitDot(laptop, 'болталка', true);
+  await openServer(laptop, kitchen);
+  await waitDot(laptop, room, true);
 
   // Аня читает канал на первом устройстве.
-  await anya.locator('button[aria-label*="Кухня"], button[title*="Кухня"]').first().click();
-  await anya.waitForTimeout(800);
-  await anya.getByText('болталка', { exact: true }).click();
+  await openServer(anya, kitchen);
+  await openChannel(anya, room);
   await expect(anya.getByText('первое слово').first()).toBeVisible({ timeout: 15_000 });
 
   // И на втором точка гаснет сама — без перезагрузки.
-  await waitDot(laptop, 'болталка', false);
+  await waitDot(laptop, room, false);
 });
 
 test('звук канала, включённый здесь, включён и на другом устройстве', async ({ browser }) => {
   test.setTimeout(180_000);
-  const anya = await person(browser, 'Аня');
+  const anya = await person(browser, unique('Аня'));
 
   // Включаем звук каналу через его меню.
   await anya.getByText('общий', { exact: true }).click({ button: 'right' });

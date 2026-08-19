@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import path from 'node:path';
+import { openChannel, person, say, unique } from '../fixtures/stand';
 
 const PASSWORD = process.env.SITE_PASSWORD || 'testpass123';
 // Тесты бегут из каталога e2e/ (cwd) — путь к фикстуре относительно него.
@@ -72,36 +73,22 @@ test('логин → канал → сообщение → upload', async ({ pag
   await expect(page.getByText('sample.txt').first()).toBeVisible({ timeout: 15_000 });
 });
 
-test('лента отдаётся страницей и подгружается вверх', async ({ page }) => {
+test('лента отдаётся страницей и подгружается вверх', async ({ browser }) => {
   // Тут вдобавок отправляются пятьдесят пять реплик по одной.
   test.setTimeout(180_000);
-  await page.goto('/');
-  await page.getByPlaceholder('Password').fill(PASSWORD);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await pickName(page, 'Страничник');
-
-  const channel = page.getByText('общий', { exact: true });
-  await expect(channel).toBeVisible({ timeout: 15_000 });
-  await channel.click();
-  const composer = page.getByPlaceholder(/^message #/);
-  await expect(composer).toBeVisible({ timeout: 10_000 });
+  const page = await person(browser, unique('Страничник'));
+  await openChannel(page, 'общий');
 
   // Больше страницы (50), чтобы первые реплики заведомо в неё не попали.
-  const mark = `p${Date.now().toString().slice(-6)}`;
-  for (let i = 0; i < 55; i += 1) {
-    await composer.fill(`${mark}-${i}`);
-    await composer.press('Enter');
-  }
+  const mark = unique('р');
+  for (let i = 0; i < 55; i += 1) await say(page, `${mark}-${i}`);
   await expect(page.getByText(`${mark}-54`)).toBeVisible({ timeout: 20_000 });
 
   // Заходим заново — сервер отдаёт последнюю страницу, а не всю историю.
   // Канал после перезагрузки открывается кликом, как и в первый раз: выбор
   // канала клиент не запоминает.
   await page.reload();
-  const again = page.getByText('общий', { exact: true });
-  await expect(again).toBeVisible({ timeout: 15_000 });
-  await again.click();
-  await expect(page.getByPlaceholder(/^message #/)).toBeVisible({ timeout: 15_000 });
+  await openChannel(page, 'общий');
   await expect(page.getByText(`${mark}-54`)).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText(`${mark}-0`, { exact: true })).toHaveCount(0);
 

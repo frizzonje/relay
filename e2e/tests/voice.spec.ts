@@ -1,4 +1,5 @@
-import { test, expect, type Page, type Browser } from '@playwright/test';
+import { test, expect } from '@playwright/test';
+import { connected, joinVoice, person, unique } from '../fixtures/stand';
 
 /**
  * Живой разговор двумя браузерами — то единственное, чего до сих пор не
@@ -18,9 +19,6 @@ import { test, expect, type Page, type Browser } from '@playwright/test';
  * медиасервера, значит спек не зависит от того, есть ли на стенде SFU.
  */
 
-const PASSWORD = process.env.SITE_PASSWORD || '';
-const BASE = process.env.BASE_URL || 'https://localhost';
-
 test.use({
   launchOptions: {
     args: [
@@ -31,57 +29,25 @@ test.use({
   },
 });
 
-async function person(browser: Browser, nick: string): Promise<Page> {
-  const ctx = await browser.newContext({
-    ignoreHTTPSErrors: true,
-    permissions: ['microphone'],
-  });
-  await ctx.addCookies([{ name: 'relay-lang', value: 'en', url: BASE }]);
-  const page = await ctx.newPage();
-  await page.goto('/');
-
-  const pass = page.getByPlaceholder('Password');
-  if (PASSWORD && (await pass.isVisible().catch(() => false))) {
-    await pass.fill(PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-  }
-
-  const cont = page.getByRole('button', { name: 'Continue' });
-  await cont.waitFor({ state: 'visible', timeout: 30_000 }).catch(() => {});
-  if (await cont.isVisible().catch(() => false)) {
-    await page.locator('form input').first().fill(nick);
-    await cont.click();
-    await cont.waitFor({ state: 'detached', timeout: 20_000 }).catch(() => {});
-  }
-  await expect(page.getByText('P2P общий', { exact: true })).toBeVisible({ timeout: 25_000 });
-  // Оверлей дев-режима Next перехватывает клики по нижней части экрана.
-  await page.evaluate(() => document.querySelectorAll('nextjs-portal').forEach((n) => n.remove()));
-  return page;
-}
-
-/** Зайти в голосовой канал и дождаться своей плитки. */
-async function joinVoice(page: Page, nick: string) {
-  await page.getByText('P2P общий', { exact: true }).click();
-  await expect(page.getByText(`${nick} (you)`).first()).toBeVisible({ timeout: 25_000 });
-}
-
 test('двое в канале: соединение встаёт, мут доезжает, уход виден', async ({ browser }) => {
   test.setTimeout(180_000);
+  const her = unique('Аня');
+  const him = unique('Борис');
 
-  const anya = await person(browser, 'Аня');
-  const boris = await person(browser, 'Борис');
+  const anya = await person(browser, her, { permissions: ['microphone'] });
+  const boris = await person(browser, him, { permissions: ['microphone'] });
 
-  await joinVoice(anya, 'Аня');
-  await joinVoice(boris, 'Борис');
+  await joinVoice(anya, 'P2P общий', her);
+  await joinVoice(boris, 'P2P общий', him);
 
   // Друг друга видно — плитку заводит транспорт по составу комнаты.
-  await expect(anya.getByText('Борис', { exact: true }).first()).toBeVisible({ timeout: 30_000 });
-  await expect(boris.getByText('Аня', { exact: true }).first()).toBeVisible({ timeout: 30_000 });
+  await expect(anya.getByText(him, { exact: true }).first()).toBeVisible({ timeout: 30_000 });
+  await expect(boris.getByText(her, { exact: true }).first()).toBeVisible({ timeout: 30_000 });
 
   // …и соединение реально установлено: миллисекунды приезжают из getStats
   // живого соединения, метрики снимаются раз в три секунды.
-  await expect(anya.getByText(/latency:\s*\d+ ms/)).toBeVisible({ timeout: 40_000 });
-  await expect(boris.getByText(/latency:\s*\d+ ms/)).toBeVisible({ timeout: 40_000 });
+  await connected(anya);
+  await connected(boris);
 
   // Мут едет через presence на сервере, а не по медиаканалу: его видно и тем,
   // кто сам не в эфире.
@@ -92,5 +58,5 @@ test('двое в канале: соединение встаёт, мут дое
 
   // Уход снимает плитку сразу, не дожидаясь грейса: тот только для обрывов.
   await anya.getByRole('button', { name: 'Disconnect' }).click();
-  await expect(boris.getByText('Аня', { exact: true })).toHaveCount(0, { timeout: 20_000 });
+  await expect(boris.getByText(her, { exact: true })).toHaveCount(0, { timeout: 20_000 });
 });

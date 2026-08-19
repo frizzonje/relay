@@ -1,4 +1,13 @@
-import { test, expect, type Page, type Browser } from '@playwright/test';
+import { test, expect } from '@playwright/test';
+import {
+  createChannel,
+  createServer,
+  openChannel,
+  openServer,
+  person,
+  say,
+  unique,
+} from '../fixtures/stand';
 
 /**
  * Упоминания — и то, ради чего они существуют: не подсветка слова, а то, что
@@ -7,115 +16,66 @@ import { test, expect, type Page, type Browser } from '@playwright/test';
  * канале — и погасить его, войдя туда.
  *
  * Что нужно стенду: поднятый стек (см. заголовок playwright.config) и
- * `SITE_PASSWORD`, если ворота инсталляции включены. Стенд должен быть чистым:
- * тест заводит свой сервер с каналами, и оставшиеся от прошлого прогона
- * одноимённые спутают и людей, и проверки.
+ * `SITE_PASSWORD`, если ворота инсталляции включены. Чистить стенд между
+ * прогонами не нужно: имена берутся через `unique` (см. fixtures/stand).
  */
-
-const PASSWORD = process.env.SITE_PASSWORD || '';
-const BASE = process.env.BASE_URL || 'https://localhost';
-
-async function person(browser: Browser, nick: string): Promise<Page> {
-  const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
-  await ctx.addCookies([{ name: 'relay-lang', value: 'en', url: BASE }]);
-  const page = await ctx.newPage();
-  await page.goto('/');
-
-  const pass = page.getByPlaceholder('Password');
-  if (PASSWORD && (await pass.isVisible().catch(() => false))) {
-    await pass.fill(PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-  }
-
-  const cont = page.getByRole('button', { name: 'Continue' });
-  await cont.waitFor({ state: 'visible', timeout: 25_000 }).catch(() => {});
-  if (await cont.isVisible().catch(() => false)) {
-    await page.locator('form input').first().fill(nick);
-    await cont.click();
-    await cont.waitFor({ state: 'detached', timeout: 20_000 }).catch(() => {});
-  }
-  await expect(page.getByText('общий', { exact: true })).toBeVisible({ timeout: 20_000 });
-  await page.evaluate(() => document.querySelectorAll('nextjs-portal').forEach((n) => n.remove()));
-  return page;
-}
-
-async function say(page: Page, text: string) {
-  const composer = page.getByPlaceholder(/^message #/);
-  await composer.fill(text);
-  await composer.press('Enter');
-}
-
-/** Свой сервер с текстовым каналом — чтобы звать в своём разговоре, а не в чужом. */
-async function ownChannel(page: Page, server: string, channel: string) {
-  await page.locator('button[aria-label="Create a server"]').click();
-  await page.getByPlaceholder('My server').fill(server);
-  await page.getByRole('button', { name: 'Create server' }).click();
-  const name = page.getByPlaceholder('new-channel');
-  await name.waitFor({ state: 'visible', timeout: 15_000 });
-  await name.fill(channel);
-  await page.getByRole('button', { name: 'Create channel' }).click();
-  await page.waitForTimeout(1500);
-}
-
-async function openChannel(page: Page, channel: string) {
-  await page.getByText(channel, { exact: true }).click();
-  await expect(page.getByPlaceholder(/^message #/)).toBeVisible({ timeout: 15_000 });
-}
 
 test('позвать по имени: подсказка, выделение и счётчик у названного', async ({ browser }) => {
   test.setTimeout(240_000);
-  const anya = await person(browser, 'Аня');
-  const boris = await person(browser, 'Борис');
+  const home = unique('Дом');
+  const room = unique('болталка');
+  const kitchen = unique('кухня');
+  const nick = unique('Аня');
 
-  await ownChannel(anya, 'Дом', 'болталка');
+  const anya = await person(browser, nick);
+  const boris = await person(browser, unique('Борис'));
+
+  await createServer(anya, home, room);
   // Второй канал того же сервера: в нём Аня и будет сидеть, пока её зовут в
   // первом, — иначе «счётчик у названного» проверять негде.
-  await anya.locator('button[aria-label="Create a text channel"]:visible').first().click();
-  const second = anya.getByPlaceholder('new-channel');
-  await second.waitFor({ state: 'visible', timeout: 15_000 });
-  await second.fill('кухня');
-  await anya.getByRole('button', { name: 'Create channel' }).click();
-  await anya.waitForTimeout(1200);
+  await createChannel(anya, kitchen);
 
-  await boris.reload();
-  await boris.waitForTimeout(2000);
-  await boris.locator('button[aria-label*="Дом"], button[title*="Дом"]').first().click();
-  await boris.waitForTimeout(800);
-  await openChannel(boris, 'болталка');
+  await openServer(boris, home);
+  await openChannel(boris, room);
   // Подсказка предлагает тех, кто здесь; чтобы Аня попала в список, ей надо
   // быть на связи — она и есть, вторым браузером.
-  await openChannel(anya, 'болталка');
+  await openChannel(anya, room);
   await say(anya, 'я тут');
   await expect(boris.getByText('я тут')).toBeVisible({ timeout: 15_000 });
   // Уходит в соседний канал — там её и застанет вызов.
-  await openChannel(anya, 'кухня');
+  await openChannel(anya, kitchen);
 
-  // Борис набирает «@ан» — подсказка предлагает Аню, Enter подставляет имя.
+  // Борис набирает начало имени — подсказка предлагает тех, кто на связи и
+  // кому этот канал виден (см. `mentionSuggest`), то есть не только соседей по
+  // серверу. Поэтому выбираем нужного щелчком, а не Enter'ом: Enter берёт
+  // первого в списке, а на общем стенде под «@ан» их несколько.
   const composer = boris.getByPlaceholder(/^message #/);
   await composer.fill('@ан');
-  const suggestion = boris.locator('[role="option"]', { hasText: 'Аня' });
+  const suggestion = boris.locator('[role="option"]', { hasText: nick });
   await expect(suggestion.first()).toBeVisible({ timeout: 15_000 });
-  await composer.press('Enter');
-  await expect(composer).toHaveValue('@Аня ');
+  await suggestion.first().click();
+  await expect(composer).toHaveValue(`@${nick} `);
   // Курсор возвращается за подставленное имя следующим кадром — дописываем
   // фразу после него, как это делает рука.
   await boris.waitForTimeout(300);
   await composer.pressSequentially('зайди в болталку');
-  await expect(composer).toHaveValue('@Аня зайди в болталку');
+  await expect(composer).toHaveValue(`@${nick} зайди в болталку`);
   await composer.press('Enter');
 
   // Имя в готовой реплике — выделенное, а не просто текст.
   const said = boris.locator('[data-feed] >> text=зайди в болталку');
   await expect(said).toBeVisible({ timeout: 15_000 });
-  await expect(boris.locator('[data-feed] span', { hasText: /^@Аня$/ }).first()).toBeVisible();
+  await expect(
+    boris.locator('[data-feed] span', { hasText: new RegExp(`^@${nick}$`) }).first(),
+  ).toBeVisible();
 
-  // У Ани, сидящей в соседнем канале, — счётчик на строке «болталка».
+  // У Ани, сидящей в соседнем канале, — счётчик на строке того канала.
   const badge = anya.locator('[title*="mention"]').first();
   await expect(badge).toBeVisible({ timeout: 15_000 });
   await expect(badge).toHaveText('1');
 
   // Зашла — счётчик погас, а сама реплика подсвечена как обращённая к ней.
-  await openChannel(anya, 'болталка');
+  await openChannel(anya, room);
   await expect(anya.getByText('зайди в болталку')).toBeVisible({ timeout: 15_000 });
   await expect(anya.locator('[title*="mention"]')).toHaveCount(0);
 });
