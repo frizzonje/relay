@@ -17,6 +17,26 @@ import type { MessageKey, Vars } from '@/lib/i18n/translate';
 import { useVoiceStore, type ScreenMode } from '@/stores/voice';
 import { createMeshTransport } from '@/lib/voice/mesh';
 import { voiceSupport } from '@/lib/voice-support';
+import { diag } from '@/lib/voice/diag';
+import {
+  ANALYSER_FFT_SIZE,
+  attachRemoteAudio,
+  audioContext,
+  cleanupPeerAudio,
+  detachRemoteAudio,
+  getAudioCtx,
+  initOutput,
+  isSpeakersOn,
+  peerVoiceAnalysers,
+  refreshOutputDevices,
+  setPeerGain,
+  setSpeakersOn,
+  teardownPeerAudio,
+} from '@/lib/voice/output';
+
+// Микшер входящего звука и устройство вывода живут в `voice/output.ts`. Наружу
+// уезжают отсюда: компоненты знают один адрес, `@/lib/voice`.
+export { refreshSpeakers, resumeVoiceAudio, setSpeaker } from '@/lib/voice/output';
 import type { TransportHost, VoiceTicket, VoiceTransport } from '@/lib/voice/types';
 import {
   addTile,
@@ -32,7 +52,6 @@ import {
   savePeerVol,
   setTileNet,
   setTileScreen,
-  setTileScreenAudio,
   setTileState,
   setTileVideoOn,
   syncPeerRoles,
@@ -167,21 +186,6 @@ let pingTimer: ReturnType<typeof setInterval> | null = null;
 
 const socket = () => getSocket();
 
-/**
- * Веха звонка — в консоль и в серверный лог (`voice-diag`). Ключевые решения
- * (выбор транспорта, фолбэк в p2p, обрыв) клиент принимает молча у себя, и
- * сервер видит лишь их отсутствие; консоль же умирает вместе с вкладкой.
- * «Телефон в канале, но не слышно» назавтра разбирается ровно по этим строчкам.
- */
-function diag(event: string, detail?: string) {
-  console.info(`[voice] ${event}${detail ? ` — ${detail}` : ''}`);
-  try {
-    socket().emit('voice-diag', { event, ...(detail ? { detail } : {}) });
-  } catch {
-    /* сокета ещё нет — веха останется хотя бы в консоли */
-  }
-}
-
 // Транспорты медиа. Оба создаются лениво (host ссылается на функции ниже по
 // файлу) и живут всё время работы приложения; активен всегда ровно один — его
 // выбирает `pickTransport` при входе в канал, по режиму самого канала.
@@ -246,55 +250,10 @@ const host: TransportHost = {
   playSfx: (name) => sfx().play(name),
 };
 
-// ─────────────────────────────────────────────────────────────────────────
-// Микшер входящего звука (Web Audio): независимая громкость голоса и
-// демонстрации каждого собеседника. Каждую входящую аудиодорожку гоним через
-// собственный GainNode → destination; чужой <video> при этом заглушён (muted),
-// чтобы звук не игрался дважды.
-//
-// Роль дорожки (голос/демонстрация) определяем НЕ по порядку прихода ontrack —
-// он не гарантирован и плавает между браузерами (отсюда и брался эффект
-// «рандомно кто-то глохнет в одну сторону»), — а по mid её transceiver'а.
-// Микрофон создаётся первым (createPeer), звук демонстрации — позже
-// (sendScreenTo), значит у микрофона mid меньше. Сортируем дорожки пира по mid:
-// наименьший = голос, остальные = звук демонстрации. Это устойчиво к
-// ренеготиации, glare и ICE-restart.
-//
-// Плюс держим на каждого пира скрытый muted-<audio> с его потоком: без привязки
-// дорожки к media-элементу WebAudio-граф на части Chrome/Safari молчит. Громкость
-// 0–2 (1 = 100%), как в Discord (Web Audio, а не потолок <audio>.volume в 1.0).
-// ─────────────────────────────────────────────────────────────────────────
-
-interface RemoteAudioEntry {
-  source: MediaStreamAudioSourceNode;
-  gain: GainNode;
-  analyser: AnalyserNode; // ответвление от source для детекта «говорит сейчас»
-  track: MediaStreamTrack;
-  mid: string; // стабильный ключ маршрутизации на всё время жизни transceiver'а
-  isScreen: boolean;
-}
-
-interface PeerAudio {
-  entries: Map<string, RemoteAudioEntry>; // ключ — mid (или запасной idx-N)
-  sink: HTMLAudioElement; // скрытый muted-приёмник: «прокачивает» дорожки
-  micGain: GainNode | null; // вычисляемые ссылки для setPeerVolume/setPeerScreenVolume
-  screenGain: GainNode | null;
-}
-
-let audioCtx: AudioContext | null = null;
-let masterGain: GainNode | null = null;
-let speakersOn = true;
-// Был ли включён микрофон до «глушилки» — чтобы вернуть его при включении звука.
-let micWasOnBeforeDeafen = true;
-const SPEAKER_KEY = 'relay-speaker-id';
-
-const peerAudio = new Map<string, PeerAudio>();
-
 // ─── Детект «говорит сейчас» (обводка плитки, как в Discord) ──────────────
 // Снимаем RMS-уровень с анализаторов (свой микрофон + голос каждого собеседника)
 // и зажигаем обводку выше порога, удерживая её ещё чуть-чуть после паузы, чтобы
 // не мигала между словами.
-const VAD_FFT_SIZE = 512;
 const VAD_THRESHOLD = 0.04; // RMS 0..1: речь обычно выше, тишина/шумодав — ниже
 const VAD_HANGOVER_MS = 300; // держим обводку после спада уровня
 const VAD_TICK_MS = 100;
@@ -307,180 +266,6 @@ let vadTimer: ReturnType<typeof setInterval> | null = null;
 const spokeAt = new Map<string, number>();
 let lastSpeakingKey = '';
 
-function getAudioCtx(): AudioContext {
-  if (!audioCtx) {
-    const Ctor =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    audioCtx = new Ctor();
-    masterGain = audioCtx.createGain();
-    masterGain.gain.value = speakersOn ? 1 : 0;
-    masterGain.connect(audioCtx.destination);
-  }
-  if (audioCtx.state === 'suspended') void audioCtx.resume();
-  return audioCtx;
-}
-
-/**
- * Принудительно возобновляет звук после жеста пользователя. Браузер мог
- * заблокировать автоплей (особенно Safari/iOS) — тогда AudioContext висит в
- * `suspended`, и весь входящий звук уходит в тишину, хотя медиа течёт. Дёргается
- * из кнопки разблокировки (AudioUnlock) — только там есть нужный жест.
- */
-export function resumeVoiceAudio() {
-  if (audioCtx && audioCtx.state === 'suspended') void audioCtx.resume();
-  peerAudio.forEach((pa) => void pa.sink.play().catch(() => {}));
-}
-
-// Скрытый muted-приёмник на пира гарантирует «прокачку» входящих аудиодорожек
-// (иначе WebAudio-граф на части браузеров молчит). Поток у всех дорожек пира
-// один (sender'ы добавлены с общим localStream) — достаточно одного элемента.
-function ensurePeerAudio(peerId: string, stream: MediaStream | null): PeerAudio {
-  let pa = peerAudio.get(peerId);
-  if (!pa) {
-    const sink = document.createElement('audio');
-    sink.muted = true; // звук слышно через WebAudio; элемент лишь «прокачивает» дорожку
-    sink.autoplay = true;
-    sink.setAttribute('playsinline', '');
-    sink.style.display = 'none';
-    if (stream) sink.srcObject = stream;
-    document.body.appendChild(sink);
-    const savedSpeaker =
-      typeof localStorage !== 'undefined' ? localStorage.getItem(SPEAKER_KEY) : null;
-    if (savedSpeaker) {
-      const s = sink as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> };
-      if (typeof s.setSinkId === 'function') void s.setSinkId(savedSpeaker).catch(() => {});
-    }
-    void sink.play().catch(() => {});
-    pa = { entries: new Map(), sink, micGain: null, screenGain: null };
-    peerAudio.set(peerId, pa);
-  } else if (stream && pa.sink.srcObject !== stream) {
-    pa.sink.srcObject = stream;
-    void pa.sink.play().catch(() => {});
-  }
-  return pa;
-}
-
-// Сравнение mid: числовые («0», «1», …) по значению, иначе лексикографически.
-function cmpMid(a: string, b: string): number {
-  const na = Number(a);
-  const nb = Number(b);
-  if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
-// Пересчитываем роли дорожек пира (голос/демонстрация) по порядку mid и
-// применяем сохранённую громкость. Идемпотентно — зовём при каждом изменении.
-function reassignAudioRoles(peerId: string) {
-  const pa = peerAudio.get(peerId);
-  if (!pa) return;
-  const sorted = [...pa.entries.values()].sort((a, b) => cmpMid(a.mid, b.mid));
-  const t = tileOf(peerId);
-  const voiceVol = t?.volume ?? 1;
-  const screenVol = t?.screenVolume ?? 1;
-  pa.micGain = null;
-  pa.screenGain = null;
-  sorted.forEach((e, i) => {
-    e.isScreen = i > 0; // первый по mid — микрофон, остальные — звук демонстрации
-    e.gain.gain.value = e.isScreen ? screenVol : voiceVol;
-    if (e.isScreen) pa.screenGain = e.gain;
-    else pa.micGain = e.gain;
-  });
-  recomputeScreenAudioIcon(peerId);
-}
-
-// Иконку громкости трансляции показываем, пока жива незаглушённая дорожка демонстрации.
-function recomputeScreenAudioIcon(peerId: string) {
-  const pa = peerAudio.get(peerId);
-  const screen = pa && [...pa.entries.values()].find((e) => e.isScreen);
-  setTileScreenAudio(peerId, !!screen && !screen.track.muted && screen.track.readyState === 'live');
-}
-
-function attachRemoteAudio(
-  peerId: string,
-  track: MediaStreamTrack,
-  mid: string | null,
-  stream: MediaStream | null,
-) {
-  // Слушателя не подключаем к микшеру вовсе. В прямых звонках сервера между
-  // нами нет, и «он не вправе говорить» здесь держится только на этой строчке:
-  // клиент у гостя свой, дорожку он может собрать любую — а звучать она будет
-  // ровно там, где её примут. Не примем.
-  if (roleOf(peerId)?.listen) {
-    diag('listener audio dropped', peerId);
-    return;
-  }
-  const ctx = getAudioCtx();
-  const pa = ensurePeerAudio(peerId, stream);
-  const key = mid || `idx-${pa.entries.size}`;
-
-  // Повторный ontrack по тому же mid (например, после ренеготиации) — снимаем
-  // прежний узел, чтобы не плодить дубли и не оставлять «мёртвый» источник.
-  const prev = pa.entries.get(key);
-  if (prev) {
-    prev.source.disconnect();
-    prev.gain.disconnect();
-  }
-
-  const source = ctx.createMediaStreamSource(new MediaStream([track]));
-  const gain = ctx.createGain();
-  source.connect(gain);
-  gain.connect(masterGain ?? ctx.destination);
-
-  // Ответвление на анализатор — для индикации «говорит сейчас». Снимаем уровень с
-  // source (ДО gain), чтобы обводка зависела от речи собеседника, а не от того,
-  // как ты ему подкрутил громкость. source уже «тянется» путём source→gain→master,
-  // поэтому анализатору отдельный выход в destination не нужен.
-  const analyser = ctx.createAnalyser();
-  analyser.fftSize = VAD_FFT_SIZE;
-  source.connect(analyser);
-
-  const entry: RemoteAudioEntry = { source, gain, analyser, track, mid: key, isScreen: false };
-  pa.entries.set(key, entry);
-
-  // Дорожка завершилась (демонстрацию остановили) — убираем узел, пересчитываем роли.
-  track.addEventListener('ended', () => {
-    entry.source.disconnect();
-    entry.gain.disconnect();
-    pa.entries.delete(key);
-    reassignAudioRoles(peerId);
-  });
-  const refreshIcon = () => recomputeScreenAudioIcon(peerId);
-  track.addEventListener('mute', refreshIcon);
-  track.addEventListener('unmute', refreshIcon);
-
-  reassignAudioRoles(peerId);
-}
-
-/**
- * Снять узлы микшера у одной дорожки собеседника (SFU закрывает producer'ы
- * поштучно, и `ended` при этом не приходит). Плитка и остальные дорожки живут.
- */
-function detachRemoteAudio(peerId: string, track: MediaStreamTrack) {
-  const pa = peerAudio.get(peerId);
-  if (!pa) return;
-  for (const [key, entry] of pa.entries) {
-    if (entry.track !== track) continue;
-    entry.source.disconnect();
-    entry.gain.disconnect();
-    pa.entries.delete(key);
-  }
-  reassignAudioRoles(peerId);
-}
-
-function cleanupPeerAudio(peerId: string) {
-  const pa = peerAudio.get(peerId);
-  if (!pa) return;
-  pa.entries.forEach((e) => {
-    e.source.disconnect();
-    e.gain.disconnect();
-  });
-  pa.sink.srcObject = null;
-  pa.sink.remove();
-  peerAudio.delete(peerId);
-  spokeAt.delete(peerId);
-}
-
 /**
  * Обновляет videoOn локальной плитки и рассылает собеседникам полное медиасостояние
  * (видео + мут/глушилка). Сервер запоминает мут на сокете и раздаёт его через
@@ -489,7 +274,7 @@ function cleanupPeerAudio(peerId: string) {
 function broadcastMediaState() {
   const on = camOn || screenOn;
   setTileVideoOn('local', on);
-  if (room) socket().emit('media-update', { camOn, screenOn, micOn, deafened: !speakersOn });
+  if (room) socket().emit('media-update', { camOn, screenOn, micOn, deafened: !isSpeakersOn() });
 }
 
 function setStatus(key: MessageKey, vars?: Vars) {
@@ -571,7 +356,7 @@ async function ensureLocalStream(): Promise<void> {
   setupLocalVad(); // анализатор своего микрофона для обводки и гейта
   // Доступ выдан — метки устройств теперь видны, наполняем списки
   void refreshMicInfo();
-  void refreshSpeakerInfo();
+  refreshOutputDevices();
 }
 
 /**
@@ -642,10 +427,10 @@ export function setMicThreshold(value: number) {
 
   if (t > 0) {
     if (localStream) ensureMicPipeline(); // гейту нужна цепочка
-  } else if (micGainNode && audioCtx) {
+  } else if (micGainNode && audioContext()) {
     // Порог 0 — гейт выключаем, микрофон держим открытым.
     gateOpenUntil = 0;
-    micGainNode.gain.setTargetAtTime(1, audioCtx.currentTime, 0.02);
+    micGainNode.gain.setTargetAtTime(1, audioContext()!.currentTime, 0.02);
   }
 }
 
@@ -669,11 +454,12 @@ export function getMicLevel(): number {
  * micGainNode цепочки; setTargetAtTime даёт мягкие атаку/спад без щелчков.
  */
 function evaluateGate() {
-  if (micThreshold <= 0 || !micPipelineActive || !micGainNode || !audioCtx) return;
+  const ctx = audioContext();
+  if (micThreshold <= 0 || !micPipelineActive || !micGainNode || !ctx) return;
   const now = performance.now();
   if (micOn && micLevelNorm() >= micThreshold) gateOpenUntil = now + GATE_HOLD_MS;
   const open = now < gateOpenUntil;
-  micGainNode.gain.setTargetAtTime(open ? 1 : 0, audioCtx.currentTime, open ? 0.015 : 0.06);
+  micGainNode.gain.setTargetAtTime(open ? 1 : 0, ctx.currentTime, open ? 0.015 : 0.06);
 }
 
 /** Обновляет в сторе активное устройство и список доступных микрофонов. */
@@ -697,27 +483,6 @@ export function refreshMics() {
   void refreshMicInfo();
 }
 
-/** Обновляет список устройств вывода (audiooutput) и текущий выбор в сторе. */
-async function refreshSpeakerInfo() {
-  const store = useVoiceStore.getState();
-  const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(SPEAKER_KEY) : null;
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const speakers = devices.filter((d) => d.kind === 'audiooutput');
-    store.setSpeakers(speakers);
-    const current = saved ? speakers.find((d) => d.deviceId === saved) : null;
-    store.setCurrentSpeaker(saved, current?.label ?? '');
-  } catch {
-    /* enumerateDevices недоступен */
-    store.setCurrentSpeaker(saved, '');
-  }
-}
-
-/** Перечитать список устройств вывода (для UI). */
-export function refreshSpeakers() {
-  void refreshSpeakerInfo();
-}
-
 /**
  * Переключает глобальный мут всех звуков сайта (пиры + sfx) — режим «глушилки»
  * (deafen, как в Discord). Выключил звук — микрофон гаснет автоматически (не
@@ -725,11 +490,12 @@ export function refreshSpeakers() {
  * состояние, в котором был до глушилки.
  */
 export function toggleSpeakers() {
-  speakersOn = !speakersOn;
-  useVoiceStore.getState().setSpeakersOn(speakersOn);
-  if (masterGain) masterGain.gain.value = speakersOn ? 1 : 0;
-  getSfx().setAllMuted(!speakersOn);
-  if (!speakersOn) {
+  const on = !isSpeakersOn();
+  setSpeakersOn(on);
+  getSfx().setAllMuted(!on);
+  // «Не слышишь — не говоришь»: это правило дирижёра, а не микшера. Микшер
+  // знает только про мастер-громкость, микрофон ему не принадлежит.
+  if (!on) {
     micWasOnBeforeDeafen = micOn;
     micOn = false;
   } else {
@@ -739,36 +505,8 @@ export function toggleSpeakers() {
   broadcastMediaState();
 }
 
-/**
- * Переключает устройство вывода звука для всех входящих аудиопотоков и sfx.
- * Сохраняет выбор в localStorage — применяется к новым синкам автоматически.
- */
-export async function setSpeaker(deviceId: string) {
-  if (typeof localStorage !== 'undefined') localStorage.setItem(SPEAKER_KEY, deviceId);
-
-  type SinkEl = HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> };
-  type SinkCtx = AudioContext & { setSinkId?: (id: string) => Promise<void> };
-
-  peerAudio.forEach((pa) => {
-    const s = pa.sink as SinkEl;
-    if (typeof s.setSinkId === 'function') void s.setSinkId(deviceId).catch(() => {});
-  });
-
-  if (audioCtx) {
-    const c = audioCtx as SinkCtx;
-    if (typeof c.setSinkId === 'function') void c.setSinkId(deviceId).catch(() => {});
-  }
-
-  getSfx().setSinkId(deviceId);
-
-  await refreshSpeakerInfo();
-  const { currentSpeakerLabel } = useVoiceStore.getState();
-  toast(
-    msg('voice.toast.speakerSwitched', {
-      device: currentSpeakerLabel || msg('voice.toast.speakerSwitched.fallback'),
-    }),
-  );
-}
+// Был ли включён микрофон до «глушилки» — чтобы вернуть его при включении звука.
+let micWasOnBeforeDeafen = true;
 
 /**
  * Переключение микрофона на лету: новый getUserMedia + replaceTrack у всех
@@ -796,7 +534,8 @@ export async function setMic(deviceId: string) {
   if (!newTrack) return;
   newTrack.contentHint = 'speech'; // голос, не музыка
 
-  if (micPipelineActive && micGainNode && audioCtx) {
+  const ctx = audioContext();
+  if (micPipelineActive && micGainNode && ctx) {
     // Цепочка чувствительности поднята: меняем ИСТОЧНИК, исходящая (обработанная)
     // дорожка остаётся прежней — собеседников переподписывать не нужно.
     newTrack.enabled = true; // сырой источник всегда «течёт», мут — на выходной дорожке
@@ -806,7 +545,7 @@ export async function setMic(deviceId: string) {
       /* источник мог быть уже отключён */
     }
     rawMicTrack?.stop();
-    micSource = audioCtx.createMediaStreamSource(new MediaStream([newTrack]));
+    micSource = ctx.createMediaStreamSource(new MediaStream([newTrack]));
     micSource.connect(micGainNode);
     rawMicTrack = newTrack;
   } else {
@@ -1440,7 +1179,7 @@ export function leaveVoice(hard = true) {
   // Микрофон к следующему входу включаем, но глушилка переживает выход из эфира —
   // под ней микрофон остаётся выключенным (не слышишь — не говоришь). Слушателю
   // включать нечего: права говорить выход из канала ему не добавил.
-  micOn = !listenOnly && speakersOn;
+  micOn = !listenOnly && isSpeakersOn();
   micWasOnBeforeDeafen = true;
   camOn = false;
   syncMediaState();
@@ -1454,19 +1193,6 @@ export function leaveVoice(hard = true) {
     useUiStore.setState({ view: 'lobby', voiceRoom: null, voiceLabel: '' });
     setStatus('voice.status.disconnected');
   }
-}
-
-/** Снимаем микшер целиком: узлы Web Audio и скрытые приёмники всех собеседников. */
-function teardownPeerAudio() {
-  peerAudio.forEach((pa) => {
-    pa.entries.forEach((e) => {
-      e.source.disconnect();
-      e.gain.disconnect();
-    });
-    pa.sink.srcObject = null;
-    pa.sink.remove();
-  });
-  peerAudio.clear();
 }
 
 /**
@@ -1518,7 +1244,7 @@ export function toggleMic() {
   if (listenOnly) return; // включать нечего: микрофон мы не брали
   // Включение микрофона под «глушилкой» снимает и её (как в Discord): нелепо
   // говорить, не слыша ответов. toggleSpeakers сам вернёт micOn=true и разошлёт.
-  if (!micOn && !speakersOn) {
+  if (!micOn && !isSpeakersOn()) {
     micWasOnBeforeDeafen = true;
     toggleSpeakers();
     return;
@@ -1766,7 +1492,7 @@ function setupLocalVad() {
     const ctx = getAudioCtx();
     localVadSource = ctx.createMediaStreamSource(new MediaStream([rawMicTrack]));
     localAnalyser = ctx.createAnalyser();
-    localAnalyser.fftSize = VAD_FFT_SIZE;
+    localAnalyser.fftSize = ANALYSER_FFT_SIZE;
     localVadGain = ctx.createGain();
     localVadGain.gain.value = 0; // молча: только «протягиваем» сигнал ради анализа
     localVadSource.connect(localAnalyser);
@@ -1809,10 +1535,9 @@ function updateSpeaking() {
   if (localSpeaking(now)) ids.push('local');
 
   // Собеседники — по голосовой дорожке (не по звуку демонстрации).
-  peerAudio.forEach((pa, peerId) => {
-    const voice = [...pa.entries.values()].find((e) => !e.isScreen);
-    if (isSpeaking(peerId, voice?.analyser, true, now)) ids.push(peerId);
-  });
+  for (const [peerId, analyser] of peerVoiceAnalysers()) {
+    if (isSpeaking(peerId, analyser, true, now)) ids.push(peerId);
+  }
 
   ids.sort();
   const key = ids.join(',');
@@ -1843,7 +1568,7 @@ export function initVoice() {
   // Подключили/отключили устройство — обновляем списки в сторе
   navigator.mediaDevices?.addEventListener?.('devicechange', () => {
     void refreshMicInfo();
-    void refreshSpeakerInfo();
+    refreshOutputDevices();
   });
 
   // Витрина плиток — то, чего она сама не знает: звук пира, его громкость и
@@ -1851,13 +1576,12 @@ export function initVoice() {
   // спрашиваются, а не берутся.
   initTiles({
     dropAudio: cleanupPeerAudio,
-    setGain: (peerId, kind, value) => {
-      const pa = peerAudio.get(peerId);
-      const gain = kind === 'voice' ? pa?.micGain : pa?.screenGain;
-      if (gain) gain.gain.value = value;
-    },
+    setGain: setPeerGain,
     focusChanged: (id) => tx().focusChanged?.(id),
   });
+  // Микшер снимает узлы ушедшего сам, а вот «когда он в последний раз говорил»
+  // — это уже обводка плитки, и живёт она здесь.
+  initOutput({ forgetSpeaker: (peerId) => spokeAt.delete(peerId) });
 
   const s = socket();
 
