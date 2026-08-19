@@ -7,6 +7,8 @@ import { useVoiceStore } from '@/stores/voice';
 import { diag } from '@/lib/voice/diag';
 import { roleOf, setTileScreenAudio, tileOf } from '@/lib/voice/tiles';
 
+let vadBuf: Uint8Array<ArrayBuffer> | null = null;
+
 // ─────────────────────────────────────────────────────────────────────────
 // Микшер входящего звука (Web Audio): независимая громкость голоса и
 // демонстрации каждого собеседника. Каждую входящую аудиодорожку гоним через
@@ -351,6 +353,18 @@ export function peerVoiceAnalysers(): [string, AnalyserNode | undefined][] {
 /** Перечитать устройства вывода — зовётся, когда доступ к устройствам выдан. */
 export function refreshOutputDevices(): void {
   void refreshSpeakerInfo();
+}
+
+// RMS-уровень (0..1) по временной форме сигнала анализатора.
+export function analyserRms(an: AnalyserNode): number {
+  if (!vadBuf || vadBuf.length !== an.fftSize) vadBuf = new Uint8Array(new ArrayBuffer(an.fftSize));
+  an.getByteTimeDomainData(vadBuf);
+  let sum = 0;
+  for (let i = 0; i < vadBuf.length; i++) {
+    const v = (vadBuf[i] - 128) / 128;
+    sum += v * v;
+  }
+  return Math.sqrt(sum / vadBuf.length);
 }
 
 /**

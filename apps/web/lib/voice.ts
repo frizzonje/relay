@@ -19,12 +19,10 @@ import { createMeshTransport } from '@/lib/voice/mesh';
 import { voiceSupport } from '@/lib/voice-support';
 import { diag } from '@/lib/voice/diag';
 import {
-  ANALYSER_FFT_SIZE,
+  analyserRms,
   attachRemoteAudio,
-  audioContext,
   cleanupPeerAudio,
   detachRemoteAudio,
-  getAudioCtx,
   initOutput,
   isSpeakersOn,
   peerVoiceAnalysers,
@@ -34,9 +32,34 @@ import {
   teardownPeerAudio,
 } from '@/lib/voice/output';
 
-// Микшер входящего звука и устройство вывода живут в `voice/output.ts`. Наружу
+import {
+  applyMute,
+  ensureLocalStream,
+  hasLocalAnalyser,
+  initMic,
+  isMicOn,
+  loadMicThreshold,
+  micLevelNorm,
+  micRingThreshold,
+  refreshMicInfo,
+  setMicOn,
+  startGate,
+  teardownMic,
+} from '@/lib/voice/mic';
+
+// Микшер, устройство вывода и захват микрофона живут в своих файлах. Наружу
 // уезжают отсюда: компоненты знают один адрес, `@/lib/voice`.
 export { refreshSpeakers, resumeVoiceAudio, setSpeaker } from '@/lib/voice/output';
+export {
+  desktopPtt,
+  getMicLevel,
+  loadMediaPrefs,
+  refreshMics,
+  setMic,
+  setMicThreshold,
+  setNoiseSuppression,
+  setPushToTalk,
+} from '@/lib/voice/mic';
 import type { TransportHost, VoiceTicket, VoiceTransport } from '@/lib/voice/types';
 import {
   addTile,
@@ -121,7 +144,6 @@ const SCREEN_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
 
 let room: string | null = null;
 let localStream: MediaStream | null = null;
-let micOn = true;
 let camOn = false;
 let screenOn = false;
 let camTrack: MediaStreamTrack | null = null;
@@ -139,47 +161,8 @@ let screenMode: ScreenMode = 'quality';
  */
 let listenOnly = false;
 
-// ─── Настройки медиа (модалка настроек, раздел 06 референса) ───────────────
-// Шумоподавление — constraint для getUserMedia (по умолчанию вкл); Push-to-talk —
-// микрофон открыт, только пока удерживается пробел (по умолчанию выкл). Оба
-// значения запоминаются в localStorage и синхронизируются в стор при загрузке.
-const NS_KEY = 'relay-noise-suppress';
+// localStorage-ключ выбранной камеры — применяется при следующем включении.
 const CAM_KEY = 'relay-cam-id';
-const PTT_KEY = 'relay-ptt';
-let noiseSuppression =
-  typeof localStorage !== 'undefined' ? localStorage.getItem(NS_KEY) !== '0' : true;
-let pushToTalk =
-  typeof localStorage !== 'undefined' ? localStorage.getItem(PTT_KEY) === '1' : false;
-let pttHeld = false;
-
-/** Constraint аудио с учётом тоггла шумоподавления (замена статичного AUDIO_CONSTRAINTS). */
-function audioConstraints(): MediaTrackConstraints {
-  return { echoCancellation: true, noiseSuppression, autoGainControl: true };
-}
-
-// ─── Порог срабатывания микрофона (шумовой гейт, как в Discord) ───────────
-// «Сырой» микрофон гоним через GainNode и собеседникам шлём УЖЕ обработанную
-// дорожку. Gain здесь работает ЗАТВОРОМ: пока уровень ниже порога — плавно
-// закрываемся в 0 (тебя не слышно), выше — открываемся в 1. Цепочку поднимаем
-// ЛЕНИВО: при пороге 0 («выкл») отправляется сырая дорожка, гейт не строится.
-// Гейт включается, только когда пользователь задаёт порог > 0 (или он сохранён).
-// Смена устройства и мут работают через ту же дорожку.
-const MIC_THRESHOLD_KEY = 'relay-mic-threshold';
-let micThreshold = 0; // 0..1 в шкале метра (0 = гейт выключен); читаем в initVoice
-let micPipelineActive = false;
-let rawMicTrack: MediaStreamTrack | null = null; // дорожка устройства (для меток и как источник цепочки)
-let micSource: MediaStreamAudioSourceNode | null = null;
-let micGainNode: GainNode | null = null; // затвор гейта (0/1 с плавным переходом)
-let micDest: MediaStreamAudioDestinationNode | null = null;
-
-// Гейт: уровень нормируем в 0..1 (как метр у ползунка), сравниваем с порогом,
-// открытие держим ещё чуть-чуть после спада (hold), чтобы хвосты слов не рубило.
-const MIC_METER_FULL = 0.5; // RMS, при котором метр (и шкала порога) заполнен
-const MIC_RING_FLOOR = 0.12; // мин. уровень для обводки «говорю», когда гейт выключен
-const GATE_HOLD_MS = 250;
-const GATE_TICK_MS = 50;
-let gateOpenUntil = 0;
-let gateTimer: ReturnType<typeof setInterval> | null = null;
 
 let initialized = false;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -258,10 +241,6 @@ const VAD_THRESHOLD = 0.04; // RMS 0..1: речь обычно выше, тиш�
 const VAD_HANGOVER_MS = 300; // держим обводку после спада уровня
 const VAD_TICK_MS = 100;
 
-let localAnalyser: AnalyserNode | null = null;
-let localVadSource: MediaStreamAudioSourceNode | null = null;
-let localVadGain: GainNode | null = null;
-let vadBuf: Uint8Array<ArrayBuffer> | null = null;
 let vadTimer: ReturnType<typeof setInterval> | null = null;
 const spokeAt = new Map<string, number>();
 let lastSpeakingKey = '';
@@ -274,7 +253,8 @@ let lastSpeakingKey = '';
 function broadcastMediaState() {
   const on = camOn || screenOn;
   setTileVideoOn('local', on);
-  if (room) socket().emit('media-update', { camOn, screenOn, micOn, deafened: !isSpeakersOn() });
+  if (room)
+    socket().emit('media-update', { camOn, screenOn, micOn: isMicOn(), deafened: !isSpeakersOn() });
 }
 
 function setStatus(key: MessageKey, vars?: Vars) {
@@ -308,181 +288,6 @@ function mediaErrorText(err: unknown): string {
   }
 }
 
-// localStorage-ключ выбранного микрофона — применяется при следующем входе
-const MIC_KEY = 'relay-mic-id';
-
-async function acquireMic(): Promise<MediaStream> {
-  const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(MIC_KEY) : null;
-  if (saved) {
-    try {
-      return await navigator.mediaDevices.getUserMedia({
-        audio: { ...audioConstraints(), deviceId: { exact: saved } },
-      });
-    } catch (err) {
-      // Сохранённый микрофон пропал/занят — откатываемся на устройство по умолчанию
-      if ((err as { name?: string } | null)?.name !== 'OverconstrainedError') throw err;
-    }
-  }
-  return navigator.mediaDevices.getUserMedia({ audio: audioConstraints() });
-}
-
-// Запрос микрофона, который уже летит. Два клика подряд по разным каналам
-// упираются в один и тот же `if (!localStream)`, и без общего запроса устройство
-// открывается ДВАЖДЫ: второй поток становится нашим, а первый остаётся гореть
-// мимо дирижёра — лампочка записи не гаснет до перезагрузки вкладки, и на части
-// систем устройство остаётся занятым.
-let micPending: Promise<MediaStream> | null = null;
-
-/**
- * Убедиться, что микрофон взят, — ровно один раз на все параллельные заходы.
- * Опоздавший подхватывает уже принятый поток, а не открывает свой.
- */
-async function ensureLocalStream(): Promise<void> {
-  if (localStream) return;
-  if (!micPending) {
-    micPending = acquireMic().finally(() => {
-      micPending = null;
-    });
-  }
-  const stream = await micPending;
-  if (localStream) return; // нас опередил другой заход — поток уже принят
-
-  localStream = stream;
-  rawMicTrack = stream.getAudioTracks()[0] ?? null;
-  if (rawMicTrack) rawMicTrack.contentHint = 'speech'; // голос, не музыка
-  // Сохранённый порог > 0 — поднимаем цепочку гейта ДО join, чтобы новые пиры
-  // сразу получили уже затворённую дорожку.
-  if (micThreshold > 0) ensureMicPipeline();
-  setupLocalVad(); // анализатор своего микрофона для обводки и гейта
-  // Доступ выдан — метки устройств теперь видны, наполняем списки
-  void refreshMicInfo();
-  refreshOutputDevices();
-}
-
-/**
- * Дорожка микрофона, которую РЕАЛЬНО шлём собеседникам (именно микрофон, не звук
- * демонстрации): при поднятой цепочке чувствительности — обработанная, иначе —
- * сырая с устройства. Её мутит applyMicState и подменяет setMic.
- */
-function sentMicTrack(): MediaStreamTrack | null {
-  return localStream?.getAudioTracks().find((t) => t !== screenAudioTrack) ?? null;
-}
-
-/**
- * Лениво поднимает цепочку «сырой микрофон → gain(чувствительность) → выход» и
- * переводит собеседников на обработанную дорожку. Зовётся, когда пользователь
- * впервые уводит чувствительность с 100% (или при входе, если значение сохранено).
- * Возвращает false, если Web Audio недоступен (тогда остаёмся на сырой дорожке).
- */
-function ensureMicPipeline(): boolean {
-  if (micPipelineActive) return true;
-  if (!localStream || typeof window === 'undefined') return false;
-  const Ctor =
-    window.AudioContext ||
-    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!Ctor) return false;
-
-  const raw = rawMicTrack ?? sentMicTrack();
-  if (!raw) return false;
-
-  try {
-    const ctx = getAudioCtx();
-    micSource = ctx.createMediaStreamSource(new MediaStream([raw]));
-    micGainNode = ctx.createGain();
-    micGainNode.gain.value = 1; // открыт по умолчанию; гейт прикроет, если тихо
-    micDest = ctx.createMediaStreamDestination();
-    micSource.connect(micGainNode).connect(micDest);
-  } catch (err) {
-    console.warn('mic pipeline failed, остаёмся на сырой дорожке:', err);
-    micSource = micGainNode = null;
-    micDest = null;
-    return false;
-  }
-
-  const processed = micDest.stream.getAudioTracks()[0];
-  processed.enabled = micOn;
-  processed.contentHint = 'speech'; // подсказка кодеку/AEC: это голос, не музыка
-  rawMicTrack = raw; // сырая дорожка остаётся жить — она источник цепочки (не stop'аем)
-
-  // Переводим уже подключённых собеседников на обработанную дорожку…
-  tx().replaceMicTrack(raw, processed);
-  // …и подменяем дорожку в localStream, чтобы новые пиры брали уже её.
-  localStream.removeTrack(raw);
-  localStream.addTrack(processed);
-
-  micPipelineActive = true;
-  return true;
-}
-
-/**
- * Порог срабатывания микрофона, 0..1 в шкале метра (0 = гейт выключен, слышно
- * всегда). Чем правее — тем громче надо говорить, чтобы микрофон открылся.
- * Поднимает цепочку лениво; сам затвор ведёт evaluateGate. Выбор — в localStorage.
- */
-export function setMicThreshold(value: number) {
-  const t = Math.max(0, Math.min(1, value));
-  micThreshold = t;
-  if (typeof localStorage !== 'undefined') localStorage.setItem(MIC_THRESHOLD_KEY, String(t));
-  useVoiceStore.getState().setMicThreshold(t);
-
-  if (t > 0) {
-    if (localStream) ensureMicPipeline(); // гейту нужна цепочка
-  } else if (micGainNode && audioContext()) {
-    // Порог 0 — гейт выключаем, микрофон держим открытым.
-    gateOpenUntil = 0;
-    micGainNode.gain.setTargetAtTime(1, audioContext()!.currentTime, 0.02);
-  }
-}
-
-/** Текущий уровень микрофона в шкале метра (0..1, sqrt-кривая — тихое заметнее). */
-function micLevelNorm(): number {
-  if (!localAnalyser) return 0;
-  return Math.min(1, Math.sqrt(analyserRms(localAnalyser) / MIC_METER_FULL));
-}
-
-/**
- * Уровень своего микрофона (0..1) — для живого метра у ползунка порога (как в
- * Discord). 0, если анализатор не поднят. Дёргать можно часто (rAF) — дёшево.
- */
-export function getMicLevel(): number {
-  return micLevelNorm();
-}
-
-/**
- * Шумовой гейт: пока уровень ниже порога — плавно закрываем микрофон в 0, выше —
- * открываем в 1, удерживая открытым ещё GATE_HOLD_MS после спада. Затвор —
- * micGainNode цепочки; setTargetAtTime даёт мягкие атаку/спад без щелчков.
- */
-function evaluateGate() {
-  const ctx = audioContext();
-  if (micThreshold <= 0 || !micPipelineActive || !micGainNode || !ctx) return;
-  const now = performance.now();
-  if (micOn && micLevelNorm() >= micThreshold) gateOpenUntil = now + GATE_HOLD_MS;
-  const open = now < gateOpenUntil;
-  micGainNode.gain.setTargetAtTime(open ? 1 : 0, ctx.currentTime, open ? 0.015 : 0.06);
-}
-
-/** Обновляет в сторе активное устройство и список доступных микрофонов. */
-async function refreshMicInfo() {
-  const store = useVoiceStore.getState();
-  // Метку/девайс берём с СЫРОЙ дорожки устройства: у обработанной (выход
-  // MediaStreamDestination) ни label, ни deviceId нет.
-  const track = rawMicTrack ?? sentMicTrack();
-  const settings = track?.getSettings?.();
-  store.setCurrentMic(settings?.deviceId ?? null, track?.label ?? '');
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    store.setMics(devices.filter((d) => d.kind === 'audioinput'));
-  } catch {
-    /* enumerateDevices недоступен — список останется пустым */
-  }
-}
-
-/** Перечитать список микрофонов (для UI — например, при открытии меню). */
-export function refreshMics() {
-  void refreshMicInfo();
-}
-
 /**
  * Переключает глобальный мут всех звуков сайта (пиры + sfx) — режим «глушилки»
  * (deafen, как в Discord). Выключил звук — микрофон гаснет автоматически (не
@@ -496,90 +301,16 @@ export function toggleSpeakers() {
   // «Не слышишь — не говоришь»: это правило дирижёра, а не микшера. Микшер
   // знает только про мастер-громкость, микрофон ему не принадлежит.
   if (!on) {
-    micWasOnBeforeDeafen = micOn;
-    micOn = false;
+    micWasOnBeforeDeafen = isMicOn();
+    setMicOn(false);
   } else {
-    micOn = micWasOnBeforeDeafen;
+    setMicOn(micWasOnBeforeDeafen);
   }
-  applyMicState();
   broadcastMediaState();
 }
 
 // Был ли включён микрофон до «глушилки» — чтобы вернуть его при включении звука.
 let micWasOnBeforeDeafen = true;
-
-/**
- * Переключение микрофона на лету: новый getUserMedia + replaceTrack у всех
- * собеседников без пересборки SDP. Выбор запоминаем в localStorage.
- */
-export async function setMic(deviceId: string) {
-  if (typeof localStorage !== 'undefined') localStorage.setItem(MIC_KEY, deviceId);
-
-  // Не в звонке — просто запомнили выбор, применится при следующем входе
-  if (!localStream) return;
-
-  let stream: MediaStream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: deviceId
-        ? { ...audioConstraints(), deviceId: { exact: deviceId } }
-        : audioConstraints(),
-    });
-  } catch (err) {
-    toast.error(msg('voice.toast.micSwitchFailed', { reason: mediaErrorText(err) }));
-    return;
-  }
-
-  const newTrack = stream.getAudioTracks()[0];
-  if (!newTrack) return;
-  newTrack.contentHint = 'speech'; // голос, не музыка
-
-  const ctx = audioContext();
-  if (micPipelineActive && micGainNode && ctx) {
-    // Цепочка чувствительности поднята: меняем ИСТОЧНИК, исходящая (обработанная)
-    // дорожка остаётся прежней — собеседников переподписывать не нужно.
-    newTrack.enabled = true; // сырой источник всегда «течёт», мут — на выходной дорожке
-    try {
-      micSource?.disconnect();
-    } catch {
-      /* источник мог быть уже отключён */
-    }
-    rawMicTrack?.stop();
-    micSource = ctx.createMediaStreamSource(new MediaStream([newTrack]));
-    micSource.connect(micGainNode);
-    rawMicTrack = newTrack;
-  } else {
-    // Сырой путь (цепочки нет): подменяем дорожку у всех собеседников и в localStream.
-    newTrack.enabled = micOn; // сохраняем текущее состояние «выкл/вкл»
-    const oldTrack = sentMicTrack();
-    tx().replaceMicTrack(oldTrack, newTrack);
-    if (oldTrack) {
-      oldTrack.stop();
-      localStream.removeTrack(oldTrack);
-    }
-    localStream.addTrack(newTrack);
-    rawMicTrack = newTrack;
-  }
-
-  setupLocalVad(); // переподцепляем анализатор обводки к новому устройству
-  await refreshMicInfo();
-  toast(
-    msg('voice.toast.micSwitched', {
-      device: newTrack.label || msg('voice.toast.micSwitched.fallback'),
-    }),
-  );
-}
-
-/**
- * Тоггл аппаратного шумоподавления микрофона (модалка настроек, раздел 06).
- * Меняем constraint и, если уже в звонке, переснимаем дорожку текущего устройства.
- */
-export async function setNoiseSuppression(on: boolean) {
-  noiseSuppression = on;
-  if (typeof localStorage !== 'undefined') localStorage.setItem(NS_KEY, on ? '1' : '0');
-  useVoiceStore.getState().setNoiseSuppression(on);
-  if (localStream) await setMic(useVoiceStore.getState().currentMicId ?? '');
-}
 
 // ─── Камера: список устройств и выбор (модалка настроек) ───────────────────
 /** Обновляет список камер (videoinput) и активную камеру в сторе. */
@@ -615,98 +346,6 @@ export async function setCamera(deviceId: string) {
   } else {
     void refreshCameraInfo();
   }
-}
-
-// ─── Push-to-talk (модалка настроек) ───────────────────────────────────────
-// Пока режим включён, микрофон держим закрытым и открываем только на время
-// удержания пробела. Пробел игнорируем, когда фокус в поле ввода (чат/теги),
-// чтобы не воровать набор текста и не активировать кнопки.
-function pttTargetIsTextInput(): boolean {
-  const el =
-    typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null;
-  if (!el) return false;
-  const tag = el.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
-}
-
-// Открыть/закрыть микрофон на время удержания PTT. Общая часть для пробела
-// (окно в фокусе) и глобального хоткея десктоп-оболочки (desktopPtt). Флаг
-// pttHeld один на оба источника — повторные press/release не дублируются.
-function pttPress() {
-  if (pttHeld) return;
-  pttHeld = true;
-  if (!localStream || micOn) return;
-  micOn = true;
-  applyMicState();
-  broadcastMediaState();
-}
-
-function pttRelease() {
-  if (!pttHeld) return;
-  pttHeld = false;
-  if (!localStream) return;
-  micOn = false;
-  applyMicState();
-  broadcastMediaState();
-}
-
-function onPttKeyDown(e: KeyboardEvent) {
-  if (e.code !== 'Space' || e.repeat || pttTargetIsTextInput()) return;
-  e.preventDefault();
-  pttPress();
-}
-
-function onPttKeyUp(e: KeyboardEvent) {
-  if (e.code !== 'Space') return;
-  pttRelease();
-}
-
-/**
- * Глобальный push-to-talk из десктоп-оболочки (Tauri global-shortcut, событие
- * `ptt` → см. lib/desktop.ts). Действует только в режиме Push-to-talk — иначе
- * микрофон и так открыт, и отпускание хоткея неожиданно бы его глушило.
- */
-export function desktopPtt(pressed: boolean) {
-  if (!pushToTalk) return;
-  if (pressed) pttPress();
-  else pttRelease();
-}
-
-/**
- * Тоггл режима Push-to-talk. При включении глушим микрофон (говоришь только на
- * удержании пробела); при выключении возвращаем микрофон в открытое состояние.
- */
-export function setPushToTalk(on: boolean) {
-  if (on === pushToTalk) return;
-  pushToTalk = on;
-  if (typeof localStorage !== 'undefined') localStorage.setItem(PTT_KEY, on ? '1' : '0');
-  useVoiceStore.getState().setPushToTalk(on);
-  if (typeof window === 'undefined') return;
-  if (on) {
-    window.addEventListener('keydown', onPttKeyDown);
-    window.addEventListener('keyup', onPttKeyUp);
-    pttHeld = false;
-    if (localStream && micOn) {
-      micOn = false;
-      applyMicState();
-      broadcastMediaState();
-    }
-  } else {
-    window.removeEventListener('keydown', onPttKeyDown);
-    window.removeEventListener('keyup', onPttKeyUp);
-    if (localStream && !micOn) {
-      micOn = true;
-      applyMicState();
-      broadcastMediaState();
-    }
-  }
-}
-
-/** Синхронизировать тогглы настроек из localStorage в стор (при монтировании модалки). */
-export function loadMediaPrefs() {
-  const store = useVoiceStore.getState();
-  store.setNoiseSuppression(noiseSuppression);
-  store.setPushToTalk(pushToTalk);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1036,7 +675,7 @@ function onTransportLost(reason: 'setup' | 'lost') {
 export function setListenOnly(on: boolean) {
   listenOnly = on;
   if (!on) return;
-  micOn = false;
+  setMicOn(false);
   useVoiceStore.getState().setListenOnly(true);
   syncMediaState();
 }
@@ -1095,7 +734,7 @@ export async function joinVoice(newRoom: string, label: string) {
   useUiStore.setState({ view: 'voice', voiceRoom: room, voiceLabel: label });
 
   addTile('local', msg('common.you', { name: myName() }), localStream, true);
-  applyMicState();
+  applyMute();
   syncMediaState();
 
   // Транспорт выбираем ДО `join`: сразу за ним сервер пришлёт состав комнаты, и
@@ -1147,22 +786,7 @@ export function leaveVoice(hard = true) {
     localStream.getTracks().forEach((t) => t.stop());
     localStream = null;
   }
-  // Разбираем цепочку чувствительности. Сырая дорожка живёт ОТДЕЛЬНО от
-  // localStream (когда цепочка активна), поэтому её надо погасить вручную.
-  try {
-    micSource?.disconnect();
-    micGainNode?.disconnect();
-  } catch {
-    /* узлы могли быть уже отключены */
-  }
-  rawMicTrack?.stop();
-  rawMicTrack = null;
-  micSource = null;
-  micGainNode = null;
-  micDest = null;
-  micPipelineActive = false;
-  gateOpenUntil = 0;
-  teardownLocalVad();
+  teardownMic();
   spokeAt.clear();
   lastSpeakingKey = '';
   useVoiceStore.getState().setSpeakingIds([]);
@@ -1179,7 +803,7 @@ export function leaveVoice(hard = true) {
   // Микрофон к следующему входу включаем, но глушилка переживает выход из эфира —
   // под ней микрофон остаётся выключенным (не слышишь — не говоришь). Слушателю
   // включать нечего: права говорить выход из канала ему не добавил.
-  micOn = !listenOnly && isSpeakersOn();
+  setMicOn(!listenOnly && isSpeakersOn());
   micWasOnBeforeDeafen = true;
   camOn = false;
   syncMediaState();
@@ -1228,29 +852,19 @@ export function showVoiceStage() {
 // ─────────────────────────────────────────────────────────────────────────
 
 function syncMediaState() {
-  useVoiceStore.getState().setMedia({ micOn, camOn, screenOn, screenMode });
-}
-
-function applyMicState() {
-  // Микрофон глушим, а звук демонстрации экрана — нет (он не зависит от микрофона)
-  localStream?.getAudioTracks().forEach((t) => {
-    if (t === screenAudioTrack) return;
-    t.enabled = micOn;
-  });
-  syncMediaState();
+  useVoiceStore.getState().setMedia({ micOn: isMicOn(), camOn, screenOn, screenMode });
 }
 
 export function toggleMic() {
   if (listenOnly) return; // включать нечего: микрофон мы не брали
   // Включение микрофона под «глушилкой» снимает и её (как в Discord): нелепо
-  // говорить, не слыша ответов. toggleSpeakers сам вернёт micOn=true и разошлёт.
-  if (!micOn && !isSpeakersOn()) {
+  // говорить, не слыша ответов. toggleSpeakers сам вернёт микрофон и разошлёт.
+  if (!isMicOn() && !isSpeakersOn()) {
     micWasOnBeforeDeafen = true;
     toggleSpeakers();
     return;
   }
-  micOn = !micOn;
-  applyMicState();
+  setMicOn(!isMicOn());
   broadcastMediaState();
 }
 
@@ -1431,27 +1045,14 @@ function stopScreen() {
 // Индикация «говорит сейчас» (VAD): обводка плитки по уровню звука
 // ─────────────────────────────────────────────────────────────────────────
 
-// RMS-уровень (0..1) по временной форме сигнала анализатора.
-function analyserRms(an: AnalyserNode): number {
-  if (!vadBuf || vadBuf.length !== an.fftSize) vadBuf = new Uint8Array(new ArrayBuffer(an.fftSize));
-  an.getByteTimeDomainData(vadBuf);
-  let sum = 0;
-  for (let i = 0; i < vadBuf.length; i++) {
-    const v = (vadBuf[i] - 128) / 128;
-    sum += v * v;
-  }
-  return Math.sqrt(sum / vadBuf.length);
-}
-
 // Своя обводка: уровень в шкале метра против порога (или пола без гейта), с
 // удержанием. На муте — мгновенно гаснет.
 function localSpeaking(now: number): boolean {
-  if (!micOn || !localAnalyser) {
+  if (!isMicOn() || !hasLocalAnalyser()) {
     spokeAt.delete('local');
     return false;
   }
-  const thr = micThreshold > 0 ? micThreshold : MIC_RING_FLOOR;
-  if (micLevelNorm() >= thr) {
+  if (micLevelNorm() >= micRingThreshold()) {
     spokeAt.set('local', now);
     return true;
   }
@@ -1477,44 +1078,6 @@ function isSpeaking(
   }
   const last = spokeAt.get(id);
   return last != null && now - last < VAD_HANGOVER_MS;
-}
-
-// Поднимает локальный анализатор микрофона (независимо от цепочки чувствительности).
-// Тихий путь до destination нужен, чтобы граф «тянул» микрофон, — себя мы не слышим.
-function setupLocalVad() {
-  teardownLocalVad();
-  if (!rawMicTrack || typeof window === 'undefined') return;
-  const Ctor =
-    window.AudioContext ||
-    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!Ctor) return;
-  try {
-    const ctx = getAudioCtx();
-    localVadSource = ctx.createMediaStreamSource(new MediaStream([rawMicTrack]));
-    localAnalyser = ctx.createAnalyser();
-    localAnalyser.fftSize = ANALYSER_FFT_SIZE;
-    localVadGain = ctx.createGain();
-    localVadGain.gain.value = 0; // молча: только «протягиваем» сигнал ради анализа
-    localVadSource.connect(localAnalyser);
-    localAnalyser.connect(localVadGain);
-    localVadGain.connect(ctx.destination);
-  } catch (err) {
-    console.warn('local VAD setup failed:', err);
-    teardownLocalVad();
-  }
-}
-
-function teardownLocalVad() {
-  try {
-    localVadSource?.disconnect();
-    localAnalyser?.disconnect();
-    localVadGain?.disconnect();
-  } catch {
-    /* узлы могли быть уже отключены */
-  }
-  localVadSource = null;
-  localAnalyser = null;
-  localVadGain = null;
 }
 
 // Тик опроса уровней → список говорящих в стор (только при изменении состава).
@@ -1557,13 +1120,7 @@ export function initVoice() {
   if (initialized) return;
   initialized = true;
 
-  // Сохранённый порог микрофона (применится при следующем входе в эфир)
-  const savedThr =
-    typeof localStorage !== 'undefined' ? Number(localStorage.getItem(MIC_THRESHOLD_KEY)) : NaN;
-  if (Number.isFinite(savedThr) && savedThr >= 0 && savedThr <= 1) {
-    micThreshold = savedThr;
-    useVoiceStore.getState().setMicThreshold(savedThr);
-  }
+  loadMicThreshold(); // применится при следующем входе в эфир
 
   // Подключили/отключили устройство — обновляем списки в сторе
   navigator.mediaDevices?.addEventListener?.('devicechange', () => {
@@ -1582,6 +1139,19 @@ export function initVoice() {
   // Микшер снимает узлы ушедшего сам, а вот «когда он в последний раз говорил»
   // — это уже обводка плитки, и живёт она здесь.
   initOutput({ forgetSpeaker: (peerId) => spokeAt.delete(peerId) });
+  // Микрофон кладёт свою дорожку в общий исходящий поток — тот же, куда потом
+  // попадут камера и экран. Поток принадлежит дирижёру, поэтому спрашивается.
+  initMic({
+    stream: () => localStream,
+    adopt: (stream) => {
+      localStream = stream;
+    },
+    screenAudioTrack: () => screenAudioTrack,
+    replaceTrack: (from, to) => tx().replaceMicTrack(from, to),
+    syncStore: syncMediaState,
+    announce: broadcastMediaState,
+    deviceErrorText: mediaErrorText,
+  });
 
   const s = socket();
 
@@ -1720,5 +1290,5 @@ export function initVoice() {
   if (!vadTimer) vadTimer = setInterval(updateSpeaking, VAD_TICK_MS);
 
   // Шумовой гейт микрофона — отдельный, более частый тик для быстрой атаки
-  if (!gateTimer) gateTimer = setInterval(evaluateGate, GATE_TICK_MS);
+  startGate();
 }
