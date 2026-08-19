@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import {
   connected,
   createServer,
@@ -6,6 +6,7 @@ import {
   joinVoice,
   openServer,
   person,
+  test,
   unique,
 } from '../fixtures/stand';
 import { SFU_CONTAINER, dockerReachable, startContainer, stopContainer } from '../fixtures/docker';
@@ -122,6 +123,12 @@ test('падение медиасервера роняет канал в пря�
 
   try {
     expect(await stopContainer(SFU_CONTAINER)).toBeLessThan(400);
+
+    // Пока лестница восстановления идёт, на плитках об этом написано. Не
+    // мелочь: ступени занимают секунды, звука в них нет, и молчащий интерфейс
+    // человек читает как поломку у себя — идёт крутить микрофон, которому
+    // ничего не сделалось.
+    await expect(anya.getByText(/reconnecting/).first()).toBeVisible({ timeout: 30_000 });
 
     // Лестница восстановления у SFU-транспорта своя (restart-ice, пересборка
     // транспортов), и только исчерпав её, он говорит дирижёру «потерян». Тот и

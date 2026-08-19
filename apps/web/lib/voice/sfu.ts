@@ -169,6 +169,8 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
   // Лестница восстановления: 0 — всё в порядке, 1 — сделан ICE-restart,
   // 2 — транспорты пересобраны. Дальше идти некуда, решает дирижёр.
   let recoverStage = 0;
+  /** Сказано ли на плитках, что связь чинится (см. `tellTiles`). */
+  let saidReconnecting = false;
   let failTimer: ReturnType<typeof setTimeout> | null = null;
   let setupTimer: ReturnType<typeof setTimeout> | null = null;
   let socketTimer: ReturnType<typeof setTimeout> | null = null;
@@ -489,12 +491,18 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         if (failTimer) clearTimeout(failTimer);
         failTimer = null;
         recoverStage = 0;
+        // Транспорта два, и встать они могут не одновременно: пока второй лежит,
+        // связи всё ещё нет, и снимать надпись рано.
+        if (!mediaBroken()) tellTiles(false);
         return;
       }
       // 'disconnected' часто сам проходит за секунду-другую (перескок сети),
       // поэтому даём ему фору; 'failed' — окончательно, лечим сразу.
       if (state === 'failed' || state === 'disconnected') {
         host.diag('sfu transport', `${direction} ${state}`);
+        // Только когда звонок уже стоял: на входе на плитках своя надпись, и
+        // «переподключение…» вместо «соединение…» было бы про другое.
+        if (ready) tellTiles(true);
       }
       if (state === 'failed') scheduleRecovery(0);
       else if (state === 'disconnected') scheduleRecovery(4_000);
@@ -573,6 +581,30 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     return [sendTransport, recvTransport].some(
       (t) => t && (t.connectionState === 'failed' || t.connectionState === 'disconnected'),
     );
+  }
+
+  /**
+   * Сказать на плитках, что связь чинится, — и убрать надпись, когда починили.
+   * Транспорт у медиасервера один на всех, поэтому и надпись на всех сразу:
+   * развалился он, а не связь с кем-то одним.
+   *
+   * Раньше вся лестница шла молча. Тоста на ступенях нет намеренно (они длятся
+   * секунды и чаще всего кончаются успехом), `setStatus` в этой части
+   * приложения не показывает никто — статус читает только гостевая сцена, — и
+   * человек оставался с неподвижными плитками, без звука и без единого слова о
+   * том, что происходит. В mesh это есть с самого начала (handleStateChange), и
+   * разница между транспортами тут была не решением, а недосмотром.
+   *
+   * Помним, сказали ли уже (`saidReconnecting`): снимать надпись, которую
+   * ставили не мы, нельзя — на входе там стоит «соединение…», и погасить его
+   * раньше времени значило бы объявить готовым то, чего ещё нет.
+   */
+  function tellTiles(broken: boolean) {
+    if (broken === saidReconnecting) return;
+    saidReconnecting = broken;
+    for (const peerId of names.keys()) {
+      host.setTileState(peerId, broken ? 'tile.state.reconnecting' : '');
+    }
   }
 
   function scheduleRecovery(delayMs: number) {
@@ -834,6 +866,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     focusedId = null;
     clearTimers();
     recoverStage = 0;
+    saidReconnecting = false;
     ready = false;
     lost = false;
     sock?.removeAllListeners();
