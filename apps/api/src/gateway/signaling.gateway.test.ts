@@ -692,13 +692,17 @@ describe('server-unlock', () => {
 
     // Сервер снесли и завели заново под тем же id и другим паролем: соль у
     // нового хэша своя, а с ней и ключ подписи — прежний пропуск ничей.
-    gw.handleServerDelete(asSocket(owner), { id: 'srv' });
+    await gw.handleServerDelete(asSocket(owner), { id: 'srv' });
     await gw.handleServerCreate(asSocket(owner), {
       id: 'srv',
       name: 'тайный',
       password: 'другой',
     });
-    gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'тайный чат' });
+    await gw.handleChannelCreate(asSocket(owner), {
+      serverId: 'srv',
+      type: 'text',
+      name: 'тайный чат',
+    });
     settle();
 
     const stale = server.connect({ id: 'stale', auth: { unlock: [token] } });
@@ -2003,7 +2007,7 @@ describe('rename', () => {
     settle();
     server.clearAll();
 
-    gw.handleRename(asSocket(a), { name: 'Новое' });
+    await gw.handleRename(asSocket(a), { name: 'Новое' });
     expect(b.last('peer-renamed')).toEqual({ id: 'a', name: 'Новое' });
     expect(a.last('chat-roster')).toEqual([{ nick: 'Новое' }]);
     settle();
@@ -2052,8 +2056,8 @@ describe('rename', () => {
     gw.handleJoin(asSocket(a), { room: 'voice-obshchii', name: 'A' });
     gw.handleJoin(asSocket(b), { room: 'voice-obshchii', name: 'B' });
     b.clear();
-    gw.handleRename(asSocket(a), { name: '  ' });
-    gw.handleRename(asSocket(a), { name: 'A' });
+    await gw.handleRename(asSocket(a), { name: '  ' });
+    await gw.handleRename(asSocket(a), { name: 'A' });
     expect(b.got('peer-renamed')).toBe(false);
   });
 });

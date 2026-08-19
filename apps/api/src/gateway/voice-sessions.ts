@@ -172,7 +172,9 @@ export class VoiceSessions {
 
     const peers = this.peersIn(room);
 
-    client.join(room);
+    // `void` — сигнатура socket.io: `join`/`leave` объявлены `void | Promise<void>`
+    // ради асинхронных адаптеров, у встроенного они синхронны.
+    void client.join(room);
     client.data.room = room;
     client.data.name = name;
     client.data.transport = transport;
@@ -195,7 +197,7 @@ export class VoiceSessions {
 
     this.logger.log(`voice: ${client.data.name || '?'} (${client.id}) left "${room}"`);
     client.to(room).emit('peer-left', { id: client.id });
-    client.leave(room);
+    void client.leave(room);
     client.data.room = undefined;
     client.data.transport = undefined;
     // Пропуск выписан на комнату, из которой мы только что вышли: дальше он

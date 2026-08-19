@@ -52,7 +52,10 @@ export class ChatSessions {
    * виден снаружи, поэтому решает его обработчик, а не мы.
    */
   enter(client: AppSocket, room: string, name: string | undefined): void {
-    client.join(room);
+    // `void` здесь и ниже — из-за сигнатуры socket.io: `join`/`leave` объявлены
+    // `void | Promise<void>` ради асинхронных адаптеров, у встроенного они
+    // синхронны. Ждать нечего, а молча ронять промис нельзя.
+    void client.join(room);
     client.data.chatRoom = room;
     client.data.chatName = name || ANON_NAME;
   }
@@ -65,7 +68,7 @@ export class ChatSessions {
   leave(client: AppSocket): void {
     const room = client.data.chatRoom;
     if (!room) return;
-    client.leave(room);
+    void client.leave(room);
     client.data.chatRoom = undefined;
     client.data.chatName = undefined;
     // Системку о выходе не шлём: вход тоже не объявляем — ростер сам покажет уход.
@@ -85,7 +88,7 @@ export class ChatSessions {
     for (const id of [...ids]) {
       const sock = this.server.sockets.sockets.get(id);
       if (!sock) continue;
-      sock.leave(room);
+      void sock.leave(room);
       sock.data.chatRoom = undefined;
       sock.data.chatName = undefined;
       sock.emit('chat-closed', { slug });

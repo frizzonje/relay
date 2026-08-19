@@ -126,4 +126,10 @@ async function bootstrap() {
   console.log(`Listening on ${proto}://localhost:${port}`);
 }
 
-bootstrap();
+// Не взлетели — говорим почему. Без этого причина уезжает в «unhandled
+// rejection» без единой внятной строки, а перезапускающий демон крутит падение
+// по кругу молча.
+bootstrap().catch((e) => {
+  console.error('api не запустился:', e);
+  process.exit(1);
+});
