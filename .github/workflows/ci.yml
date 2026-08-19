@@ -179,6 +179,20 @@ jobs:
             -e E2E_PHASE=read -e E2E_MARK="$GITHUB_RUN_ID-survives-restart" \
             mcr.microsoft.com/playwright:v1.55.0-noble \
             sh -c 'npm install --no-save @playwright/test@1.55.0 && npx playwright test tests/persistence.spec.ts'
+      # Run apart from everything else on purpose: it restarts api, which drops
+      # the sockets of the whole installation. Inside the parallel run it would
+      # take its neighbours down with it. What it proves is what `relay update`
+      # does to a live installation — the call has to come back on its own.
+      - name: A call through an api restart
+        run: |
+          CADDY_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' relay-caddy-1)
+          docker run --rm --network relay_default --add-host "relay.test:$CADDY_IP" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD":/work -w /work/e2e \
+            -e BASE_URL=https://relay.test -e SITE_PASSWORD=testpass123 -e CI=1 \
+            -e E2E_DISRUPTIVE=1 \
+            mcr.microsoft.com/playwright:v1.55.0-noble \
+            sh -c 'npm install --no-save @playwright/test@1.55.0 && npx playwright test tests/reconnect.spec.ts --workers=1'
       - name: Tear down
         if: always()
         run: docker compose -f docker-compose.yml -f infra/docker-compose.e2e.yml down -v

@@ -35,3 +35,14 @@ export const stopContainer = (name: string): Promise<number> =>
 
 export const startContainer = (name: string): Promise<number> =>
   ask(`/containers/${encodeURIComponent(name)}/start`);
+
+/** Имя контейнера api: тоже зависит от имени проекта compose. */
+export const API_CONTAINER = process.env.E2E_API_CONTAINER || 'relay-api-1';
+
+/**
+ * Перезапустить контейнер. Возвращается, когда docker его поднял, — а не когда
+ * сервис внутри готов отвечать: этого docker не знает, и ждать готовности
+ * приходится по тому, что видно в приложении.
+ */
+export const restartContainer = (name: string): Promise<number> =>
+  ask(`/containers/${encodeURIComponent(name)}/restart?t=0`);
