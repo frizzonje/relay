@@ -82,6 +82,27 @@ async function waitDot(page: Page, channel: string, want: boolean) {
   await expect.poll(() => unreadDot(page, channel), { timeout: 20_000 }).toBe(want);
 }
 
+/**
+ * Подпись колокольчика в строке канала: он и есть видимое состояние настройки
+ * «звук на новые сообщения». Значок не кнопка (щелчок по строке открывает
+ * канал), поэтому спрашиваем title, а не роль.
+ */
+function channelSoundTitle(page: Page, channel: string): Promise<string | null> {
+  return page.evaluate((name) => {
+    // Именем «общий» зовутся и текстовый канал, и голосовой; колокольчик есть
+    // только у текстового, по нему строку и узнаём.
+    for (const row of document.querySelectorAll('[role="button"]')) {
+      if (!(row.textContent || '').includes(name)) continue;
+      // Подсказку у svg даёт вложенный <title>, а не атрибут (см. Icon.tsx).
+      for (const marked of row.querySelectorAll('svg > title')) {
+        const title = marked.textContent || '';
+        if (title.startsWith('New messages here')) return title;
+      }
+    }
+    return null;
+  }, channel);
+}
+
 test('прочитанное на одном устройстве прочитано и на другом', async ({ browser }) => {
   test.setTimeout(180_000);
   const anya = await person(browser, 'Аня');
@@ -135,8 +156,11 @@ test('звук канала, включённый здесь, включён и 
   await sound.waitFor({ state: 'visible', timeout: 10_000 });
   await sound.click();
 
+  // На втором устройстве спрашиваем ровно там, где человек это и видит, — у
+  // колокольчика в строке канала. Списка «что ездит с личностью» в настройках
+  // больше нет (он выкинут намеренно), а сама настройка ездить не перестала.
   const laptop = await secondDevice(browser, anya);
-  await laptop.locator('button[aria-label="Settings"]').click();
-  await laptop.getByRole('button', { name: 'Across devices' }).click();
-  await expect(laptop.getByText('#общий')).toBeVisible({ timeout: 15_000 });
+  await expect
+    .poll(() => channelSoundTitle(laptop, 'общий'), { timeout: 20_000 })
+    .toBe('New messages here ping');
 });
