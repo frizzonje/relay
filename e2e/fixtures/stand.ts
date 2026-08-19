@@ -1,4 +1,10 @@
-import { expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import {
+  expect,
+  test as base,
+  type Browser,
+  type BrowserContext,
+  type Page,
+} from '@playwright/test';
 
 /**
  * Общая часть всех спеков: как в relay заходит человек, как он заводит сервер
@@ -93,6 +99,7 @@ export async function person(
   }
 
   await ready(page);
+  crowd.push(page);
   return page;
 }
 
@@ -108,6 +115,7 @@ export async function secondDevice(browser: Browser, from: Page): Promise<Page> 
   const page = await ctx.newPage();
   await page.goto('/');
   await ready(page);
+  crowd.push(page);
   return page;
 }
 
@@ -160,6 +168,7 @@ export async function createServer(page: Page, server: string, channel: string):
   await page.getByRole('button', { name: 'Create a server' }).click();
   await page.getByPlaceholder('My server').fill(server);
   await page.getByRole('button', { name: 'Create server' }).click();
+  litter.push({ page, server });
   // Создание сервера само зовёт завести первый канал — окно уже открыто, и
   // спрашивать «а не открыто ли оно» тут нельзя: на первом кадре его ещё нет,
   // и ответ «нет» уводил бы жать кнопку, которой в этот момент не видно.
@@ -215,10 +224,102 @@ export async function joinVoice(page: Page, channel: string, nick: string): Prom
 }
 
 /**
+ * Плитка собеседника на сцене. Считаем именно её: имя человека написано ещё и
+ * в списке участников сбоку, и `getByText` находит оба места — «плиток две»
+ * тогда значит «плитка и строка», а не то, о чём проверка спрашивала.
+ */
+export const tile = (page: Page, nick: string) =>
+  page.getByRole('button', { name: `${nick}: expand to fill the stage` });
+
+/**
  * Дождаться, что соединение с собеседником и правда встало: миллисекунды в
  * панели считаются по `getStats` живого `RTCPeerConnection` — пока пиры не
  * договорились, там `waiting`, а не число.
  */
 export async function connected(page: Page): Promise<void> {
   await expect(page.getByText(/latency:\s*\d+ ms/)).toBeVisible({ timeout: 45_000 });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Уборка за собой
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Серверы на инсталляции не бесконечны: их двадцать (`MAX_SERVERS`), а полный
+ * прогон заводит около шести. Стенд, поднятый один раз на день работы, упирался
+ * в потолок к третьему прогону — и упирался молча: сервер просто не создавался,
+ * а спек падал через двадцать секунд на «где мой канал», ничего не сказав про
+ * настоящую причину. Поэтому спеки убирают за собой, а не полагаются на то, что
+ * кто-то помнит про `down -v`.
+ */
+const crowd: Page[] = [];
+const litter: { page: Page; server: string }[] = [];
+
+/**
+ * Общий `test` для всех спеков: тот же, что у Playwright, плюс уборка после
+ * каждого теста. Фикстура `auto`, потому что убирать надо всегда, а не когда
+ * спек вспомнил её попросить.
+ */
+export const test = base.extend<{ tidy: void }>({
+  tidy: [
+    // eslint-disable-next-line no-empty-pattern
+    async ({}, use) => {
+      await use();
+      // Сначала из эфиров: пока в голосовом канале сервера кто-то есть, сервер
+      // удаляться отказывается (см. DeleteServerDialog — кнопка просто не
+      // предлагается).
+      for (const page of crowd.splice(0)) await hangUp(page).catch(() => {});
+      for (const { page, server } of litter.splice(0)) {
+        await removeServer(page, server).catch(() => {});
+      }
+    },
+    { auto: true },
+  ],
+});
+
+async function hangUp(page: Page): Promise<void> {
+  if (page.isClosed()) return;
+  const leave = page.getByRole('button', { name: 'Disconnect' });
+  if (await leave.isVisible().catch(() => false)) await leave.click({ timeout: 20_000 });
+}
+
+/**
+ * Убрать за собой сервер. Со второй попытки, если первая не вышла: к моменту
+ * уборки на странице может быть открыт диалог (его закрывает Escape), а состав
+ * эфиров сервер пересчитывает не мгновенно — а пока в эфире кто-то есть,
+ * удаление он не предложит вовсе.
+ */
+async function removeServer(page: Page, server: string): Promise<void> {
+  if (page.isClosed()) return;
+  await page.keyboard.press('Escape').catch(() => {});
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (await tryRemove(page, server)) return;
+    await page.waitForTimeout(2000);
+  }
+}
+
+async function tryRemove(page: Page, server: string): Promise<boolean> {
+  const button = serverButton(page, server);
+  if (!(await button.isVisible().catch(() => false))) return true; // уже нет
+  try {
+    await button.click({ timeout: 20_000 });
+    // Крестик в шапке сайдбара и кнопка подтверждения зовутся одинаково —
+    // «Delete server»; вторая живёт в диалоге, им и различаем.
+    await page
+      .getByRole('button', { name: 'Delete server', exact: true })
+      .first()
+      .click({ timeout: 20_000 });
+    const dialog = page.getByRole('dialog');
+    await dialog
+      .getByRole('button', { name: 'Delete server', exact: true })
+      .click({ timeout: 15_000 });
+    await expect(button).toHaveCount(0, { timeout: 15_000 });
+    return true;
+  } catch (err) {
+    // Молчаливая неудача уборки — ровно то, из-за чего потолок серверов
+    // когда-то выглядел загадкой: спек падал не там, где ломалось.
+    console.log('[tidy]', server, 'остался:', String((err as Error).message).slice(0, 200));
+    await page.keyboard.press('Escape').catch(() => {});
+    return false;
+  }
 }

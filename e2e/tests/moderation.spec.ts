@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
 import {
   createServer,
   openChannel,
@@ -6,6 +6,7 @@ import {
   person,
   say,
   serverButton,
+  test,
   unique,
 } from '../fixtures/stand';
 

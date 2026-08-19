@@ -1,5 +1,13 @@
-import { test, expect, type Page } from '@playwright/test';
-import { createServer, openChannel, openServer, person, say, unique } from '../fixtures/stand';
+import { expect, type Page } from '@playwright/test';
+import {
+  createServer,
+  openChannel,
+  openServer,
+  person,
+  say,
+  test,
+  unique,
+} from '../fixtures/stand';
 
 /**
  * Закреплённые — и то, ради чего они существуют: не пометка для себя, а то, что

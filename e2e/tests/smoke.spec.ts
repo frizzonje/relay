@@ -1,6 +1,6 @@
-import { test, expect, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import path from 'node:path';
-import { openChannel, person, say, unique } from '../fixtures/stand';
+import { openChannel, person, say, test, unique } from '../fixtures/stand';
 
 const PASSWORD = process.env.SITE_PASSWORD || 'testpass123';
 // Тесты бегут из каталога e2e/ (cwd) — путь к фикстуре относительно него.

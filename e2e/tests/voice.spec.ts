@@ -1,5 +1,5 @@
-import { test, expect } from '@playwright/test';
-import { connected, joinVoice, person, unique } from '../fixtures/stand';
+import { expect } from '@playwright/test';
+import { connected, joinVoice, person, test, unique } from '../fixtures/stand';
 
 /**
  * Живой разговор двумя браузерами — то единственное, чего до сих пор не
