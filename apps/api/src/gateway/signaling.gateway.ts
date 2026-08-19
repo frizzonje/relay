@@ -13,6 +13,7 @@ import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import type { AppServer, AppSocket } from './socket-data';
 import { ChatSessions } from './chat-sessions';
 import { BROADCAST_DEBOUNCE_MS, Directory } from './directory';
+import { Mentions } from './mentions';
 import { Moderation } from './moderation';
 import { Perimeter } from './perimeter';
 import { VoiceSessions } from './voice-sessions';
@@ -208,6 +209,14 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.logger,
   );
 
+  /** Упоминания: кого назвали, кому сказать, сколько накопилось. */
+  private readonly mentions = new Mentions(
+    this.registry,
+    this.chat,
+    this.perimeter,
+    () => this.server,
+  );
+
   /**
    * Модерация: чья это власть, докуда достаёт и что делает бан с живыми
    * сокетами. Заводится последней — ей нужны все трое владельцев состояния.
@@ -376,7 +385,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       // Упоминания — после отметок чтения и не случайно: счётчик считается
       // «сколько раз назвали после того, как канал дочитан», и клиенту он
       // приезжает уже посчитанным, поверх известных ему отметок.
-      await this.sendMentions(client);
+      await this.mentions.sendSnapshot(client);
     } catch (e) {
       // Личное — не то, без чего приложение не работает: без отметок канал
       // просто выглядит непрочитанным. Падать на этом (и уж тем более рвать
@@ -502,7 +511,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       // …и счётчики упоминаний в них: снимок на подключении собирался, когда
       // эти каналы были ещё не видны, и «тебя звали» в них молчало бы до
       // следующего захода.
-      void this.sendMentions(client);
+      void this.mentions.sendSnapshot(client);
       // Пропуск на будущие подключения: с ним разблокировка переживает
       // реконнект, а пароль остаётся там, где ему и место, — у человека.
       // Хэш перечитываем: пока считался scrypt, пароль могли сменить, и
@@ -1492,69 +1501,6 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     return { ok: true, people: people.slice(0, MENTION_SUGGEST_LIMIT) };
   }
 
-  /**
-   * Кого назвали в этом тексте: клиент присылает отпечатки выбранных им людей,
-   * сервер оставляет тех, чьё имя в тексте и правда написано.
-   *
-   * Ник в снимок берётся из базы, а не из тела сообщения: иначе рядом с чужим
-   * лицом можно было бы написать любое имя.
-   */
-  private async resolveMentions(text: string, claimed: unknown): Promise<MentionRef[]> {
-    if (!text || !Array.isArray(claimed) || !claimed.length) return [];
-    const fingerprints = [
-      ...new Set(
-        claimed
-          .slice(0, LIMIT.mentions)
-          .map((value) => trimmed(value, LIMIT.fingerprint))
-          .filter(Boolean),
-      ),
-    ];
-    if (!fingerprints.length) return [];
-    return mentionedIn(text, await this.chat.peopleByFingerprint(fingerprints));
-  }
-
-  /**
-   * Сказать названным, что их назвали. Летит на все устройства человека — тем
-   * же порядком, что и отметки чтения: канал, в котором тебя позвали, обязан
-   * загореться и на телефоне.
-   *
-   * Себе не звоним (написать собственное имя — не вызов), гостю по инвайту
-   * тоже: у него нет личности, а значит и счётчика, который это зажигает.
-   * Тому, кому канал не виден, — тем более: событие несёт слаг, а слаг канала
-   * закрытого сервера сам по себе часть секрета.
-   */
-  private pingMentions(from: AppSocket, mentions: MentionRef[], slug: string, ts: number): void {
-    if (!mentions.length) return;
-    const channel = this.registry.channels.find((c) => c.type === 'text' && c.slug === slug);
-    if (!channel) return;
-    const author = this.perimeter.speaker(from)?.fingerprint;
-    const targets = new Set(mentions.map((m) => m.fingerprint));
-    for (const sock of this.server.sockets.sockets.values()) {
-      const who = this.perimeter.speaker(sock)?.fingerprint;
-      if (!who || who === author || !targets.has(who)) continue;
-      if (this.perimeter.isGuest(sock) || !this.perimeter.canSee(sock, channel)) continue;
-      sock.emit('mention', { slug, ts });
-    }
-  }
-
-  /**
-   * Снимок непрочитанных упоминаний по каналам. Считается в базе, а не
-   * копится в памяти: счётчик обязан пережить и рестарт api, и смену
-   * устройства, — иначе «тебя звали» существовало бы ровно до перезагрузки
-   * страницы.
-   */
-  private async sendMentions(client: AppSocket): Promise<void> {
-    const me = this.perimeter.speaker(client);
-    if (!me) return;
-    const counts = await this.chat.mentionCounts(me.id, me.fingerprint);
-    const bySlug: Record<string, number> = {};
-    for (const channel of this.registry.channels) {
-      const n = counts.get(channel.id);
-      if (n && this.perimeter.canSee(client, channel)) bySlug[channel.slug] = n;
-    }
-    client.emit('mentions', { counts: bySlug });
-  }
-
   @SubscribeMessage('chat-leave')
   handleChatLeave(@ConnectedSocket() client: AppSocket) {
     this.chats.leave(client);
@@ -1573,7 +1519,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const uploadId = str(payload?.uploadId);
     if (!text && !(await this.uploads.exists(uploadId))) return;
 
-    const mentions = await this.resolveMentions(text, payload?.mentions);
+    const mentions = await this.mentions.resolve(text, payload?.mentions);
 
     // Снимок цитаты, вложение и время назначает хранилище: время — потому что
     // по нему же строится курсор ленты, и оно обязано быть одних часов с ней.
@@ -1592,7 +1538,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     if (!msg) return;
 
     this.server.to(room).emit('chat', msg);
-    this.pingMentions(client, mentions, this.chat.slug(room), msg.ts);
+    this.mentions.ping(client, mentions, this.chat.slug(room), msg.ts);
     // Лёгкий пинг активности: сайдбар зажигает «непрочитано» на закрытых сейчас
     // каналах. Только слаг и время, без содержимого. Рассылаем не всем подряд, а
     // тем, кому канал виден: слаг канала закрытого сервера — часть секрета, и
@@ -1657,7 +1603,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     if (!msg) return;
     if (!this.ownsMessage(client, msg)) return;
 
-    const mentions = await this.resolveMentions(text, payload?.mentions);
+    const mentions = await this.mentions.resolve(text, payload?.mentions);
     const editedTs = await this.chat.edit(id, text, mentions);
     this.server.to(room).emit('chat-edited', { id, text, editedTs, mentions });
 
@@ -1666,7 +1612,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // читает канал, — то есть ровно не тот, кого звали. Уже названным второй
     // раз не звоним: правка опечатки — не повод повторить вызов.
     const already = new Set((msg.mentions ?? []).map((m) => m.fingerprint));
-    this.pingMentions(
+    this.mentions.ping(
       client,
       mentions.filter((m) => !already.has(m.fingerprint)),
       this.chat.slug(room),
