@@ -11,6 +11,7 @@ import {
 } from '@nestjs/websockets';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import type { AppServer, AppSocket } from './socket-data';
+import { ChatSessions } from './chat-sessions';
 import { Perimeter } from './perimeter';
 import { VoiceSessions } from './voice-sessions';
 import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
@@ -175,6 +176,11 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.logger,
   );
 
+  /** Владелец чат-сессии: принадлежность сокета к ленте и подпись в ней. */
+  private readonly chats = new ChatSessions(() => this.server, {
+    fingerprintOf: (sock) => this.perimeter.speaker(sock)?.fingerprint,
+  });
+
   private readonly voice = new VoiceSessions(
     () => this.server,
     {
@@ -183,7 +189,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       guestRoomOf: (sock) => this.perimeter.guestRoom(sock),
       isListener: (sock) => this.perimeter.isListener(sock),
       visibleVoiceSlugs: (sock) => this.perimeter.visibleVoiceSlugs(sock),
-      onGraceExpired: (sock) => this.leaveChatRoom(sock),
+      onGraceExpired: (sock) => this.chats.leave(sock),
     },
     this.logger,
   );
@@ -390,13 +396,6 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     return this.registry.channels
       .filter((c) => this.perimeter.canSee(client, c))
       .map((c) => publicChannel(c, who, c.type === 'text' ? this.chat.lastTs(c.slug) : 0));
-  }
-
-  // Подпись этого сокета в текстовом канале. Имя самоназванное (см. S1 ревизии),
-  // но по нему же сверяется авторство правки и удаления, поэтому читается оно
-  // в одном месте и с одним запасным вариантом.
-  private chatNameOf(client: AppSocket): string {
-    return client.data.chatName || ANON_NAME;
   }
 
   /**
@@ -643,7 +642,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       // канал по этому же списку, и после splice забывать было бы уже нечего.
       if (channel.type === 'text') {
         this.chat.forget(channel.slug);
-        this.closeChatRoom(channel.slug);
+        this.chats.close(this.chat.room(channel.slug), channel.slug);
       }
       this.registry.channels.splice(i, 1);
     }
@@ -783,7 +782,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const target = channel.type === 'voice' ? channel.slug : this.chat.room(channel.slug);
     let count = 0;
     for (const sock of this.server.sockets.sockets.values()) {
-      const where = channel.type === 'voice' ? this.voice.roomOf(sock) : sock.data.chatRoom;
+      const where = channel.type === 'voice' ? this.voice.roomOf(sock) : this.chats.roomOf(sock);
       if (where === target) count++;
     }
     return count;
@@ -881,7 +880,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // реестру, поэтому идёт до того, как канал из него исчезнет.
     if (channel.type === 'text') {
       this.chat.forget(channel.slug);
-      this.closeChatRoom(channel.slug);
+      this.chats.close(this.chat.room(channel.slug), channel.slug);
       // Отметки чтения канала уходят вместе с ним: каскада у них нет намеренно
       // (отметка не должна запирать удаление канала), значит убрать за собой
       // некому, кроме этого места.
@@ -975,7 +974,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
     const me = this.perimeter.speaker(client);
     if (!me) return { ok: false, error: 'forbidden' };
-    const room = client.data.chatRoom;
+    const room = this.chats.roomOf(client);
     if (!room) return { ok: false, error: 'forbidden' };
     const channel = this.registry.channels.find(
       (c) => c.type === 'text' && c.slug === this.chat.slug(room),
@@ -1110,12 +1109,12 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   /** Выписать сокет из эфира и ленты этого сервера — там ему больше нельзя. */
   private evictFrom(client: AppSocket, serverId: string): void {
     const voice = this.voice.roomOf(client);
-    const chat = client.data.chatRoom;
+    const chat = this.chats.roomOf(client);
     for (const channel of this.registry.channels) {
       if (channel.serverId !== serverId) continue;
       if (channel.type === 'voice' && voice === channel.slug) this.voice.leave(client);
       if (channel.type === 'text' && chat === this.chat.room(channel.slug)) {
-        this.leaveChatRoom(client);
+        this.chats.leave(client);
         // С причиной: канал на месте, ушёл человек. Без неё клиент сказал бы
         // ему «канал удалён» — и он пошёл бы искать пропажу, которой нет.
         client.emit('chat-closed', { slug: channel.slug, reason: 'banned' });
@@ -1453,17 +1452,14 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
 
       if (this.voice.rename(sock, name)) presence = true;
 
-      const chatRoom = sock.data.chatRoom;
-      if (chatRoom && sock.data.chatName !== name) {
-        sock.data.chatName = name;
-        rosters.add(chatRoom);
-      }
+      const staleRoster = this.chats.rename(sock, name);
+      if (staleRoster) rosters.add(staleRoster);
 
       // Самому устройству-инициатору говорить нечего: оно и так знает.
       if (sock.id !== client.id) sock.emit('renamed', { name });
     }
 
-    for (const room of rosters) this.emitRoster(room);
+    for (const room of rosters) this.chats.emitRoster(room);
     if (presence) this.voice.broadcast();
   }
 
@@ -1493,12 +1489,10 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     }
 
     // Уже сидел в другом текстовом канале — сначала выходим
-    this.leaveChatRoom(client);
+    this.chats.leave(client);
 
     const room = this.chat.room(slug);
-    client.join(room);
-    client.data.chatRoom = room;
-    client.data.chatName = name || ANON_NAME;
+    this.chats.enter(client, room, name);
 
     // Новичку — последняя страница канала. Не вся история: она больше не
     // помещается в один снимок, и остальное он подтянет вверх сам. Вместе с ней
@@ -1506,7 +1500,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // спрашивают, только когда его открывают.
     const [page, pins] = await Promise.all([this.chat.history(slug), this.chat.pinCount(slug)]);
     client.emit('chat-history', { slug, ...page, pins });
-    this.emitRoster(room);
+    this.chats.emitRoster(room);
   }
 
   /**
@@ -1522,7 +1516,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   ): Promise<ChatHistoryMoreResult> {
     const empty = { ok: true as const, messages: [], more: false };
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
-    const room = client.data.chatRoom;
+    const room = this.chats.roomOf(client);
     if (!room) return empty;
     const beforeTs = typeof payload?.beforeTs === 'number' ? payload.beforeTs : 0;
     const beforeId = str(payload?.beforeId);
@@ -1541,7 +1535,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   ): Promise<ChatWindowResult> {
     const empty = { ok: true as const, messages: [], more: false, moreAfter: false };
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
-    const room = client.data.chatRoom;
+    const room = this.chats.roomOf(client);
     if (!room) return empty;
     const afterTs = typeof payload?.afterTs === 'number' ? payload.afterTs : 0;
     const afterId = str(payload?.afterId);
@@ -1564,7 +1558,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   ): Promise<ChatWindowResult> {
     const empty = { ok: true as const, messages: [], more: false, moreAfter: false };
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
-    const room = client.data.chatRoom;
+    const room = this.chats.roomOf(client);
     const id = str(payload?.id);
     if (!room || !id) return empty;
     return { ok: true, ...(await this.chat.around(this.chat.slug(room), id)) };
@@ -1586,7 +1580,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   ): Promise<ChatSearchResult> {
     const empty = { ok: true as const, hits: [], more: false, terms: [] };
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
-    const room = client.data.chatRoom;
+    const room = this.chats.roomOf(client);
     if (!room) return empty;
     const here = this.registry.channels.find(
       (c) => c.type === 'text' && c.slug === this.chat.slug(room),
@@ -1632,7 +1626,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   ): Promise<MentionSuggestResult> {
     const empty = { ok: true as const, people: [] };
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
-    const room = client.data.chatRoom;
+    const room = this.chats.roomOf(client);
     if (!room) return empty;
     const here = this.registry.channels.find(
       (c) => c.type === 'text' && c.slug === this.chat.slug(room),
@@ -1739,13 +1733,13 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
 
   @SubscribeMessage('chat-leave')
   handleChatLeave(@ConnectedSocket() client: AppSocket) {
-    this.leaveChatRoom(client);
+    this.chats.leave(client);
   }
 
   @SubscribeMessage('chat-message')
   async handleChatMessage(@ConnectedSocket() client: AppSocket, @MessageBody() payload: ChatPayload) {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
-    const room = client.data.chatRoom;
+    const room = this.chats.roomOf(client);
     if (!room) return;
     const text = trimmed(payload?.text, LIMIT.message);
 
@@ -1760,7 +1754,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // Снимок цитаты, вложение и время назначает хранилище: время — потому что
     // по нему же строится курсор ленты, и оно обязано быть одних часов с ней.
     const msg = await this.chat.add(this.chat.slug(room), {
-      name: this.chatNameOf(client),
+      name: this.chats.nameOf(client),
       // Авторство пишется рядом с именем, а не вместо: имя — снимок момента,
       // личность — то, по чему потом сверяются правка, удаление и модерация.
       identityId: this.perimeter.speaker(client)?.id,
@@ -1821,7 +1815,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    */
   private ownsMessage(client: AppSocket, msg: { name: string; fingerprint?: string }): boolean {
     if (msg.fingerprint) return this.perimeter.speaker(client)?.fingerprint === msg.fingerprint;
-    return msg.name === this.chatNameOf(client);
+    return msg.name === this.chats.nameOf(client);
   }
 
   // Правка своего сообщения — автора сверяет ownsMessage.
@@ -1829,7 +1823,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   @SubscribeMessage('chat-edit')
   async handleChatEdit(@ConnectedSocket() client: AppSocket, @MessageBody() payload: ChatEditPayload) {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
-    const room = client.data.chatRoom;
+    const room = this.chats.roomOf(client);
     if (!room) return;
     const id = str(payload?.id);
     const text = trimmed(payload?.text, LIMIT.message);
@@ -1869,7 +1863,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() payload: ChatDeletePayload,
   ) {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
-    const room = client.data.chatRoom;
+    const room = this.chats.roomOf(client);
     if (!room) return;
     const id = str(payload?.id);
     if (!id) return;
@@ -1909,7 +1903,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() payload: ChatPinPayload,
   ): Promise<ChatPinResult> {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
-    const room = client.data.chatRoom;
+    const room = this.chats.roomOf(client);
     if (!room) return { ok: false, error: 'forbidden' };
     const id = str(payload?.id);
     if (!id) return { ok: false, error: 'not-found' };
@@ -1945,7 +1939,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() payload: ChatPinsPayload,
   ): Promise<ChatPinsResult> {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false };
-    const room = client.data.chatRoom;
+    const room = this.chats.roomOf(client);
     if (!room) return { ok: false };
     const slug = this.chat.slug(room);
     // Спросили про другой канал — значит спрашивавший уже не здесь: отвечаем
@@ -1960,9 +1954,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   @SubscribeMessage('chat-typing')
   handleChatTyping(@ConnectedSocket() client: AppSocket) {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
-    const room = client.data.chatRoom;
+    const room = this.chats.roomOf(client);
     if (!room) return;
-    const name = this.chatNameOf(client);
+    const name = this.chats.nameOf(client);
     client.to(room).emit('chat-typing', { name });
   }
 
@@ -1974,7 +1968,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() payload: ChatReactPayload,
   ) {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
-    const room = client.data.chatRoom;
+    const room = this.chats.roomOf(client);
     if (!room) return;
     const id = str(payload?.id);
     const emoji = str(payload?.emoji);
@@ -1983,7 +1977,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const msg = await this.chat.findAny(this.chat.slug(room), id);
     if (!msg) return;
 
-    const name = this.chatNameOf(client);
+    const name = this.chats.nameOf(client);
     const reactions = this.chat.toggleReaction(msg, name, emoji);
     await this.chat.saveReactions(id, reactions);
 
@@ -2007,60 +2001,4 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     target.emit(event, { from: client.id, ...data });
   }
 
-  /**
-   * Канал удалили — распускаем его комнату. Каждому читателю говорим об этом
-   * прямо (`chat-closed`), а не оставляем догадываться по новому реестру:
-   * закрытые серверы делают реестр неполным, и клиент имеет право не считать
-   * пропажу канала удалением. После выписки писать в канал уже нечем —
-   * `chat-message` смотрит на `client.data.chatRoom`.
-   */
-  private closeChatRoom(slug: string) {
-    const room = this.chat.room(slug);
-    const ids = this.server.sockets.adapter.rooms.get(room);
-    if (!ids) return;
-    for (const id of [...ids]) {
-      const sock = this.server.sockets.sockets.get(id);
-      if (!sock) continue;
-      sock.leave(room);
-      sock.data.chatRoom = undefined;
-      sock.data.chatName = undefined;
-      sock.emit('chat-closed', { slug });
-    }
-  }
-
-  private leaveChatRoom(client: AppSocket) {
-    const room = client.data.chatRoom;
-    if (!room) return;
-    client.leave(room);
-    client.data.chatRoom = undefined;
-    client.data.chatName = undefined;
-    // Системку о выходе не шлём: вход тоже не объявляем — ростер сам покажет уход.
-    this.emitRoster(room);
-  }
-
-  /**
-   * Состав текстового канала — рассылаем всем участникам.
-   *
-   * Список людей, а не сокетов: 1.0 разрешает одной личности войти с телефона и
-   * с ноутбука разом, и без склейки по отпечатку она стояла бы в составе дважды
-   * — двумя строками с одинаковым лицом и одинаковым именем. Гостей по инвайту
-   * склеивать нечем и не нужно: у них нет ключа, и каждый сам по себе.
-   */
-  private emitRoster(room: string) {
-    const ids = this.server.sockets.adapter.rooms.get(room) ?? new Set<string>();
-    const people: RosterPerson[] = [];
-    const seen = new Set<string>();
-    for (const id of ids) {
-      const sock = this.server.sockets.sockets.get(id);
-      const nick = sock?.data.chatName;
-      if (!nick) continue;
-      const fingerprint = sock ? this.perimeter.speaker(sock)?.fingerprint : undefined;
-      if (fingerprint) {
-        if (seen.has(fingerprint)) continue;
-        seen.add(fingerprint);
-      }
-      people.push(fingerprint ? { nick, fingerprint } : { nick });
-    }
-    this.server.to(room).emit('chat-roster', people);
-  }
 }
