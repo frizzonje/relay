@@ -1,11 +1,51 @@
 # Оверлей к корневому docker-compose.yml для e2e: подменяет Caddyfile на
-# e2e-вариант (внутренний CA + хост relay.test). Запуск:
+# e2e-вариант (внутренний CA + хост relay.test) и поднимает медиасервер в общей
+# сети compose. Запуск:
 #   SITE_PASSWORD=testpass123 docker compose \
 #     -f docker-compose.yml -f infra/docker-compose.e2e.yml up -d
 # Затем Playwright-контейнер в сети relay_default с --add-host relay.test:<caddy_ip>.
 services:
   caddy:
+    environment:
+      # Медиасервер стенда живёт в сети compose (см. sfu-e2e), а не в host-сети,
+      # как в проде: до него — по имени, а не через шлюз хоста.
+      - SFU_UPSTREAM=sfu-e2e:3100
     volumes:
       - ./infra/Caddyfile.e2e:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+
+  api:
+    environment:
+      # Ключ подписи пропусков — общий с sfu-e2e. Пока он не задан, api не
+      # выдаёт ни одного пропуска, и режим SFU в интерфейсе выключен вовсе:
+      # без этой строки спек на медиасервер проверял бы отсутствие кнопки.
+      - SFU_SECRET=e2e-sfu-secret
+      - SFU_INTERNAL_URL=http://sfu-e2e:3100
+
+  # Медиасервер для стенда. Отдельным именем, а не оверлеем к `sfu` из
+  # docker-compose.yml, по одной причине: там он в host-сети (так дешевле сотня
+  # RTC-портов на живой инсталляции), а `network_mode` оверлеем не снимается —
+  # compose честно говорит, что `network_mode` и `networks` несовместимы. Здесь
+  # же host-сеть не годится вовсе: браузер Playwright сидит в сети compose, и
+  # ICE-кандидат «адрес хоста» ему не адрес.
+  sfu-e2e:
+    build:
+      context: .
+      dockerfile: apps/sfu/Dockerfile
+    environment:
+      - PORT=3100
+      - SFU_SECRET=e2e-sfu-secret
+    # Свой адрес в сети compose — тот единственный, по которому браузер из
+    # соседнего контейнера до медиа и достучится. Слушаем 0.0.0.0, а анонсировать
+    # обязаны конкретный IP (см. media.config.announcedIp), и заранее он
+    # неизвестен: docker раздаёт адреса при старте.
+    command: ["sh", "-c", "SFU_ANNOUNCED_IP=$$(hostname -i | cut -d' ' -f1) exec node dist/main.js"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    expose:
+      - "3100"

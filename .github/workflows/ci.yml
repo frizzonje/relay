@@ -135,10 +135,25 @@ jobs:
         run: docker compose -f docker-compose.yml -f infra/docker-compose.e2e.yml up -d --build
       - name: Wait for Caddy internal cert
         run: sleep 15
+      # The media server has to be up before the browsers start, not merely
+      # before they need it: whether the SFU mode is offered at all is decided
+      # by /api/config, which the page asks once on load.
+      - name: Wait for the media server
+        run: |
+          for i in $(seq 60); do
+            state=$(docker inspect -f '{{.State.Health.Status}}' relay-sfu-e2e-1 2>/dev/null || echo starting)
+            [ "$state" = healthy ] && break
+            if [ "$i" = 60 ]; then echo "sfu did not come up"; docker logs relay-sfu-e2e-1; exit 1; fi
+            sleep 2
+          done
+      # The docker socket is for one check and one only: the media server has to
+      # die in the middle of a live call, and nobody but the test knows when
+      # that middle is. Without the mount that spec skips itself.
       - name: Run Playwright
         run: |
           CADDY_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' relay-caddy-1)
           docker run --rm --network relay_default --add-host "relay.test:$CADDY_IP" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD":/work -w /work/e2e \
             -e BASE_URL=https://relay.test -e SITE_PASSWORD=testpass123 -e CI=1 \
             -e E2E_PHASE=write -e E2E_MARK="$GITHUB_RUN_ID-survives-restart" \

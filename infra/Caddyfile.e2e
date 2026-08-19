@@ -11,6 +11,12 @@ relay.test {
 	handle @backend {
 		reverse_proxy api:3000
 	}
+	# Сигналинг медиасервера — тем же путём, что и в проде (infra/Caddyfile).
+	# Без него клиент получит пропуск и не найдёт, куда с ним идти.
+	@sfu path /sfu/*
+	handle @sfu {
+		reverse_proxy {$SFU_UPSTREAM:sfu-e2e:3100}
+	}
 	handle {
 		reverse_proxy web:3001
 	}
