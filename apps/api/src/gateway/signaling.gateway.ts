@@ -15,12 +15,14 @@ import { Directory } from './directory';
 import { Mentions } from './mentions';
 import { Moderation } from './moderation';
 import { ChatHandlers } from './chat.handlers';
+import { GuestHandlers } from './guests.handlers';
+import { ModerationHandlers } from './moderation.handlers';
 import { PersonalHandlers } from './personal.handlers';
 import { RegistryHandlers } from './registry.handlers';
 import { VoiceHandlers } from './voice.handlers';
 import { Perimeter } from './perimeter';
 import { VoiceSessions } from './voice-sessions';
-import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
+import { isAuthorized, verifyGuestToken } from '../auth/auth';
 import { IdentityService } from '../identity/identity.service';
 import { OwnerService } from '../identity/owner.service';
 import { PrefsService } from '../identity/prefs.service';
@@ -35,9 +37,6 @@ import {
   normalizeClientId,
 } from './ownership';
 import {
-  LIMIT,
-  str,
-  trimmed,
   type ChannelCreatePayload,
   type ChannelDeletePayload,
   type ChannelDeleteResult,
@@ -231,6 +230,26 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.prefs,
     this.perimeter,
     this.mentions,
+    this.logger,
+  );
+
+  /** Три события модерации: бан, разбан, список. */
+  private readonly moderationHandlers = new ModerationHandlers(
+    this.registry,
+    this.chat,
+    this.chats,
+    this.roles,
+    this.perimeter,
+    this.moderation,
+  );
+
+  /** Инвайт-ссылки: выдать и выгнать по ней пришедшего. */
+  private readonly guestHandlers = new GuestHandlers(
+    this.registry,
+    this.voice,
+    this.perimeter,
+    this.directory,
+    () => this.server,
     this.logger,
   );
 
@@ -457,145 +476,46 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     return this.personalHandlers.rename(client, payload);
   }
 
-  // ===== Модерация =====
+  // ===== Модерация и гости =====
 
-  /**
-   * Забанить автора сообщения.
-   *
-   * Модерирует создатель сервера — своего и только своего; поверх него владелец
-   * инсталляции, который может и это, и бан на всю инсталляцию. Охват
-   * спрашивается явно (`everywhere`): человек, выгоняющий кого-то со своего
-   * сервера, не должен случайно закрыть ему всю инсталляцию.
-   *
-   * Целью служит сообщение, а не имя: имена не уникальны, а сказанное
-   * однозначно указывает на своего автора. Автор-гость забанить себя не даёт —
-   * его личности нет, за него ручается токен приглашения, и разговор с ним
-   * заканчивается через `guest-kick`.
-   */
   @SubscribeMessage('moderation-ban')
-  async handleModerationBan(
+  handleModerationBan(
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ModerationBanPayload,
   ): Promise<ModerationResult> {
-    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
-    const me = this.perimeter.speaker(client);
-    if (!me) return { ok: false, error: 'forbidden' };
-    const room = this.chats.roomOf(client);
-    if (!room) return { ok: false, error: 'forbidden' };
-    const channel = this.registry.channels.find(
-      (c) => c.type === 'text' && c.slug === this.chat.slug(room),
-    );
-    if (!channel || !this.moderation.mayModerate(client, channel)) return { ok: false, error: 'forbidden' };
-
-    const everywhere = payload?.everywhere === true;
-    // Бан на всю инсталляцию — только владельцу: у создателя сервера власти
-    // ровно на свой сервер, и расширять её нечем.
-    if (everywhere && !this.perimeter.isOwner(client)) return { ok: false, error: 'forbidden' };
-
-    const id = str(payload?.id);
-    const authorId = id ? await this.chat.authorOf(this.chat.slug(room), id) : null;
-    if (!authorId) return { ok: false, error: 'not-found' };
-
-    const scope = everywhere ? null : channel.serverId;
-    const done = await this.roles.ban(authorId, scope, me.id);
-    if (!done.ok) return { ok: false, error: done.reason === 'unknown' ? 'unknown' : 'forbidden' };
-    this.moderation.applyBan(authorId, scope);
-    return { ok: true };
+    return this.moderationHandlers.ban(client, payload);
   }
 
-  /** Разбанить по отпечатку — той же ручкой, которой забаненный показан. */
   @SubscribeMessage('moderation-unban')
-  async handleModerationUnban(
+  handleModerationUnban(
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ModerationUnbanPayload,
   ): Promise<ModerationResult> {
-    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
-    const scope = this.moderation.scopeFor(client, str(payload?.server));
-    if (scope === undefined) return { ok: false, error: 'forbidden' };
-    const identityId = await this.roles.byFingerprint(payload?.fingerprint);
-    if (!identityId) return { ok: false, error: 'not-found' };
-    if (!(await this.roles.unban(identityId, scope))) return { ok: false, error: 'not-found' };
-    this.moderation.liftBan(identityId, scope);
-    return { ok: true };
+    return this.moderationHandlers.unban(client, payload);
   }
 
-  /** Кто забанен: на этом сервере или, если сервер не назван, на инсталляции. */
   @SubscribeMessage('moderation-bans')
-  async handleModerationBans(
+  handleModerationBans(
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ModerationBansPayload,
   ): Promise<ModerationBansResult> {
-    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
-    const scope = this.moderation.scopeFor(client, str(payload?.server));
-    if (scope === undefined) return { ok: false, error: 'forbidden' };
-    return { ok: true, bans: await this.roles.bans(scope) };
+    return this.moderationHandlers.list(client, payload);
   }
 
-  // ===== Инвайт-ссылки =====
-
-  // Инвайт на войс-канал: подписанный токен без хранения на сервере (24 часа,
-  // многоразовый). Абсолютный URL строит клиент из window.location.origin.
-  // Возвращаемое значение = socket.io ack.
-  //
-  // Канал закрытого сервера зовёт гостя СЛУШАТЕЛЕМ. Приглашающий раздаёт по
-  // ссылке ровно то, что имеет сам, — а пароля он не отдавал: голос в закрытом
-  // канале держится на том же пароле, что и всё остальное, и ссылка,
-  // раздающая право говорить, обошла бы его одним сообщением в чужом чате.
-  // Слышать при этом гость должен: за этим его и звали.
   @SubscribeMessage('invite-create')
   handleInviteCreate(
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: InviteCreatePayload,
   ): InviteCreateResult {
-    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
-    const slug = trimmed(payload?.room, LIMIT.slug);
-    // Канал должен существовать, быть голосовым и быть видимым этому сокету
-    // (каналы закрытых серверов — только после ввода пароля).
-    const channel = this.directory.channelsFor(client).find((c) => c.type === 'voice' && c.slug === slug);
-    if (!channel) return { ok: false, error: 'not-found' };
-    const listen = this.isLockedChannel(slug);
-    const { token, exp } = issueGuestToken(slug, { listen });
-    return { ok: true, token, exp, listen };
+    return this.guestHandlers.createInvite(client, payload);
   }
 
-  /** Канал закрытого сервера: сам канал в реестре и за ним сервер с паролем. */
-  private isLockedChannel(slug: string): boolean {
-    const channel = this.registry.channels.find((c) => c.type === 'voice' && c.slug === slug);
-    return !!channel && !!this.registry.serverOf(channel)?.passwordHash;
-  }
-
-  /**
-   * Выгнать гостя из эфира. Право на это есть у любого НЕ-гостя, кому виден сам
-   * канал: гость в комнате — тот, кого сюда позвали по ссылке, и отвечает за
-   * него вся комната, а не один владелец. Гостю гостя не выгнать — иначе
-   * ссылка, разосланная в чужой чат, становилась бы кнопкой «выгнать всех
-   * остальных».
-   */
   @SubscribeMessage('guest-kick')
   handleGuestKick(
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: GuestKickPayload,
   ): GuestKickResult {
-    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
-    const id = trimmed(payload?.id, LIMIT.id);
-    const target = id ? this.server.sockets.sockets.get(id) : undefined;
-    if (!target || !this.perimeter.isGuest(target)) return { ok: false, error: 'not-found' };
-    const room = this.voice.roomOf(target);
-    if (!room) return { ok: false, error: 'not-found' };
-    // Канал закрытого сервера запирает и это: не введя пароль, ты не видишь ни
-    // канала, ни того, кто в нём сидит, — значит и выгонять оттуда некого.
-    if (!this.perimeter.mayEnter(client, room)) return { ok: false, error: 'forbidden' };
-
-    this.perimeter.banGuest(target, room);
-    // Сокет не рвём: гость должен УВИДЕТЬ, что произошло, а разорванное
-    // соединение он бы просто переподключил и гадал, куда делся звук. Выписки
-    // из комнаты и закрытой двери на обратный вход довольно.
-    target.emit('kicked', { room });
-    this.voice.leave(target);
-    this.logger.log(
-      `guest ${target.data.name || '?'} (${target.id}) kicked from "${room}" by ${client.id}`,
-    );
-    return { ok: true };
+    return this.guestHandlers.kick(client, payload);
   }
 
   // ===== Разговор =====
