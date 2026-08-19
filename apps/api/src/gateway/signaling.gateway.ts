@@ -11,6 +11,7 @@ import {
 } from '@nestjs/websockets';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import type { AppServer, AppSocket } from './socket-data';
+import { Perimeter } from './perimeter';
 import { VoiceSessions } from './voice-sessions';
 import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
 import { IdentityService, type Speaker } from '../identity/identity.service';
@@ -160,20 +161,28 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    * зависимостей у него нет, а спрашивает он у гейтвея ровно то, чем гейтвей и
    * владеет, — личность, гостевой контур и видимость каналов.
    */
+  /**
+   * Контур доступа. Заводится здесь по той же причине, что и голосовая сессия:
+   * зависимости у него настоящие (реестр, личности, права), но приезжают они
+   * гейтвею от Nest, а не ему.
+   */
+  private readonly perimeter = new Perimeter(
+    this.registry,
+    this.identities,
+    this.owner,
+    this.roles,
+    () => this.server,
+    this.logger,
+  );
+
   private readonly voice = new VoiceSessions(
     () => this.server,
     {
-      fingerprintOf: (sock) => this.speaker(sock)?.fingerprint,
-      isGuest: (sock) => this.isGuest(sock),
-      guestRoomOf: (sock) => (this.isGuest(sock) ? sock.data.guestRoom : undefined),
-      isListener: (sock) => this.isListener(sock),
-      visibleVoiceSlugs: (sock) => {
-        const visible = new Set<string>();
-        for (const c of this.registry.channels) {
-          if (c.type === 'voice' && this.canSee(sock, c)) visible.add(c.slug);
-        }
-        return visible;
-      },
+      fingerprintOf: (sock) => this.perimeter.speaker(sock)?.fingerprint,
+      isGuest: (sock) => this.perimeter.isGuest(sock),
+      guestRoomOf: (sock) => this.perimeter.guestRoom(sock),
+      isListener: (sock) => this.perimeter.isListener(sock),
+      visibleVoiceSlugs: (sock) => this.perimeter.visibleVoiceSlugs(sock),
       onGraceExpired: (sock) => this.leaveChatRoom(sock),
     },
     this.logger,
@@ -194,32 +203,17 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    */
   afterInit(server: AppServer): void {
     server.use((socket, next) => {
-      void this.identities
-        .fromCookie(socket.handshake.headers.cookie)
-        .then(async (speaker) => {
-          if (!speaker) return;
-          socket.data.identity = speaker;
-          // Власть над инсталляцией выясняется здесь же и один раз: её
-          // спрашивает каждая рассылка реестра, а меняется она перевыпуском
-          // ссылки владельца — событием, у которого есть свой обработчик
-          // (см. `syncOwner`).
-          socket.data.owner = await this.owner.isOwner(speaker.id);
-          const rights = await this.roles.rightsOf(speaker.id);
-          socket.data.bannedFrom = rights.bannedFrom;
-          socket.data.banned = rights.banned;
-        })
-        .catch((e) => this.logger.error(`не удалось узнать личность сокета: ${e}`))
-        .finally(() => {
-          // Забаненного на всю инсталляцию не пускаем внутрь вовсе — отказом
-          // самой миддлвары, до `handleConnection`. Причина уезжает клиенту
-          // текстом ошибки: белый экран вместо объяснения — худший из ответов
-          // на «почему меня не пускает».
-          if (socket.data.banned === true) {
-            next(new Error(BANNED_ERROR));
-            return;
-          }
-          next();
-        });
+      void this.perimeter.recognize(socket).then((banned) => {
+        // Забаненного на всю инсталляцию не пускаем внутрь вовсе — отказом
+        // самой миддлвары, до `handleConnection`. Причина уезжает клиенту
+        // текстом ошибки: белый экран вместо объяснения — худший из ответов
+        // на «почему меня не пускает».
+        if (banned) {
+          next(new Error(BANNED_ERROR));
+          return;
+        }
+        next();
+      });
     });
   }
 
@@ -232,42 +226,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    * с уже недействительным правом.
    */
   async syncOwner(): Promise<void> {
-    const ownerId = await this.owner.ownerId();
-    for (const socket of this.server?.sockets.sockets.values() ?? []) {
-      socket.data.owner =
-        !!ownerId && socket.data.identity?.id === ownerId;
-    }
+    await this.perimeter.resyncOwner();
     this.broadcastServers();
     this.broadcastChannels();
-  }
-
-  /** Личность этого сокета — или `undefined`: гость, старый клиент, чужой ключ. */
-  private speaker(client: AppSocket): Speaker | undefined {
-    return client.data.identity;
-  }
-
-  /**
-   * Кто спрашивает, с точки зрения прав: устройство, личность за ним и власть
-   * над инсталляцией. Собирается из того, что уже лежит на сокете, — в базу за
-   * этим не ходят: правами интересуется каждая рассылка реестра, а меняются они
-   * считанные разы за жизнь инсталляции (см. `syncOwner`).
-   */
-  private claimant(client: AppSocket): Claimant {
-    return {
-      clientId: deviceId(client),
-      identityId: this.speaker(client)?.id,
-      owner: client.data.owner === true,
-    };
-  }
-
-  /** Серверы, с которых этот сокет забанен. Обычный случай — пустое множество. */
-  private bannedFrom(client: AppSocket): Set<string> | undefined {
-    return client.data.bannedFrom;
-  }
-
-  /** Забанен ли этот сокет с этого сервера. */
-  private isBannedFrom(client: AppSocket, serverId: string | undefined): boolean {
-    return !!serverId && this.bannedFrom(client)?.has(serverId) === true;
   }
 
   /**
@@ -277,13 +238,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    * Возвращает число выгнанных: отзывать нечего — это тоже нормальный исход.
    */
   dropDevice(deviceId: string): number {
-    let dropped = 0;
-    for (const socket of this.server?.sockets.sockets.values() ?? []) {
-      if (socket.data.identity?.deviceId !== deviceId) continue;
-      socket.disconnect(true);
-      dropped += 1;
-    }
-    return dropped;
+    const sockets = this.perimeter.socketsOfDevice(deviceId);
+    for (const socket of sockets) socket.disconnect(true);
+    return sockets.length;
   }
 
   /**
@@ -292,59 +249,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    * украшением — представиться чужим именем можно было бы одним `join`.
    */
   private nameOf(client: AppSocket, claimed: string | undefined): string | undefined {
-    return this.speaker(client)?.nick ?? claimed;
-  }
-
-  // Выгнанные гости: «комната + устройство» → до какого времени дверь закрыта.
-  // Ссылка многоразовая и живёт сутки, поэтому без этой карты «выгнать» не
-  // значило бы ничего. Час — не наказание, а пауза: он переживает обиду и
-  // перезаход, но не превращает случайный клик в приговор до конца инвайта.
-  // Хранится в памяти процесса: рестарт api прощает всех, и это честно —
-  // серьёзный запрет живёт в пароле сервера, а не здесь.
-  private readonly guestBans = new Map<string, number>();
-  private static readonly GUEST_BAN_MS = 60 * 60 * 1000;
-
-  // ── Токен-бакет на сокет ────────────────────────────────────────────────
-  // Гасим флуд событий, каждое из которых иначе вызывает рассылку на весь
-  // сервер (presence/чат/реестр) — O(n) обход+emit на всех. Живому человеку
-  // 20 действий/с с запасом хватает (join, мут, сообщения — единицы в минуту),
-  // бот на тысячах/с упрётся в пустой бакет. Заодно тормозит перебор пароля
-  // закрытого сервера (server-unlock). Негоциацию (offer/answer/ice) НЕ трогаем:
-  // она бывает легитимно бурстовой и релеится 1:1, дёшево.
-  private static readonly RL_CAPACITY = 40;
-  private static readonly RL_REFILL_PER_SEC = 20;
-
-  // Диагностические вехи звонка считаем ОТДЕЛЬНО от действий человека, и это не
-  // щедрость, а разделение: вехи шлёт сам клиент, пачкой и ровно в те секунды,
-  // когда человек прыгает по каналам, — то есть телеметрия занимала место в том
-  // же бакете, из которого через мгновение платит `join`. Не пустить веху в лог
-  // не стоит ничего; не пустить `join` — значит оставить человека в канале,
-  // которого сервер за ним не числит: его не слышно, а ошибки он не увидит,
-  // потому что отказ здесь молчаливый.
-  private static readonly DIAG_CAPACITY = 20;
-  private static readonly DIAG_REFILL_PER_SEC = 5;
-
-  // ── Разблокировка закрытых серверов ─────────────────────────────────────
-  // Общий бакет (20/с) от перебора пароля не защищает: 20 попыток в секунду с
-  // сокета, а сокетов можно открыть сколько угодно. Счётчик неудач живёт не на
-  // сокете (реконнект обнулял бы его за один round-trip), а на паре «адрес +
-  // сервер» — см. ./unlock, там же семафор на одновременные scrypt.
-  private readonly unlockAttempts = new UnlockAttempts();
-
-  // Уже проверенные пароли: ключ — HMAC от «хэш + пароль» на случайном ключе
-  // процесса (голый sha256 пароля в памяти — плохая идея, а так дамп кучи не
-  // даёт ничего). Ради этого кэша всё и затевалось: авто-разблокировка после
-  // реконнекта перестаёт быть пересчётом scrypt на каждого вернувшегося.
-  private readonly unlockCache = new Map<string, true>();
-  private readonly unlockCacheKey = randomBytes(32);
-  private static readonly UNLOCK_CACHE_MAX = 500;
-
-  // Ключ вяжем к самому хэшу, а не к id сервера: id можно освободить удалением и
-  // занять заново с другим паролем — тогда запись из кэша пустила бы по старому.
-  private unlockCacheId(storedHash: string, password: string): string {
-    return createHmac('sha256', this.unlockCacheKey)
-      .update(storedHash + '\0' + password)
-      .digest('base64url');
+    return this.perimeter.speaker(client)?.nick ?? claimed;
   }
 
   // Presence меняется пачками (заход нескольких, серия media-update) —
@@ -362,47 +267,6 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   // слаг — уже «неизвестный» — уехал бы посторонним.
   private readonly pendingActivity = new Map<string, { ts: number; locked: string | null }>();
   private activityTimer: ReturnType<typeof setTimeout> | null = null;
-
-  // Списываем токен; false → бакет пуст (флуд), обработчик молча выходит.
-
-  private allow(client: AppSocket): boolean {
-    return this.spend(
-      client,
-      'rl',
-      SignalingGateway.RL_CAPACITY,
-      SignalingGateway.RL_REFILL_PER_SEC,
-    );
-  }
-
-  /** Бакет диагностических вех — свой, чтобы телеметрия не съедала звонок. */
-  private allowDiag(client: AppSocket): boolean {
-    return this.spend(
-      client,
-      'rlDiag',
-      SignalingGateway.DIAG_CAPACITY,
-      SignalingGateway.DIAG_REFILL_PER_SEC,
-    );
-  }
-
-  private spend(
-    client: AppSocket,
-    key: 'rl' | 'rlDiag',
-    capacity: number,
-    refillPerSec: number,
-  ): boolean {
-    const now = Date.now();
-    const bucket = client.data[key] ?? {
-      tokens: capacity,
-      ts: now,
-    };
-    const elapsed = (now - bucket.ts) / 1000;
-    bucket.tokens = Math.min(capacity, bucket.tokens + elapsed * refillPerSec);
-    bucket.ts = now;
-    client.data[key] = bucket;
-    if (bucket.tokens < 1) return false;
-    bucket.tokens -= 1;
-    return true;
-  }
 
   // Socket.io цепляется к http-серверу мимо express-миддлвар,
   // поэтому пропуск проверяем прямо в handshake
@@ -430,16 +294,11 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       (client.handshake.auth as { clientId?: unknown } | undefined)?.clientId,
     );
     if (guest) {
-      client.data.guest = true;
-      client.data.guestRoom = guest.slug;
-      // Право говорить приезжает подписанным в токене (см. handleInviteCreate):
-      // канал закрытого сервера зовёт слушателем. Сокет запоминает это один раз
-      // и на всю сессию — переспрашивать клиента не о чем.
-      client.data.guestListen = guest.listen;
+      this.perimeter.admit(client, guest);
       // Выгнанному дверь не открывается заново: без этого «выгнать» значило бы
       // «подождать пять секунд» — гость возвращается по той же ссылке, она
       // многоразовая и живёт сутки.
-      if (this.guestBanned(client, guest.slug)) {
+      if (this.perimeter.guestBanned(client, guest.slug)) {
         client.emit('kicked', { room: guest.slug });
         return;
       }
@@ -448,12 +307,12 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     }
     // Набор серверов, разблокированных этим сокетом (закрытые под паролем).
     // `??=` — чтобы восстановление сессии (CSR) не сбросило уже введённые пароли.
-    client.data.unlocked ??= new Set<string>();
+    this.perimeter.ensureUnlocked(client);
     // Пропуска, выданные за уже введённые пароли (см. ./unlock). Читаем их
     // ЗДЕСЬ, до первой рассылки реестра: разберись мы отдельным сообщением
     // после подключения — клиент успел бы получить реестр без своих закрытых
     // серверов, а вместе с ним и полную картину «каналы пропали».
-    this.restoreUnlocked(client);
+    this.perimeter.restoreUnlocked(client);
     // Новому клиенту сразу шлём реестры серверов и каналов и кто где в голосовых.
     // Серверы — публичная форма (без хэшей, с флагом locked); каналы — только
     // видимые ему (закрытые серверы скрыты до ввода пароля).
@@ -475,7 +334,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    * между устройствами: их непрочитанное остаётся в localStorage, как и было.
    */
   private async sendPersonal(client: AppSocket): Promise<void> {
-    const me = this.speaker(client);
+    const me = this.perimeter.speaker(client);
     if (!me) return;
     try {
       const [marks, values] = await Promise.all([
@@ -513,30 +372,13 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     return out;
   }
 
-  // Гость по инвайту: разрешён только эфир своей комнаты (join/leave/сигналинг/
-  // media-update/rename) — остальные обработчики выходят на этом гарде.
-  private isGuest(client: AppSocket): boolean {
-    return client.data.guest === true;
-  }
-
-  /**
-   * Слушатель: гость, позванный в канал закрытого сервера. Слышит комнату, но
-   * своего медиа не отдаёт. Держится это не на кнопке в интерфейсе — она лишь
-   * не врёт человеку, — а на двух настоящих заслонах: пропуск в медиасервер
-   * уходит с клеймом `listen` (produce получит отказ), а в прямых звонках
-   * входящий звук слушателя отбрасывают сами собеседники по флагу в presence.
-   */
-  private isListener(client: AppSocket): boolean {
-    return client.data.guestListen === true;
-  }
-
   // Публичная форма реестра серверов: без хэша пароля, с флагом `locked` и с
   // `mine` — «этой записью управляешь ты». Наружу уходит именно флаг, а не
   // clientId владельца: рассылать id значило бы раздавать всем то единственное,
   // чем правило владения и держится (см. ./ownership).
   private publicServersFor(client: AppSocket): PublicServer[] {
-    const banned = this.bannedFrom(client);
-    const all = this.registry.publicServers(this.claimant(client));
+    const banned = this.perimeter.bannedFrom(client);
+    const all = this.registry.publicServers(this.perimeter.claimant(client));
     return banned?.size ? all.filter((s) => !banned.has(s.id)) : all;
   }
 
@@ -544,57 +386,10 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   // Текстовым подмешиваем время последнего сообщения: по нему клиент зажигает
   // «непрочитано» сразу после загрузки, не дожидаясь живого `chat-activity`.
   private channelsFor(client: AppSocket): PublicChannel[] {
-    const who = this.claimant(client);
+    const who = this.perimeter.claimant(client);
     return this.registry.channels
-      .filter((c) => this.canSee(client, c))
+      .filter((c) => this.perimeter.canSee(client, c))
       .map((c) => publicChannel(c, who, c.type === 'text' ? this.chat.lastTs(c.slug) : 0));
-  }
-
-  // Разблокировки этого сокета — набор id закрытых серверов, чьи пароли он ввёл.
-  // Набор заводится на подключении (handleConnection, рядом с остальными полями
-  // сокета), а читают и пополняют его ТОЛЬКО методы ниже: сырой доступ к
-  // нетипизированному client.data расползался по обработчикам, и каждая копия
-  // сама решала, что делать с его отсутствием.
-  private unlockedOf(client: AppSocket): Set<string> | undefined {
-    return client.data.unlocked;
-  }
-
-  // Пароль сервера принят — запоминаем разблокировку на этом сокете.
-  private markUnlocked(client: AppSocket, serverId: string) {
-    this.unlockedOf(client)?.add(serverId);
-  }
-
-  /**
-   * Восстановить разблокировки по пропускам из handshake. Пропуск подписан
-   * хэшем пароля своего сервера (см. ./unlock), так что сменённый пароль
-   * отзывает его сам — проверять тут больше нечего.
-   *
-   * Битые и просроченные пропуска молча пропускаем: клиент предъявляет всё, что
-   * у него лежит, и ровно так же выглядит пропуск сервера, который успели
-   * открыть, удалить или перепаролить. Отвечать на каждый значило бы
-   * рассказывать по одному токену, что стало с сервером, которого спросивший
-   * не видит.
-   */
-  private restoreUnlocked(client: AppSocket) {
-    const raw = (client.handshake.auth as { unlock?: unknown } | undefined)?.unlock;
-    if (!Array.isArray(raw)) return;
-    // Столько же, сколько серверов вообще может быть: больше валидных пропусков
-    // не бывает, а перебирать присланное без предела незачем.
-    for (const item of raw.slice(0, MAX_SERVERS)) {
-      if (typeof item !== 'string' || !item) continue;
-      const id = verifyUnlockToken(item, (serverId) => {
-        const srv = this.registry.servers.find((s) => s.id === serverId);
-        return srv?.passwordHash;
-      });
-      if (id) this.markUnlocked(client, id);
-    }
-  }
-
-  // Открыт ли сервер этому сокету: открытый — всем, закрытый — только тому,
-  // кто ввёл пароль. Право на сам сервер, не на его каналы (те — canSee).
-  private isOpenTo(client: AppSocket, server: ServerEntry): boolean {
-    if (this.isBannedFrom(client, server.id)) return false;
-    return !server.passwordHash || this.unlockedOf(client)?.has(server.id) === true;
   }
 
   // Подпись этого сокета в текстовом канале. Имя самоназванное (см. S1 ревизии),
@@ -602,24 +397,6 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   // в одном месте и с одним запасным вариантом.
   private chatNameOf(client: AppSocket): string {
     return client.data.chatName || ANON_NAME;
-  }
-
-  // Видит ли сокет этот канал: закрытый сервер — только после ввода пароля.
-  private canSee(client: AppSocket, channel: Channel): boolean {
-    if (this.isBannedFrom(client, channel.serverId)) return false;
-    return this.registry.canSee(this.unlockedOf(client), channel);
-  }
-
-  /**
-   * Вправе ли сокет войти в голосовую комнату. Комната, за которой нет канала
-   * реестра, — это «сирота» (канал удалили под живым разговором) или комната
-   * инвайта: их не запираем, запирать нечего. А вот канал закрытого сервера
-   * пускает только по паролю: `join` берёт слаг, и без этой проверки пароль
-   * обходится одной строкой, даже когда сам канал в списке не показан.
-   */
-  private mayEnter(client: AppSocket, room: string): boolean {
-    const channel = this.registry.channels.find((c) => c.type === 'voice' && c.slug === room);
-    return !channel || this.canSee(client, channel);
   }
 
   /**
@@ -639,7 +416,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const owners = this.registry.ownerIds(this.registry.servers);
     const byOwner = new Map<string, PublicServer[]>();
     for (const sock of this.server.sockets.sockets.values()) {
-      if (sock.data.guest === true) continue;
+      if (this.perimeter.isGuest(sock)) continue;
       const key = this.ownerKey(sock, owners);
       let payload = byOwner.get(key);
       if (!payload) {
@@ -659,8 +436,8 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   // банами получают РАЗНЫЕ реестры, и общая группа отдала бы забаненному
   // сервер, с которого его выгнали.
   private ownerKey(client: AppSocket, owners: Set<string>): string {
-    const who = this.claimant(client);
-    const banned = [...(this.bannedFrom(client) ?? [])].sort().join('\u0004');
+    const who = this.perimeter.claimant(client);
+    const banned = [...(this.perimeter.bannedFrom(client) ?? [])].sort().join('\u0004');
     const mine = who.owner
       ? '\u0003owner'
       : [who.identityId, who.clientId].filter((id) => id && owners.has(id)).join('\u0002');
@@ -687,9 +464,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       const owners = this.registry.ownerIds(this.registry.channels);
       const byGroup = new Map<string, PublicChannel[]>();
       for (const sock of this.server.sockets.sockets.values()) {
-        if (sock.data.guest === true) continue;
+        if (this.perimeter.isGuest(sock)) continue;
         const key =
-          this.registry.visibilityKey(this.unlockedOf(sock)) +
+          this.registry.visibilityKey(this.perimeter.unlockedOf(sock)) +
           '\u0001' +
           this.ownerKey(sock, owners);
         let payload = byGroup.get(key);
@@ -710,7 +487,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ServerCreatePayload,
   ) {
-    if (!this.allow(client) || this.isGuest(client)) return;
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     // id генерирует клиент — принимаем как есть (санитизируем длину), чтобы он мог
     // сразу открыть новый сервер и создавать в нём каналы, не дожидаясь ответа.
     const id = trimmed(payload?.id, LIMIT.id);
@@ -744,7 +521,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       ...this.creatorOf(client),
     });
     // Создатель знает пароль — сразу разблокируем сервер для его сокета.
-    if (passwordHash) this.markUnlocked(client, id);
+    if (passwordHash) this.perimeter.markUnlocked(client, id);
     this.broadcastServers();
     // Раздаём каналы заново: у создателя новый сервер уже разблокирован.
     this.broadcastChannels();
@@ -756,7 +533,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ServerUnlockPayload,
   ) {
-    if (!this.allow(client) || this.isGuest(client)) return;
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const id = str(payload?.id);
     const password = str(payload?.password);
     const srv = this.registry.servers.find((s) => s.id === id);
@@ -772,15 +549,11 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // Этот адрес уже отстрелялся неудачами по этому серверу — до конца простоя
     // даже не считаем хэш. Проверка ДО scrypt — она же и есть то, что не даёт
     // перебору забить пул: сам семафор только ограничивает ущерб.
-    const ip = clientIp(client.handshake);
-    if (this.unlockAttempts.blockedUntil(ip, id)) {
+    if (this.perimeter.unlockBlocked(client, id)) {
       client.emit('server-unlock-result', { id, ok: false });
       return;
     }
-    const cacheKey = this.unlockCacheId(srv.passwordHash, password);
-    const ok = this.unlockCache.has(cacheKey)
-      ? true
-      : await verifyServerPassword(password, srv.passwordHash);
+    const ok = await this.perimeter.passwordFits(srv.passwordHash, password);
     // Пока считался хэш, сервер могли удалить — тогда разблокировать нечего.
     if (!this.registry.servers.some((s) => s.id === id)) {
       client.emit('server-unlock-result', { id, ok: false });
@@ -789,23 +562,17 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     if (!ok) {
       // Пишем каждую неудачу, а не только превышение порога: по одной строчке
       // «превышено» не видно ни начала подбора, ни его темпа.
-      const { count, until } = this.unlockAttempts.fail(ip, id);
+      const { count, until } = this.perimeter.noteUnlockFailure(client, id);
+      // Адрес — только для строчки в логе: считает и помнит попытки контур, а
+      // разбирают подбор по логу, и без адреса он там бесполезен.
+      const ip = clientIp(client.handshake);
       const cooldown =
         until > Date.now() ? `, cooldown ${Math.round((until - Date.now()) / 1000)}s` : '';
       this.logger.warn(`server-unlock: failed attempt ${count} for "${id}" from ${ip}${cooldown}`);
     }
     if (ok) {
-      this.unlockAttempts.succeed(ip, id);
-      // Кэш держим ограниченным: ключей ровно столько, сколько разных паролей
-      // предъявили, а вытесняем самый старый (Map хранит порядок вставки).
-      if (!this.unlockCache.has(cacheKey)) {
-        if (this.unlockCache.size >= SignalingGateway.UNLOCK_CACHE_MAX) {
-          const oldest = this.unlockCache.keys().next().value;
-          if (oldest) this.unlockCache.delete(oldest);
-        }
-        this.unlockCache.set(cacheKey, true);
-      }
-      this.markUnlocked(client, id);
+      this.perimeter.noteUnlockSuccess(client, id, srv.passwordHash, password);
+      this.perimeter.markUnlocked(client, id);
       // Пароль подошёл — теперь этому сокету видны каналы сервера…
       client.emit('channels', this.channelsFor(client));
       // …и состав их эфиров. Без этого строки каналов стоят пустыми до первого
@@ -835,21 +602,21 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ServerDeletePayload,
   ): Promise<ServerDeleteResult> {
-    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
     const id = str(payload?.id);
     if (!id) return { ok: false, error: 'not-found' };
     const idx = this.registry.servers.findIndex((s) => s.id === id && s.removable);
     if (idx === -1) return { ok: false, error: 'not-found' };
     // Закрытый сервер удалить может только тот, кто ввёл пароль (разблокировал).
     const srv = this.registry.servers[idx];
-    if (!this.isOpenTo(client, srv)) return { ok: false, error: 'forbidden' };
+    if (!this.perimeter.isOpenTo(client, srv)) return { ok: false, error: 'forbidden' };
     // Удаляет создатель сервера — или владелец инсталляции, которому
     // принадлежит всё. У записей без создателя (они старше самого правила
     // владения) владельца не существует: права прежние. Заблокировать их
     // удаление навсегда было бы хуже — чужой не нарочно удалит разве что по
     // неосторожности, а лишённый возможности хозяин не восстановит сервер
     // никак. Отказ пишем в лог: чужой снос — событие, а не шум.
-    if (!ownedBy(srv, this.claimant(client))) {
+    if (!ownedBy(srv, this.perimeter.claimant(client))) {
       this.logger.warn(`server-delete: "${id}" refused for ${client.id} (not the creator)`);
       return { ok: false, error: 'not-owner' };
     }
@@ -862,7 +629,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.registry.servers.splice(idx, 1);
     // Простой за неудачи вязался к этому id — новому серверу с тем же id он
     // достаться не должен.
-    this.unlockAttempts.forgetServer(id);
+    this.perimeter.forgetServer(id);
     this.broadcastServers();
 
     // Каналы удалённого сервера уходят вместе с ним — иначе повиснут сиротами.
@@ -896,12 +663,12 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ServerStatsPayload,
   ): Promise<ServerStatsResult> {
-    if (!this.allow(client) || this.isGuest(client)) return { ok: false };
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false };
     const id = str(payload?.id);
     const srv = this.registry.servers.find((s) => s.id === id);
     if (!srv || !srv.removable) return { ok: false };
-    if (!this.isOpenTo(client, srv)) return { ok: false };
-    if (!ownedBy(srv, this.claimant(client))) return { ok: false };
+    if (!this.perimeter.isOpenTo(client, srv)) return { ok: false };
+    if (!ownedBy(srv, this.perimeter.claimant(client))) return { ok: false };
     const own = this.registry.channels.filter((c) => c.serverId === id);
     const counted = await Promise.all(
       own.filter((c) => c.type === 'text').map((c) => this.chat.count(c.slug)),
@@ -939,7 +706,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ChannelCreatePayload,
   ) {
-    if (!this.allow(client) || this.isGuest(client)) return;
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const type = payload?.type === 'voice' ? 'voice' : payload?.type === 'text' ? 'text' : null;
     if (!type) return;
     // Сервер-владелец должен существовать (иначе канал повиснет вне рейки).
@@ -951,7 +718,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // «+» и не показывает, но запрет держим на сервере, а не на кнопке.
     if (serverId === MAIN_SERVER_ID) return;
     // В закрытый сервер канал создаёт только разблокировавший его сокет.
-    if (!this.isOpenTo(client, srv)) return;
+    if (!this.perimeter.isOpenTo(client, srv)) return;
     const rawName = trimmed(payload?.name, LIMIT.name);
     const slug = slugifyChannel(rawName);
     if (!slug) return;
@@ -987,7 +754,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ChannelModePayload,
   ) {
-    if (!this.allow(client) || this.isGuest(client)) return;
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const id = str(payload?.id);
     const mode: VoiceMode | null =
       payload?.mode === 'sfu' ? 'sfu' : payload?.mode === 'p2p' ? 'p2p' : null;
@@ -1028,7 +795,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    * введены и кто за ним стоит.
    */
   private editableChannel(client: AppSocket, id: string) {
-    return this.registry.editable(id, this.unlockedOf(client), this.claimant(client));
+    return this.registry.editable(id, this.perimeter.unlockedOf(client), this.perimeter.claimant(client));
   }
 
   /**
@@ -1038,7 +805,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    * (см. ./ownership).
    */
   private creatorOf(client: AppSocket): { creatorIdentityId: string } | { creatorId?: string } {
-    const identityId = this.speaker(client)?.id;
+    const identityId = this.perimeter.speaker(client)?.id;
     return identityId ? { creatorIdentityId: identityId } : { creatorId: deviceId(client) };
   }
 
@@ -1051,7 +818,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ChannelStatsPayload,
   ): Promise<ChannelStatsResult> {
-    if (!this.allow(client) || this.isGuest(client)) return { ok: false };
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false };
     const id = str(payload?.id);
     const found = this.editableChannel(client, id);
     if ('error' in found) return { ok: false };
@@ -1072,7 +839,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ChannelRenamePayload,
   ): Promise<ChannelRenameResult> {
-    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
     const id = str(payload?.id);
     const name = trimmed(payload?.name, LIMIT.name);
     if (!id) return { ok: false, error: 'not-found' };
@@ -1091,7 +858,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ChannelDeletePayload,
   ): Promise<ChannelDeleteResult> {
-    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
     const id = str(payload?.id);
     if (!id) return { ok: false, error: 'not-found' };
     const found = this.editableChannel(client, id);
@@ -1142,15 +909,15 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ReadMarkPayload,
   ): Promise<void> {
-    if (!this.allow(client) || this.isGuest(client)) return;
-    const me = this.speaker(client);
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
+    const me = this.perimeter.speaker(client);
     if (!me) return;
     const slug = trimmed(payload?.slug, LIMIT.slug);
     const ts = typeof payload?.ts === 'number' ? payload.ts : 0;
     const channel = this.registry.channels.find((c) => c.type === 'text' && c.slug === slug);
     // Канал, которого этот сокет не видит, ему и не дочитать: иначе отметки
     // становятся способом перебирать слаги закрытых серверов.
-    if (!channel || !this.canSee(client, channel)) return;
+    if (!channel || !this.perimeter.canSee(client, channel)) return;
     const mark = await this.reads.mark(me.id, channel.id, ts);
     if (mark === null) return;
     // Прочитано на десктопе — прочитано и в браузере, прямо сейчас. Это и есть
@@ -1170,8 +937,8 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: PrefsSetPayload,
   ): Promise<void> {
-    if (!this.allow(client) || this.isGuest(client)) return;
-    const me = this.speaker(client);
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
+    const me = this.perimeter.speaker(client);
     if (!me) return;
     const key = payload?.key;
     if (!(await this.prefs.set(me.id, key, payload?.value))) return;
@@ -1180,7 +947,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
 
   /** Остальным устройствам того же человека — но не тому, кто это и сделал. */
   private tellOtherDevices(client: AppSocket, identityId: string, event: string, data: unknown): void {
-    for (const sock of this.socketsOf(identityId)) {
+    for (const sock of this.perimeter.socketsOf(identityId)) {
       if (sock.id !== client.id) sock.emit(event, data);
     }
   }
@@ -1205,8 +972,8 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ModerationBanPayload,
   ): Promise<ModerationResult> {
-    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
-    const me = this.speaker(client);
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
+    const me = this.perimeter.speaker(client);
     if (!me) return { ok: false, error: 'forbidden' };
     const room = client.data.chatRoom;
     if (!room) return { ok: false, error: 'forbidden' };
@@ -1218,7 +985,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const everywhere = payload?.everywhere === true;
     // Бан на всю инсталляцию — только владельцу: у создателя сервера власти
     // ровно на свой сервер, и расширять её нечем.
-    if (everywhere && client.data.owner !== true) return { ok: false, error: 'forbidden' };
+    if (everywhere && !this.perimeter.isOwner(client)) return { ok: false, error: 'forbidden' };
 
     const id = str(payload?.id);
     const authorId = id ? await this.chat.authorOf(this.chat.slug(room), id) : null;
@@ -1237,7 +1004,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ModerationUnbanPayload,
   ): Promise<ModerationResult> {
-    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
     const scope = this.moderatedScope(client, payload?.server);
     if (scope === undefined) return { ok: false, error: 'forbidden' };
     const identityId = await this.roles.byFingerprint(payload?.fingerprint);
@@ -1253,7 +1020,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ModerationBansPayload,
   ): Promise<ModerationBansResult> {
-    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
     const scope = this.moderatedScope(client, payload?.server);
     if (scope === undefined) return { ok: false, error: 'forbidden' };
     return { ok: true, bans: await this.roles.bans(scope) };
@@ -1266,9 +1033,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    */
   private moderatedScope(client: AppSocket, raw: unknown): string | null | undefined {
     const id = str(raw);
-    if (!id) return client.data.owner === true ? null : undefined;
+    if (!id) return this.perimeter.isOwner(client) ? null : undefined;
     const srv = this.registry.servers.find((s) => s.id === id);
-    if (!srv || !this.isOpenTo(client, srv)) return undefined;
+    if (!srv || !this.perimeter.isOpenTo(client, srv)) return undefined;
     return this.moderates(client, srv) ? id : undefined;
   }
 
@@ -1296,12 +1063,12 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    */
   private mayModerate(client: AppSocket, channel: Channel): boolean {
     const srv = this.registry.serverOf(channel);
-    return !!srv && this.isOpenTo(client, srv) && this.moderates(client, srv);
+    return !!srv && this.perimeter.isOpenTo(client, srv) && this.moderates(client, srv);
   }
 
   /** То же правило, но про сам сервер. Считается там же, где рисуется флаг. */
   private moderates(client: AppSocket, srv: ServerEntry): boolean {
-    return moderatedBy(srv, this.claimant(client));
+    return moderatedBy(srv, this.perimeter.claimant(client));
   }
 
   /**
@@ -1316,13 +1083,13 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    * реестр: остальная инсталляция для человека продолжается.
    */
   private applyBan(identityId: string, serverId: string | null): void {
-    for (const sock of this.socketsOf(identityId)) {
+    for (const sock of this.perimeter.socketsOf(identityId)) {
       if (serverId === null) {
         sock.emit('banned');
         sock.disconnect(true);
         continue;
       }
-      ((sock.data.bannedFrom) ??= new Set()).add(serverId);
+      this.perimeter.noteBannedFrom(sock, serverId);
       this.evictFrom(sock, serverId);
       sock.emit('servers', this.publicServersFor(sock));
       sock.emit('channels', this.channelsFor(sock));
@@ -1332,22 +1099,14 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   /** Разбан под живым сокетом: сервер возвращается на место сам. */
   private liftBan(identityId: string, serverId: string | null): void {
     if (serverId === null) return;
-    for (const sock of this.socketsOf(identityId)) {
-      this.bannedFrom(sock)?.delete(serverId);
+    for (const sock of this.perimeter.socketsOf(identityId)) {
+      this.perimeter.bannedFrom(sock)?.delete(serverId);
       sock.emit('servers', this.publicServersFor(sock));
       sock.emit('channels', this.channelsFor(sock));
     }
   }
 
   /** Живые сокеты этой личности. Их обычно один-два: браузер и десктоп. */
-  private socketsOf(identityId: string): AppSocket[] {
-    const out: AppSocket[] = [];
-    for (const sock of this.server?.sockets.sockets.values() ?? []) {
-      if (sock.data.identity?.id === identityId) out.push(sock);
-    }
-    return out;
-  }
-
   /** Выписать сокет из эфира и ленты этого сервера — там ему больше нельзя. */
   private evictFrom(client: AppSocket, serverId: string): void {
     const voice = this.voice.roomOf(client);
@@ -1380,7 +1139,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: InviteCreatePayload,
   ): InviteCreateResult {
-    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
     const slug = trimmed(payload?.room, LIMIT.slug);
     // Канал должен существовать, быть голосовым и быть видимым этому сокету
     // (каналы закрытых серверов — только после ввода пароля).
@@ -1409,17 +1168,17 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: GuestKickPayload,
   ): GuestKickResult {
-    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
     const id = trimmed(payload?.id, LIMIT.id);
     const target = id ? this.server.sockets.sockets.get(id) : undefined;
-    if (!target || target.data.guest !== true) return { ok: false, error: 'not-found' };
+    if (!target || !this.perimeter.isGuest(target)) return { ok: false, error: 'not-found' };
     const room = this.voice.roomOf(target);
     if (!room) return { ok: false, error: 'not-found' };
     // Канал закрытого сервера запирает и это: не введя пароль, ты не видишь ни
     // канала, ни того, кто в нём сидит, — значит и выгонять оттуда некого.
-    if (!this.mayEnter(client, room)) return { ok: false, error: 'forbidden' };
+    if (!this.perimeter.mayEnter(client, room)) return { ok: false, error: 'forbidden' };
 
-    this.banGuest(target, room);
+    this.perimeter.banGuest(target, room);
     // Сокет не рвём: гость должен УВИДЕТЬ, что произошло, а разорванное
     // соединение он бы просто переподключил и гадал, куда делся звук. Выписки
     // из комнаты и закрытой двери на обратный вход довольно.
@@ -1429,34 +1188,6 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       `guest ${target.data.name || '?'} (${target.id}) kicked from "${room}" by ${client.id}`,
     );
     return { ok: true };
-  }
-
-  /** Ключ отлучения: комната + устройство (а если оно не назвалось — адрес). */
-  private banKey(client: AppSocket, room: string): string {
-    const device = deviceId(client) || `ip:${clientIp(client.handshake)}`;
-    // Разделитель — NUL, записанный escape-последовательностью: сырой байт
-    // делает весь файл двоичным для grep и file. Ни в имени комнаты, ни в id
-    // устройства он встретиться не может, поэтому склейка однозначна.
-    return `${room}\0${device}`;
-  }
-
-  private banGuest(client: AppSocket, room: string) {
-    // Заодно подметаем протухшее: карта живёт всё время работы процесса, а
-    // класть в неё по записи на каждого выгнанного и не убирать — это утечка
-    // размером в историю инсталляции.
-    const now = Date.now();
-    for (const [key, until] of this.guestBans) {
-      if (until <= now) this.guestBans.delete(key);
-    }
-    this.guestBans.set(this.banKey(client, room), now + SignalingGateway.GUEST_BAN_MS);
-  }
-
-  private guestBanned(client: AppSocket, room: string): boolean {
-    const until = this.guestBans.get(this.banKey(client, room));
-    if (until === undefined) return false;
-    if (until > Date.now()) return true;
-    this.guestBans.delete(this.banKey(client, room));
-    return false;
   }
 
   // ===== Пропуск в медиасервер =====
@@ -1470,7 +1201,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: SfuTokenPayload,
   ): Promise<SfuTokenResult> {
-    if (!this.allow(client)) return { ok: false, error: 'forbidden' };
+    if (!this.perimeter.allow(client)) return { ok: false, error: 'forbidden' };
     // Отказ обязан стирать прошлый пропуск, и это не уборка ради порядка.
     // Пропуск — единственное, чем сервер догадывается о транспорте клиента,
     // который его не называет (бандл прошлой версии). Не сотри мы его, человек,
@@ -1502,7 +1233,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       return { ok: false, error: 'not-in-room' };
     }
     // Гость «пришит» к своему каналу — чужую комнату не спросит.
-    if (this.isGuest(client) && room !== client.data.guestRoom) {
+    if (this.perimeter.isGuest(client) && room !== this.perimeter.guestRoom(client)) {
       forget();
       return { ok: false, error: 'forbidden' };
     }
@@ -1511,7 +1242,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // Пропуск — только в видимый канал: закрытый сервер запирает и медиасервер,
     // иначе пароль обходится одним слагом. Гость идёт по своей комнате: реестра
     // у него нет, а к каналу он уже пришит проверкой выше.
-    const channel = (this.isGuest(client) ? this.registry.channels : this.channelsFor(client)).find(
+    const channel = (this.perimeter.isGuest(client) ? this.registry.channels : this.channelsFor(client)).find(
       (c) => c.type === 'voice' && c.slug === room,
     );
     if (!channel || channel.mode !== 'sfu') {
@@ -1529,7 +1260,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       room,
       peerId: client.id,
       name,
-      listen: this.isListener(client),
+      listen: this.perimeter.isListener(client),
     });
     // Запоминаем выдачу: клиент, не умеющий сообщать транспорт в `join` (бандл
     // прошлой версии), иначе сошёл бы за p2p — и остальные съехали бы в прямые
@@ -1549,7 +1280,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   // никакой логики: верить содержимому на слово нельзя.
   @SubscribeMessage('voice-diag')
   handleVoiceDiag(@ConnectedSocket() client: AppSocket, @MessageBody() payload: VoiceDiagPayload) {
-    if (!this.allowDiag(client)) return;
+    if (!this.perimeter.allowDiag(client)) return;
     const event = oneLine(str(payload?.event)).slice(0, LIMIT.diagEvent);
     if (!event) return;
     const detail = oneLine(str(payload?.detail)).slice(0, LIMIT.diagDetail);
@@ -1559,22 +1290,22 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
 
   @SubscribeMessage('join')
   handleJoin(@ConnectedSocket() client: AppSocket, @MessageBody() payload: JoinPayload) {
-    if (!this.allow(client)) return;
+    if (!this.perimeter.allow(client)) return;
     const room = trimmed(payload?.room, LIMIT.slug);
     if (!room) return;
     // Гость «пришит» к каналу из своего токена — другие комнаты недоступны.
-    if (this.isGuest(client) && room !== client.data.guestRoom) return;
+    if (this.perimeter.isGuest(client) && room !== this.perimeter.guestRoom(client)) return;
     // Выгнанный не возвращается, пока не истечёт пауза (см. handleGuestKick).
     // Проверяем и здесь, а не только в handshake: сокет мог быть открыт до
     // того, как его выгнали, — тогда `join` был бы дверью с другой стороны.
-    if (this.isGuest(client) && this.guestBanned(client, room)) {
+    if (this.perimeter.isGuest(client) && this.perimeter.guestBanned(client, room)) {
       client.emit('kicked', { room });
       return;
     }
     // Канал закрытого сервера — только для тех, кто ввёл пароль. Комнату, которой
     // в реестре нет вовсе, пропускаем: это либо канал, удалённый под живым
     // разговором, либо инвайт-комната, и запирать их не за что.
-    if (!this.isGuest(client) && !this.mayEnter(client, room)) {
+    if (!this.perimeter.isGuest(client) && !this.perimeter.mayEnter(client, room)) {
       this.logger.warn(`voice: join to locked room "${room}" refused for ${client.id}`);
       // Отказ обязан быть слышен. Молчащий `return` клиент не отличал от
       // удавшегося входа: он считал себя в канале, для остальных его там не
@@ -1616,16 +1347,16 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     client.to(room).emit('peer-joined', {
       id: client.id,
       name,
-      ...(this.speaker(client) ? { fingerprint: this.speaker(client)?.fingerprint } : {}),
-      ...(this.isGuest(client) ? { guest: true } : {}),
-      ...(this.isListener(client) ? { listen: true } : {}),
+      ...(this.perimeter.speaker(client) ? { fingerprint: this.perimeter.speaker(client)?.fingerprint } : {}),
+      ...(this.perimeter.isGuest(client) ? { guest: true } : {}),
+      ...(this.perimeter.isListener(client) ? { listen: true } : {}),
     });
     this.voice.broadcast();
     // UA — в лог: «телефон не слышит» первым делом упирается в вопрос, ЧТО это
     // за клиент был (мобильный Safari? нативное приложение? старый бандл?).
     const ua = oneLine(String(client.handshake.headers['user-agent'] ?? '')).slice(0, 120);
     this.logger.log(
-      `voice: ${name || '?'} (${client.id}${this.isGuest(client) ? ', guest' : ''}) joined "${room}" via ${transport} ua="${ua}"`,
+      `voice: ${name || '?'} (${client.id}${this.perimeter.isGuest(client) ? ', guest' : ''}) joined "${room}" via ${transport} ua="${ua}"`,
     );
     // Разъехались в транспортах — участники друг друга не слышат вообще.
     // Клиенты разберутся сами (мелкая комната съедет в p2p целиком), но в логе
@@ -1668,7 +1399,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody()
     payload: { camOn?: unknown; screenOn?: unknown; micOn?: unknown; deafened?: unknown },
   ) {
-    if (!this.allow(client)) return;
+    if (!this.perimeter.allow(client)) return;
     const room = this.voice.roomOf(client);
     if (!room) return;
     // Мут/глушилку запоминает голосовая сессия — их раздаёт voice-presence
@@ -1699,8 +1430,8 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: { name?: unknown },
   ) {
-    if (!this.allow(client)) return;
-    const speaker = this.speaker(client);
+    if (!this.perimeter.allow(client)) return;
+    const speaker = this.perimeter.speaker(client);
     const name = speaker
       ? ((await this.identities.nickOf(speaker.id)) ?? speaker.nick)
       : trimmed(payload?.name, LIMIT.tag);
@@ -1712,12 +1443,12 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // плиток, ростер и presence там нарисованы по данным ТОГО сокета, а он о
     // смене не узнаёт до перезахода. У того, кто вошёл без ключа, устройство
     // ровно одно — им и ограничиваемся.
-    const targets = speaker ? this.socketsOf(speaker.id) : [client];
+    const targets = speaker ? this.perimeter.socketsOf(speaker.id) : [client];
     const rosters = new Set<string>();
     let presence = false;
 
     for (const sock of targets) {
-      const own = this.speaker(sock);
+      const own = this.perimeter.speaker(sock);
       if (own) own.nick = name;
 
       if (this.voice.rename(sock, name)) presence = true;
@@ -1740,7 +1471,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
 
   @SubscribeMessage('chat-join')
   async handleChatJoin(@ConnectedSocket() client: AppSocket, @MessageBody() payload: ChatPayload) {
-    if (!this.allow(client) || this.isGuest(client)) return;
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const slug = trimmed(payload?.room, LIMIT.slug);
     if (!slug) return;
     // Как и в голосовом: имя личности называет сервер (см. nameOf).
@@ -1790,7 +1521,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() payload: ChatHistoryMorePayload,
   ): Promise<ChatHistoryMoreResult> {
     const empty = { ok: true as const, messages: [], more: false };
-    if (!this.allow(client) || this.isGuest(client)) return empty;
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
     const room = client.data.chatRoom;
     if (!room) return empty;
     const beforeTs = typeof payload?.beforeTs === 'number' ? payload.beforeTs : 0;
@@ -1809,7 +1540,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() payload: ChatHistoryAfterPayload,
   ): Promise<ChatWindowResult> {
     const empty = { ok: true as const, messages: [], more: false, moreAfter: false };
-    if (!this.allow(client) || this.isGuest(client)) return empty;
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
     const room = client.data.chatRoom;
     if (!room) return empty;
     const afterTs = typeof payload?.afterTs === 'number' ? payload.afterTs : 0;
@@ -1832,7 +1563,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() payload: ChatAroundPayload,
   ): Promise<ChatWindowResult> {
     const empty = { ok: true as const, messages: [], more: false, moreAfter: false };
-    if (!this.allow(client) || this.isGuest(client)) return empty;
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
     const room = client.data.chatRoom;
     const id = str(payload?.id);
     if (!room || !id) return empty;
@@ -1854,13 +1585,13 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() payload: ChatSearchPayload,
   ): Promise<ChatSearchResult> {
     const empty = { ok: true as const, hits: [], more: false, terms: [] };
-    if (!this.allow(client) || this.isGuest(client)) return empty;
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
     const room = client.data.chatRoom;
     if (!room) return empty;
     const here = this.registry.channels.find(
       (c) => c.type === 'text' && c.slug === this.chat.slug(room),
     );
-    if (!here || !this.canSee(client, here)) return empty;
+    if (!here || !this.perimeter.canSee(client, here)) return empty;
 
     const query = trimmed(payload?.query, LIMIT.search);
     const terms = searchTerms(query);
@@ -1870,7 +1601,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const channels =
       scope === 'server'
         ? this.registry.channels.filter(
-            (c) => c.type === 'text' && c.serverId === here.serverId && this.canSee(client, c),
+            (c) => c.type === 'text' && c.serverId === here.serverId && this.perimeter.canSee(client, c),
           )
         : [here];
 
@@ -1900,25 +1631,25 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() payload: MentionSuggestPayload,
   ): Promise<MentionSuggestResult> {
     const empty = { ok: true as const, people: [] };
-    if (!this.allow(client) || this.isGuest(client)) return empty;
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
     const room = client.data.chatRoom;
     if (!room) return empty;
     const here = this.registry.channels.find(
       (c) => c.type === 'text' && c.slug === this.chat.slug(room),
     );
-    if (!here || !this.canSee(client, here)) return empty;
+    if (!here || !this.perimeter.canSee(client, here)) return empty;
 
     const prefix = trimmed(payload?.prefix, LIMIT.tag).toLowerCase();
-    const me = this.speaker(client)?.fingerprint;
+    const me = this.perimeter.speaker(client)?.fingerprint;
     const seen = new Set<string>();
     const people: MentionSuggestResult['people'] = [];
 
     // Сначала те, кто сейчас на связи: для них упоминание — не запись в
     // историю, а обращение, которое они увидят сию минуту.
     for (const sock of this.server.sockets.sockets.values()) {
-      const who = this.speaker(sock);
+      const who = this.perimeter.speaker(sock);
       if (!who || who.fingerprint === me || seen.has(who.fingerprint)) continue;
-      if (this.isGuest(sock) || !this.canSee(sock, here)) continue;
+      if (this.perimeter.isGuest(sock) || !this.perimeter.canSee(sock, here)) continue;
       if (prefix && !who.nick.toLowerCase().startsWith(prefix)) continue;
       seen.add(who.fingerprint);
       people.push({ fingerprint: who.fingerprint, nick: who.nick, online: true });
@@ -1928,7 +1659,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // спрашивающему: звать через канал человека, о котором ты знаешь только по
     // соседнему каналу, — обычное дело.
     const channels = this.registry.channels.filter(
-      (c) => c.type === 'text' && c.serverId === here.serverId && this.canSee(client, c),
+      (c) => c.type === 'text' && c.serverId === here.serverId && this.perimeter.canSee(client, c),
     );
     const spoke = await this.chat.mentionCandidates(
       channels.map((c) => c.id),
@@ -1978,12 +1709,12 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     if (!mentions.length) return;
     const channel = this.registry.channels.find((c) => c.type === 'text' && c.slug === slug);
     if (!channel) return;
-    const author = this.speaker(from)?.fingerprint;
+    const author = this.perimeter.speaker(from)?.fingerprint;
     const targets = new Set(mentions.map((m) => m.fingerprint));
     for (const sock of this.server.sockets.sockets.values()) {
-      const who = this.speaker(sock)?.fingerprint;
+      const who = this.perimeter.speaker(sock)?.fingerprint;
       if (!who || who === author || !targets.has(who)) continue;
-      if (this.isGuest(sock) || !this.canSee(sock, channel)) continue;
+      if (this.perimeter.isGuest(sock) || !this.perimeter.canSee(sock, channel)) continue;
       sock.emit('mention', { slug, ts });
     }
   }
@@ -1995,13 +1726,13 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    * страницы.
    */
   private async sendMentions(client: AppSocket): Promise<void> {
-    const me = this.speaker(client);
+    const me = this.perimeter.speaker(client);
     if (!me) return;
     const counts = await this.chat.mentionCounts(me.id, me.fingerprint);
     const bySlug: Record<string, number> = {};
     for (const channel of this.registry.channels) {
       const n = counts.get(channel.id);
-      if (n && this.canSee(client, channel)) bySlug[channel.slug] = n;
+      if (n && this.perimeter.canSee(client, channel)) bySlug[channel.slug] = n;
     }
     client.emit('mentions', { counts: bySlug });
   }
@@ -2013,7 +1744,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
 
   @SubscribeMessage('chat-message')
   async handleChatMessage(@ConnectedSocket() client: AppSocket, @MessageBody() payload: ChatPayload) {
-    if (!this.allow(client) || this.isGuest(client)) return;
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const room = client.data.chatRoom;
     if (!room) return;
     const text = trimmed(payload?.text, LIMIT.message);
@@ -2032,7 +1763,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       name: this.chatNameOf(client),
       // Авторство пишется рядом с именем, а не вместо: имя — снимок момента,
       // личность — то, по чему потом сверяются правка, удаление и модерация.
-      identityId: this.speaker(client)?.id,
+      identityId: this.perimeter.speaker(client)?.id,
       text,
       uploadId,
       spoiler: payload?.spoiler === true,
@@ -2068,8 +1799,8 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       const batch = [...this.pendingActivity];
       this.pendingActivity.clear();
       for (const sock of this.server.sockets.sockets.values()) {
-        if (sock.data.guest === true) continue; // гостю реестр не положен вовсе
-        const unlocked = sock.data.unlocked;
+        if (this.perimeter.isGuest(sock)) continue; // гостю реестр не положен вовсе
+        const unlocked = this.perimeter.unlockedOf(sock);
         for (const [slug, { ts, locked }] of batch) {
           if (locked && !unlocked?.has(locked)) continue;
           sock.emit('chat-activity', { slug, ts });
@@ -2089,7 +1820,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    * зато и не притворяемся, что она есть.
    */
   private ownsMessage(client: AppSocket, msg: { name: string; fingerprint?: string }): boolean {
-    if (msg.fingerprint) return this.speaker(client)?.fingerprint === msg.fingerprint;
+    if (msg.fingerprint) return this.perimeter.speaker(client)?.fingerprint === msg.fingerprint;
     return msg.name === this.chatNameOf(client);
   }
 
@@ -2097,7 +1828,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   // Системные и сообщения-вложения без текста не редактируем.
   @SubscribeMessage('chat-edit')
   async handleChatEdit(@ConnectedSocket() client: AppSocket, @MessageBody() payload: ChatEditPayload) {
-    if (!this.allow(client) || this.isGuest(client)) return;
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const room = client.data.chatRoom;
     if (!room) return;
     const id = str(payload?.id);
@@ -2137,7 +1868,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ChatDeletePayload,
   ) {
-    if (!this.allow(client) || this.isGuest(client)) return;
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const room = client.data.chatRoom;
     if (!room) return;
     const id = str(payload?.id);
@@ -2177,7 +1908,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ChatPinPayload,
   ): Promise<ChatPinResult> {
-    if (!this.allow(client) || this.isGuest(client)) return { ok: false, error: 'forbidden' };
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
     const room = client.data.chatRoom;
     if (!room) return { ok: false, error: 'forbidden' };
     const id = str(payload?.id);
@@ -2191,7 +1922,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const on = payload?.on === true;
 
     if (on) {
-      const res = await this.chat.pin(slug, id, this.speaker(client)?.id ?? null);
+      const res = await this.chat.pin(slug, id, this.perimeter.speaker(client)?.id ?? null);
       if (res === 'gone') return { ok: false, error: 'not-found' };
       if (res === 'limit') return { ok: false, error: 'limit' };
     } else if (!(await this.chat.unpin(slug, id))) {
@@ -2213,7 +1944,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ChatPinsPayload,
   ): Promise<ChatPinsResult> {
-    if (!this.allow(client) || this.isGuest(client)) return { ok: false };
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false };
     const room = client.data.chatRoom;
     if (!room) return { ok: false };
     const slug = this.chat.slug(room);
@@ -2228,7 +1959,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   // Тег берём с сокета, тело клиента не нужно. allow() гасит перебор.
   @SubscribeMessage('chat-typing')
   handleChatTyping(@ConnectedSocket() client: AppSocket) {
-    if (!this.allow(client) || this.isGuest(client)) return;
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const room = client.data.chatRoom;
     if (!room) return;
     const name = this.chatNameOf(client);
@@ -2242,7 +1973,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ChatReactPayload,
   ) {
-    if (!this.allow(client) || this.isGuest(client)) return;
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const room = client.data.chatRoom;
     if (!room) return;
     const id = str(payload?.id);
@@ -2323,7 +2054,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       const sock = this.server.sockets.sockets.get(id);
       const nick = sock?.data.chatName;
       if (!nick) continue;
-      const fingerprint = sock?.data.identity?.fingerprint;
+      const fingerprint = sock ? this.perimeter.speaker(sock)?.fingerprint : undefined;
       if (fingerprint) {
         if (seen.has(fingerprint)) continue;
         seen.add(fingerprint);
