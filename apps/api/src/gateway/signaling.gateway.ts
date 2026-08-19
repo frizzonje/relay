@@ -30,9 +30,7 @@ import { ReadsService } from '../identity/reads.service';
 import { RolesService } from '../identity/roles.service';
 import { UploadsService } from '../uploads';
 import { ChatService } from './chat.service';
-import {
-  RegistryService,
-} from './registry.service';
+import { RegistryService } from './registry.service';
 import {
   type ChannelCreatePayload,
   type ChannelDeletePayload,
@@ -42,35 +40,35 @@ import {
   type ChannelRenameResult,
   type ChannelStatsPayload,
   type ChannelStatsResult,
+  type ChatAroundPayload,
   type ChatDeletePayload,
   type ChatEditPayload,
+  type ChatHistoryAfterPayload,
   type ChatHistoryMorePayload,
   type ChatHistoryMoreResult,
-  type ChatSearchResult,
-  type ChatWindowResult,
-  type ChatHistoryAfterPayload,
-  type ChatAroundPayload,
-  type ChatSearchPayload,
   type ChatPayload,
   type ChatPinPayload,
   type ChatPinResult,
   type ChatPinsPayload,
   type ChatPinsResult,
   type ChatReactPayload,
+  type ChatSearchPayload,
+  type ChatSearchResult,
+  type ChatWindowResult,
   type GuestKickPayload,
+  type GuestKickResult,
+  type InviteCreatePayload,
+  type InviteCreateResult,
+  type JoinPayload,
+  type MentionSuggestPayload,
+  type MentionSuggestResult,
   type ModerationBanPayload,
   type ModerationBansPayload,
   type ModerationBansResult,
   type ModerationResult,
   type ModerationUnbanPayload,
-  type MentionSuggestPayload,
-  type MentionSuggestResult,
   type PrefsSetPayload,
   type ReadMarkPayload,
-  type GuestKickResult,
-  type InviteCreatePayload,
-  type InviteCreateResult,
-  type JoinPayload,
   type ServerCreatePayload,
   type ServerDeletePayload,
   type ServerDeleteResult,
@@ -103,6 +101,21 @@ export const BANNED_ERROR = 'banned';
   // окна), чтобы при восстановлении никого не «выкинуть» из канала.
   connectionStateRecovery: { maxDisconnectionDuration: 20_000 },
 })
+/**
+ * Точка входа Nest: приём подключения, разбор кто это, и маршрут события к
+ * тому, кто им занимается.
+ *
+ * Логики здесь нет намеренно, и список полей ниже объясняет почему. Сначала
+ * идут владельцы состояния — контур доступа, витрина реестра, чат-сессия,
+ * голосовая сессия, — и только потом обработчики, которые их спрашивают.
+ * Порядок объявления здесь и есть порядок инициализации: обработчик, заведённый
+ * раньше своего владельца, получил бы `undefined`, и сборка об этом честно
+ * скажет (TS2729).
+ *
+ * Всё, что живёт на сокете, живёт у владельцев: в этом файле не осталось ни
+ * одного обращения к `client.data`. Ровно из-за его отсутствия здесь и появился
+ * когда-то забытый `sfuPassRoom` — см. docs/plans/core-refactor.md.
+ */
 export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server!: AppServer;
