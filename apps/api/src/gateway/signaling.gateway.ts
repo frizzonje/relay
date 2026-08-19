@@ -13,6 +13,7 @@ import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import type { AppServer, AppSocket } from './socket-data';
 import { ChatSessions } from './chat-sessions';
 import { BROADCAST_DEBOUNCE_MS, Directory } from './directory';
+import { Moderation } from './moderation';
 import { Perimeter } from './perimeter';
 import { VoiceSessions } from './voice-sessions';
 import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
@@ -205,6 +206,19 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       onGraceExpired: (sock) => this.chats.leave(sock),
     },
     this.logger,
+  );
+
+  /**
+   * Модерация: чья это власть, докуда достаёт и что делает бан с живыми
+   * сокетами. Заводится последней — ей нужны все трое владельцев состояния.
+   */
+  private readonly moderation = new Moderation(
+    this.registry,
+    this.chat,
+    this.chats,
+    this.voice,
+    this.perimeter,
+    this.directory,
   );
 
   /**
@@ -886,7 +900,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const channel = this.registry.channels.find(
       (c) => c.type === 'text' && c.slug === this.chat.slug(room),
     );
-    if (!channel || !this.mayModerate(client, channel)) return { ok: false, error: 'forbidden' };
+    if (!channel || !this.moderation.mayModerate(client, channel)) return { ok: false, error: 'forbidden' };
 
     const everywhere = payload?.everywhere === true;
     // Бан на всю инсталляцию — только владельцу: у создателя сервера власти
@@ -900,7 +914,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const scope = everywhere ? null : channel.serverId;
     const done = await this.roles.ban(authorId, scope, me.id);
     if (!done.ok) return { ok: false, error: done.reason === 'unknown' ? 'unknown' : 'forbidden' };
-    this.applyBan(authorId, scope);
+    this.moderation.applyBan(authorId, scope);
     return { ok: true };
   }
 
@@ -911,12 +925,12 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() payload: ModerationUnbanPayload,
   ): Promise<ModerationResult> {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
-    const scope = this.moderatedScope(client, payload?.server);
+    const scope = this.moderation.scopeFor(client, str(payload?.server));
     if (scope === undefined) return { ok: false, error: 'forbidden' };
     const identityId = await this.roles.byFingerprint(payload?.fingerprint);
     if (!identityId) return { ok: false, error: 'not-found' };
     if (!(await this.roles.unban(identityId, scope))) return { ok: false, error: 'not-found' };
-    this.liftBan(identityId, scope);
+    this.moderation.liftBan(identityId, scope);
     return { ok: true };
   }
 
@@ -927,106 +941,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() payload: ModerationBansPayload,
   ): Promise<ModerationBansResult> {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return { ok: false, error: 'forbidden' };
-    const scope = this.moderatedScope(client, payload?.server);
+    const scope = this.moderation.scopeFor(client, str(payload?.server));
     if (scope === undefined) return { ok: false, error: 'forbidden' };
     return { ok: true, bans: await this.roles.bans(scope) };
-  }
-
-  /**
-   * Охват, которым этому сокету позволено распоряжаться: названный сервер (если
-   * он его модерирует) или вся инсталляция (если он владелец). `undefined` —
-   * не позволено ничего, и это отличается от `null`, который и есть инсталляция.
-   */
-  private moderatedScope(client: AppSocket, raw: unknown): string | null | undefined {
-    const id = str(raw);
-    if (!id) return this.perimeter.isOwner(client) ? null : undefined;
-    const srv = this.registry.servers.find((s) => s.id === id);
-    if (!srv || !this.perimeter.isOpenTo(client, srv)) return undefined;
-    return this.moderates(client, srv) ? id : undefined;
-  }
-
-  /** Модерирует ли этот сокет сервер, которому принадлежит эта комната чата. */
-  private moderatesRoom(client: AppSocket, room: string): boolean {
-    const slug = this.chat.slug(room);
-    const channel = this.registry.channels.find((c) => c.type === 'text' && c.slug === slug);
-    return !!channel && this.mayModerate(client, channel);
-  }
-
-  /**
-   * Модерирует ли этот сокет сервер, которому принадлежит канал.
-   *
-   * Это НЕ то же, что право править запись реестра (`ownedBy`), и разница
-   * стоит того, чтобы её написать. Там «создателя нет» означает «права общие» —
-   * иначе сервер, созданный до самого правила владения, никто не смог бы даже
-   * переименовать. Здесь такое послабление означало бы, что на главном сервере
-   * любой удаляет чужие сообщения и банит кого хочет: создателя у него нет и
-   * быть не может.
-   *
-   * Поэтому модерация требует названного хозяина — личность создателя, — либо
-   * владельца инсталляции. Унаследованный clientId власти не даёт: он лежит в
-   * localStorage и подделывается, а удаление чужих слов и бан — не то, что
-   * доверяют строке из чужого браузера.
-   */
-  private mayModerate(client: AppSocket, channel: Channel): boolean {
-    const srv = this.registry.serverOf(channel);
-    return !!srv && this.perimeter.isOpenTo(client, srv) && this.moderates(client, srv);
-  }
-
-  /** То же правило, но про сам сервер. Считается там же, где рисуется флаг. */
-  private moderates(client: AppSocket, srv: ServerEntry): boolean {
-    return moderatedBy(srv, this.perimeter.claimant(client));
-  }
-
-  /**
-   * Бан вступает в силу немедленно, под живыми сокетами.
-   *
-   * Иначе он не значил бы почти ничего: забаненный дописывал бы в канал до тех
-   * пор, пока сам не переподключится, — то есть ровно столько, сколько длится
-   * скандал, из-за которого его и банили.
-   *
-   * На всю инсталляцию — отключаем: пускать обратно его уже не будут, и держать
-   * соединение незачем. С сервера — выписываем из его комнат и раздаём заново
-   * реестр: остальная инсталляция для человека продолжается.
-   */
-  private applyBan(identityId: string, serverId: string | null): void {
-    for (const sock of this.perimeter.socketsOf(identityId)) {
-      if (serverId === null) {
-        sock.emit('banned');
-        sock.disconnect(true);
-        continue;
-      }
-      this.perimeter.noteBannedFrom(sock, serverId);
-      this.evictFrom(sock, serverId);
-      sock.emit('servers', this.directory.serversFor(sock));
-      sock.emit('channels', this.directory.channelsFor(sock));
-    }
-  }
-
-  /** Разбан под живым сокетом: сервер возвращается на место сам. */
-  private liftBan(identityId: string, serverId: string | null): void {
-    if (serverId === null) return;
-    for (const sock of this.perimeter.socketsOf(identityId)) {
-      this.perimeter.bannedFrom(sock)?.delete(serverId);
-      sock.emit('servers', this.directory.serversFor(sock));
-      sock.emit('channels', this.directory.channelsFor(sock));
-    }
-  }
-
-  /** Живые сокеты этой личности. Их обычно один-два: браузер и десктоп. */
-  /** Выписать сокет из эфира и ленты этого сервера — там ему больше нельзя. */
-  private evictFrom(client: AppSocket, serverId: string): void {
-    const voice = this.voice.roomOf(client);
-    const chat = this.chats.roomOf(client);
-    for (const channel of this.registry.channels) {
-      if (channel.serverId !== serverId) continue;
-      if (channel.type === 'voice' && voice === channel.slug) this.voice.leave(client);
-      if (channel.type === 'text' && chat === this.chat.room(channel.slug)) {
-        this.chats.leave(client);
-        // С причиной: канал на месте, ушёл человек. Без неё клиент сказал бы
-        // ему «канал удалён» — и он пошёл бы искать пропажу, которой нет.
-        client.emit('chat-closed', { slug: channel.slug, reason: 'banned' });
-      }
-    }
   }
 
   // ===== Инвайт-ссылки =====
@@ -1778,7 +1695,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const slug = this.chat.slug(room);
     const msg = await this.chat.find(slug, id);
     if (!msg) return;
-    if (!this.ownsMessage(client, msg) && !this.moderatesRoom(client, room)) return;
+    if (!this.ownsMessage(client, msg) && !this.moderation.moderatesRoom(client, room)) return;
 
     if (!(await this.chat.remove(id))) return;
     this.server.to(room).emit('chat-deleted', { id });
@@ -1814,7 +1731,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     if (!room) return { ok: false, error: 'forbidden' };
     const id = str(payload?.id);
     if (!id) return { ok: false, error: 'not-found' };
-    if (!this.moderatesRoom(client, room)) return { ok: false, error: 'forbidden' };
+    if (!this.moderation.moderatesRoom(client, room)) return { ok: false, error: 'forbidden' };
 
     const slug = this.chat.slug(room);
     // «Закрепить» приходит явно, а не выводится из того, что клиент видит у
