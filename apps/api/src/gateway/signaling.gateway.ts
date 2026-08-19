@@ -11,6 +11,7 @@ import {
 } from '@nestjs/websockets';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import type { AppServer, AppSocket } from './socket-data';
+import { VoiceSessions } from './voice-sessions';
 import { isAuthorized, issueGuestToken, verifyGuestToken } from '../auth/auth';
 import { IdentityService, type Speaker } from '../identity/identity.service';
 import { OwnerService } from '../identity/owner.service';
@@ -152,6 +153,32 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     private readonly prefs: PrefsService,
   ) {}
 
+  private readonly logger = new Logger(SignalingGateway.name);
+
+  /**
+   * Владелец голосовой сессии. Заводится здесь, а не приезжает от Nest: своих
+   * зависимостей у него нет, а спрашивает он у гейтвея ровно то, чем гейтвей и
+   * владеет, — личность, гостевой контур и видимость каналов.
+   */
+  private readonly voice = new VoiceSessions(
+    () => this.server,
+    {
+      fingerprintOf: (sock) => this.speaker(sock)?.fingerprint,
+      isGuest: (sock) => this.isGuest(sock),
+      guestRoomOf: (sock) => (this.isGuest(sock) ? sock.data.guestRoom : undefined),
+      isListener: (sock) => this.isListener(sock),
+      visibleVoiceSlugs: (sock) => {
+        const visible = new Set<string>();
+        for (const c of this.registry.channels) {
+          if (c.type === 'voice' && this.canSee(sock, c)) visible.add(c.slug);
+        }
+        return visible;
+      },
+      onGraceExpired: (sock) => this.leaveChatRoom(sock),
+    },
+    this.logger,
+  );
+
   /**
    * Кто говорит — выясняется до первого события, а не в `handleConnection`.
    *
@@ -268,17 +295,6 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     return this.speaker(client)?.nick ?? claimed;
   }
 
-  // Отложенный выход из комнат по socket.id: при восстановлении сессии отменяем.
-  private readonly pendingLeave = new Map<string, ReturnType<typeof setTimeout>>();
-  // clientId (стабильный id устройства) -> { socket.id, комната } того, кто сейчас
-  // в голосовом. По нему выгоняем «призрака»: прошлый сокет того же клиента, ещё
-  // висящий в комнате после перезагрузки (новый сокет — новый id, старый уходит
-  // лишь по грейсу LEAVE_GRACE_MS, и всё это время участника двоит у остальных).
-  private readonly voiceMembers = new Map<string, { id: string; room: string }>();
-  // Грейс на восстановление сессии перед уведомлением остальных об уходе. Чуть
-  // больше окна connectionStateRecovery — чтобы CSR успел отработать первым.
-  private static readonly LEAVE_GRACE_MS = 24_000;
-
   // Выгнанные гости: «комната + устройство» → до какого времени дверь закрыта.
   // Ссылка многоразовая и живёт сутки, поэтому без этой карты «выгнать» не
   // значило бы ничего. Час — не наказание, а пауза: он переживает обиду и
@@ -334,8 +350,6 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   // Presence меняется пачками (заход нескольких, серия media-update) —
   // коалесцируем рассылку в один emit за короткое окно вместо O(n) обхода+emit
   // на каждое событие. 80 мс незаметны на индикаторах мута/эфира.
-  private static readonly PRESENCE_DEBOUNCE_MS = 80;
-  private presenceTimer: ReturnType<typeof setTimeout> | null = null;
 
   // То же окно — реестру каналов и пингам активности чата. Обе рассылки идут по
   // всем сокетам, и без коалесцирования работа растёт как квадрат их числа:
@@ -350,7 +364,6 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   private activityTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Списываем токен; false → бакет пуст (флуд), обработчик молча выходит.
-  private readonly logger = new Logger(SignalingGateway.name);
 
   private allow(client: AppSocket): boolean {
     return this.spend(
@@ -406,11 +419,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     }
     // Сессия восстановлена после обрыва (тот же id) — отменяем отложенный выход:
     // эфир и текстовые каналы не трогаем, остальные нас и не «теряли».
-    const pending = this.pendingLeave.get(client.id);
-    if (pending) {
-      clearTimeout(pending);
-      this.pendingLeave.delete(client.id);
-    }
+    this.voice.resume(client);
     // Устройство, с которого пришли: по нему решается владение серверами и
     // каналами (audit B2) и выгоняется «призрак» прошлой вкладки в эфире.
     // Берём из handshake, а не из каждого сообщения: одна точка входа, и id
@@ -434,11 +443,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
         client.emit('kicked', { room: guest.slug });
         return;
       }
-      const presence = this.buildVoicePresence();
-      client.emit(
-        'voice-presence',
-        guest.slug in presence ? { [guest.slug]: presence[guest.slug] } : {},
-      );
+      client.emit('voice-presence', this.voice.snapshotFor(client));
       return;
     }
     // Набор серверов, разблокированных этим сокетом (закрытые под паролем).
@@ -454,7 +459,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // видимые ему (закрытые серверы скрыты до ввода пароля).
     client.emit('servers', this.publicServersFor(client));
     client.emit('channels', this.channelsFor(client));
-    client.emit('voice-presence', this.presenceFor(client, this.buildVoicePresence()));
+    client.emit('voice-presence', this.voice.snapshotFor(client));
     // Своё личное — отметки чтения и настройки. Отдельно от реестра и позже
     // него: за ними надо в базу, а реестр уже здесь, и задерживать первый кадр
     // приложения ради громкостей незачем.
@@ -615,30 +620,6 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   private mayEnter(client: AppSocket, room: string): boolean {
     const channel = this.registry.channels.find((c) => c.type === 'voice' && c.slug === room);
     return !channel || this.canSee(client, channel);
-  }
-
-  /**
-   * Присутствие в форме, пригодной этому сокету. Правило белого списка: комната
-   * едет к нему, только если за ней стоит видимый ему канал реестра. Слаг канала
-   * закрытого сервера — такой же секрет, как и сам канал (по нему заходят: `join`
-   * берёт слаг, а не id), а комната, которой в реестре нет вовсе, — вообще не
-   * канал: `join` пускает в любой слаг, и рассылка такой строки означала бы, что
-   * каждый участник может нарисовать остальным на главном сервере «эфир» с
-   * произвольным названием. Своя комната — исключение: в ней человек сидит, и
-   * не показать её ему было бы враньём.
-   */
-  private presenceFor(
-    client: AppSocket,
-    presence: Record<string, VoicePresenceEntry[]>,
-  ): Record<string, VoicePresenceEntry[]> {
-    const own = typeof client.data.room === 'string' ? client.data.room : null;
-    const visible = new Set<string>();
-    for (const c of this.registry.channels) {
-      if (c.type === 'voice' && this.canSee(client, c)) visible.add(c.slug);
-    }
-    return Object.fromEntries(
-      Object.entries(presence).filter(([room]) => room === own || visible.has(room)),
-    );
   }
 
   /**
@@ -830,7 +811,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       // …и состав их эфиров. Без этого строки каналов стоят пустыми до первого
       // чужого входа-выхода: присутствие теперь режется по видимости, и
       // прошлую рассылку этот сокет получил ещё запертым.
-      client.emit('voice-presence', this.presenceFor(client, this.buildVoicePresence()));
+      client.emit('voice-presence', this.voice.snapshotFor(client));
       // …и счётчики упоминаний в них: снимок на подключении собирался, когда
       // эти каналы были ещё не видны, и «тебя звали» в них молчало бы до
       // следующего захода.
@@ -945,7 +926,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     if (!rooms.size) return 0;
     let count = 0;
     for (const sock of this.server.sockets.sockets.values()) {
-      const room = sock.data.room;
+      const room = this.voice.roomOf(sock);
       if (room && rooms.has(room)) count++;
     }
     return count;
@@ -1035,9 +1016,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const target = channel.type === 'voice' ? channel.slug : this.chat.room(channel.slug);
     let count = 0;
     for (const sock of this.server.sockets.sockets.values()) {
-      const where = (channel.type === 'voice' ? sock.data.room : sock.data.chatRoom) as
-        | string
-        | undefined;
+      const where = channel.type === 'voice' ? this.voice.roomOf(sock) : sock.data.chatRoom;
       if (where === target) count++;
     }
     return count;
@@ -1371,11 +1350,11 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
 
   /** Выписать сокет из эфира и ленты этого сервера — там ему больше нельзя. */
   private evictFrom(client: AppSocket, serverId: string): void {
-    const voice = client.data.room;
+    const voice = this.voice.roomOf(client);
     const chat = client.data.chatRoom;
     for (const channel of this.registry.channels) {
       if (channel.serverId !== serverId) continue;
-      if (channel.type === 'voice' && voice === channel.slug) this.leaveRoom(client);
+      if (channel.type === 'voice' && voice === channel.slug) this.voice.leave(client);
       if (channel.type === 'text' && chat === this.chat.room(channel.slug)) {
         this.leaveChatRoom(client);
         // С причиной: канал на месте, ушёл человек. Без неё клиент сказал бы
@@ -1434,7 +1413,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     const id = trimmed(payload?.id, LIMIT.id);
     const target = id ? this.server.sockets.sockets.get(id) : undefined;
     if (!target || target.data.guest !== true) return { ok: false, error: 'not-found' };
-    const room = target.data.room;
+    const room = this.voice.roomOf(target);
     if (!room) return { ok: false, error: 'not-found' };
     // Канал закрытого сервера запирает и это: не введя пароль, ты не видишь ни
     // канала, ни того, кто в нём сидит, — значит и выгонять оттуда некого.
@@ -1445,7 +1424,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // соединение он бы просто переподключил и гадал, куда делся звук. Выписки
     // из комнаты и закрытой двери на обратный вход довольно.
     target.emit('kicked', { room });
-    this.leaveRoom(target);
+    this.voice.leave(target);
     this.logger.log(
       `guest ${target.data.name || '?'} (${target.id}) kicked from "${room}" by ${client.id}`,
     );
@@ -1499,9 +1478,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // медиасервер» — и весь канал, работающий прекрасно, получил бы красное
     // «тебя не слышат» на пустом месте. Пропуск описывает СЛЕДУЮЩИЙ вход, и
     // отказ в нём — такой же ответ, как выдача.
-    const forget = () => {
-      client.data.sfuPassRoom = undefined;
-    };
+    const forget = () => this.voice.forgetPass(client);
     const url = (process.env.SFU_URL ?? '').trim();
     if (!url || !sfuSecret()) {
       forget();
@@ -1519,7 +1496,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // голосовой канал он и так вправе, а `peerId` по-прежнему берётся из
     // сокета, так что назваться чужим id нельзя.
     const asked = trimmed(payload?.room, LIMIT.slug);
-    const room = asked || (typeof client.data.room === 'string' ? client.data.room : '');
+    const room = asked || this.voice.roomOf(client) || '';
     if (!room) {
       forget();
       return { ok: false, error: 'not-in-room' };
@@ -1545,7 +1522,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // этот момент ещё пуст (заполнен он только при пере-выдаче во время звонка).
     // Лимит — тот же, что у `join`.
     const askedName = trimmed(payload?.name, LIMIT.tag);
-    const name = askedName || (typeof client.data.name === 'string' ? client.data.name : '');
+    const name = askedName || this.voice.nameOf(client) || '';
     // Слушателю пропуск выдаём тот же, но с клеймом: медиасервер откажет ему в
     // produce. Клиент у гостя свой — запрет обязан жить там, где течёт медиа.
     const { token, exp } = issueSfuToken({
@@ -1558,7 +1535,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // прошлой версии), иначе сошёл бы за p2p — и остальные съехали бы в прямые
     // звонки, разъехавшись с ним по-настоящему. Пропуск — лучшее, что о таком
     // клиенте известно: за ним идут в медиасервер.
-    client.data.sfuPassRoom = room;
+    this.voice.grantPass(client, room);
     this.logger.log(`sfu-token issued to ${name || '?'} (${client.id}) room "${room}"`);
     return { ok: true, token, exp, url };
   }
@@ -1627,47 +1604,11 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // прошлой версии поля не пришлёт — за него отвечает выданный пропуск:
     // считать такого p2p нельзя, остальные съехали бы в прямые звонки и
     // разъехались бы с ним уже по-настоящему.
-    const transport =
-      payload?.transport === 'sfu' || payload?.transport === 'p2p'
-        ? payload.transport
-        : client.data.sfuPassRoom === room
-          ? 'sfu'
-          : 'p2p';
+    const transport = this.voice.transportFor(client, payload?.transport, room);
 
-    // Повторный join без leave (например, после обрыва) — сначала выходим из старой комнаты
-    this.leaveRoom(client);
-
-    // Выгоняем «призрака»: прошлый сокет того же устройства, ещё висящий в этой
-    // комнате (перезагрузка страницы = новый id, старый уйдёт лишь по грейсу).
-    // Так участника не двоит у остальных. Делаем ДО сбора списка пиров.
-    if (clientId) this.evictGhost(clientId, client.id);
-    client.data.clientId = clientId;
-
-    // Только реально подключённые сокеты: в adapter.rooms может ещё висеть id
-    // отвалившегося пира (окно connectionStateRecovery) — ему offer слать некому.
-    const peerIds = this.server.sockets.adapter.rooms.get(room) ?? new Set<string>();
-    const peers = [...peerIds]
-      .filter((id) => this.server.sockets.sockets.has(id))
-      .map((id) => {
-        const sock = this.server.sockets.sockets.get(id);
-        const speaker = sock ? this.speaker(sock) : undefined;
-        return {
-          id,
-          name: sock?.data.name,
-          ...(speaker ? { fingerprint: speaker.fingerprint } : {}),
-          ...(sock?.data.guest === true ? { guest: true } : {}),
-          ...(sock?.data.guestListen === true ? { listen: true } : {}),
-        };
-      });
-
-    client.join(room);
-    client.data.room = room;
-    client.data.name = name;
-    client.data.transport = transport;
-    if (clientId) this.voiceMembers.set(clientId, { id: client.id, room });
-    // Медиасостояние прошлого захода не тащим: клиент пришлёт своё сразу после join.
-    client.data.micOn = undefined;
-    client.data.deafened = undefined;
+    // Вход: выход из прошлой комнаты, выселение «призрака» своего же устройства
+    // и сбор соседей — всё это один неделимый порядок, и живёт он в VoiceSessions.
+    const peers = this.voice.enter(client, { room, name, transport, clientId });
 
     // Новичку — список тех, кто уже в канале (он шлёт им offer'ы),
     // остальным — уведомление о пополнении
@@ -1679,7 +1620,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       ...(this.isGuest(client) ? { guest: true } : {}),
       ...(this.isListener(client) ? { listen: true } : {}),
     });
-    this.broadcastVoicePresence();
+    this.voice.broadcast();
     // UA — в лог: «телефон не слышит» первым делом упирается в вопрос, ЧТО это
     // за клиент был (мобильный Safari? нативное приложение? старый бандл?).
     const ua = oneLine(String(client.handshake.headers['user-agent'] ?? '')).slice(0, 120);
@@ -1690,7 +1631,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // Клиенты разберутся сами (мелкая комната съедет в p2p целиком), но в логе
     // это должно быть видно сразу: снаружи такое выглядит как «он в канале, но
     // молчит», и без строчки в логе разбирается только гаданием.
-    const split = this.transportsInRoom(room);
+    const split = this.voice.transportsInRoom(room);
     if (split.size > 1) {
       this.logger.warn(
         `voice: room "${room}" is split across transports: ${[...split].join(' + ')}`,
@@ -1700,7 +1641,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
 
   @SubscribeMessage('leave')
   handleLeave(@ConnectedSocket() client: AppSocket) {
-    this.leaveRoom(client);
+    this.voice.leave(client);
   }
 
   @SubscribeMessage('offer')
@@ -1728,26 +1669,20 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     payload: { camOn?: unknown; screenOn?: unknown; micOn?: unknown; deafened?: unknown },
   ) {
     if (!this.allow(client)) return;
-    const room = client.data.room;
+    const room = this.voice.roomOf(client);
     if (!room) return;
-    // Мут/глушилку запоминаем на сокете — их раздаёт voice-presence (индикаторы в
-    // сайдбаре видят и те, кто сам не в эфире). micOn по умолчанию true.
-    const prevMic = client.data.micOn;
-    const prevDeafened = client.data.deafened;
-    client.data.micOn = payload?.micOn !== false;
-    client.data.deafened = payload?.deafened === true;
+    // Мут/глушилку запоминает голосовая сессия — их раздаёт voice-presence
+    // (индикаторы в сайдбаре видят и те, кто сам не в эфире).
+    const changed = this.voice.setMedia(client, payload?.micOn, payload?.deafened);
     client.to(room).emit('media-update', {
       from: client.id,
       camOn: payload?.camOn === true,
       screenOn: payload?.screenOn === true,
-      micOn: client.data.micOn,
-      deafened: client.data.deafened,
+      ...this.voice.mediaOf(client),
     });
     // Presence несёт только мут/глушилку — камеру/экран (или повтор того же
     // состояния) не гоним на весь сервер. Рассылаем лишь при реальной их смене.
-    if (client.data.micOn !== prevMic || client.data.deafened !== prevDeafened) {
-      this.broadcastVoicePresence();
-    }
+    if (changed) this.voice.broadcast();
   }
 
   // Смена тега на лету: обновляем имя в голосовой комнате (presence + подписи
@@ -1785,15 +1720,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       const own = this.speaker(sock);
       if (own) own.nick = name;
 
-      const room = sock.data.room;
-      if (room && sock.data.name !== name) {
-        sock.data.name = name;
-        // От имени того сокета, который в комнате и сидит: id в событии — это
-        // id плитки, и подставить сюда id переименовавшегося устройства значит
-        // переименовать не ту плитку (или ничью).
-        sock.to(room).emit('peer-renamed', { id: sock.id, name });
-        presence = true;
-      }
+      if (this.voice.rename(sock, name)) presence = true;
 
       const chatRoom = sock.data.chatRoom;
       if (chatRoom && sock.data.chatName !== name) {
@@ -1806,7 +1733,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     }
 
     for (const room of rosters) this.emitRoster(room);
-    if (presence) this.broadcastVoicePresence();
+    if (presence) this.voice.broadcast();
   }
 
   // ===== Текстовый канал =====
@@ -2336,128 +2263,17 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // Не выходим из комнат сразу: даём socket.io шанс восстановить сессию (тот же
     // id, те же комнаты). Если за грейс-период клиент не вернулся — тогда уже
     // выходим и уведомляем остальных. Так моргание сети не обрывает живой звонок.
-    const id = client.id;
-    const timer = setTimeout(() => {
-      this.pendingLeave.delete(id);
-      this.leaveRoom(client);
-      this.leaveChatRoom(client);
-    }, SignalingGateway.LEAVE_GRACE_MS);
-    timer.unref?.();
-    this.pendingLeave.set(id, timer);
+    this.voice.hold(client);
   }
 
   // Пересылаем сигнал только участнику той же комнаты, что и отправитель
   private relay(client: AppSocket, event: string, to: unknown, data: Record<string, unknown>) {
     if (typeof to !== 'string') return;
-    const room = client.data.room;
+    const room = this.voice.roomOf(client);
     if (!room) return;
     const target = this.server.sockets.sockets.get(to);
-    if (!target || target.data.room !== room) return;
+    if (!target || this.voice.roomOf(target) !== room) return;
     target.emit(event, { from: client.id, ...data });
-  }
-
-  // Убираем прошлый сокет того же устройства из голосового. Два случая:
-  // — сокет ещё жив (второй таб / сессия сохранена CSR) — штатно выводим leaveRoom;
-  // — сокет уже отвалился (перезагрузка) — шлём peer-left по его id в ЕГО комнату,
-  //   чтобы плитку сняли сразу, не дожидаясь грейса. В обоих отменяем отложенный выход.
-  private evictGhost(clientId: string, keepId: string) {
-    const ghost = this.voiceMembers.get(clientId);
-    if (!ghost || ghost.id === keepId) return;
-    const timer = this.pendingLeave.get(ghost.id);
-    if (timer) {
-      clearTimeout(timer);
-      this.pendingLeave.delete(ghost.id);
-    }
-    const sock = this.server.sockets.sockets.get(ghost.id);
-    if (sock) {
-      // Живой сокет: штатный выход сам снимет запись из voiceMembers.
-      this.leaveRoom(sock);
-    } else {
-      // Отвалившийся: сокета уже нет — сами уведомляем комнату и чистим карту.
-      this.server.to(ghost.room).emit('peer-left', { id: ghost.id });
-      this.voiceMembers.delete(clientId);
-      this.broadcastVoicePresence();
-    }
-  }
-
-  /** Какими транспортами сейчас звонят в комнате. Больше одного = расщепление. */
-  private transportsInRoom(room: string): Set<string> {
-    const kinds = new Set<string>();
-    for (const id of this.server.sockets.adapter.rooms.get(room) ?? []) {
-      const sock = this.server.sockets.sockets.get(id);
-      if (sock) kinds.add(sock.data.transport === 'sfu' ? 'sfu' : 'p2p');
-    }
-    return kinds;
-  }
-
-  private leaveRoom(client: AppSocket) {
-    const room = client.data.room;
-    if (room) {
-      this.logger.log(
-        `voice: ${client.data.name || '?'} (${client.id}) left "${room}"`,
-      );
-      client.to(room).emit('peer-left', { id: client.id });
-      client.leave(room);
-      client.data.room = undefined;
-      client.data.transport = undefined;
-      // Пропуск выписан на комнату, из которой мы только что вышли (см.
-      // handleSfuToken): дальше он способен только соврать про транспорт.
-      client.data.sfuPassRoom = undefined;
-      const clientId = client.data.clientId;
-      if (clientId && this.voiceMembers.get(clientId)?.id === client.id) {
-        this.voiceMembers.delete(clientId);
-      }
-      this.broadcastVoicePresence();
-    }
-  }
-
-  // Кто сейчас в каких голосовых каналах (формат совпадает с VoicePeer из shared)
-  private buildVoicePresence(): Record<string, VoicePresenceEntry[]> {
-    const presence: Record<string, VoicePresenceEntry[]> = {};
-    for (const [id, sock] of this.server.sockets.sockets) {
-      const room = sock.data.room;
-      if (!room) continue;
-      // Слушателю микрофон выставляем сами: он его и не включал, но клиент
-      // прошлой версии по умолчанию считает микрофон включённым, а показать
-      // «говорит» тому, кого физически не слышно, — худшее из вранья.
-      const listen = sock.data.guestListen === true;
-      const speaker = this.speaker(sock);
-      (presence[room] ??= []).push({
-        id,
-        name: sock.data.name || ANON_NAME,
-        ...(speaker ? { fingerprint: speaker.fingerprint } : {}),
-        micOn: !listen && sock.data.micOn !== false,
-        deafened: sock.data.deafened === true,
-        transport: sock.data.transport === 'sfu' ? 'sfu' : 'p2p',
-        ...(sock.data.guest === true ? { guest: true } : {}),
-        ...(listen ? { listen: true } : {}),
-      });
-    }
-    return presence;
-  }
-
-  // Коалесцирующий (trailing-edge) дебаунс: пачка событий за окно = один emit
-  // с итоговым состоянием. Таймер уже взведён — ничего не делаем.
-  // Рассылка пер-сокетная (как broadcastChannels): гостям — только срез их
-  // комнаты, чтобы состав остальных каналов не утекал за инвайт.
-  private broadcastVoicePresence() {
-    if (this.presenceTimer) return;
-    this.presenceTimer = setTimeout(() => {
-      this.presenceTimer = null;
-      const presence = this.buildVoicePresence();
-      for (const sock of this.server.sockets.sockets.values()) {
-        if (sock.data.guest === true) {
-          // `guest` и `guestRoom` кладутся вместе, одним `if` на подключении:
-          // гостя без комнаты не бывает, и утверждение здесь — про это, а не
-          // про удобство.
-          const room = sock.data.guestRoom as string;
-          sock.emit('voice-presence', room in presence ? { [room]: presence[room] } : {});
-        } else {
-          sock.emit('voice-presence', this.presenceFor(sock, presence));
-        }
-      }
-    }, SignalingGateway.PRESENCE_DEBOUNCE_MS);
-    this.presenceTimer.unref?.();
   }
 
   /**
