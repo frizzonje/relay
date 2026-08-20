@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FakeServer, asSocket, type FakeSocket } from './testkit';
+import { asSocket } from './testkit';
 import {
   MAIN,
   connect,
@@ -10,7 +10,6 @@ import {
   ownServer,
   personCookie,
   say,
-  settle,
   slugOf,
   useGatewayStand,
 } from './gateway.testkit';
@@ -24,31 +23,6 @@ import {
  */
 
 useGatewayStand();
-
-// ── Модерация ─────────────────────────────────────────────────────────────
-
-/** Попытка подключения вместе с тем, чем ответила дверь. */
-async function knock(gw: SignalingGateway, server: FakeServer, cookie: string, id?: string) {
-  const sock = server.connect({ id, cookie });
-  const refused = await server.run(sock);
-  if (!refused) gw.handleConnection(asSocket(sock));
-  return { sock, refused };
-}
-
-/** Свой сервер с текстовым каналом — то, что модерирует его создатель. */
-async function ownServer(gw: SignalingGateway, sock: FakeSocket, id = 'srv') {
-  await gw.handleServerCreate(asSocket(sock), { id, name: 'мой' });
-  await gw.handleChannelCreate(asSocket(sock), { serverId: id, type: 'text', name: 'болталка' });
-  await gw.handleChannelCreate(asSocket(sock), { serverId: id, type: 'voice', name: 'эфир' });
-  settle();
-}
-
-/** Сказать что-нибудь в канале и вернуть id сказанного. */
-async function say(gw: SignalingGateway, sock: FakeSocket, slug: string, text: string) {
-  await gw.handleChatJoin(asSocket(sock), { room: slug });
-  await gw.handleChatMessage(asSocket(sock), { text });
-  return (sock.last('chat') as { id: string }).id;
-}
 
 describe('бан', () => {
   it('забаненного на инсталляцию не пускают на порог', async () => {

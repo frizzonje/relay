@@ -408,12 +408,6 @@ describe('server-stats', () => {
 
 // ── Права на реестр ───────────────────────────────────────────────────────
 
-/** Сделать человека владельцем инсталляции — тем же путём, что и ссылка. */
-async function makeOwner(owner: OwnerService, identityId: string): Promise<void> {
-  const { token } = await owner.issue();
-  await owner.claim(token, identityId);
-}
-
 describe('права на сервер: личность и владелец инсталляции', () => {
   it('созданный сервер записан на личность, а не на устройство', async () => {
     const { gw, server, registry } = await makeGateway();
