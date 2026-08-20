@@ -107,7 +107,7 @@ const UPLINK_PILL: Record<'cpu' | 'bandwidth', { short: MessageKey; title: Messa
 };
 
 // Слой simulcast, который реально доехал (только режим медиасервера): мелкой
-// плитке отдают экономный, крупной — исходный. См. lib/voice/sfu.ts.
+// плитке отдают экономный, крупной — исходный. См. lib/voice/sfu/subscribe.ts.
 const LAYER_LABEL: Record<number, MessageKey> = {
   0: 'net.layer.low',
   1: 'net.layer.mid',
