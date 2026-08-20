@@ -1,6 +1,6 @@
 'use client';
 
-import type { IceServer, SdpPayload } from '@relay/shared';
+import type { IceServer } from '@relay/shared';
 import { getSocket } from '@/lib/socket';
 import { getIceServers } from '@/lib/config';
 import { tx } from '@/lib/i18n';
@@ -15,7 +15,8 @@ import {
   type NetSnapshot,
   type StatsSnapshot,
 } from '../stats';
-import { createSenders, tuneSdp } from './senders';
+import { createSenders } from './senders';
+import { createNegotiation } from './negotiation';
 import { createLadder, signalingUp } from './recovery';
 import { createSilence } from './silence';
 
@@ -40,16 +41,9 @@ interface Peer {
   pc: RTCPeerConnection;
   name: string;
   polite: boolean;
-  makingOffer: boolean;
-  ignoreOffer: boolean;
-  pendingCandidates: RTCIceCandidateInit[];
   // Сводное состояние связи (см. combinedConnState) — чтобы не дёргать UI на
   // каждое дублирующее событие connection/ice state.
   connState: PeerConnState;
-  // Отпечаток DTLS удалённой стороны. Сменился — собеседник пересобрал свой pc,
-  // и наш надо выбрасывать, а не «доводить» ренеготиацией: браузер не примет
-  // чужой отпечаток на живом транспорте, и связь останется полусобранной.
-  fingerprint: string | null;
 }
 
 type PeerConnState = 'connecting' | 'connected' | 'disconnected' | 'failed';
@@ -63,14 +57,6 @@ function combinedConnState(pc: RTCPeerConnection): PeerConnState {
   if (c === 'failed' || i === 'failed') return 'failed';
   if (c === 'disconnected' || i === 'disconnected') return 'disconnected';
   return 'connecting';
-}
-
-// Отпечаток DTLS из SDP (`a=fingerprint:sha-256 AB:CD:…`). Единственный признак,
-// по которому видно, что за тем же собеседником стоит УЖЕ ДРУГОЙ pc: сокет и id
-// у него прежние, а соединение он собрал заново.
-function fingerprintOf(sdp: string | undefined): string | null {
-  const m = /^a=fingerprint:\s*\S+\s+(\S+)/im.exec(sdp ?? '');
-  return m ? m[1] : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -113,6 +99,16 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     dropConnection,
     createPeer: (peerId, name, relayOnly) => void createPeer(peerId, name, true, relayOnly),
   });
+  const negotiation = createNegotiation({
+    host,
+    peer: (peerId) => peers.get(peerId) ?? null,
+    dropConnection,
+    createPeer: (peerId, name) => createPeer(peerId, name, false), // мы — отвечающая сторона
+    sendMedia: (peerId, pc) => {
+      if (host.screenOn()) senders.sendScreenTo(peerId, pc);
+      else if (host.camOn()) senders.sendVideoTo(peerId, pc);
+    },
+  });
   const silence = createSilence({ host, signalingUp });
 
   // ── Сигналинг (perfect negotiation) ───────────────────────────────────
@@ -141,11 +137,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       name,
       // «Вежливая» сторона уступает при одновременных offer'ах; роль по id
       polite: (socket().id ?? '') < peerId,
-      makingOffer: false,
-      ignoreOffer: false,
-      pendingCandidates: [],
       connState: 'connecting',
-      fingerprint: null,
     };
     peers.set(peerId, peer);
 
@@ -175,28 +167,11 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       else if (host.camOn()) senders.sendVideoTo(peerId, pc);
     }
 
-    pc.onnegotiationneeded = async () => {
-      try {
-        peer.makingOffer = true;
-        const offer = await pc.createOffer();
-        // Пока ждали createOffer, мог прийти встречный offer (glare) и сменить
-        // состояние. Тогда свой локальный offer уже не нужен: ответим в обработчике
-        // 'offer', и наш answer заодно унесёт собеседнику свежие дорожки. Без этой
-        // проверки setLocalDescription упал бы и оставил связь полусобранной.
-        if (pc.signalingState !== 'stable') return;
-        offer.sdp = tuneSdp(offer.sdp);
-        await pc.setLocalDescription(offer);
-        socket().emit('offer', { to: peerId, sdp: pc.localDescription as SdpPayload });
-      } catch (err) {
-        console.error('negotiation failed:', err);
-      } finally {
-        peer.makingOffer = false;
-      }
-    };
+    // Обещание наружу — по той же причине, что и у сокет-обработчиков ниже.
+    pc.onnegotiationneeded = () => negotiation.offerTo(peerId, pc);
 
     pc.onicecandidate = (e) => {
-      if (e.candidate)
-        socket().emit('ice-candidate', { to: peerId, candidate: e.candidate.toJSON() });
+      if (e.candidate) negotiation.sendCandidate(peerId, e.candidate);
     };
 
     pc.ontrack = (e) => {
@@ -262,6 +237,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     const peer = peers.get(peerId);
     if (!peer) return;
     ladder.disarm(peerId);
+    negotiation.forget(peerId);
     peer.pc.close();
     peers.delete(peerId);
     senders.forget(peerId);
@@ -284,20 +260,6 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       const urls = Array.isArray(s.urls) ? s.urls : [s.urls];
       return urls.some((u) => typeof u === 'string' && /^turns?:/i.test(u));
     });
-  }
-
-  async function drainCandidates(peerId: string) {
-    const peer = peers.get(peerId);
-    if (!peer) return;
-    const queued = peer.pendingCandidates;
-    peer.pendingCandidates = [];
-    for (const candidate of queued) {
-      try {
-        await peer.pc.addIceCandidate(candidate);
-      } catch (err) {
-        console.error('addIceCandidate failed:', err);
-      }
-    }
   }
 
   // ── Метрики ───────────────────────────────────────────────────────────
@@ -450,89 +412,15 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
         }
       });
 
-      s.on('offer', async ({ from, name, sdp }) => {
-        if (!room || !host.localStream()) return;
-        let peer = peers.get(from);
-        const remoteFp = fingerprintOf((sdp as RTCSessionDescriptionInit | undefined)?.sdp);
-        // Отпечаток DTLS сменился — за тем же id стоит уже ДРУГОЙ pc: собеседник
-        // пересобрал связь (его лестница дошла до ступени 2). Ренеготиацией такой
-        // offer не принять — браузер не пустит чужой отпечаток на живой транспорт,
-        // и раньше это давало ровно «оба в канале, оба молчат». Пересобираем и мы.
-        const rebuilt = !!(peer && peer.fingerprint && remoteFp && remoteFp !== peer.fingerprint);
-        // Труп прошлого соединения: setRemoteDescription на мёртвом/закрытом pc
-        // связь не поднимет — выкидываем и принимаем offer на свежий pc.
-        const dead =
-          !!peer && (peer.pc.connectionState === 'failed' || peer.pc.signalingState === 'closed');
-        if (peer && (dead || rebuilt)) {
-          host.diag(
-            'mesh peer rebuilt',
-            `${peer.name}: ${rebuilt ? 'new dtls fingerprint' : peer.pc.connectionState}`,
-          );
-          dropConnection(from);
-          host.setTileState(from, 'tile.state.reconnecting');
-          peer = undefined;
-        }
-        const fresh = !peer;
-        if (!peer) {
-          createPeer(from, name || tx('voice.peer.fallback'), false); // мы — отвечающая сторона
-          peer = peers.get(from)!;
-        }
-        const pc = peer.pc;
+      // Переговоры целиком в mesh/negotiation.ts — здесь только два условия,
+      // без которых слушать нечего: мы в комнате и своё медиа у нас на руках.
+      // Обещание возвращаем наружу: socket.io его не ждёт, а тест — ждёт, и
+      // без него «отправили ли answer» пришлось бы проверять по таймеру.
+      s.on('offer', (msg) => (room && host.localStream() ? negotiation.onOffer(msg) : undefined));
 
-        const collision = peer.makingOffer || pc.signalingState !== 'stable';
-        peer.ignoreOffer = !peer.polite && collision;
-        if (peer.ignoreOffer) return;
+      s.on('answer', (msg) => negotiation.onAnswer(msg));
 
-        try {
-          await pc.setRemoteDescription(sdp as RTCSessionDescriptionInit);
-          if (remoteFp) peer.fingerprint = remoteFp;
-          await drainCandidates(from);
-          const answer = await pc.createAnswer();
-          answer.sdp = tuneSdp(answer.sdp);
-          await pc.setLocalDescription(answer);
-          s.emit('answer', { to: from, sdp: pc.localDescription as SdpPayload });
-
-          // Только теперь, ответив свежему пиру, отдаём ему СВОЮ камеру/демонстрацию.
-          // Связь уже стабильна — addTrack здесь запускает обычную ренеготиацию (тот
-          // же путь, что при старте показа в живом звонке), а не хрупкий «доп. offer
-          // поверх answer», который после переподключения участник нередко не получал.
-          if (fresh && (host.screenOn() || host.camOn())) {
-            if (host.screenOn()) senders.sendScreenTo(from, pc);
-            else senders.sendVideoTo(from, pc);
-          }
-        } catch (err) {
-          console.error('offer handling failed:', err);
-        }
-      });
-
-      s.on('answer', async ({ from, sdp }) => {
-        const peer = peers.get(from);
-        if (!peer || peer.pc.signalingState !== 'have-local-offer') return;
-        try {
-          await peer.pc.setRemoteDescription(sdp as RTCSessionDescriptionInit);
-          // Запоминаем отпечаток и с answer'а: когда инициаторы мы, offer'ов от
-          // собеседника может не быть вовсе — а сравнивать при его пересборке надо.
-          const fp = fingerprintOf((sdp as RTCSessionDescriptionInit | undefined)?.sdp);
-          if (fp) peer.fingerprint = fp;
-          await drainCandidates(from);
-        } catch (err) {
-          console.error('answer handling failed:', err);
-        }
-      });
-
-      s.on('ice-candidate', async ({ from, candidate }) => {
-        const peer = peers.get(from);
-        if (!peer) return;
-        try {
-          if (peer.pc.remoteDescription) {
-            await peer.pc.addIceCandidate(candidate);
-          } else {
-            peer.pendingCandidates.push(candidate);
-          }
-        } catch (err) {
-          if (!peer.ignoreOffer) console.error('addIceCandidate failed:', err);
-        }
-      });
+      s.on('ice-candidate', (msg) => negotiation.onCandidate(msg));
 
       s.on('peer-left', ({ id }) => {
         const peer = peers.get(id);
@@ -551,6 +439,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       peers.forEach((peer) => peer.pc.close());
       peers.clear();
       ladder.forgetAll();
+      negotiation.forgetAll();
       senders.forgetAll();
       silence.forgetAll();
       netHistory.clear();
