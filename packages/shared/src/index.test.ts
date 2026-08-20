@@ -9,6 +9,7 @@ import {
   GUEST_TOKEN_TTL_MS,
   LIMITS,
   MAX_UPLOAD_BYTES,
+  PROTOCOL_VERSION,
   REACTION_EMOJIS,
   TOKEN_TTL_MS,
   issueGuestToken,
@@ -64,6 +65,14 @@ describe('константы совпадают с копией в api', () => {
   it('страница ленты — та же', () => {
     expect(apiSource('gateway/chat.service.ts')).toContain(
       `export const PAGE_SIZE = ${CHAT_PAGE_SIZE};`,
+    );
+  });
+
+  it('версия контракта та же — на ней держится вся дверь', () => {
+    // Разъехавшись, эти два числа дают не ошибку сборки, а инсталляцию,
+    // которая не пускает никого: сервер сверяет своё с тем, что назвал клиент.
+    expect(apiSource('gateway/protocol.ts')).toContain(
+      `export const PROTOCOL_VERSION = ${PROTOCOL_VERSION};`,
     );
   });
 

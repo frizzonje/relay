@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueGuestToken, issueToken } from '../auth/auth';
 import { asSocket } from './testkit';
+import { PROTOCOL_VERSION } from './protocol';
 import { MAIN, connect, makeGateway, settle, slugOf, useGatewayStand } from './gateway.testkit';
 
 /**
@@ -24,6 +25,36 @@ beforeEach(() => {
 });
 
 // ── Подключение ───────────────────────────────────────────────────────────
+
+/**
+ * Версия контракта на рукопожатии. Дверь отвечает ею раньше всего остального:
+ * у сокета, говорящего на другом языке, спрашивать личность бессмысленно.
+ */
+describe('версия контракта', () => {
+  it('не назвавшего версию не пускают: до 1.0 её не было вовсе', async () => {
+    const { server } = await makeGateway();
+    const sock = server.connect({ auth: { protocol: undefined } });
+    expect((await server.run(sock))?.message).toBe('client-outdated');
+  });
+
+  it('старая версия — «обнови клиент», новая — «обнови сервер»', async () => {
+    const { server } = await makeGateway();
+    const old = server.connect({ auth: { protocol: PROTOCOL_VERSION - 1 } });
+    expect((await server.run(old))?.message).toBe('client-outdated');
+    // Клиент новее сервера — совет противоположный, и дать не тот значит
+    // послать человека чинить не то.
+    const ahead = server.connect({ auth: { protocol: PROTOCOL_VERSION + 1 } });
+    expect((await server.run(ahead))?.message).toBe('server-outdated');
+  });
+
+  it('своя версия проходит дверь', async () => {
+    const { gw, server } = await makeGateway();
+    const sock = server.connect();
+    expect(await server.run(sock)).toBeUndefined();
+    gw.handleConnection(asSocket(sock));
+    expect(sock.got('servers')).toBe(true);
+  });
+});
 
 describe('подключение', () => {
   it('без пропуска сокет отключают, а не пускают наблюдать', async () => {

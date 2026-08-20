@@ -1,4 +1,5 @@
 import type { Server, Socket } from 'socket.io';
+import { PROTOCOL_VERSION } from './protocol';
 
 /**
  * Поддельный socket.io для тестов гейтвея.
@@ -141,7 +142,10 @@ export class FakeServer {
   ) {
     const id = opts.id ?? `sock-${++this.seq}`;
     const sock = new FakeSocket(id, this, {
-      auth: opts.auth ?? {},
+      // Версию контракта тестовый сокет называет сам: её спрашивает дверь, и
+      // без неё каждый тест проверял бы отказ устаревшему клиенту вместо того,
+      // что в нём написано. Сказать своё — можно, для тестов самой двери.
+      auth: { protocol: PROTOCOL_VERSION, ...(opts.auth ?? {}) },
       headers: {
         ...(opts.ua ? { 'user-agent': opts.ua } : {}),
         ...(opts.cookie ? { cookie: opts.cookie } : {}),

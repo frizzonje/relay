@@ -11,6 +11,7 @@ import { usePairingStore } from '@/stores/pairing';
 import { AdmitDeviceDialog } from '@/components/layout/AdmitDeviceDialog';
 import { OwnerClaimDialog } from '@/components/layout/OwnerClaimDialog';
 import { BannedGate } from '@/components/layout/BannedGate';
+import { OutdatedGate } from '@/components/layout/OutdatedGate';
 import { ServerRail } from '@/components/layout/ServerRail';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Topbar } from '@/components/layout/Topbar';
@@ -145,6 +146,7 @@ export function AppShell() {
       <AdmitDeviceDialog />
       <OwnerClaimDialog />
       <BannedGate />
+      <OutdatedGate />
     </div>
   );
 }

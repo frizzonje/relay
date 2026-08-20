@@ -11,6 +11,7 @@ import { useChatStore } from '@/stores/chat';
 import { useUnreadStore, LAST_READ_KEY } from '@/stores/unread';
 import { useChannelsStore } from '@/stores/channels';
 import { useIdentityStore } from '@/stores/identity';
+import { useContractStore } from '@/stores/contract';
 import { useModerationStore } from '@/stores/moderation';
 import { usePinsStore } from '@/stores/pins';
 import { useServersStore } from '@/stores/servers';
@@ -330,6 +331,11 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     socket.on('banned', () => useModerationStore.getState().setBanned(true));
     socket.on('connect_error', (err: Error) => {
       if (err?.message === 'banned') useModerationStore.getState().setBanned(true);
+      // Дверь не пустила из-за версии контракта. Сторону сервер называет сам:
+      // «обнови приложение» и «этот relay старее твоего приложения» — советы
+      // разным людям (см. OutdatedGate).
+      if (err?.message === 'client-outdated') useContractStore.getState().setOutdated('client');
+      if (err?.message === 'server-outdated') useContractStore.getState().setOutdated('server');
     });
 
     socket.on('connect', () => {

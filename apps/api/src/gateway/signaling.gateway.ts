@@ -32,6 +32,7 @@ import { UploadsService } from '../uploads';
 import { ChatService } from './chat.service';
 import { RegistryService } from './registry.service';
 import {
+  PROTOCOL_VERSION,
   type ChannelCreatePayload,
   type ChannelCreateResult,
   type ChannelDeletePayload,
@@ -89,6 +90,24 @@ import {
  * строке показывает экран «вас забанили», а не бесконечное «переподключаюсь».
  */
 export const BANNED_ERROR = 'banned';
+
+/**
+ * Отказ во входе клиенту не той версии контракта. Тоже текстом ошибки — другого
+ * канала у неподключённого сокета нет, — и двумя разными строками: «обнови
+ * приложение» и «на этом сервере старая версия relay» это противоположные
+ * советы, и дать не тот значит послать человека чинить не то.
+ */
+export const CLIENT_OUTDATED_ERROR = 'client-outdated';
+export const SERVER_OUTDATED_ERROR = 'server-outdated';
+
+/**
+ * Версия контракта, названная клиентом. `undefined` — не назвал вовсе, то есть
+ * клиент старше самого правила: до 1.0 поля не существовало.
+ */
+function spokenProtocol(auth: unknown): number | undefined {
+  const raw = (auth as { protocol?: unknown } | undefined)?.protocol;
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined;
+}
 
 @WebSocketGateway({
   // origin: '*' — дефолт для прода (единый origin за Caddy, кука sameSite=lax не
@@ -290,6 +309,24 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    */
   afterInit(server: AppServer): void {
     server.use((socket, next) => {
+      // Версия контракта — раньше всего остального: у сокета, говорящего на
+      // другом языке, спрашивать личность бессмысленно. До 1.0 версии не было
+      // вовсе, и отставший клиент выглядел не устаревшим, а сломанным: молчащие
+      // каналы и вечное «переподключаюсь» вместо одной внятной строки.
+      const spoken = spokenProtocol(socket.handshake.auth);
+      if (spoken !== PROTOCOL_VERSION) {
+        this.logger.warn(
+          `отказ во входе: контракт ${spoken ?? 'не назван'} против ${PROTOCOL_VERSION}`,
+        );
+        next(
+          new Error(
+            spoken !== undefined && spoken > PROTOCOL_VERSION
+              ? SERVER_OUTDATED_ERROR
+              : CLIENT_OUTDATED_ERROR,
+          ),
+        );
+        return;
+      }
       void this.perimeter.recognize(socket).then((banned) => {
         // Забаненного на всю инсталляцию не пускаем внутрь вовсе — отказом
         // самой миддлвары, до `handleConnection`. Причина уезжает клиенту

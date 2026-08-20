@@ -426,6 +426,11 @@
   "pair.link.title": "Link this device",
   "pair.link.waiting": "Waiting for the other device to let this one in…",
   "pair.retry": "Try again",
+  "outdated.client.body": "This tab is running code older than the server, and the server no longer lets it in. Reload the page; if it happens again, the app itself needs updating.",
+  "outdated.client.title": "The app is out of date",
+  "outdated.reload": "Reload",
+  "outdated.server.body": "This installation runs an older relay than the app you are knocking with. Nothing on your side fixes that — only whoever runs this server can update it.",
+  "outdated.server.title": "This server is out of date",
   "pins.action.pin": "Pin",
   "pins.action.unpin": "Unpin",
   "pins.count": {

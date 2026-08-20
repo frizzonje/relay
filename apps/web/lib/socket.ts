@@ -1,5 +1,9 @@
 import { io, type Socket } from 'socket.io-client';
-import type { ClientToServerEvents, ServerToClientEvents } from '@relay/shared';
+import {
+  PROTOCOL_VERSION,
+  type ClientToServerEvents,
+  type ServerToClientEvents,
+} from '@relay/shared';
 import { loadClientId } from '@/lib/identity';
 import { loadUnlockTokens } from '@/lib/unlock-tokens';
 
@@ -48,6 +52,11 @@ export function getSocket(): RelaySocket {
         const guest = guestTokenFromLocation();
         const unlock = loadUnlockTokens();
         cb({
+          // Версия контракта: по ней сервер отличает устаревший клиент от
+          // сломанного и говорит об этом словами, а не молчанием (см.
+          // OutdatedGate). Вкладка, открытая до обновления сервера, продолжает
+          // жить на старом бандле — и узнаёт об этом здесь, на реконнекте.
+          protocol: PROTOCOL_VERSION,
           clientId: loadClientId(),
           ...(guest ? { guest } : {}),
           ...(unlock.length ? { unlock } : {}),
