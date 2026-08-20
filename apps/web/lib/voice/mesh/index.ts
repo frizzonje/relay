@@ -17,6 +17,7 @@ import {
   type StatsSnapshot,
 } from '../stats';
 import { createSenders, tuneSdp } from './senders';
+import { createSilence } from './silence';
 
 /**
  * Mesh-транспорт: каждый шлёт своё медиа каждому напрямую (perfect negotiation,
@@ -46,8 +47,6 @@ const RECOVER_WINDOW_MS = 7000;
 const POLITE_LAG_MS = 2500;
 // Потолок паузы между повторными пересборками (растёт от RECOVER_WINDOW_MS).
 const REBUILD_MAX_DELAY_MS = 30_000;
-// Связь «есть», а входящего звука нет столько — считаем поломкой и чиним.
-const SILENCE_MS = 8000;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Состояние пира
@@ -77,8 +76,6 @@ interface Peer {
   rebuiltAt: number;
   // Про эту связь уже жаловались в тост — не повторяться на каждом круге.
   warned: boolean;
-  // Подряд идущие срабатывания сторожа тишины (связь есть, звука нет).
-  silentKicks: number;
   // Отпечаток DTLS удалённой стороны. Сменился — собеседник пересобрал свой pc,
   // и наш надо выбрасывать, а не «доводить» ренеготиацией: браузер не примет
   // чужой отпечаток на живом транспорте, и связь останется полусобранной.
@@ -123,7 +120,6 @@ function fingerprintOf(sdp: string | undefined): string | null {
 export function createMeshTransport(host: TransportHost): VoiceTransport {
   const peers = new Map<string, Peer>();
   const netHistory = new Map<string, NetSnapshot>();
-  const audioFlow = new Map<string, { bytes: number; since: number }>();
 
   let room: string | null = null;
   let iceServers: IceServer[] = [{ urls: ['stun:stun.l.google.com:19302'] }];
@@ -131,6 +127,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
 
   const socket = () => getSocket();
   const senders = createSenders(host);
+  const silence = createSilence({ host, signalingUp: () => signalingUp() });
 
   // ── Сигналинг (perfect negotiation) ───────────────────────────────────
 
@@ -168,7 +165,6 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       rebuilds: 0,
       rebuiltAt: 0,
       warned: false,
-      silentKicks: 0,
       fingerprint: null,
     };
     peers.set(peerId, peer);
@@ -247,7 +243,6 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
           clearRecovery(peer);
           peer.recoverStage = 0;
           peer.rebuilds = 0;
-          peer.silentKicks = 0;
           peer.warned = false; // связь была — следующий провал стоит показать снова
           host.setTileState(peerId, '');
           // bitrate-cap/тюнинг применяем только после ICE — иначе setParameters кидает
@@ -299,8 +294,8 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     peer.pc.close();
     peers.delete(peerId);
     senders.forget(peerId);
+    silence.forget(peerId);
     netHistory.delete(peerId);
-    audioFlow.delete(peerId);
     host.cleanupPeerAudio(peerId);
   }
 
@@ -562,58 +557,21 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     host.setUplink(worstUplink);
   }
 
-  // Сторож «односторонней тишины» — ровно тот сбой, на который жалуются: pc бодро
-  // рапортует connected, палочки горят, а звука нет, и сам он из этого состояния
-  // не выйдет. Байты входящего аудио перестали расти — сперва ICE-restart, если и
-  // после него тихо — пересборка соединения.
-  //
-  // Ложных срабатываний не боимся: мут у нас — это `track.enabled = false`, RTP
-  // при этом продолжает идти (DTX в SDP выключен принудительно), а собеседника,
-  // который не слал звук НИ РАЗУ, отсекает условие prev.bytes > 0.
-  //
-  // В лог кладём currentDirection каждого transceiver'а: если тишина от кривого
-  // направления m-line после glare, а не от сети, это видно только там.
-  function monitorAudioFlow(snaps: Map<string, StatsSnapshot>) {
-    const now = Date.now();
-    for (const [id, peer] of peers) {
-      if (peer.connState !== 'connected') {
-        audioFlow.delete(id);
-        continue;
-      }
-      const snap = snaps.get(id);
-      if (!snap) continue;
-      const bytes = snap.audioBytesRecv;
-      const prev = audioFlow.get(id);
-      if (!prev || bytes > prev.bytes) {
-        audioFlow.set(id, { bytes, since: now });
-        peer.silentKicks = 0; // звук идёт — счётчик попыток сбрасываем
-        continue;
-      }
-      // Байты не растут дольше порога — фиксируем и не спамим каждые 3 с
-      if (now - prev.since > SILENCE_MS) {
-        const tx = peer.pc.getTransceivers ? peer.pc.getTransceivers() : [];
-        const dirs = tx
-          .map((t) => `${t.receiver?.track?.kind ?? '?'}:${t.currentDirection ?? '?'}`)
-          .join(', ');
-        const secs = Math.round((now - prev.since) / 1000);
-        console.warn(
-          `[voice] нет входящего звука от «${peer.name}» (${id}) ` +
-            `${secs}с; bytesReceived=${bytes}; transceivers=[${dirs}]`,
-        );
-        audioFlow.set(id, { bytes, since: now });
-        // Звук шёл и оборвался — чиним. Порог даёт следующую попытку не раньше
-        // чем через SILENCE_MS, так что лестница не срывается в цикл.
-        if (prev.bytes > 0 && signalingUp()) {
-          peer.silentKicks += 1;
-          host.diag(
-            'mesh silence',
-            `${peer.name} ${secs}s: ${peer.silentKicks === 1 ? 'restart-ice' : 'rebuild'}; transceivers=[${dirs}]`,
-          );
-          host.setTileState(id, 'tile.state.reconnecting');
-          if (peer.silentKicks === 1) peer.pc.restartIce();
-          else rebuildPeer(id);
-        }
-      }
+  // Сторож односторонней тишины: считает он (mesh/silence.ts), а чинит лестница.
+  function fixSilence(snaps: Map<string, StatsSnapshot>) {
+    const probes = [...peers].map(([id, peer]) => ({
+      id,
+      name: peer.name,
+      pc: peer.pc,
+      connected: peer.connState === 'connected',
+      audioBytesRecv: snaps.get(id)?.audioBytesRecv ?? null,
+    }));
+    for (const { peerId, fix } of silence.check(probes)) {
+      const peer = peers.get(peerId);
+      if (!peer) continue;
+      host.setTileState(peerId, 'tile.state.reconnecting');
+      if (fix === 'restart-ice') peer.pc.restartIce();
+      else rebuildPeer(peerId);
     }
   }
 
@@ -745,8 +703,8 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       });
       peers.clear();
       senders.forgetAll();
+      silence.forgetAll();
       netHistory.clear();
-      audioFlow.clear();
       room = null;
       host.setUplink('ok'); // пиров нет — своё «узкое место» сбрасываем
     },
@@ -786,7 +744,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
         // Палочки — до сторожа: сторож чинит связь, и после его ступени снимок
         // этого тика описывал бы соединение, которого уже нет.
         updatePeerQuality(snaps);
-        monitorAudioFlow(snaps);
+        fixSilence(snaps);
       })();
     },
 
