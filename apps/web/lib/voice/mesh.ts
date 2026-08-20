@@ -8,7 +8,8 @@ import { tx } from '@/lib/i18n';
 import { boostVideoBitrate, boostAudioBitrate } from '@/lib/sdp';
 import type { UplinkStatus } from '@/stores/voice';
 import type { TransportHost, VoiceTransport } from './types';
-import { gradeQuality, kbps, limitReason, pingGrade, type NetSnapshot } from './quality';
+import { gradeQuality, pingGrade, type NetSnapshot } from './quality';
+import { netDelta, readStats, toHistory, worseUplink } from './stats';
 
 /**
  * Mesh-транспорт: каждый шлёт своё медиа каждому напрямую (perfect negotiation,
@@ -562,17 +563,8 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       if (peer.connState !== 'connected') continue;
       anyConnected = true;
       try {
-        const stats = await peer.pc.getStats();
-        stats.forEach((report) => {
-          if (
-            report.type === 'candidate-pair' &&
-            report.state === 'succeeded' &&
-            report.currentRoundTripTime != null
-          ) {
-            const ms = Math.round(report.currentRoundTripTime * 1000);
-            if (rttMs === null || ms < rttMs) rttMs = ms;
-          }
-        });
+        const ms = readStats(await peer.pc.getStats()).rttMs;
+        if (ms !== null && (rttMs === null || ms < rttMs)) rttMs = ms;
       } catch {
         /* getStats может кинуть на закрывающемся pc — игнорируем */
       }
@@ -616,119 +608,34 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
         continue;
       }
 
-      let rtt: number | null = null;
-      let lost = 0;
-      let recv = 0;
-      let jitterMs: number | null = null;
-      let bytesSent = 0;
-      let bytesRecv = 0;
-      let width: number | null = null;
-      let height: number | null = null;
-      let fps: number | null = null;
-      let videoCodecId: string | undefined;
-      // Кандидат-пары: id выбранной (наименьший RTT) — по нему потом читаем тип пути.
-      let bestPairLocalId: string | undefined;
-      let bestPairRemoteId: string | undefined;
-      let stats: RTCStatsReport;
+      let report: RTCStatsReport;
       try {
-        stats = await peer.pc.getStats();
+        report = await peer.pc.getStats();
       } catch {
         /* getStats может кинуть на закрывающемся pc — пропускаем пира */
         continue;
       }
-      stats.forEach((r) => {
-        if (
-          r.type === 'candidate-pair' &&
-          r.state === 'succeeded' &&
-          r.currentRoundTripTime != null
-        ) {
-          const ms = Math.round(r.currentRoundTripTime * 1000);
-          if (rtt === null || ms < rtt) {
-            rtt = ms;
-            bestPairLocalId = (r as { localCandidateId?: string }).localCandidateId;
-            bestPairRemoteId = (r as { remoteCandidateId?: string }).remoteCandidateId;
-          }
-        }
-        const kind = (r as { kind?: string; mediaType?: string }).kind ?? r.mediaType;
-        if (r.type === 'inbound-rtp' && (kind === 'audio' || kind === 'video')) {
-          lost += (r as { packetsLost?: number }).packetsLost ?? 0;
-          recv += (r as { packetsReceived?: number }).packetsReceived ?? 0;
-          bytesRecv += (r as { bytesReceived?: number }).bytesReceived ?? 0;
-          const j = (r as { jitter?: number }).jitter;
-          if (kind === 'audio' && j != null) jitterMs = Math.round(j * 1000);
-          if (kind === 'video') {
-            const rv = r as {
-              frameWidth?: number;
-              frameHeight?: number;
-              framesPerSecond?: number;
-              codecId?: string;
-            };
-            if (rv.frameWidth && rv.frameHeight) {
-              width = rv.frameWidth;
-              height = rv.frameHeight;
-            }
-            if (rv.framesPerSecond != null) fps = Math.round(rv.framesPerSecond);
-            if (rv.codecId) videoCodecId = rv.codecId;
-          }
-        }
-        if (r.type === 'outbound-rtp' && (kind === 'audio' || kind === 'video')) {
-          bytesSent += (r as { bytesSent?: number }).bytesSent ?? 0;
-          if (kind === 'video') {
-            const reason = limitReason(
-              (r as { qualityLimitationReason?: string }).qualityLimitationReason,
-            );
-            if (reason === 'bandwidth') worstUplink = 'bandwidth';
-            else if (reason === 'cpu' && worstUplink === 'ok') worstUplink = 'cpu';
-          }
-        }
-      });
+      const snap = readStats(report);
+      // Своё «узкое место» — общее на всех: аплинк у нас один, а видим мы его
+      // с каждого соединения по-своему. Берём худшее.
+      worstUplink = worseUplink(worstUplink, snap.uplink);
 
-      // Тип пути: реле, если локальный ИЛИ удалённый кандидат выбранной пары — relay.
-      let relay: boolean | null = null;
-      const localCand = bestPairLocalId ? stats.get(bestPairLocalId) : undefined;
-      const remoteCand = bestPairRemoteId ? stats.get(bestPairRemoteId) : undefined;
-      if (localCand || remoteCand) {
-        const lt = (localCand as { candidateType?: string } | undefined)?.candidateType;
-        const rt = (remoteCand as { candidateType?: string } | undefined)?.candidateType;
-        relay = lt === 'relay' || rt === 'relay';
-      }
-
-      // Кодек входящего видео из codecId → mimeType «video/VP8» → «VP8».
-      let codec: string | null = null;
-      if (videoCodecId) {
-        const mime = (stats.get(videoCodecId) as { mimeType?: string } | undefined)?.mimeType;
-        if (mime) codec = mime.split('/')[1]?.toUpperCase() ?? null;
-      }
-
-      // Потери и битрейт за интервал: дельта относительно прошлого снимка.
-      // Первый тик базы ещё не имеет — потери 0, битрейт неизвестен.
-      const prev = netHistory.get(id);
+      // Потери и битрейт — за интервал, а не накопленным итогом с начала звонка.
       const now = Date.now();
-      netHistory.set(id, { lost, recv, bytesSent, bytesRecv, ts: now });
-      let lossPct: number | null = null;
-      let sendKbps: number | null = null;
-      let recvKbps: number | null = null;
-      if (prev) {
-        const dLost = Math.max(0, lost - prev.lost);
-        const dRecv = Math.max(0, recv - prev.recv);
-        const total = dLost + dRecv;
-        lossPct = total > 0 ? Math.round((dLost / total) * 1000) / 10 : 0;
-        const dt = now - prev.ts;
-        sendKbps = kbps(bytesSent, prev.bytesSent, dt);
-        recvKbps = kbps(bytesRecv, prev.bytesRecv, dt);
-      }
+      const delta = netDelta(netHistory.get(id), snap, now);
+      netHistory.set(id, toHistory(snap, now));
 
       host.setTileNet(id, {
-        grade: gradeQuality(rtt, lossPct ?? 0),
-        rttMs: rtt,
-        lossPct,
-        jitterMs,
-        relay,
-        sendKbps,
-        recvKbps,
-        videoRes: width && height ? `${width}×${height}` : null,
-        fps,
-        codec,
+        grade: gradeQuality(snap.rttMs, delta.lossPct ?? 0),
+        rttMs: snap.rttMs,
+        lossPct: delta.lossPct,
+        jitterMs: snap.jitterMs,
+        relay: snap.relay,
+        sendKbps: delta.sendKbps,
+        recvKbps: delta.recvKbps,
+        videoRes: snap.videoRes,
+        fps: snap.fps,
+        codec: snap.codec,
       });
     }
 
@@ -755,11 +662,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       }
       let bytes = 0;
       try {
-        const stats = await peer.pc.getStats();
-        stats.forEach((r) => {
-          const kind = (r as { kind?: string; mediaType?: string }).kind ?? r.mediaType;
-          if (r.type === 'inbound-rtp' && kind === 'audio') bytes += r.bytesReceived ?? 0;
-        });
+        bytes = readStats(await peer.pc.getStats()).audioBytesRecv;
       } catch {
         continue;
       }

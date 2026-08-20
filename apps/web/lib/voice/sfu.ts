@@ -14,14 +14,8 @@ import { io, type Socket } from 'socket.io-client';
 import { tx } from '@/lib/i18n';
 import type { UplinkStatus } from '@/stores/voice';
 import type { TransportHost, VoiceTransport } from './types';
-import {
-  gradeQuality,
-  kbps,
-  limitReason,
-  pingGrade,
-  rttFromStats,
-  type NetSnapshot,
-} from './quality';
+import { gradeQuality, pingGrade, type NetSnapshot } from './quality';
+import { netDelta, readStats, toHistory, worseUplink } from './stats';
 
 /**
  * SFU-транспорт: своё медиа уходит на медиасервер ОДИН раз, он раздаёт его
@@ -788,7 +782,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     for (const transport of [recvTransport, sendTransport]) {
       if (!transport || transport.closed) continue;
       try {
-        const rtt = rttFromStats(await transport.getStats());
+        const rtt = readStats(await transport.getStats()).rttMs;
         if (rtt != null) return rtt;
       } catch {
         /* транспорт мог закрыться под руками — просто пробуем второй */
@@ -827,80 +821,37 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         continue;
       }
 
-      // Не `lost`: так зовётся модульный флаг «уже сдались и позвали дирижёра»,
-      // и здесь он был бы затенён локальным счётчиком потерянных пакетов.
-      let lostPkts = 0;
-      let recv = 0;
-      let bytesRecv = 0;
-      let jitterMs: number | null = null;
-      let width = 0;
-      let height = 0;
-      let fps: number | null = null;
-      let codec: string | null = null;
-
+      const reports: RTCStatsReport[] = [];
       for (const entry of mine) {
-        let stats: RTCStatsReport;
         try {
-          stats = await entry.consumer.getStats();
+          reports.push(await entry.consumer.getStats());
         } catch {
-          continue;
+          /* consumer мог закрыться между тиками — считаем по остальным */
         }
-        stats.forEach((r) => {
-          if (r.type !== 'inbound-rtp') return;
-          const kind = (r as { kind?: string; mediaType?: string }).kind ?? r.mediaType;
-          lostPkts += (r as { packetsLost?: number }).packetsLost ?? 0;
-          recv += (r as { packetsReceived?: number }).packetsReceived ?? 0;
-          bytesRecv += (r as { bytesReceived?: number }).bytesReceived ?? 0;
-          const j = (r as { jitter?: number }).jitter;
-          if (kind === 'audio' && j != null) jitterMs = Math.round(j * 1000);
-          if (kind !== 'video') return;
-          const rv = r as {
-            frameWidth?: number;
-            frameHeight?: number;
-            framesPerSecond?: number;
-            codecId?: string;
-          };
-          if (rv.frameWidth && rv.frameHeight) {
-            width = rv.frameWidth;
-            height = rv.frameHeight;
-          }
-          if (rv.framesPerSecond != null) fps = Math.round(rv.framesPerSecond);
-          const mime = rv.codecId
-            ? (stats.get(rv.codecId) as { mimeType?: string } | undefined)?.mimeType
-            : undefined;
-          if (mime) codec = mime.split('/')[1]?.toUpperCase() ?? null;
-        });
       }
+      // Дорожек у собеседника несколько, а плитка одна: складываем в один снимок.
+      const snap = readStats(reports);
 
       // Потери и битрейт — за интервал, а не накопленным итогом с начала звонка.
-      const prev = netHistory.get(peerId);
       const now = Date.now();
-      netHistory.set(peerId, { lost: lostPkts, recv, bytesSent: 0, bytesRecv, ts: now });
-      let lossPct: number | null = null;
-      let recvKbps: number | null = null;
-      if (prev) {
-        const dLost = Math.max(0, lostPkts - prev.lost);
-        const dRecv = Math.max(0, recv - prev.recv);
-        const total = dLost + dRecv;
-        lossPct = total > 0 ? Math.round((dLost / total) * 1000) / 10 : 0;
-        recvKbps = kbps(bytesRecv, prev.bytesRecv, now - prev.ts);
-      }
+      const delta = netDelta(netHistory.get(peerId), snap, now);
+      netHistory.set(peerId, toHistory(snap, now));
 
       // Слой берём с камеры: у демонстрации он один, показывать нечего.
       const cam = mine.find((e) => e.source === 'cam');
       const layer = cam ? (gotLayer.get(cam.consumer.id) ?? null) : null;
 
       host.setTileNet(peerId, {
-        grade: gradeQuality(rtt, lossPct ?? 0),
+        grade: gradeQuality(rtt, delta.lossPct ?? 0),
         rttMs: rtt,
-        lossPct,
-        jitterMs,
+        lossPct: delta.lossPct,
+        jitterMs: snap.jitterMs,
         relay: null, // TURN в этом режиме не участвует — путь всегда через сервер
         sendKbps: null, // исходящий у нас общий на всех, «к нему» не существует
-        recvKbps,
-        videoRes: width && height ? `${width}×${height}` : null,
-        fps,
-        codec,
+        recvKbps: delta.recvKbps,
+        videoRes: snap.videoRes,
+        fps: snap.fps,
+        codec: snap.codec,
         via: 'sfu',
         layer,
       });
@@ -913,15 +864,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     for (const producer of producers.values()) {
       if (producer.kind !== 'video' || producer.closed) continue;
       try {
-        const stats = await producer.getStats();
-        stats.forEach((r) => {
-          if (r.type !== 'outbound-rtp') return;
-          const reason = limitReason(
-            (r as { qualityLimitationReason?: string }).qualityLimitationReason,
-          );
-          if (reason === 'bandwidth') worst = 'bandwidth';
-          else if (reason === 'cpu' && worst === 'ok') worst = 'cpu';
-        });
+        worst = worseUplink(worst, readStats(await producer.getStats()).uplink);
       } catch {
         /* producer мог закрыться между тиками */
       }
@@ -957,11 +900,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       if (entry.consumer.kind !== 'audio' || entry.consumer.closed) continue;
       let bytes = 0;
       try {
-        const stats = await entry.consumer.getStats();
-        stats.forEach((r) => {
-          if (r.type === 'inbound-rtp')
-            bytes += (r as { bytesReceived?: number }).bytesReceived ?? 0;
-        });
+        bytes = readStats(await entry.consumer.getStats()).audioBytesRecv;
       } catch {
         continue; // consumer мог закрыться между тиками
       }

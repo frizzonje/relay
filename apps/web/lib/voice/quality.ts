@@ -47,19 +47,6 @@ export function kbps(bytesNow: number, bytesPrev: number, dtMs: number): number 
   return Math.max(0, Math.round(((bytesNow - bytesPrev) * 8) / dtMs)); // *8/1000/(ms/1000)=*8/ms
 }
 
-/** Минимальный RTT по успешной candidate-pair в отчёте getStats (мс, null — нет данных). */
-export function rttFromStats(stats: RTCStatsReport): number | null {
-  let best: number | null = null;
-  stats.forEach((report) => {
-    const r = report as { type?: string; state?: string; currentRoundTripTime?: number };
-    if (r.type !== 'candidate-pair' || r.state !== 'succeeded') return;
-    if (r.currentRoundTripTime == null) return;
-    const ms = Math.round(r.currentRoundTripTime * 1000);
-    if (best === null || ms < best) best = ms;
-  });
-  return best;
-}
-
 /** Пороги окраски пинга в панели голоса — общие для панели и тултипа. */
 export function pingGrade(rttMs: number): 'good' | 'mid' | 'bad' {
   return rttMs < 80 ? 'good' : rttMs < 200 ? 'mid' : 'bad';

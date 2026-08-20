@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { gradeQuality, kbps, limitReason, pingGrade, rttFromStats } from './quality';
+import { gradeQuality, kbps, limitReason, pingGrade } from './quality';
 
 /**
  * Арифметика «палочек качества». Она общая для обоих транспортов нарочно:
@@ -52,39 +52,6 @@ describe('kbps', () => {
   it('нулевой интервал — нет данных, а не деление на ноль', () => {
     expect(kbps(1000, 0, 0)).toBeNull();
     expect(kbps(1000, 0, -5)).toBeNull();
-  });
-});
-
-describe('rttFromStats', () => {
-  function report(entries: Record<string, unknown>[]): RTCStatsReport {
-    return { forEach: (fn: (v: unknown) => void) => entries.forEach(fn) } as RTCStatsReport;
-  }
-
-  it('берёт минимальный RTT по успешным парам кандидатов', () => {
-    expect(
-      rttFromStats(
-        report([
-          { type: 'candidate-pair', state: 'succeeded', currentRoundTripTime: 0.12 },
-          { type: 'candidate-pair', state: 'succeeded', currentRoundTripTime: 0.05 },
-        ]),
-      ),
-    ).toBe(50);
-  });
-
-  it('неуспешные пары и посторонние отчёты не учитываются', () => {
-    expect(
-      rttFromStats(
-        report([
-          { type: 'candidate-pair', state: 'failed', currentRoundTripTime: 0.001 },
-          { type: 'inbound-rtp', currentRoundTripTime: 0.002 },
-          { type: 'candidate-pair', state: 'succeeded' },
-        ]),
-      ),
-    ).toBeNull();
-  });
-
-  it('пустой отчёт — нет данных', () => {
-    expect(rttFromStats(report([]))).toBeNull();
   });
 });
 
