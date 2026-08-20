@@ -103,26 +103,22 @@ export async function serverStats(
 /** Попытка разблокировать закрытый сервер паролем (ответ придёт server-unlock-result). */
 export function unlockServer(id: string, password: string): void {
   if (!id) return;
-  // Запоминаем оптимистично: на успех пароль останется (авто-разблокировка после
-  // reload), на неверный — SocketProvider его забудет.
-  rememberServerPassword(id, password);
+  // Пароль дальше этого вызова не идёт: разблокировку переживает пропуск,
+  // который придёт в ответе (см. lib/unlock-tokens). Раньше он оставался в
+  // localStorage до конца жизни браузера — общий секрет всех, кто ходит в этот
+  // сервер, в хранилище, доступном любому XSS (audit S5).
   getSocket().emit('server-unlock', { id, password });
 }
 
-// ===== Пароли закрытых серверов в localStorage =====
-// Храним введённые верные пароли, чтобы автоматически разблокировать серверы
-// после перезагрузки/reconnect (сокет-сессия недолговечна, а доступ — нет).
-// Это client-side удобство; сервер всё равно проверяет пароль на каждый unlock.
+// ===== Пароли закрытых серверов, оставшиеся от прежних версий =====
+// Писать сюда больше нечего: разблокировку держит пропуск (lib/unlock-tokens).
+// Читать — приходится: у того, кто обновился, пароли в хранилище уже лежат, и
+// оставить их там значило бы оставить и дыру, ради которой всё это менялось.
+// Поэтому на первом же подключении они разменивают себя на пропуска и
+// стираются (см. SocketProvider), а этот блок исчезнет вместе с последней
+// инсталляцией, которая их помнит.
 
 const PW_PREFIX = 'relay-server-pw:';
-
-export function rememberServerPassword(id: string, password: string): void {
-  try {
-    localStorage.setItem(PW_PREFIX + id, password);
-  } catch {
-    /* приватный режим/квота — не критично */
-  }
-}
 
 export function forgetServerPassword(id: string): void {
   try {
@@ -132,7 +128,7 @@ export function forgetServerPassword(id: string): void {
   }
 }
 
-/** Все сохранённые пароли — для авто-разблокировки на connect. */
+/** Пароли, сохранённые прежними версиями, — их меняют на пропуска и стирают. */
 export function storedServerPasswords(): { id: string; password: string }[] {
   const out: { id: string; password: string }[] = [];
   try {

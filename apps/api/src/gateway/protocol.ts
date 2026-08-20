@@ -310,9 +310,11 @@ export interface VoiceDiagPayload {
  * `limit` со `scope` — два разных разговора: «у тебя уже столько» человек
  * чинит сам, «на инсталляции больше нельзя» может починить только тот, у кого
  * ssh к машине, — и путать их значит советовать невозможное.
+ *
+ * `token` — пропуск в только что созданный закрытый сервер (audit S5).
  */
 export type ServerCreateResult =
-  | { ok: true }
+  | { ok: true; token?: string }
   | {
       ok: false;
       error: 'forbidden' | 'bad-name' | 'exists' | 'limit';

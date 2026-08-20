@@ -128,7 +128,13 @@ export class RegistryHandlers {
     // Раздаём каналы заново: у создателя новый сервер уже разблокирован.
     this.directory.broadcastChannels();
     await this.registry.persist();
-    return { ok: true };
+    // Пропуск в свой закрытый сервер — тот же самый, что выдаёт `server-unlock`
+    // на верный пароль. Без него разблокировка создателя жила бы ровно до
+    // первого обрыва сокета, а чтобы её пережить, клиенту пришлось бы держать
+    // у себя пароль — то есть общий секрет всех, кто в этот сервер ходит
+    // (audit S5).
+    if (!passwordHash) return { ok: true };
+    return { ok: true, token: issueUnlockToken(id, passwordHash).token };
   }
   /**
    * Кончилось ли место под ещё один сервер — и чьё именно. Спрашивается

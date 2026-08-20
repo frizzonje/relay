@@ -33,7 +33,6 @@ import {
   createServer,
   deleteServer,
   forgetServerPassword,
-  rememberServerPassword,
   serverStats,
   storedServerPasswords,
   unlockServer,
@@ -297,10 +296,34 @@ describe('создание сервера', () => {
   });
 });
 
+/**
+ * Пароль закрытого сервера в localStorage — общий секрет всех, кто в этот
+ * сервер ходит, в хранилище, доступном любому XSS (audit S5). Писать его туда
+ * клиент больше не умеет вовсе; читать — обязан, пока есть браузеры, где его
+ * записала прежняя версия, и ровно затем, чтобы разменять на пропуск и стереть.
+ */
 describe('пароли закрытых серверов', () => {
-  it('запоминаются, перечисляются и забываются', () => {
-    rememberServerPassword('srv-1', 'пароль-1');
-    rememberServerPassword('srv-2', 'пароль-2');
+  it('разблокировка шлёт пароль серверу и нигде его не оставляет', () => {
+    unlockServer('srv-1', 'пароль');
+    expect(emit).toHaveBeenCalledWith('server-unlock', { id: 'srv-1', password: 'пароль' });
+    expect(localStorage.getItem('relay-server-pw:srv-1')).toBeNull();
+    emit.mockClear();
+    unlockServer('', 'пароль');
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('заведение закрытого сервера тоже обходится без пароля в хранилище', async () => {
+    const p = createServer({ id: 'srv-2', name: 'тайный', password: 'пароль' });
+    reply({ ok: true, token: 'пропуск' });
+    expect(await p).toEqual({ ok: true, token: 'пропуск' });
+    expect(localStorage.getItem('relay-server-pw:srv-2')).toBeNull();
+  });
+
+  it('оставшееся от прежней версии перечисляется и стирается', () => {
+    localStorage.setItem('relay-server-pw:srv-1', 'пароль-1');
+    localStorage.setItem('relay-server-pw:srv-2', 'пароль-2');
+    // Чужие ключи хранилища в список не попадают.
+    localStorage.setItem('relay-theme', 'light');
     expect(storedServerPasswords().sort((a, b) => a.id.localeCompare(b.id))).toEqual([
       { id: 'srv-1', password: 'пароль-1' },
       { id: 'srv-2', password: 'пароль-2' },
@@ -309,26 +332,7 @@ describe('пароли закрытых серверов', () => {
     expect(storedServerPasswords()).toEqual([{ id: 'srv-2', password: 'пароль-2' }]);
   });
 
-  it('чужие ключи localStorage в список не попадают', () => {
-    localStorage.setItem('relay-theme', 'light');
-    localStorage.setItem('relay-hosts', '[]');
-    rememberServerPassword('srv-1', 'пароль');
-    expect(storedServerPasswords()).toEqual([{ id: 'srv-1', password: 'пароль' }]);
-  });
-
-  it('разблокировка запоминает пароль оптимистично и шлёт его серверу', () => {
-    unlockServer('srv-1', 'пароль');
-    expect(localStorage.getItem('relay-server-pw:srv-1')).toBe('пароль');
-    expect(emit).toHaveBeenCalledWith('server-unlock', { id: 'srv-1', password: 'пароль' });
-    emit.mockClear();
-    unlockServer('', 'пароль');
-    expect(emit).not.toHaveBeenCalled();
-  });
-
   it('недоступное хранилище не роняет разблокировку', () => {
-    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-      throw new Error('приватный режим');
-    });
     vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
       throw new Error('приватный режим');
     });

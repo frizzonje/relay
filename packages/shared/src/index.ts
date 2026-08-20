@@ -257,9 +257,12 @@ export type QuotaScope = 'person' | 'server' | 'install';
  *
  * `limit` — само число, а не только факт: «серверов не больше пяти» человек
  * понимает, «больше нельзя» — нет.
+ *
+ * `token` — пропуск в только что созданный закрытый сервер: пароль создатель
+ * знает и так, а держать его у себя в браузере клиенту незачем (audit S5).
  */
 export type ServerCreateResult =
-  | { ok: true }
+  | { ok: true; token?: string }
   | {
       ok: false;
       error: 'forbidden' | 'bad-name' | 'exists' | 'limit';

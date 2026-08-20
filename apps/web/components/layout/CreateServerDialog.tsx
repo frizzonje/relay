@@ -12,7 +12,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
 import { cn } from '@/lib/utils';
-import { createRefusalText, createServer, rememberServerPassword } from '@/lib/servers';
+import { createRefusalText, createServer } from '@/lib/servers';
+import { saveUnlockToken } from '@/lib/unlock-tokens';
 import { serverGradient, serverInitials } from '@/lib/server-visual';
 import { useServersStore } from '@/stores/servers';
 import { useUiStore } from '@/stores/ui';
@@ -111,10 +112,11 @@ export function CreateServerDialog({
       setError(createRefusalText(res?.ok === false ? res : null));
       return;
     }
-    // Создатель знает пароль — сразу считаем сервер разблокированным и запоминаем
-    // пароль (чтобы после перезагрузки авто-разблокировать).
+    // Создатель знает пароль — сервер сразу считается разблокированным, а
+    // пропуск из ответа доносит это до следующего подключения. Пароль здесь и
+    // заканчивается: в хранилище браузера ему делать нечего (audit S5).
     if (pw) {
-      rememberServerPassword(id, pw);
+      if (res.token) saveUnlockToken(id, res.token);
       markUnlocked(id);
     }
     setActiveServer(id);
