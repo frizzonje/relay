@@ -242,6 +242,31 @@ export type ServerDeleteResult =
       occupants?: number;
     };
 
+/** Чей потолок кончился: личный, этого сервера или всей инсталляции. */
+export type QuotaScope = 'person' | 'server' | 'install';
+
+/**
+ * Итог заведения сервера (ack). Раньше отказ был молчанием: диалог закрывался,
+ * рейка переключалась на сервер, которого сервер не завёл, и человек оставался
+ * в пустом месте без единого слова о том, почему (audit S2).
+ *
+ * `limit` со `scope` — два разных разговора. «У тебя уже столько серверов»
+ * человек чинит сам, удалив свой; «на инсталляции больше нельзя» может починить
+ * только тот, у кого ssh к машине, — и путать эти два ответа значит советовать
+ * невозможное.
+ *
+ * `limit` — само число, а не только факт: «серверов не больше пяти» человек
+ * понимает, «больше нельзя» — нет.
+ */
+export type ServerCreateResult =
+  | { ok: true }
+  | {
+      ok: false;
+      error: 'forbidden' | 'bad-name' | 'exists' | 'limit';
+      scope?: QuotaScope;
+      limit?: number;
+    };
+
 /** Ввод пароля для доступа к закрытому серверу. */
 /** Кого банить: сообщение, а `everywhere` — вся инсталляция вместо сервера. */
 export interface ModerationBanPayload {
@@ -441,6 +466,19 @@ export interface ChannelDeletePayload {
 export type ChannelDeleteResult =
   | { ok: true }
   | { ok: false; error: 'not-found' | 'forbidden' | 'occupied' | 'not-owner'; occupants?: number };
+
+/**
+ * Итог заведения канала (ack). `slug` — адрес комнаты, и считает его сервер:
+ * клиенту, который хочет тут же войти в созданное, узнать его больше неоткуда.
+ */
+export type ChannelCreateResult =
+  | { ok: true; slug: string }
+  | {
+      ok: false;
+      error: 'not-found' | 'forbidden' | 'bad-name' | 'exists' | 'limit';
+      scope?: QuotaScope;
+      limit?: number;
+    };
 
 /**
  * Переименование канала. Меняется только отображаемое имя — `slug` остаётся
@@ -982,11 +1020,11 @@ export interface ClientToServerEvents {
   'chat-search': (payload: ChatSearchPayload, cb: (res: ChatSearchResult) => void) => void;
   'media-update': (payload: MediaUpdatePayload) => void;
   rename: (payload: RenamePayload) => void;
-  'server-create': (payload: ServerCreatePayload) => void;
+  'server-create': (payload: ServerCreatePayload, cb: (res: ServerCreateResult) => void) => void;
   'server-delete': (payload: ServerDeletePayload, cb: (res: ServerDeleteResult) => void) => void;
   'server-stats': (payload: ServerStatsPayload, cb: (res: ServerStatsResult) => void) => void;
   'server-unlock': (payload: ServerUnlockPayload) => void;
-  'channel-create': (payload: ChannelCreatePayload) => void;
+  'channel-create': (payload: ChannelCreatePayload, cb: (res: ChannelCreateResult) => void) => void;
   'channel-delete': (payload: ChannelDeletePayload, cb: (res: ChannelDeleteResult) => void) => void;
   'channel-rename': (payload: ChannelRenamePayload, cb: (res: ChannelRenameResult) => void) => void;
   'channel-stats': (payload: ChannelStatsPayload, cb: (res: ChannelStatsResult) => void) => void;

@@ -1,8 +1,10 @@
 import type {
+  ChannelCreateResult,
   ChannelDeleteResult,
   ChannelRenameResult,
   ChannelStatsResult,
   ChannelType,
+  QuotaScope,
   VoiceMode,
 } from '@relay/shared';
 import { toast } from 'sonner';
@@ -25,23 +27,44 @@ import { tx } from '@/lib/i18n';
 /** Ack может не прийти вовсе (обрыв) — не ждём вечно. */
 const ACK_TIMEOUT_MS = 6000;
 
-export function createChannel(type: ChannelType, name: string, mode?: VoiceMode): void {
+/**
+ * Завести канал в открытом сервере. Возвращает true, если сервер согласился;
+ * при отказе сам показывает тост с причиной — до 1.0 отказ был молчанием, и
+ * человек, упёршийся в потолок или в занятое имя, видел ровно ничего.
+ */
+export async function createChannel(
+  type: ChannelType,
+  name: string,
+  mode?: VoiceMode,
+): Promise<boolean> {
   const trimmed = name.trim();
-  if (!trimmed) return;
+  if (!trimmed) return false;
   const serverId = useServersStore.getState().activeServerId;
-  // Набор главного сервера фиксирован (сервер откажет молча) — интерфейс сюда
-  // и не ведёт, но если дорога всё же нашлась, объясняем, а не глотаем.
+  // Набор главного сервера фиксирован — интерфейс сюда и не ведёт, но если
+  // дорога всё же нашлась, объясняем, а не глотаем.
   if (serverId === MAIN_SERVER_ID) {
     toast(tx('channels.mainFixed'));
-    return;
+    return false;
   }
-  // Владельцем канала сервер запишет устройство, назвавшееся в handshake
-  // (см. lib/socket) — менять канал сможет только оно.
-  getSocket().emit('channel-create', { serverId, type, name: trimmed, ...(mode ? { mode } : {}) });
+  // Владельцем канала сервер запишет личность за этим сокетом (см. lib/socket)
+  // — менять канал сможет только она.
+  const res = await ask<ChannelCreateResult>('channel-create', {
+    serverId,
+    type,
+    name: trimmed,
+    ...(mode ? { mode } : {}),
+  });
+  if (res?.ok) return true;
+  toast(res ? refusalText(res.error, undefined, res) : tx('channels.noAnswer'));
+  return false;
 }
 
-/** Человеческое объяснение отказа — то же самое и для удаления, и для правки. */
-function refusalText(error: string, occupants?: number): string {
+/** Человеческое объяснение отказа — одно на заведение, удаление и правку. */
+function refusalText(
+  error: string,
+  occupants?: number,
+  quota?: { scope?: QuotaScope; limit?: number },
+): string {
   if (error === 'occupied') {
     return occupants
       ? tx('channels.refusal.occupiedCount', { count: occupants })
@@ -50,6 +73,16 @@ function refusalText(error: string, occupants?: number): string {
   if (error === 'forbidden') return tx('channels.refusal.forbidden');
   if (error === 'not-owner') return tx('channels.refusal.notOwner');
   if (error === 'bad-name') return tx('channels.refusal.badName');
+  if (error === 'exists') return tx('channels.refusal.exists');
+  // Потолок сервера человек чинит сам — удалит ненужный канал; потолок
+  // инсталляции не чинится ничем, кроме доступа к машине, и обещать обратное
+  // нельзя.
+  if (error === 'limit') {
+    const count = quota?.limit ?? 0;
+    return quota?.scope === 'install'
+      ? tx('channels.refusal.limitInstall', { count })
+      : tx('channels.refusal.limitServer', { count });
+  }
   return tx('channels.refusal.gone');
 }
 

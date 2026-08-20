@@ -33,6 +33,7 @@ import { ChatService } from './chat.service';
 import { RegistryService } from './registry.service';
 import {
   type ChannelCreatePayload,
+  type ChannelCreateResult,
   type ChannelDeletePayload,
   type ChannelDeleteResult,
   type ChannelModePayload,
@@ -70,6 +71,7 @@ import {
   type PrefsSetPayload,
   type ReadMarkPayload,
   type ServerCreatePayload,
+  type ServerCreateResult,
   type ServerDeletePayload,
   type ServerDeleteResult,
   type ServerStatsPayload,
@@ -388,7 +390,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   handleServerCreate(
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ServerCreatePayload,
-  ) {
+  ): Promise<ServerCreateResult> {
     return this.registryHandlers.createServer(client, payload);
   }
 
@@ -420,7 +422,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   handleChannelCreate(
     @ConnectedSocket() client: AppSocket,
     @MessageBody() payload: ChannelCreatePayload,
-  ) {
+  ): Promise<ChannelCreateResult> {
     return this.registryHandlers.createChannel(client, payload);
   }
 

@@ -62,7 +62,11 @@ export function CreateChannelDialog({
     e.preventDefault();
     const trimmed = name.trim();
     if (!trimmed) return;
-    createChannel(type, trimmed, type === 'voice' ? mode : undefined);
+    // Диалог закрываем сразу, а отказ (потолок, занятое имя) человек увидит
+    // тостом: ждать ответа ради формы, которую в успешном случае всё равно
+    // закрывают, незачем — в отличие от заведения сервера, где промах уводит
+    // рейку в несуществующее место.
+    void createChannel(type, trimmed, type === 'voice' ? mode : undefined);
     onOpenChange(false);
   }
 

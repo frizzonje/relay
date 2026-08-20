@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { issueGuestToken, verifyGuestToken } from '../auth/auth';
 import { asSocket } from './testkit';
+import { MAX_CHANNELS_PER_SERVER } from './registry.service';
 import { MAIN, connect, makeGateway, settle, useGatewayStand, type AnyGw } from './gateway.testkit';
 
 /**
@@ -123,17 +124,31 @@ describe('channel-create', () => {
     expect((gw as AnyGw).registry.channels.some((c) => c.slug === 'вторжение')).toBe(false);
   });
 
-  it('потолок в 50 каналов держится', async () => {
+  /**
+   * Потолок каналов считается по своему серверу (audit S2): общий на
+   * инсталляцию означал бы, что полсотни каналов в чужом сервере не дают
+   * завести первый в своём.
+   */
+  it('потолок сервера держится, и в отказе стоит само число', async () => {
     const { gw, owner } = await withOwnServer();
-    for (let i = 0; i < 60; i++) {
-      await gw.handleChannelCreate(asSocket(owner), {
-        serverId: 'srv',
-        type: 'text',
-        name: `ch${i}`,
-      });
+    const answers = [];
+    for (let i = 0; i < MAX_CHANNELS_PER_SERVER + 2; i++) {
+      answers.push(
+        await gw.handleChannelCreate(asSocket(owner), {
+          serverId: 'srv',
+          type: 'text',
+          name: `ch${i}`,
+        }),
+      );
       vi.advanceTimersByTime(1000);
     }
-    expect((gw as AnyGw).registry.channels).toHaveLength(50);
+    expect(answers.filter((r) => r.ok)).toHaveLength(MAX_CHANNELS_PER_SERVER);
+    expect(answers[answers.length - 1]).toEqual({
+      ok: false,
+      error: 'limit',
+      scope: 'server',
+      limit: MAX_CHANNELS_PER_SERVER,
+    });
   });
 
   it('гость каналов не создаёт', async () => {

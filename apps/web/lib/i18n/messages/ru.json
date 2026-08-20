@@ -44,8 +44,11 @@
   "channels.mainFixed": "В главном сервере набор каналов фиксирован — создайте свой сервер.",
   "channels.noAnswer": "Сервер не ответил — попробуйте ещё раз.",
   "channels.refusal.badName": "Пустое имя каналу не подходит.",
+  "channels.refusal.exists": "Канал с таким именем в этом сервере уже есть.",
   "channels.refusal.forbidden": "Этот канал трогать нельзя.",
   "channels.refusal.gone": "Канала больше нет — список уже обновился.",
+  "channels.refusal.limitInstall": "На этой инсталляции кончились каналы: {count} — это её предел. Поднять его может только тот, у кого доступ к серверу.",
+  "channels.refusal.limitServer": "В этом сервере уже {count} каналов — это предел. Удалите ненужный.",
   "channels.refusal.notOwner": "Менять этот канал может только тот, кто его создал.",
   "channels.refusal.occupied": "В канале сейчас люди — сначала пусть выйдут.",
   "channels.refusal.occupiedCount": {
@@ -512,6 +515,10 @@
   "server.delete.title": "Удалить сервер «{name}»?",
   "server.noAnswer": "Сервер не ответил — попробуйте ещё раз.",
   "server.refusal.forbidden": "Этот сервер удалить нельзя.",
+  "server.refusal.badName": "Серверу нужно имя.",
+  "server.refusal.exists": "Сервер с таким адресом уже есть.",
+  "server.refusal.limitInstall": "На этой инсталляции кончились серверы: {count} — это её предел. Поднять его может только тот, у кого доступ к серверу.",
+  "server.refusal.limitPerson": "У вас уже {count} серверов — больше на одного человека не даётся. Удалите ненужный.",
   "server.refusal.occupied": "В эфирах сервера кто-то есть — сервер не удалить, пока разговор идёт.",
   "server.refusal.occupiedCount": {
     "one": "В эфирах сервера {count} человек — сервер не удалить, пока разговор идёт.",

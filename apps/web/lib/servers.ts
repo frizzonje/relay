@@ -1,4 +1,9 @@
-import type { ServerDeleteResult, ServerStatsResult } from '@relay/shared';
+import type {
+  QuotaScope,
+  ServerCreateResult,
+  ServerDeleteResult,
+  ServerStatsResult,
+} from '@relay/shared';
 import { toast } from 'sonner';
 import { getSocket } from '@/lib/socket';
 import { ask } from '@/lib/channels';
@@ -15,20 +20,45 @@ import { tx } from '@/lib/i18n';
  * только он — каналы внутри тоже. Заслон от случайного сноса, не личность
  * (см. audit B2); в самих сообщениях id устройства не ездит.
  */
-export function createServer(server: {
+export async function createServer(server: {
   id: string;
   name: string;
   emoji?: string;
   password?: string;
-}): void {
+}): Promise<ServerCreateResult | null> {
   const name = server.name.trim().slice(0, 32);
-  if (!server.id || !name) return;
-  getSocket().emit('server-create', {
+  if (!server.id || !name) return { ok: false, error: 'bad-name' };
+  const res = await ask<ServerCreateResult>('server-create', {
     id: server.id,
     name,
     emoji: server.emoji,
     password: server.password || undefined,
   });
+  // null — сокет промолчал. Диалогу это надо отличать от отказа: там
+  // «попробуйте ещё раз», здесь «так нельзя».
+  return res;
+}
+
+/**
+ * Почему сервер не завёлся — человеческими словами. Отдельно от отказа в
+ * удалении: там «не ваш» и «внутри люди», здесь потолки и занятый адрес, и
+ * общий текст на оба случая врал бы в обе стороны.
+ */
+export function createRefusalText(
+  res: { error: string; scope?: QuotaScope; limit?: number } | null,
+): string {
+  if (!res) return tx('server.noAnswer');
+  if (res.error === 'limit') {
+    const count = res.limit ?? 0;
+    // Личный потолок человек чинит сам — удалит свой ненужный сервер. Потолок
+    // инсталляции не чинится ничем, кроме доступа к машине.
+    return res.scope === 'install'
+      ? tx('server.refusal.limitInstall', { count })
+      : tx('server.refusal.limitPerson', { count });
+  }
+  if (res.error === 'exists') return tx('server.refusal.exists');
+  if (res.error === 'bad-name') return tx('server.refusal.badName');
+  return tx('server.refusal.forbidden');
 }
 
 /**

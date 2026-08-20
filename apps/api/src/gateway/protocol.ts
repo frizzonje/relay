@@ -302,6 +302,41 @@ export interface VoiceDiagPayload {
 // Отказ обязан быть внятным: интерфейс объясняет, почему канал остался на
 // месте, вместо молчаливого «ничего не произошло».
 
+/**
+ * Итог заведения сервера. До 1.0 отказ был молчанием: интерфейс закрывал
+ * диалог, рисовал новый сервер активным — и человек оставался стоять в
+ * несуществующем месте, не зная, что произошло (audit S2).
+ *
+ * `limit` со `scope` — два разных разговора: «у тебя уже столько» человек
+ * чинит сам, «на инсталляции больше нельзя» может починить только тот, у кого
+ * ssh к машине, — и путать их значит советовать невозможное.
+ */
+export type ServerCreateResult =
+  | { ok: true }
+  | {
+      ok: false;
+      error: 'forbidden' | 'bad-name' | 'exists' | 'limit';
+      scope?: QuotaScope;
+      limit?: number;
+    };
+
+/** Чей потолок кончился: личный, этого сервера или всей инсталляции. */
+export type QuotaScope = 'person' | 'server' | 'install';
+
+/**
+ * Итог заведения канала. `slug` возвращается не для красоты: адрес комнаты
+ * считает сервер, и клиент, который хочет тут же в неё войти, узнаёт его
+ * отсюда.
+ */
+export type ChannelCreateResult =
+  | { ok: true; slug: string }
+  | {
+      ok: false;
+      error: 'not-found' | 'forbidden' | 'bad-name' | 'exists' | 'limit';
+      scope?: QuotaScope;
+      limit?: number;
+    };
+
 export type ChannelDeleteResult =
   | { ok: true }
   | { ok: false; error: 'not-found' | 'forbidden' | 'occupied' | 'not-owner'; occupants?: number };

@@ -12,17 +12,20 @@ import { Channel, VoiceMode } from './registry';
 import {
   MAIN_SERVER_ID,
   MAX_CHANNELS,
+  MAX_CHANNELS_PER_SERVER,
   MAX_SERVERS,
+  MAX_SERVERS_PER_PERSON,
   RegistryService,
   slugifyChannel,
 } from './registry.service';
-import { ownedBy } from './ownership';
+import { createdBy, ownedBy } from './ownership';
 import { clientIp, hashServerPassword, issueUnlockToken } from './unlock';
 import {
   LIMIT,
   str,
   trimmed,
   type ChannelCreatePayload,
+  type ChannelCreateResult,
   type ChannelDeletePayload,
   type ChannelDeleteResult,
   type ChannelModePayload,
@@ -31,6 +34,7 @@ import {
   type ChannelStatsPayload,
   type ChannelStatsResult,
   type ServerCreatePayload,
+  type ServerCreateResult,
   type ServerDeletePayload,
   type ServerDeleteResult,
   type ServerStatsPayload,
@@ -74,16 +78,25 @@ export class RegistryHandlers {
   }
 
   // ===== Реестр серверов =====
-  async createServer(client: AppSocket, payload: ServerCreatePayload) {
-    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
+  async createServer(client: AppSocket, payload: ServerCreatePayload): Promise<ServerCreateResult> {
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
+      return { ok: false, error: 'forbidden' };
     // id генерирует клиент — принимаем как есть (санитизируем длину), чтобы он мог
     // сразу открыть новый сервер и создавать в нём каналы, не дожидаясь ответа.
     const id = trimmed(payload?.id, LIMIT.id);
     const name = trimmed(payload?.name, LIMIT.name);
-    if (!id || !name) return;
-    if (this.registry.servers.length >= MAX_SERVERS) return;
+    if (!id || !name) return { ok: false, error: 'bad-name' };
+    const full = this.serversFull(client);
+    if (full) return full;
     // Повторный create с тем же id — не плодим дубликаты (напр. ретрай сокета).
-    if (this.registry.servers.some((s) => s.id === id)) return;
+    // Своему повтору отвечаем «готово»: сервер и правда стоит, и заводить его
+    // второй раз не нужно. Чужой id (столкновение uuid — событие невероятное,
+    // но не запрещённое) получает отказ: под чужим сервером мы его не откроем.
+    const twin = this.registry.servers.find((s) => s.id === id);
+    if (twin)
+      return createdBy(twin, this.perimeter.claimant(client))
+        ? { ok: true }
+        : { ok: false, error: 'exists' };
     const emoji = trimmed(payload?.emoji, LIMIT.emoji) || undefined;
     // Пароль (если задан) → сервер закрытый. Хэшируем, храним только хэш.
     // Хэширование асинхронное и через тот же семафор, что и проверка: в
@@ -94,8 +107,9 @@ export class RegistryHandlers {
     const passwordHash = password ? await hashServerPassword(password) : undefined;
     // Пока считался хэш, реестр мог измениться: тот же id мог занять другой
     // сокет, а свободное место — кончиться.
-    if (this.registry.servers.length >= MAX_SERVERS) return;
-    if (this.registry.servers.some((s) => s.id === id)) return;
+    const filled = this.serversFull(client);
+    if (filled) return filled;
+    if (this.registry.servers.some((s) => s.id === id)) return { ok: false, error: 'exists' };
 
     // Создатель — личность, и он же единственный модератор этого сервера
     // (см. ./ownership). Клиент без ключа (старый или чужой) по-прежнему
@@ -114,7 +128,36 @@ export class RegistryHandlers {
     // Раздаём каналы заново: у создателя новый сервер уже разблокирован.
     this.directory.broadcastChannels();
     await this.registry.persist();
+    return { ok: true };
   }
+  /**
+   * Кончилось ли место под ещё один сервер — и чьё именно. Спрашивается
+   * дважды: до подсчёта хэша пароля и после, потому что за эти десятки
+   * миллисекунд место мог занять другой сокет.
+   *
+   * Владелец инсталляции личного потолка не имеет. Он и так может снести любой
+   * сервер, а ssh к машине сильнее любого числа в этом файле — упереть его в
+   * пятёрку значило бы изображать запрет там, где его нет.
+   */
+  private serversFull(client: AppSocket): ServerCreateResult | null {
+    if (this.registry.servers.length >= MAX_SERVERS)
+      return { ok: false, error: 'limit', scope: 'install', limit: MAX_SERVERS };
+    const who = this.perimeter.claimant(client);
+    if (who.owner) return null;
+    // Не назвавшийся вовсе (ни ключа, ни имени устройства) заводит записи
+    // ничьи — и его счётом становятся они же. Иначе не назваться было бы
+    // способом обойти личный потолок, то есть сам потолок держался бы на
+    // вежливости клиента. В 1.0 таких не бывает — личность рождается на первом
+    // входе, — но правило пишется не для тех, кто ходит нашим клиентом.
+    const nameless = !who.identityId && !who.clientId;
+    const mine = this.registry.servers.filter(
+      (s) => createdBy(s, who) || (nameless && !s.creatorId && !s.creatorIdentityId),
+    ).length;
+    return mine >= MAX_SERVERS_PER_PERSON
+      ? { ok: false, error: 'limit', scope: 'person', limit: MAX_SERVERS_PER_PERSON }
+      : null;
+  }
+
   async unlockServer(client: AppSocket, payload: ServerUnlockPayload) {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const id = str(payload?.id);
@@ -275,27 +318,40 @@ export class RegistryHandlers {
   }
 
   // ===== Реестр каналов =====
-  async createChannel(client: AppSocket, payload: ChannelCreatePayload) {
-    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
+  async createChannel(
+    client: AppSocket,
+    payload: ChannelCreatePayload,
+  ): Promise<ChannelCreateResult> {
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
+      return { ok: false, error: 'forbidden' };
     const type = payload?.type === 'voice' ? 'voice' : payload?.type === 'text' ? 'text' : null;
-    if (!type) return;
+    if (!type) return { ok: false, error: 'bad-name' };
     // Сервер-владелец должен существовать (иначе канал повиснет вне рейки).
     const serverId = str(payload?.serverId) || MAIN_SERVER_ID;
     const srv = this.registry.servers.find((s) => s.id === serverId);
-    if (!srv) return;
+    if (!srv) return { ok: false, error: 'not-found' };
     // Главный сервер — витрина с фиксированным набором каналов (см.
     // DEFAULT_CHANNELS). Свои каналы заводят в своих серверах; интерфейс тут
     // «+» и не показывает, но запрет держим на сервере, а не на кнопке.
-    if (serverId === MAIN_SERVER_ID) return;
+    if (serverId === MAIN_SERVER_ID) return { ok: false, error: 'forbidden' };
     // В закрытый сервер канал создаёт только разблокировавший его сокет.
-    if (!this.perimeter.isOpenTo(client, srv)) return;
+    if (!this.perimeter.isOpenTo(client, srv)) return { ok: false, error: 'forbidden' };
     const rawName = trimmed(payload?.name, LIMIT.name);
     const slug = slugifyChannel(rawName);
-    if (!slug) return;
-    if (this.registry.channels.length >= MAX_CHANNELS) return;
+    if (!slug) return { ok: false, error: 'bad-name' };
+    if (this.registry.channels.length >= MAX_CHANNELS)
+      return { ok: false, error: 'limit', scope: 'install', limit: MAX_CHANNELS };
+    // Потолок каналов — у сервера, а не у инсталляции: иначе полсотни каналов
+    // в чужом сервере не давали бы завести первый в своём.
+    if (
+      this.registry.channels.filter((c) => c.serverId === serverId).length >=
+      MAX_CHANNELS_PER_SERVER
+    )
+      return { ok: false, error: 'limit', scope: 'server', limit: MAX_CHANNELS_PER_SERVER };
     // Слаг уникален глобально (комнаты голоса/чата ключуются по нему) — один слаг
     // на тип по всем серверам, повторное создание не плодит дубликаты.
-    if (this.registry.channels.some((c) => c.type === type && c.slug === slug)) return;
+    if (this.registry.channels.some((c) => c.type === type && c.slug === slug))
+      return { ok: false, error: 'exists' };
 
     const channel: Channel = {
       id: randomUUID(),
@@ -314,6 +370,7 @@ export class RegistryHandlers {
     this.registry.channels.push(channel);
     this.directory.broadcastChannels();
     await this.registry.persist();
+    return { ok: true, slug };
   }
 
   // Смена транспорта голосового канала. Права те же, что у channel-delete:

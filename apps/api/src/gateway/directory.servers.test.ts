@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { issueGuestToken } from '../auth/auth';
 import { ChannelRow, MessageRow, ServerRow } from '../db/entities';
 import { asSocket } from './testkit';
+import { MAX_SERVERS, MAX_SERVERS_PER_PERSON } from './registry.service';
 import {
   MAIN,
   connect,
@@ -114,15 +115,84 @@ describe('server-create', () => {
     expect(public2).not.toHaveProperty('emoji');
   });
 
-  it('потолок в 20 серверов держится', async () => {
+  /**
+   * Потолок стал личным (audit S2). До 1.0 он был общим на инсталляцию, и один
+   * человек выбирал его целиком — после чего не мог завести сервер уже никто.
+   */
+  it('личный потолок держится, и в отказе стоит само число', async () => {
     const { gw, server } = await makeGateway();
-    const a = connect(gw, server);
-    for (let i = 0; i < 25; i++) {
-      await gw.handleServerCreate(asSocket(a), { id: `srv-${i}`, name: `s${i}` });
+    const a = connect(gw, server, { clientId: 'dev-a' });
+    const answers = [];
+    for (let i = 0; i < MAX_SERVERS_PER_PERSON + 2; i++) {
+      answers.push(await gw.handleServerCreate(asSocket(a), { id: `srv-${i}`, name: `s${i}` }));
       // Бакет на 40 токенов — двигаем время, чтобы упереться именно в потолок.
       vi.advanceTimersByTime(1000);
     }
-    expect((gw as AnyGw).registry.servers).toHaveLength(20);
+    expect(answers.filter((r) => r.ok)).toHaveLength(MAX_SERVERS_PER_PERSON);
+    expect(answers[answers.length - 1]).toEqual({
+      ok: false,
+      error: 'limit',
+      scope: 'person',
+      limit: MAX_SERVERS_PER_PERSON,
+    });
+  });
+
+  it('чужой потолок не мешает соседу: место общее, счёт — свой', async () => {
+    const { gw, server } = await makeGateway();
+    const a = connect(gw, server, { clientId: 'dev-a' });
+    for (let i = 0; i < MAX_SERVERS_PER_PERSON + 2; i++) {
+      await gw.handleServerCreate(asSocket(a), { id: `srv-${i}`, name: `s${i}` });
+      vi.advanceTimersByTime(1000);
+    }
+    const b = connect(gw, server, { clientId: 'dev-b' });
+    expect(await gw.handleServerCreate(asSocket(b), { id: 'srv-b', name: 'соседний' })).toEqual({
+      ok: true,
+    });
+  });
+
+  it('не назвавшийся не обходит счёт: ничьи записи считаются за него', async () => {
+    const { gw, server } = await makeGateway();
+    const anon = connect(gw, server);
+    const answers = [];
+    for (let i = 0; i < MAX_SERVERS_PER_PERSON + 2; i++) {
+      answers.push(await gw.handleServerCreate(asSocket(anon), { id: `srv-${i}`, name: `s${i}` }));
+      vi.advanceTimersByTime(1000);
+    }
+    expect(answers.some((r) => !r.ok && r.error === 'limit' && r.scope === 'person')).toBe(true);
+  });
+
+  it('потолок инсталляции держится поверх личных', async () => {
+    const { gw, server } = await makeGateway();
+    let last;
+    for (let person = 0; person < 12; person++) {
+      const sock = connect(gw, server, { clientId: `dev-${person}` });
+      for (let i = 0; i < MAX_SERVERS_PER_PERSON; i++) {
+        last = await gw.handleServerCreate(asSocket(sock), {
+          id: `srv-${person}-${i}`,
+          name: `s${person}-${i}`,
+        });
+        vi.advanceTimersByTime(1000);
+      }
+    }
+    expect((gw as AnyGw).registry.servers).toHaveLength(MAX_SERVERS);
+    expect(last).toEqual({ ok: false, error: 'limit', scope: 'install', limit: MAX_SERVERS });
+  });
+
+  it('свой повтор с тем же id — «готово», чужой id — отказ', async () => {
+    const { gw, server } = await makeGateway();
+    const a = connect(gw, server, { clientId: 'dev-a' });
+    expect(await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'мой' })).toEqual({
+      ok: true,
+    });
+    // Ретрай сокета не обязан выглядеть ошибкой: сервер стоит, и он наш.
+    expect(await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'мой' })).toEqual({
+      ok: true,
+    });
+    const b = connect(gw, server, { clientId: 'dev-b' });
+    expect(await gw.handleServerCreate(asSocket(b), { id: 'srv', name: 'чужой' })).toEqual({
+      ok: false,
+      error: 'exists',
+    });
   });
 
   it('гость сервера не создаёт', async () => {

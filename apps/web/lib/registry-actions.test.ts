@@ -29,6 +29,7 @@ import {
   setChannelMode,
 } from './channels';
 import {
+  createRefusalText,
   createServer,
   deleteServer,
   forgetServerPassword,
@@ -58,32 +59,71 @@ afterEach(() => {
 });
 
 describe('создание канала', () => {
-  it('уходит в активный сервер с обрезанным именем', () => {
-    createChannel('text', '  болталка  ');
-    expect(emit).toHaveBeenCalledWith('channel-create', {
-      serverId: 'srv-1',
-      type: 'text',
-      name: 'болталка',
-    });
+  it('уходит в активный сервер с обрезанным именем', async () => {
+    const p = createChannel('text', '  болталка  ');
+    expect(emit.mock.calls[0].slice(0, 2)).toEqual([
+      'channel-create',
+      { serverId: 'srv-1', type: 'text', name: 'болталка' },
+    ]);
+    reply({ ok: true, slug: 'boltalka' });
+    expect(await p).toBe(true);
+    expect(toast).not.toHaveBeenCalled();
   });
 
   it('режим передаётся только когда задан', () => {
-    createChannel('voice', 'эфир', 'sfu');
+    void createChannel('voice', 'эфир', 'sfu');
     expect(emit.mock.calls[0][1]).toMatchObject({ mode: 'sfu' });
     emit.mockClear();
-    createChannel('voice', 'эфир');
+    void createChannel('voice', 'эфир');
     expect(emit.mock.calls[0][1]).not.toHaveProperty('mode');
   });
 
-  it('пустое имя не отправляется вовсе', () => {
-    createChannel('text', '   ');
+  it('пустое имя не отправляется вовсе', async () => {
+    expect(await createChannel('text', '   ')).toBe(false);
     expect(emit).not.toHaveBeenCalled();
   });
 
-  it('в главный сервер не пускает и объясняет, а не глотает', () => {
+  it('в главный сервер не пускает и объясняет, а не глотает', async () => {
     activeServerId.value = MAIN_SERVER_ID;
-    createChannel('text', 'лишний');
+    expect(await createChannel('text', 'лишний')).toBe(false);
     expect(emit).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalled();
+  });
+
+  /**
+   * До 1.0 всё это было молчанием: канал просто не появлялся (audit S2).
+   * Тексты обязаны различаться — «имя занято» и «места нет» человек чинит
+   * разными действиями, а «на инсталляции кончились» не чинит вовсе.
+   */
+  it('отказ объясняется, и каждый — своими словами', async () => {
+    const texts = new Set<string>();
+    for (const res of [
+      { ok: false, error: 'exists' },
+      { ok: false, error: 'limit', scope: 'server', limit: 25 },
+      { ok: false, error: 'limit', scope: 'install', limit: 300 },
+      { ok: false, error: 'forbidden' },
+      { ok: false, error: 'bad-name' },
+    ]) {
+      toast.mockClear();
+      const p = createChannel('text', 'канал');
+      reply(res);
+      expect(await p).toBe(false);
+      texts.add(String(toast.mock.calls[0][0]));
+    }
+    expect(texts.size).toBe(5);
+  });
+
+  it('в отказе по потолку сервера стоит само число', async () => {
+    const p = createChannel('text', 'канал');
+    reply({ ok: false, error: 'limit', scope: 'server', limit: 25 });
+    await p;
+    expect(String(toast.mock.calls[0][0])).toMatch(/25/);
+  });
+
+  it('молчание сервера объясняется своим текстом', async () => {
+    const p = createChannel('text', 'канал');
+    vi.advanceTimersByTime(6000);
+    expect(await p).toBe(false);
     expect(toast).toHaveBeenCalled();
   });
 });
@@ -197,15 +237,50 @@ describe('смена транспорта канала', () => {
 
 describe('создание сервера', () => {
   it('имя обрезается, пустой пароль не превращается в закрытый сервер', () => {
-    createServer({ id: 'srv-2', name: '  и'.repeat(40), password: '' });
+    void createServer({ id: 'srv-2', name: '  и'.repeat(40), password: '' });
     expect(emit.mock.calls[0][1]).toMatchObject({ id: 'srv-2', password: undefined });
     expect((emit.mock.calls[0][1] as { name: string }).name.length).toBeLessThanOrEqual(32);
   });
 
-  it('без id или имени не отправляется', () => {
-    createServer({ id: '', name: 'мой' });
-    createServer({ id: 'srv-2', name: '   ' });
+  it('без id или имени не отправляется', async () => {
+    expect(await createServer({ id: '', name: 'мой' })).toMatchObject({ ok: false });
+    expect(await createServer({ id: 'srv-2', name: '   ' })).toMatchObject({ ok: false });
     expect(emit).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Отказ в заведении сервера — не тост, а строка в самом диалоге (он ждёт
+   * ответа), поэтому текст здесь спрашивают отдельной функцией. Личный потолок
+   * и потолок инсталляции обязаны звучать по-разному: первый человек чинит
+   * сам, второй — только через того, у кого доступ к машине.
+   */
+  it('у каждого отказа свой текст, и в потолке стоит число', async () => {
+    const texts = new Set<string>();
+    for (const res of [
+      { ok: false as const, error: 'limit', scope: 'person' as const, limit: 5 },
+      { ok: false as const, error: 'limit', scope: 'install' as const, limit: 50 },
+      { ok: false as const, error: 'exists' },
+      { ok: false as const, error: 'bad-name' },
+      { ok: false as const, error: 'forbidden' },
+    ]) {
+      texts.add(createRefusalText(res));
+    }
+    expect(texts.size).toBe(5);
+    expect(createRefusalText({ error: 'limit', scope: 'person', limit: 5 })).toMatch(/5/);
+    // Молчание — отдельный ответ, а не выдуманная причина отказа.
+    expect(createRefusalText(null)).not.toBe(createRefusalText({ error: 'forbidden' }));
+  });
+
+  it('ответ сервера доезжает до вызывающего целиком', async () => {
+    const p = createServer({ id: 'srv-2', name: 'мой' });
+    reply({ ok: false, error: 'limit', scope: 'person', limit: 5 });
+    expect(await p).toEqual({ ok: false, error: 'limit', scope: 'person', limit: 5 });
+  });
+
+  it('молчание сокета возвращается как null, а не как отказ', async () => {
+    const p = createServer({ id: 'srv-2', name: 'мой' });
+    vi.advanceTimersByTime(6000);
+    expect(await p).toBeNull();
   });
 
   it('отказ удаления сервера объясняется своими словами', async () => {

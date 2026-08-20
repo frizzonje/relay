@@ -42,8 +42,11 @@
   "channels.mainFixed": "The main server has a fixed set of channels — create your own server.",
   "channels.noAnswer": "The server did not answer — try again.",
   "channels.refusal.badName": "An empty name will not do for a channel.",
+  "channels.refusal.exists": "A channel by this name is already on this server.",
   "channels.refusal.forbidden": "This channel is off limits.",
   "channels.refusal.gone": "The channel is gone — the list has already caught up.",
+  "channels.refusal.limitInstall": "This installation is out of channels: {count} is its ceiling. Only whoever runs the server can raise it.",
+  "channels.refusal.limitServer": "This server already holds {count} channels — that is the ceiling. Delete one you no longer need.",
   "channels.refusal.notOwner": "Only the person who created this channel can change it.",
   "channels.refusal.occupied": "There are people in the channel — let them leave first.",
   "channels.refusal.occupiedCount": {
@@ -482,6 +485,10 @@
   "server.delete.title": "Delete server “{name}”?",
   "server.noAnswer": "The server did not answer — try again.",
   "server.refusal.forbidden": "This server cannot be deleted.",
+  "server.refusal.badName": "A server needs a name.",
+  "server.refusal.exists": "A server with this address already exists.",
+  "server.refusal.limitInstall": "This installation is out of servers: {count} is its ceiling. Only whoever runs the server can raise it.",
+  "server.refusal.limitPerson": "You already have {count} servers — that is as many as one person gets. Delete one you no longer need.",
   "server.refusal.occupied": "Someone is on air in this server — it cannot be deleted while the conversation is going.",
   "server.refusal.occupiedCount": {
     "one": "{count} person is on air in this server — it cannot be deleted while the conversation is going.",

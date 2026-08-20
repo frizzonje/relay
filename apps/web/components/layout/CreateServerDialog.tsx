@@ -12,7 +12,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
 import { cn } from '@/lib/utils';
-import { createServer, rememberServerPassword } from '@/lib/servers';
+import { createRefusalText, createServer, rememberServerPassword } from '@/lib/servers';
 import { serverGradient, serverInitials } from '@/lib/server-visual';
 import { useServersStore } from '@/stores/servers';
 import { useUiStore } from '@/stores/ui';
@@ -73,6 +73,8 @@ export function CreateServerDialog({
   const [password, setPassword] = useState('');
   // id генерируем при открытии, чтобы предпросмотр-градиент совпал с итоговым.
   const [id, setId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
 
   const setActiveServer = useServersStore((s) => s.setActiveServer);
   const markUnlocked = useServersStore((s) => s.markUnlocked);
@@ -84,15 +86,31 @@ export function CreateServerDialog({
       setEmoji(undefined);
       setPassword('');
       setId(crypto.randomUUID());
+      setBusy(false);
+      setError('');
     }
   }, [open]);
 
-  function submit(e: FormEvent) {
+  /**
+   * Ответа сервера здесь ЖДЁМ, а не рисуем результат заранее. Раньше диалог
+   * закрывался сразу и переключал рейку на новый сервер — а если сервер отказал
+   * (кончился потолок, занят адрес), человек оставался стоять в пустом месте
+   * без единого слова. Круг ожидания стоит одного round-trip и появляется
+   * только при заведении сервера — действии, которое делают редко.
+   */
+  async function submit(e: FormEvent) {
     e.preventDefault();
     const trimmed = name.trim();
-    if (!trimmed || !id) return;
+    if (!trimmed || !id || busy) return;
     const pw = password.trim();
-    createServer({ id, name: trimmed, emoji, password: pw || undefined });
+    setBusy(true);
+    setError('');
+    const res = await createServer({ id, name: trimmed, emoji, password: pw || undefined });
+    setBusy(false);
+    if (!res?.ok) {
+      setError(createRefusalText(res?.ok === false ? res : null));
+      return;
+    }
     // Создатель знает пароль — сразу считаем сервер разблокированным и запоминаем
     // пароль (чтобы после перезагрузки авто-разблокировать).
     if (pw) {
@@ -199,11 +217,13 @@ export function CreateServerDialog({
             </p>
           </div>
 
+          {error && <p className="text-[13px] font-semibold text-danger">{error}</p>}
+
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               {t('common.cancel')}
             </Button>
-            <Button type="submit" variant="primary" disabled={!name.trim()}>
+            <Button type="submit" variant="primary" disabled={!name.trim() || busy}>
               <Icon name="plus" /> {t('createServer.submit')}
             </Button>
           </DialogFooter>
