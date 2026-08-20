@@ -21,8 +21,14 @@ check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); printf '  ok   %s\n' "$1"
 docker rm -f "$PGC" >/dev/null 2>&1
 docker run -d --name "$PGC" -e POSTGRES_USER=relay -e POSTGRES_PASSWORD=relay \
   -e POSTGRES_DB=relay postgres:18-alpine >/dev/null || { echo "  SKIP: no docker"; exit 0; }
+# Not pg_isready: the official image runs its own server during initdb, on the
+# unix socket only, and pg_isready says yes to that one — after which it shuts
+# down, taking with it every table created in the meantime. A query over TCP is
+# the honest question, because TCP is exactly what the init server does not
+# listen on.
 for _ in $(seq 1 60); do
-  docker exec "$PGC" pg_isready -U relay -d relay >/dev/null 2>&1 && break
+  docker exec -e PGPASSWORD=relay "$PGC" \
+    psql -h 127.0.0.1 -U relay -d relay -c 'select 1' >/dev/null 2>&1 && break
   sleep 1
 done
 

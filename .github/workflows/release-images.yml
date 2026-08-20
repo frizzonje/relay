@@ -134,8 +134,13 @@ jobs:
           POSTGRES_USER: relay
           POSTGRES_PASSWORD: relay
           POSTGRES_DB: relay_test
+          PGPASSWORD: relay
+        # Запрос по TCP, а не `pg_isready`: официальный образ во время initdb
+        # поднимает свой сервер на unix-сокете, и pg_isready отвечает «готов»
+        # ему — а потом тот гасится вместе со всем, что успели создать. По TCP
+        # init-сервер не слушает вовсе, поэтому вопрос честный.
         options: >-
-          --health-cmd "pg_isready -U relay -d relay_test"
+          --health-cmd "psql -h 127.0.0.1 -U relay -d relay_test -c 'select 1'"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
