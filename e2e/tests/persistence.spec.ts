@@ -1,4 +1,5 @@
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
+import { openChannel, person, say, test, unique } from '../fixtures/stand';
 
 /**
  * Обещание, ради которого в 1.0 появилась база: рестарт стека не теряет
@@ -8,54 +9,27 @@ import { test, expect } from '@playwright/test';
  * должен перезапустить api. Поэтому спека двухфазная: сначала `write`, потом
  * снаружи рестарт, потом `read` тем же маркером. Без маркера тест доказывал бы
  * только то, что в канале вообще что-то есть.
+ *
+ * Пишут и читают РАЗНЫЕ люди, и это не небрежность: сообщение должно пережить
+ * рестарт как запись сервера, а не как эхо той вкладки, которая его отправила.
  */
 
-const PASSWORD = process.env.SITE_PASSWORD || 'testpass123';
-const PHASE = process.env.E2E_PHASE ?? '';
 const MARK = process.env.E2E_MARK || 'переживи-рестарт';
+const PHASE = process.env.E2E_PHASE ?? '';
 
-test.beforeEach(async ({ context }) => {
-  await context.addCookies([
-    {
-      name: 'relay-lang',
-      value: 'en',
-      url: process.env.BASE_URL || 'https://localhost',
-    },
-  ]);
-  await context.addInitScript(() => {
-    try {
-      localStorage.setItem('relay-tag', 'e2e-user');
-    } catch {
-      /* до первого origin недоступно — addInitScript выставит позже */
-    }
-  });
-});
-
-/** Вход и открытый текстовый канал — общая часть обеих фаз. */
-async function openChannel(page: import('@playwright/test').Page) {
-  await page.goto('/');
-  await page.getByPlaceholder('Password').fill(PASSWORD);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-
-  const channel = page.getByText('общий', { exact: true });
-  await expect(channel).toBeVisible({ timeout: 15_000 });
-  await channel.click();
-  await expect(page.getByPlaceholder(/^message #/)).toBeVisible({ timeout: 10_000 });
-}
-
-test('фаза 1: пишем то, что должно пережить рестарт', async ({ page }) => {
+test('фаза 1: пишем то, что должно пережить рестарт', async ({ browser }) => {
   test.skip(PHASE !== 'write', 'фаза write запускается отдельно');
-  await openChannel(page);
-  const composer = page.getByPlaceholder(/^message #/);
-  await composer.fill(MARK);
-  await composer.press('Enter');
+  const page = await person(browser, unique('Писарь'));
+  await openChannel(page, 'общий');
+  await say(page, MARK);
   await expect(page.getByText(MARK)).toBeVisible({ timeout: 15_000 });
 });
 
-test('фаза 2: после рестарта стека сообщение на месте', async ({ page }) => {
+test('фаза 2: после рестарта стека сообщение на месте', async ({ browser }) => {
   test.skip(PHASE !== 'read', 'фаза read запускается после рестарта api');
-  await openChannel(page);
+  const page = await person(browser, unique('Читарь'));
   // История приезжает страницей при входе в канал — если она снова живёт в
   // памяти процесса, здесь будет пусто.
+  await openChannel(page, 'общий');
   await expect(page.getByText(MARK)).toBeVisible({ timeout: 15_000 });
 });
