@@ -1,6 +1,5 @@
 'use client';
 
-import { toast } from 'sonner';
 import type { IceServer, SdpPayload } from '@relay/shared';
 import { getSocket } from '@/lib/socket';
 import { getIceServers } from '@/lib/config';
@@ -17,6 +16,7 @@ import {
   type StatsSnapshot,
 } from '../stats';
 import { createSenders, tuneSdp } from './senders';
+import { createLadder, signalingUp } from './recovery';
 import { createSilence } from './silence';
 
 /**
@@ -33,22 +33,6 @@ import { createSilence } from './silence';
  */
 
 // ─────────────────────────────────────────────────────────────────────────
-// Окна лестницы восстановления
-// ─────────────────────────────────────────────────────────────────────────
-
-// `disconnected` часто поднимается сам (моргнула сеть, сменился путь) — даём
-// паузу, но короткую: каждая лишняя секунда здесь — секунда тишины в разговоре.
-const RECOVER_GRACE_MS = 4000;
-// Сторож ступени: не помогло за это окно — идём дальше по лестнице.
-const RECOVER_WINDOW_MS = 7000;
-// «Вежливая» сторона ждёт на столько дольше на каждой ступени. Пересобирать
-// соединение должен кто-то ОДИН: две встречные пересборки — это два новых pc,
-// два отпечатка DTLS и лишний круг переговоров на ровном месте.
-const POLITE_LAG_MS = 2500;
-// Потолок паузы между повторными пересборками (растёт от RECOVER_WINDOW_MS).
-const REBUILD_MAX_DELAY_MS = 30_000;
-
-// ─────────────────────────────────────────────────────────────────────────
 // Состояние пира
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -59,23 +43,9 @@ interface Peer {
   makingOffer: boolean;
   ignoreOffer: boolean;
   pendingCandidates: RTCIceCandidateInit[];
-  failTimer: ReturnType<typeof setTimeout> | null;
   // Сводное состояние связи (см. combinedConnState) — чтобы не дёргать UI на
   // каждое дублирующее событие connection/ice state.
   connState: PeerConnState;
-  // Собрано ли соединение с политикой relay-only (только TURN). См. rebuildPeer.
-  relayOnly: boolean;
-  // Стадия лестницы восстановления: 0 — ничего, 1 — сделан ICE-restart, 2 —
-  // идут пересборки. Сбрасывается в 0 при выходе на связь.
-  recoverStage: number;
-  // Сколько раз уже пересобирали соединение: задаёт и паузу до следующей
-  // попытки, и политику ICE (через раз — через TURN).
-  rebuilds: number;
-  // Когда пересобрали в последний раз — чтобы пересборка, рухнувшая сразу, не
-  // утаскивала в цикл «упало → пересобрали → упало» на скорости отказа ICE.
-  rebuiltAt: number;
-  // Про эту связь уже жаловались в тост — не повторяться на каждом круге.
-  warned: boolean;
   // Отпечаток DTLS удалённой стороны. Сменился — собеседник пересобрал свой pc,
   // и наш надо выбрасывать, а не «доводить» ренеготиацией: браузер не примет
   // чужой отпечаток на живом транспорте, и связь останется полусобранной.
@@ -127,7 +97,23 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
 
   const socket = () => getSocket();
   const senders = createSenders(host);
-  const silence = createSilence({ host, signalingUp: () => signalingUp() });
+  const ladder = createLadder({
+    host,
+    peer: (peerId) => {
+      const peer = peers.get(peerId);
+      if (!peer) return null;
+      return {
+        name: peer.name,
+        polite: peer.polite,
+        connected: peer.connState === 'connected',
+        pc: peer.pc,
+      };
+    },
+    hasTurn,
+    dropConnection,
+    createPeer: (peerId, name, relayOnly) => void createPeer(peerId, name, true, relayOnly),
+  });
+  const silence = createSilence({ host, signalingUp });
 
   // ── Сигналинг (perfect negotiation) ───────────────────────────────────
 
@@ -158,13 +144,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       makingOffer: false,
       ignoreOffer: false,
       pendingCandidates: [],
-      failTimer: null,
       connState: 'connecting',
-      relayOnly,
-      recoverStage: 0,
-      rebuilds: 0,
-      rebuiltAt: 0,
-      warned: false,
       fingerprint: null,
     };
     peers.set(peerId, peer);
@@ -240,10 +220,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       switch (state) {
         case 'connected':
           // Связь есть — лестницу восстановления сбрасываем целиком.
-          clearRecovery(peer);
-          peer.recoverStage = 0;
-          peer.rebuilds = 0;
-          peer.warned = false; // связь была — следующий провал стоит показать снова
+          ladder.markUp(peerId);
           host.setTileState(peerId, '');
           // bitrate-cap/тюнинг применяем только после ICE — иначе setParameters кидает
           senders.tuneVideo(peerId, host.screenOn());
@@ -254,11 +231,11 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
           // запускаем лестницу. Если лестница уже идёт (ступень 1+), её сторож
           // главнее: он считает окно текущей ступени, а не грейс.
           host.setTileState(peerId, 'tile.state.reconnecting');
-          if (peer.recoverStage === 0) armRecovery(peerId, RECOVER_GRACE_MS);
+          ladder.armGrace(peerId);
           break;
         case 'failed':
           host.setTileState(peerId, 'tile.state.reconnecting');
-          recoverPeer(peerId);
+          ladder.recover(peerId);
           break;
         // 'connecting' — промежуточное состояние, в том числе сразу после
         // restartIce. Сторож ступени здесь НЕ трогаем: раньше он на этом переходе
@@ -275,14 +252,8 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     // Сторож и на ПЕРВОЕ соединение: offer мог не доехать, ICE — не собраться, а
     // сам по себе такой pc из 'connecting' не выйдет никогда. Окно шире обычного —
     // холодный старт с TURN бывает небыстрым.
-    armRecovery(peerId, RECOVER_WINDOW_MS * 2);
+    ladder.armFirst(peerId);
     return pc;
-  }
-
-  function clearRecovery(peer: Peer) {
-    if (!peer.failTimer) return;
-    clearTimeout(peer.failTimer);
-    peer.failTimer = null;
   }
 
   // Закрыть соединение с пиром, оставив плитку: связь мы пересобираем с тем же
@@ -290,7 +261,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
   function dropConnection(peerId: string) {
     const peer = peers.get(peerId);
     if (!peer) return;
-    clearRecovery(peer);
+    ladder.disarm(peerId);
     peer.pc.close();
     peers.delete(peerId);
     senders.forget(peerId);
@@ -302,6 +273,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
   function removePeer(peerId: string) {
     if (!peers.has(peerId)) return;
     dropConnection(peerId);
+    ladder.forget(peerId);
     host.removeTile(peerId);
   }
 
@@ -312,127 +284,6 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       const urls = Array.isArray(s.urls) ? s.urls : [s.urls];
       return urls.some((u) => typeof u === 'string' && /^turns?:/i.test(u));
     });
-  }
-
-  // Жив ли сигналинг. Без него ни одна ступень лестницы не работает: и offer
-  // ICE-restart'а, и offer пересборки уходят через сокет. Пока он лежит, лестницу
-  // держим на паузе — иначе она вхолостую прожжёт все ступени, пока чинить нечего
-  // (сокет вернётся — догоним, см. resync).
-  function signalingUp(): boolean {
-    try {
-      return socket().connected !== false;
-    } catch {
-      return false;
-    }
-  }
-
-  // Пауза до следующей пересборки — растёт с числом уже сделанных, до потолка.
-  function rebuildDelay(rebuilds: number): number {
-    return Math.min(RECOVER_WINDOW_MS * Math.max(1, rebuilds), REBUILD_MAX_DELAY_MS);
-  }
-
-  // Завести сторож следующей ступени. «Вежливая» сторона ждёт чуть дольше:
-  // пересборку должен вести кто-то один, иначе оба выбрасывают живые pc навстречу.
-  function armRecovery(peerId: string, delayMs: number) {
-    const peer = peers.get(peerId);
-    if (!peer) return;
-    clearRecovery(peer);
-    peer.failTimer = setTimeout(
-      () => {
-        peer.failTimer = null;
-        recoverPeer(peerId);
-      },
-      delayMs + (peer.polite ? POLITE_LAG_MS : 0),
-    );
-  }
-
-  // Лестница восстановления связи с пиром:
-  //   ступень 1 → ICE-restart (дёшево; частая причина обрыва — сменился сетевой путь);
-  //   ступень 2 → пересборка соединения с нуля, через раз — ТОЛЬКО через TURN
-  //               (relay-only): это спасает симметричный NAT/DPI, где host/srflx
-  //               мертвы, а прямой путь не собирается.
-  // Пересборки повторяются с растущей паузой и НЕ кончаются никогда, пока
-  // собеседник числится в канале: снять его — дело сервера (peer-left). Раньше
-  // лестница сдавалась после двух ступеней и убирала плитку, и звонок оставался
-  // молчать до перезахода — даже если сеть чинилась через десять секунд.
-  // Дёргается из handleStateChange (failed/disconnected) и из собственных сторожей.
-  function recoverPeer(peerId: string) {
-    const peer = peers.get(peerId);
-    if (!peer) return;
-    clearRecovery(peer);
-    // Уже снова на связи (гонка таймеров) — ничего не делаем.
-    if (peer.connState === 'connected') {
-      peer.recoverStage = 0;
-      return;
-    }
-    if (!signalingUp()) {
-      armRecovery(peerId, RECOVER_WINDOW_MS); // сигналинг лежит — ступень не доедет
-      return;
-    }
-
-    if (peer.recoverStage === 0) {
-      peer.recoverStage = 1;
-      host.diag('mesh recover', `stage 1: restart-ice with ${peer.name}`);
-      host.setTileState(peerId, 'tile.state.reconnecting');
-      peer.pc.restartIce();
-      // Сторож: если ICE-restart не поднял связь за окно — идём на следующую ступень.
-      armRecovery(peerId, RECOVER_WINDOW_MS);
-      return;
-    }
-
-    rebuildPeer(peerId);
-  }
-
-  // Ступень 2 лестницы: закрываем мёртвый pc и поднимаем новый как инициатор —
-  // наш offer унесёт дорожки, удалённая сторона узнает пересборку по сменившемуся
-  // отпечатку DTLS и ответит уже со свежего pc (см. обработчик 'offer').
-  // Плитку сохраняем — обновляем только статус.
-  function rebuildPeer(peerId: string) {
-    const old = peers.get(peerId);
-    if (!old) return;
-    // Своих дорожек нет (вышли из канала прямо сейчас) — пересобирать нечего.
-    if (!host.localStream()) return;
-
-    // Пауза между пересборками. Сеть, которая не даёт связь третий раз подряд, не
-    // починится от того, что мы будем долбиться в неё каждые семь секунд, — а
-    // пересборка, рухнувшая мгновенно, иначе увела бы в цикл на скорости отказа ICE.
-    const wait = rebuildDelay(old.rebuilds);
-    const since = Date.now() - old.rebuiltAt;
-    if (old.rebuilds > 0 && since < wait) {
-      armRecovery(peerId, wait - since);
-      return;
-    }
-
-    const { name } = old;
-    const rebuilds = old.rebuilds + 1;
-    // Нечётная попытка идёт через TURN (если он есть), чётная — обычным путём:
-    // сеть могла и починиться, а реле — лишний крюк по задержке и чужой трафик.
-    const relayOnly = hasTurn() && rebuilds % 2 === 1;
-    // Жалуемся ровно один раз на пира: дальше молча продолжаем попытки.
-    const warn = !old.warned && rebuilds > 1;
-    const warned = old.warned || warn;
-
-    dropConnection(peerId);
-    host.diag(
-      'mesh recover',
-      `stage 2: rebuild #${rebuilds}${relayOnly ? ' relay-only' : ''} with ${name}`,
-    );
-    // relay-only — отдельная подпись: прямой путь не собрался, идём через TURN.
-    host.setTileState(peerId, relayOnly ? 'tile.state.fallback' : 'tile.state.reconnecting');
-    createPeer(peerId, name, true, relayOnly); // инициатор — мы
-
-    const peer = peers.get(peerId);
-    if (!peer) return;
-    peer.recoverStage = 2;
-    peer.rebuilds = rebuilds;
-    peer.rebuiltAt = Date.now();
-    peer.warned = warned;
-    armRecovery(peerId, rebuildDelay(rebuilds));
-
-    if (warn) {
-      toast.error(tx('voice.toast.peerUnreachable', { name }));
-      host.playSfx('error'); // соединиться не вышло
-    }
   }
 
   async function drainCandidates(peerId: string) {
@@ -571,7 +422,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       if (!peer) continue;
       host.setTileState(peerId, 'tile.state.reconnecting');
       if (fix === 'restart-ice') peer.pc.restartIce();
-      else rebuildPeer(peerId);
+      else ladder.rebuild(peerId);
     }
   }
 
@@ -697,11 +548,9 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
 
     leave() {
       if (!room) return; // нас тут и не было — выходить нечего
-      peers.forEach((peer) => {
-        if (peer.failTimer) clearTimeout(peer.failTimer);
-        peer.pc.close();
-      });
+      peers.forEach((peer) => peer.pc.close());
       peers.clear();
+      ladder.forgetAll();
       senders.forgetAll();
       silence.forgetAll();
       netHistory.clear();
@@ -767,9 +616,9 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       for (const [id, peer] of peers) {
         if (peer.connState === 'connected') continue;
         host.diag('mesh resync', `${peer.name}: ${peer.connState}`);
-        peer.recoverStage = 0;
+        ladder.rewind(id);
         host.setTileState(id, 'tile.state.reconnecting');
-        recoverPeer(id);
+        ladder.recover(id);
       }
     },
   };
