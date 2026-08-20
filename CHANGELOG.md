@@ -69,6 +69,21 @@ enough; give it 2 GB of swap.
 
 ### Changed
 
+- **Servers and channels have room for everyone.** The ceilings used to be
+  installation-wide — twenty servers, fifty channels — so one enthusiastic
+  person filled them and nobody could create anything again. Now each person
+  gets five servers and each server twenty-five channels, under a much higher
+  ceiling that exists to protect the machine.
+- **A refused create says why.** Creating a server or a channel used to fail in
+  silence: the dialog closed, the rail switched to a server that was never
+  made. It now answers, and running out of your own five reads differently from
+  running out of the installation's — only one of those is yours to fix.
+- **A channel name on one server no longer takes it from every other.** Channel
+  addresses now carry a mark of their own server, so "общий" is free on yours
+  no matter who used it first. Nobody sees the mark; a channel goes by its name.
+- **A client too old for the server is told so.** The contract has a version
+  checked at the handshake, and the app says whether it is the app or the
+  server that is behind — the two need opposite fixes.
 - **Unread marks, channel sound and per-person volumes moved to your identity.**
   Read it on the desktop, and it is read on the phone. The settings section that
   used to say "across devices" is gone: it now simply is.
@@ -79,6 +94,12 @@ enough; give it 2 GB of swap.
 
 ### Fixed
 
+- **The password to a locked server no longer sits in your browser.** It was
+  kept there so the server would still be open to you after a reconnect; a
+  signed pass does that now. It is not your secret either — it is the one
+  shared by everyone who visits that server.
+- **Reactions belong to a key, not to a name.** Names here are free and repeat;
+  taking someone else's used to mean taking their reaction with it.
 - Leaving an SFU channel no longer leaves the server thinking you are still on
   the media server — a healthy direct call looked split, and everyone in it got
   told they could not be heard.
