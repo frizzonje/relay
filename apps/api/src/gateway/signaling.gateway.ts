@@ -114,7 +114,7 @@ export const BANNED_ERROR = 'banned';
  *
  * Всё, что живёт на сокете, живёт у владельцев: в этом файле не осталось ни
  * одного обращения к `client.data`. Ровно из-за его отсутствия здесь и появился
- * когда-то забытый `sfuPassRoom` — см. docs/plans/core-refactor.md.
+ * когда-то забытый `sfuPassRoom` — см. docs/plans/old/core-refactor.md.
  */
 export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
