@@ -121,6 +121,28 @@ jobs:
   gate:
     name: verify (lint · typecheck · test · build)
     runs-on: ubuntu-latest
+    # Ровно та же база, что у CI на ветках (.github/workflows/ci.yml,
+    # build-test): api-тесты 1.0 разговаривают с настоящим Postgres, и без
+    # него весь пакет падает на сборе — 18 файлов, ни одного проверенного
+    # утверждения. Джоба, которая называет себя воротами релиза, обязана
+    # запускаться на том же стенде, что и проверка ветки; расходятся они
+    # молча, а замечается это на теге, когда публиковать уже пора.
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: relay
+          POSTGRES_PASSWORD: relay
+          POSTGRES_DB: relay_test
+        options: >-
+          --health-cmd "pg_isready -U relay -d relay_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    env:
+      TEST_DATABASE_URL: postgresql://relay:relay@localhost:5432/relay_test
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
