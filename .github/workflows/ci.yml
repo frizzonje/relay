@@ -133,8 +133,23 @@ jobs:
           SITE_PASSWORD: testpass123
           POSTGRES_PASSWORD: testpass123
         run: docker compose -f docker-compose.yml -f infra/docker-compose.e2e.yml up -d --build
-      - name: Wait for Caddy internal cert
-        run: sleep 15
+      - name: Wait for Caddy to serve the site over TLS
+        run: |
+          # Not a sleep: the question is whether the stand answers, and the
+          # answer travels the whole way — internal certificate, site name,
+          # proxy to api. A fixed pause was either too long on every green run
+          # or too short on the one slow one, and the slow one looked like a
+          # broken test.
+          for i in $(seq 60); do
+            if docker exec relay-caddy-1 wget --no-check-certificate -qO- \
+                 https://relay.test/api/health >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Caddy never started serving https://relay.test"
+          docker logs relay-caddy-1
+          exit 1
       # The media server has to be up before the browsers start, not merely
       # before they need it: whether the SFU mode is offered at all is decided
       # by /api/config, which the page asks once on load.
