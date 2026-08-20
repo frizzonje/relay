@@ -13,8 +13,23 @@ import type {
 import { io, type Socket } from 'socket.io-client';
 import { tx } from '@/lib/i18n';
 import type { UplinkStatus } from '@/stores/voice';
-import type { TransportHost, VoiceTransport } from './types';
-import { gradeQuality, pingGrade } from './quality';
+import type { TransportHost, VoiceTransport } from '../types';
+import {
+  AUDIO_SLOT,
+  CAM_ENCODINGS,
+  MIC_CODEC_OPTIONS,
+  SCREEN_AUDIO_CODEC_OPTIONS,
+  SCREEN_ENCODINGS,
+  TOP_SPATIAL_LAYER,
+  type Ack,
+  type ConsumerLayers,
+  type ConsumerPayload,
+  type PeerSnapshot,
+  type ProducerInfo,
+  type Source,
+  type WelcomePayload,
+} from './protocol';
+import { gradeQuality, pingGrade } from '../quality';
 import {
   netDelta,
   readStats,
@@ -23,7 +38,7 @@ import {
   worseUplink,
   type NetSnapshot,
   type StatsSnapshot,
-} from './stats';
+} from '../stats';
 
 /**
  * SFU-транспорт: своё медиа уходит на медиасервер ОДИН раз, он раздаёт его
@@ -39,78 +54,6 @@ import {
  * api. Пропуск (короткоживущий токен) выдаёт api, см. `apps/sfu/src/token.ts`.
  */
 
-// ─────────────────────────────────────────────────────────────────────────
-// Что чем является на проводе
-// ─────────────────────────────────────────────────────────────────────────
-
-/** Роль дорожки. Совпадает с `ProducerSource` на сервере — контракт общий. */
-type Source = 'mic' | 'cam' | 'screen' | 'screen-audio';
-
-interface ProducerInfo {
-  id: string;
-  kind: 'audio' | 'video';
-  source: Source;
-}
-
-interface PeerSnapshot {
-  peerId: string;
-  name: string;
-  producers: ProducerInfo[];
-}
-
-interface WelcomePayload {
-  peerId: string;
-  routerRtpCapabilities: RtpCapabilities;
-  peers: PeerSnapshot[];
-}
-
-interface ConsumerPayload {
-  id: string;
-  producerId: string;
-  peerId: string;
-  kind: 'audio' | 'video';
-  rtpParameters: RtpParameters;
-  source: Source;
-}
-
-/** Слой simulcast, который сервер реально отдаёт по этому consumer'у. */
-interface ConsumerLayers {
-  consumerId: string;
-  spatialLayer: number | null;
-  temporalLayer: number | null;
-}
-
-type Ack<T> = ({ ok: true } & T) | { ok: false; error: string };
-
-// ─────────────────────────────────────────────────────────────────────────
-// Профили кодирования
-// ─────────────────────────────────────────────────────────────────────────
-
-// Камера — три слоя simulcast: сервер сам выберет, кому какой отдать, а мы
-// поверх просим слой явно (см. focusChanged). Ради этого simulcast и нужен:
-// на плитке 160px нет смысла принимать 720p, и наоборот.
-const CAM_ENCODINGS = [
-  { rid: 'q', maxBitrate: 150_000, scaleResolutionDownBy: 4, scalabilityMode: 'L1T3' },
-  { rid: 'h', maxBitrate: 500_000, scaleResolutionDownBy: 2, scalabilityMode: 'L1T3' },
-  { rid: 'f', maxBitrate: 1_800_000, scalabilityMode: 'L1T3' },
-];
-
-// Демонстрация экрана — наоборот, один жирный слой: текст в мыле нечитаем,
-// деградация «в мыло» тут хуже, чем просадка ФПС.
-const SCREEN_ENCODINGS = [{ maxBitrate: 8_000_000, scalabilityMode: 'L1T3' }];
-
-// Потолки Opus те же, что в mesh: голос на «discord-уровне», звук демонстрации
-// (музыка/фильм) заметно жирнее — там слышно разницу.
-const MIC_CODEC_OPTIONS = { opusStereo: false, opusFec: true, opusMaxAverageBitrate: 128_000 };
-const SCREEN_AUDIO_CODEC_OPTIONS = {
-  opusStereo: true,
-  opusFec: true,
-  opusMaxAverageBitrate: 256_000,
-};
-
-// Верхний слой simulcast (индекс), он же «дай максимум».
-const TOP_SPATIAL_LAYER = 2;
-
 // Окно на каждую ступень лестницы восстановления: не поднялись за него — идём
 // дальше. Столько же ждёт mesh на своём ICE-restart.
 const RECOVER_WINDOW_MS = 8_000;
@@ -123,11 +66,6 @@ const SILENCE_MS = 8_000;
 // Сколько ждём медиасервер на входе: welcome + оба транспорта. Не поднялись —
 // это отказ, а не «ещё чуть-чуть»: дирижёр уведёт звонок в p2p.
 const SETUP_TIMEOUT_MS = 12_000;
-
-// Слот аудио-дорожки для микшера. Дирижёр различает голос и звук демонстрации
-// по порядку этого ключа (в mesh туда идёт `mid`) — здесь мы роль ЗНАЕМ точно,
-// она приходит в `source`, поэтому просто отдаём фиксированный порядок.
-const AUDIO_SLOT: Record<string, string> = { mic: '0', 'screen-audio': '1' };
 
 // ─────────────────────────────────────────────────────────────────────────
 
