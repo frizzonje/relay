@@ -657,7 +657,8 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
   }
 
   function scheduleRecovery(delayMs: number) {
-    if (failTimer || !ready) return; // лестница уже идёт (или мы ещё не вставали)
+    // Лестница уже идёт; мы ещё не вставали; мы уже сдались и позвали дирижёра.
+    if (failTimer || !ready || lost) return;
     failTimer = setTimeout(() => {
       failTimer = null;
       void recover();
@@ -724,7 +725,16 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     sendTransport = await openTransport('send');
     recvTransport = await openTransport('recv');
     if (!sendTransport || !recvTransport) return; // не вышло — дожмёт сторож
-    await publishLocal();
+    // Микрофон не уехал — на пересборке это значит ровно то же, что и на входе
+    // (см. `onWelcome`): транспорты стоят, палочки зелёные, а нас не слышно, и
+    // человек узнаёт об этом от собеседника через минуту разговора в пустоту.
+    // Раньше ответ `publishLocal` здесь выбрасывался, и ступень 2 кончалась
+    // молчаливым успехом. Считаем это потерей — дирижёр уведёт в p2p.
+    if (!(await publishLocal())) {
+      host.diag('sfu rebuild failed', 'mic not published');
+      giveUp('lost');
+      return;
+    }
     for (const { peerId, info } of wanted) await consume(peerId, info);
   }
 
