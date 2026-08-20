@@ -602,8 +602,41 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
   function tellTiles(broken: boolean) {
     if (broken === saidReconnecting) return;
     saidReconnecting = broken;
+    if (broken) dimTileNet();
     for (const peerId of names.keys()) {
       host.setTileState(peerId, broken ? 'tile.state.reconnecting' : '');
+    }
+  }
+
+  /**
+   * Погасить палочки у всех сразу — по той же причине, что и надпись выше:
+   * путь до медиасервера один на всех, и если развалился он, то про связь с
+   * каждым мы не знаем ничего.
+   *
+   * Гасить приходится явно. Само по себе молчание транспорта выглядит на
+   * счётчиках consumer'ов как полный штиль: потерь за интервал ноль, rtt
+   * `null`, — и `gradeQuality(null, 0)` уверенно рисует четыре палочки ровно в
+   * ту минуту, когда связи нет. Индикатор для того и нужен, чтобы в тишине
+   * ответить «у меня или у него», и врать он не имеет права. В mesh это есть с
+   * самого начала (`connState !== 'connected'` — и всё в `null`).
+   */
+  function dimTileNet() {
+    for (const peerId of names.keys()) {
+      netHistory.delete(peerId);
+      host.setTileNet(peerId, {
+        grade: 'bad',
+        rttMs: null,
+        lossPct: null,
+        jitterMs: null,
+        relay: null,
+        sendKbps: null,
+        recvKbps: null,
+        videoRes: null,
+        fps: null,
+        codec: null,
+        via: 'sfu',
+        layer: null,
+      });
     }
   }
 
@@ -737,6 +770,11 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
   }
 
   async function updatePeerQuality(rtt: number | null) {
+    // Связь до сервера развалилась — мерить нечего и незачем: см. `dimTileNet`.
+    if (mediaBroken()) {
+      dimTileNet();
+      return;
+    }
     for (const peerId of names.keys()) {
       const mine = [...consumers.values()].filter((e) => e.peerId === peerId);
       if (mine.length === 0) {
@@ -744,7 +782,9 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         continue;
       }
 
-      let lost = 0;
+      // Не `lost`: так зовётся модульный флаг «уже сдались и позвали дирижёра»,
+      // и здесь он был бы затенён локальным счётчиком потерянных пакетов.
+      let lostPkts = 0;
       let recv = 0;
       let bytesRecv = 0;
       let jitterMs: number | null = null;
@@ -763,7 +803,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         stats.forEach((r) => {
           if (r.type !== 'inbound-rtp') return;
           const kind = (r as { kind?: string; mediaType?: string }).kind ?? r.mediaType;
-          lost += (r as { packetsLost?: number }).packetsLost ?? 0;
+          lostPkts += (r as { packetsLost?: number }).packetsLost ?? 0;
           recv += (r as { packetsReceived?: number }).packetsReceived ?? 0;
           bytesRecv += (r as { bytesReceived?: number }).bytesReceived ?? 0;
           const j = (r as { jitter?: number }).jitter;
@@ -790,11 +830,11 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       // Потери и битрейт — за интервал, а не накопленным итогом с начала звонка.
       const prev = netHistory.get(peerId);
       const now = Date.now();
-      netHistory.set(peerId, { lost, recv, bytesSent: 0, bytesRecv, ts: now });
+      netHistory.set(peerId, { lost: lostPkts, recv, bytesSent: 0, bytesRecv, ts: now });
       let lossPct: number | null = null;
       let recvKbps: number | null = null;
       if (prev) {
-        const dLost = Math.max(0, lost - prev.lost);
+        const dLost = Math.max(0, lostPkts - prev.lost);
         const dRecv = Math.max(0, recv - prev.recv);
         const total = dLost + dRecv;
         lossPct = total > 0 ? Math.round((dLost / total) * 1000) / 10 : 0;
