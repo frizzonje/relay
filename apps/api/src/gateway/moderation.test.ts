@@ -229,6 +229,71 @@ describe('бан', () => {
     expect((g.last('servers') as { id: string }[]).map((s) => s.id)).toContain('srv');
   });
 
+  it('список банов чужого сервера не отдают, и разбанить на нём нечего', async () => {
+    // Кто здесь модератор — вопрос про КОНКРЕТНЫЙ сервер. Иначе список банов
+    // соседа рассказывал бы, кого он выгнал, любому, кто спросит по id.
+    const { gw, server } = await makeGateway();
+    const host = await personCookie('Хозяйка');
+    const guest = await personCookie('Гость');
+    const stranger = await personCookie('Прохожий');
+    const h = await connectAs(gw, server, host.cookie, { id: 'h' });
+    await ownServer(gw, h);
+    const g = await connectAs(gw, server, guest.cookie, { id: 'g' });
+    const id = await say(gw, g, 'болталка', 'привет');
+    await gw.handleChatJoin(asSocket(h), { room: 'болталка' });
+    await gw.handleModerationBan(asSocket(h), { id });
+
+    const s = await connectAs(gw, server, stranger.cookie, { id: 's' });
+    expect(await gw.handleModerationBans(asSocket(s), { server: 'srv' })).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+    expect(
+      await gw.handleModerationUnban(asSocket(s), {
+        fingerprint: guest.fingerprint,
+        server: 'srv',
+      }),
+    ).toEqual({ ok: false, error: 'forbidden' });
+  });
+
+  it('банов на инсталляцию не показывают тому, кто ею не владеет', async () => {
+    // Сервер не назван — речь про инсталляцию целиком, а это власть владельца.
+    // У создателя сервера её нет, сколько бы серверов он ни завёл.
+    const { gw, server } = await makeGateway();
+    const host = await personCookie('Хозяйка');
+    const h = await connectAs(gw, server, host.cookie, { id: 'h' });
+    await ownServer(gw, h);
+
+    expect(await gw.handleModerationBans(asSocket(h), {})).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+    expect(await gw.handleModerationUnban(asSocket(h), { fingerprint: 'что-нибудь' })).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+  });
+
+  it('разбан незнакомого отпечатка и разбан не забаненного — оба «не найдено»', async () => {
+    // Разница между «такого нет» и «он не забанен» наружу не выходит намеренно:
+    // по ответу нельзя перебором узнать, чей отпечаток здесь заводили.
+    const { gw, server } = await makeGateway();
+    const host = await personCookie('Хозяйка');
+    const guest = await personCookie('Гость');
+    const h = await connectAs(gw, server, host.cookie, { id: 'h' });
+    await ownServer(gw, h);
+
+    expect(
+      await gw.handleModerationUnban(asSocket(h), { fingerprint: 'нет-такого', server: 'srv' }),
+    ).toEqual({ ok: false, error: 'not-found' });
+    expect(
+      await gw.handleModerationUnban(asSocket(h), {
+        fingerprint: guest.fingerprint,
+        server: 'srv',
+      }),
+    ).toEqual({ ok: false, error: 'not-found' });
+  });
+
   it('модератор удаляет чужое сообщение, но не правит его', async () => {
     // Удалить сказанное — модерация; переписать сказанное чужим именем — подлог.
     const { gw, server } = await makeGateway();
