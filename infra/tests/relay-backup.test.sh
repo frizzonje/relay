@@ -55,7 +55,11 @@ seed() { # put known content into the scratch volumes
 echo "── backup carries everything a rebuild needs (B7.3)"
 seed
 OUT="$(relay backup)"
-TAR="$(ls "$D"/backups/relay-backup-*.tar.gz 2>/dev/null | head -1)"
+# The path the command itself printed, not the newest file in the directory:
+# these archives are named by the second, and asking the directory made the
+# test depend on how fast the machine got here.
+archive_of() { echo "$1" | sed -n 's/^.*Backup: \(.*\.tar\.gz\)$/\1/p' | tail -1; }
+TAR="$(archive_of "$OUT")"
 check "a tarball was produced" "yes" "$([ -n "$TAR" ] && echo yes || echo no)"
 LIST="$(tar tzf "$TAR" 2>/dev/null)"
 for want in ./u/photo.jpg ./u/state/registry.json ./c/certs/site.crt ./cfg/.env \
@@ -63,7 +67,10 @@ for want in ./u/photo.jpg ./u/state/registry.json ./c/certs/site.crt ./cfg/.env 
             ./cfg/coturn-entrypoint.sh ./cfg/relay-cli.sh ./db.sql; do
   check "contains $want" "yes" "$(echo "$LIST" | grep -qxF "$want" && echo yes || echo no)"
 done
-check "the tarball is not world-readable (.env is in it)" "600" "$(stat -f '%Lp' "$TAR" 2>/dev/null || stat -c '%a' "$TAR")"
+# GNU first, BSD second: `stat -f` on coreutils means "filesystem status" and
+# succeeds with an answer to another question, so it can never fail into the
+# fallback.
+check "the tarball is not world-readable (.env is in it)" "600" "$(stat -c '%a' "$TAR" 2>/dev/null || stat -f '%Lp' "$TAR")"
 # A dump, not a copy of the data directory: the volume must never be read here.
 check "the database was dumped, not copied" "yes" "$(grep -q 'pg_dump' "$WORK/compose.log" && echo yes || echo no)"
 check "and the data directory stayed out of the archive" "no" "$(echo "$LIST" | grep -q 'PG_VERSION' && echo yes || echo no)"
@@ -87,7 +94,7 @@ cp "$D/docker-compose.prod.yml" "$WORK/compose.keep"
 awk '/^  db:/{skip=1} /^  api:/{skip=0} !skip' "$WORK/compose.keep" >"$D/docker-compose.prod.yml"
 : >"$WORK/compose.log"
 OUT="$(relay backup)"
-PRE="$(ls -t "$D"/backups/relay-backup-*.tar.gz 2>/dev/null | head -1)"
+PRE="$(archive_of "$OUT")"
 check "an archive was still written" "yes" "$([ -n "$PRE" ] && echo yes || echo no)"
 check "it says what is in it" "yes" "$(echo "$OUT" | grep -q 'files and configuration only' && echo yes || echo no)"
 check "no dump was attempted" "no" "$(grep -q 'pg_dump' "$WORK/compose.log" && echo yes || echo no)"
@@ -112,7 +119,7 @@ check "registry is back" '{"servers":[{"id":"s1"}]}' "$(docker run --rm -v "$VU"
 check "certificates are back" "PEM" "$(docker run --rm -v "$VC":/c alpine cat /c/certs/site.crt 2>/dev/null)"
 check "the password is back" "SITE_PASSWORD=s3cret-that-exists-nowhere-else" "$(grep '^SITE_PASSWORD=' "$D/.env")"
 check "Caddyfile un-clobbered" "0" "$(grep -c 'clobbered' "$D/Caddyfile" | tr -d ' ')"
-check ".env is 0600 after restore" "600" "$(stat -f '%Lp' "$D/.env" 2>/dev/null || stat -c '%a' "$D/.env")"
+check ".env is 0600 after restore" "600" "$(stat -c '%a' "$D/.env" 2>/dev/null || stat -f '%Lp' "$D/.env")"
 check "the CLI is executable after restore" "yes" "$([ -x "$D/relay-cli.sh" ] && echo yes || echo no)"
 check "the stack was stopped and started" "yes" "$(grep -q 'down' "$WORK/compose.log" && grep -q 'up -d --remove-orphans' "$WORK/compose.log" && echo yes || echo no)"
 check "the old cluster was cleared, not merged into" "" "$(docker run --rm -v "$VP":/p alpine sh -c 'ls -A /p' 2>/dev/null)"

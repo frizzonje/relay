@@ -364,8 +364,16 @@ cmd_backup() { make_backup "relay-backup-$(date +%Y%m%d-%H%M%S).tar.gz"; }
 # too, on the way into a major — and an upgrade that says "backed up first" has
 # to mean the same archive `relay restore` reads, not a near-copy of it.
 make_backup() {
-  local out="$1" stage name dbmount=()
+  local out="$1" stage name dbmount=() n=1
   mkdir -p "$DIR/backups"
+  # Never write over an archive that is already there. The name carries the
+  # time to the second, and two backups inside one second is not a hypothetical
+  # — `relay update` takes one right after a hand-made one — so the archive
+  # that would lose is the one somebody took on purpose a moment earlier.
+  while [ -e "$DIR/backups/$out" ]; do
+    n=$((n + 1))
+    out="${1%.tar.gz}-$n.tar.gz"
+  done
   stage="$(mktemp -d)"
   sweep "$stage"
   mkdir -p "$stage/cfg"
