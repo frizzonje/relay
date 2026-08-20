@@ -5,10 +5,9 @@ import type { IceServer, SdpPayload } from '@relay/shared';
 import { getSocket } from '@/lib/socket';
 import { getIceServers } from '@/lib/config';
 import { tx } from '@/lib/i18n';
-import { boostVideoBitrate, boostAudioBitrate } from '@/lib/sdp';
 import type { UplinkStatus } from '@/stores/voice';
-import type { TransportHost, VoiceTransport } from './types';
-import { gradeQuality, pingGrade } from './quality';
+import type { TransportHost, VoiceTransport } from '../types';
+import { gradeQuality, pingGrade } from '../quality';
 import {
   netDelta,
   readStats,
@@ -16,7 +15,8 @@ import {
   worseUplink,
   type NetSnapshot,
   type StatsSnapshot,
-} from './stats';
+} from '../stats';
+import { createSenders, tuneSdp } from './senders';
 
 /**
  * Mesh-транспорт: каждый шлёт своё медиа каждому напрямую (perfect negotiation,
@@ -30,18 +30,6 @@ import {
  * На 2–3 участниках mesh лучше SFU: ниже задержка, ноль нагрузки на сервер,
  * медиа не идёт через чужую машину. Потолок — видео на 4+ (см. docs/plans/old/sfu.md).
  */
-
-// ─────────────────────────────────────────────────────────────────────────
-// Потолки битрейта (SDP задаёт предел кодеку, setParameters — sender'у)
-// ─────────────────────────────────────────────────────────────────────────
-
-const VIDEO_MAX_BITRATE = 2_500_000;
-const SCREEN_MAX_BITRATE = 8_000_000;
-
-// Потолки битрейта аудио-кодировщика по ролям. Голос держим на «discord-уровне»,
-// а звук демонстрации (музыка/фильм) пускаем заметно жирнее — там слышно разницу.
-const MIC_AUDIO_MAX_BITRATE = 128_000;
-const SCREEN_AUDIO_MAX_BITRATE = 256_000;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Окна лестницы восстановления
@@ -73,8 +61,6 @@ interface Peer {
   ignoreOffer: boolean;
   pendingCandidates: RTCIceCandidateInit[];
   failTimer: ReturnType<typeof setTimeout> | null;
-  videoSender: RTCRtpSender | null;
-  screenAudioSender: RTCRtpSender | null;
   // Сводное состояние связи (см. combinedConnState) — чтобы не дёргать UI на
   // каждое дублирующее событие connection/ice state.
   connState: PeerConnState;
@@ -144,89 +130,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
   let initialized = false;
 
   const socket = () => getSocket();
-
-  // ── SDP и параметры sender'ов ─────────────────────────────────────────
-  // boostVideoBitrate/boostAudioBitrate вынесены в lib/sdp.ts (чистый модуль).
-  // Тюним и видео (x-google-bitrate), и голос (Opus: стерео/битрейт/FEC) —
-  // иначе звонок звучит глухо на дефолтном ~32 кбит/с моно.
-
-  function tuneSdp(sdp: string | undefined): string | undefined {
-    return boostAudioBitrate(boostVideoBitrate(sdp));
-  }
-
-  // Поднимаем потолок битрейта у одного аудио-sender'а. SDP задаёт
-  // maxaveragebitrate кодеку, а это — фактический максимум кодировщика.
-  async function setAudioSenderBitrate(sender: RTCRtpSender, max: number) {
-    try {
-      const params = sender.getParameters();
-      if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-      params.encodings.forEach((e) => {
-        e.maxBitrate = max;
-        // Голос/звук демонстрации важнее картинки: под нагрузкой WebRTC душит
-        // потоки по приоритету. Без этого голос рвётся наравне с видео, когда
-        // кто-то параллельно льёт экран на 8 Мбит/с. high = и DSCP-метка, и
-        // распределение полосы в пользу аудио.
-        e.priority = 'high';
-        e.networkPriority = 'high';
-      });
-      await sender.setParameters(params);
-    } catch (err) {
-      console.warn('audio setParameters failed:', err);
-    }
-  }
-
-  // Тюним все аудио-sender'ы пира: звук демонстрации — под высокий потолок
-  // (музыка/фильм), микрофон и прочее — под голосовой.
-  async function tuneAudioSenders(peer: Peer) {
-    for (const sender of peer.pc.getSenders()) {
-      if (sender.track?.kind !== 'audio') continue;
-      const max =
-        sender === peer.screenAudioSender ? SCREEN_AUDIO_MAX_BITRATE : MIC_AUDIO_MAX_BITRATE;
-      await setAudioSenderBitrate(sender, max);
-    }
-  }
-
-  async function tuneVideoSender(sender: RTCRtpSender, isScreen = false) {
-    try {
-      const params = sender.getParameters();
-      if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-      params.encodings[0].maxBitrate = isScreen ? SCREEN_MAX_BITRATE : VIDEO_MAX_BITRATE;
-      // Экран — по выбору пользователя (тумблер Качество/ФПС); камера — сбалансированно
-      params.degradationPreference = isScreen ? host.screenDegradation() : 'balanced';
-      await sender.setParameters(params);
-    } catch (err) {
-      console.warn('setParameters failed:', err);
-    }
-  }
-
-  // ── Публикация локальных дорожек ──────────────────────────────────────
-
-  // Отдаём собеседнику текущую видеодорожку (камеру ИЛИ экран) через общий video-sender
-  function sendVideoTo(peer: Peer) {
-    const track = host.videoTrack();
-    if (!track) return;
-    if (peer.videoSender) {
-      peer.videoSender.replaceTrack(track).catch(() => {});
-    } else {
-      peer.videoSender = peer.pc.addTrack(track, host.localStream()!);
-    }
-    void tuneVideoSender(peer.videoSender, host.screenOn());
-  }
-
-  // Демонстрация = видео экрана (общий слот) + отдельная аудиодорожка со звуком экрана
-  function sendScreenTo(peer: Peer) {
-    sendVideoTo(peer);
-    const audio = host.screenAudioTrack();
-    if (!audio) return;
-    if (peer.screenAudioSender) {
-      peer.screenAudioSender.replaceTrack(audio).catch(() => {});
-    } else {
-      peer.screenAudioSender = peer.pc.addTrack(audio, host.localStream()!);
-    }
-    // Звуку демонстрации — высокий потолок сразу (показ мог стартовать уже после
-    // того, как связь установилась, и общий tuneAudioSenders по нему не прошёлся).
-    void setAudioSenderBitrate(peer.screenAudioSender, SCREEN_AUDIO_MAX_BITRATE);
-  }
+  const senders = createSenders(host);
 
   // ── Сигналинг (perfect negotiation) ───────────────────────────────────
 
@@ -258,8 +162,6 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       ignoreOffer: false,
       pendingCandidates: [],
       failTimer: null,
-      videoSender: null,
-      screenAudioSender: null,
       connState: 'connecting',
       relayOnly,
       recoverStage: 0,
@@ -293,8 +195,8 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     // встречного offer'а, а он после answer срабатывает не на всех браузерах —
     // отдаём своё видео отвечающей стороной уже после ответа (обработчик 'offer').
     if (initiator) {
-      if (host.screenOn()) sendScreenTo(peer);
-      else if (host.camOn()) sendVideoTo(peer);
+      if (host.screenOn()) senders.sendScreenTo(peerId, pc);
+      else if (host.camOn()) senders.sendVideoTo(peerId, pc);
     }
 
     pc.onnegotiationneeded = async () => {
@@ -349,8 +251,8 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
           peer.warned = false; // связь была — следующий провал стоит показать снова
           host.setTileState(peerId, '');
           // bitrate-cap/тюнинг применяем только после ICE — иначе setParameters кидает
-          if (peer.videoSender) void tuneVideoSender(peer.videoSender, host.screenOn());
-          void tuneAudioSenders(peer);
+          senders.tuneVideo(peerId, host.screenOn());
+          void senders.tuneAudio(peerId, pc);
           break;
         case 'disconnected':
           // Может само подняться (кратковременная смена сети) — даём паузу, затем
@@ -396,6 +298,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     clearRecovery(peer);
     peer.pc.close();
     peers.delete(peerId);
+    senders.forget(peerId);
     netHistory.delete(peerId);
     audioFlow.delete(peerId);
     host.cleanupPeerAudio(peerId);
@@ -785,8 +688,8 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
           // же путь, что при старте показа в живом звонке), а не хрупкий «доп. offer
           // поверх answer», который после переподключения участник нередко не получал.
           if (fresh && (host.screenOn() || host.camOn())) {
-            if (host.screenOn()) sendScreenTo(peer);
-            else sendVideoTo(peer);
+            if (host.screenOn()) senders.sendScreenTo(from, pc);
+            else senders.sendVideoTo(from, pc);
           }
         } catch (err) {
           console.error('offer handling failed:', err);
@@ -841,6 +744,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
         peer.pc.close();
       });
       peers.clear();
+      senders.forgetAll();
       netHistory.clear();
       audioFlow.clear();
       room = null;
@@ -848,24 +752,19 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     },
 
     publishVideo() {
-      peers.forEach((peer) => sendVideoTo(peer));
+      peers.forEach((peer, id) => senders.sendVideoTo(id, peer.pc));
     },
 
     unpublishVideo() {
-      peers.forEach((peer) => {
-        if (peer.videoSender) peer.videoSender.replaceTrack(null).catch(() => {});
-      });
+      peers.forEach((_peer, id) => senders.stopVideo(id));
     },
 
     publishScreen() {
-      peers.forEach((peer) => sendScreenTo(peer));
+      peers.forEach((peer, id) => senders.sendScreenTo(id, peer.pc));
     },
 
     unpublishScreen() {
-      peers.forEach((peer) => {
-        if (peer.videoSender) peer.videoSender.replaceTrack(null).catch(() => {});
-        if (peer.screenAudioSender) peer.screenAudioSender.replaceTrack(null).catch(() => {});
-      });
+      peers.forEach((_peer, id) => senders.stopScreen(id));
     },
 
     replaceMicTrack(oldTrack, newTrack) {
@@ -877,9 +776,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     },
 
     retuneVideo() {
-      peers.forEach((peer) => {
-        if (peer.videoSender) void tuneVideoSender(peer.videoSender, true);
-      });
+      peers.forEach((_peer, id) => senders.tuneVideo(id, true));
     },
 
     pollStats() {
