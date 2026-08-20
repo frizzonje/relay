@@ -1,11 +1,16 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 
 /**
- * Юнит-тест mesh-транспорта (lib/voice/mesh.ts) через публичный API дирижёра
- * lib/voice.ts — проверяем связку целиком: perfect-negotiation
- * (offer/answer, glare-подавление у «невежливой» стороны) и очередь ICE-
- * кандидатов с дренажём после setRemoteDescription. RTCPeerConnection,
- * getUserMedia и socket замоканы — реальной сети/медиа не требуется.
+ * Mesh-транспорт целиком, через публичный API дирижёра (`lib/voice.ts`).
+ *
+ * Через дирижёра, а не по файлам: mesh разрезан на предметы — переговоры,
+ * лестница, сторож тишины, метрики, публикация дорожек, — и ценно здесь ровно
+ * то, как они работают ВМЕСТЕ. Чужой offer доезжает до сторожа ступени, сторож
+ * тишины дёргает ту же лестницу, что и провал ICE; все известные баги этой
+ * машины жили как раз на стыках, а не внутри предметов.
+ *
+ * RTCPeerConnection, getUserMedia и socket замоканы — реальной сети и медиа
+ * не требуется.
  */
 
 // ─── Моки внешних зависимостей voice.ts ──────────────────────────────────
@@ -126,7 +131,7 @@ const fakeStream = {
   getTracks: () => [audioTrack],
 };
 
-let voice: typeof import('./voice');
+let voice: typeof import('@/lib/voice');
 
 beforeAll(async () => {
   vi.useFakeTimers(); // нейтрализуем ping-setInterval
@@ -134,7 +139,7 @@ beforeAll(async () => {
   vi.stubGlobal('navigator', {
     mediaDevices: { getUserMedia: vi.fn(async () => fakeStream) },
   });
-  voice = await import('./voice');
+  voice = await import('@/lib/voice');
   voice.initVoice(); // регистрирует socket-хендлеры
 });
 
@@ -158,7 +163,18 @@ function emitted(event: string) {
   return sockets.emit.mock.calls.filter((c) => c[0] === event);
 }
 
-describe('PeerManager — perfect negotiation', () => {
+// Звонок с одним собеседником, инициатор — мы. 'zzz' < 'aaa' ложь ⇒ мы
+// «невежливые» и идём по ступеням лестницы без задержки: POLITE_LAG_MS в
+// расчёт времени в этих тестах не входит.
+async function callWith(peerId = 'aaa') {
+  sockets.id = 'zzz';
+  sockets.connected = true;
+  await voice.joinVoice('room1', 'Канал 1');
+  await fire('peers', [{ id: peerId, name: 'A' }]);
+  return FakePC.instances[0];
+}
+
+describe('mesh — perfect negotiation', () => {
   it('входящий offer → answer с поднятым битрейтом', async () => {
     sockets.id = 'aaa'; // 'aaa' < 'zzz' ⇒ мы «вежливые»
     await voice.joinVoice('room1', 'Канал 1');
@@ -194,19 +210,36 @@ describe('PeerManager — perfect negotiation', () => {
     expect(emitted('answer')).toHaveLength(0);
     expect(pc.remoteDescription).toBeNull(); // setRemoteDescription не вызывался
   });
-});
 
-describe('PeerManager — лестница восстановления', () => {
-  // 'zzz' < 'aaa' ложь ⇒ мы «невежливые» и идём по ступеням без задержки —
-  // POLITE_LAG_MS в расчёт времени в этих тестах не входит.
-  async function callWith(peerId = 'aaa') {
-    sockets.id = 'zzz';
+  it('собеседник, пересобравший связь, узнаётся по отпечатку DTLS', async () => {
+    sockets.id = 'aaa'; // «вежливые» — отвечаем на чужие offer'ы
     sockets.connected = true;
     await voice.joinVoice('room1', 'Канал 1');
-    await fire('peers', [{ id: peerId, name: 'A' }]);
-    return FakePC.instances[0];
-  }
 
+    const offer = (fp: string) => ({
+      from: 'zzz',
+      name: 'Z',
+      sdp: { type: 'offer', sdp: `a=fingerprint:sha-256 ${fp}\r\n${VIDEO_SDP}` },
+    });
+
+    await fire('offer', offer('AA:BB'));
+    const first = FakePC.instances[0];
+    expect(first.remoteDescription?.type).toBe('offer');
+
+    // Тот же отпечаток — обычная ренеготиация: соединение не трогаем.
+    await fire('offer', offer('AA:BB'));
+    expect(FakePC.instances).toHaveLength(1);
+    expect(first.closed).toBe(false);
+
+    // Отпечаток сменился ⇒ за тем же id уже другой pc. Наш выбрасываем.
+    await fire('offer', offer('CC:DD'));
+    expect(first.closed).toBe(true);
+    expect(FakePC.instances).toHaveLength(2);
+    expect(FakePC.instances[1].localDescription?.type).toBe('answer');
+  });
+});
+
+describe('mesh — лестница восстановления', () => {
   it('промежуточное «connecting» больше не гасит сторож ступени', async () => {
     const pc = await callWith();
 
@@ -255,7 +288,9 @@ describe('PeerManager — лестница восстановления', () => 
     expect(pc.restarts).toBe(1);
     sockets.recovered = false;
   });
+});
 
+describe('mesh — сторож тишины', () => {
   it('связь есть, а звука нет — чиним, а не только пишем в консоль', async () => {
     const pc = await callWith();
     pc.setState('connected');
@@ -270,36 +305,9 @@ describe('PeerManager — лестница восстановления', () => 
     expect(pc.closed).toBe(true);
     expect(FakePC.instances).toHaveLength(2);
   });
-
-  it('собеседник, пересобравший связь, узнаётся по отпечатку DTLS', async () => {
-    sockets.id = 'aaa'; // «вежливые» — отвечаем на чужие offer'ы
-    sockets.connected = true;
-    await voice.joinVoice('room1', 'Канал 1');
-
-    const offer = (fp: string) => ({
-      from: 'zzz',
-      name: 'Z',
-      sdp: { type: 'offer', sdp: `a=fingerprint:sha-256 ${fp}\r\n${VIDEO_SDP}` },
-    });
-
-    await fire('offer', offer('AA:BB'));
-    const first = FakePC.instances[0];
-    expect(first.remoteDescription?.type).toBe('offer');
-
-    // Тот же отпечаток — обычная ренеготиация: соединение не трогаем.
-    await fire('offer', offer('AA:BB'));
-    expect(FakePC.instances).toHaveLength(1);
-    expect(first.closed).toBe(false);
-
-    // Отпечаток сменился ⇒ за тем же id уже другой pc. Наш выбрасываем.
-    await fire('offer', offer('CC:DD'));
-    expect(first.closed).toBe(true);
-    expect(FakePC.instances).toHaveLength(2);
-    expect(FakePC.instances[1].localDescription?.type).toBe('answer');
-  });
 });
 
-describe('PeerManager — метрики', () => {
+describe('mesh — метрики', () => {
   async function callWith(peerId = 'aaa') {
     sockets.id = 'zzz';
     sockets.connected = true;
@@ -329,7 +337,7 @@ describe('PeerManager — метрики', () => {
   });
 });
 
-describe('PeerManager — очередь ICE-кандидатов', () => {
+describe('mesh — очередь ICE-кандидатов', () => {
   it('кандидат до remoteDescription буферизуется и дренажится после offer', async () => {
     sockets.id = 'aaa';
     await voice.joinVoice('room1', 'Канал 1');
