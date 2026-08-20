@@ -12,6 +12,7 @@ import {
   makeOwner,
   personCookie,
   settle,
+  slugOf,
   useGatewayStand,
   type AnyGw,
 } from './gateway.testkit';
@@ -219,7 +220,7 @@ describe('server-create', () => {
     const owner = connect(gw, server, { id: 'owner', clientId: 'dev-owner' });
     await gw.handleServerCreate(asSocket(owner), { id: 'srv', name: 'мой' });
     await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'чат' });
-    await gw.handleChatJoin(asSocket(owner), { room: 'чат', name: 'Хозяин' });
+    await gw.handleChatJoin(asSocket(owner), { room: slugOf('чат'), name: 'Хозяин' });
     await gw.handleChatMessage(asSocket(owner), { text: 'привет' });
 
     expect(await gw.handleServerDelete(asSocket(owner), { id: 'srv' })).toEqual({ ok: true });
@@ -289,11 +290,11 @@ describe('server-delete', () => {
   it('читателей текстового канала выписывают явно, а не оставляют гадать', async () => {
     const { gw, server, owner } = await withServer();
     const reader = connect(gw, server, { id: 'reader' });
-    await gw.handleChatJoin(asSocket(reader), { room: 'болталка', name: 'Читатель' });
+    await gw.handleChatJoin(asSocket(reader), { room: slugOf('болталка'), name: 'Читатель' });
     reader.clear();
 
     await gw.handleServerDelete(asSocket(owner), { id: 'srv' });
-    expect(reader.last('chat-closed')).toEqual({ slug: 'болталка' });
+    expect(reader.last('chat-closed')).toEqual({ slug: slugOf('болталка') });
     expect(reader.data.chatRoom).toBeUndefined();
   });
 
@@ -338,7 +339,7 @@ describe('server-delete', () => {
   it('живой разговор дороже уборки: сервер с людьми в эфире не удаляется', async () => {
     const { gw, server, owner } = await withServer();
     const talker = connect(gw, server, { id: 'talker' });
-    gw.handleJoin(asSocket(talker), { room: 'эфир', name: 'Говорящий' });
+    gw.handleJoin(asSocket(talker), { room: slugOf('эфир'), name: 'Говорящий' });
     expect(await gw.handleServerDelete(asSocket(owner), { id: 'srv' })).toEqual({
       ok: false,
       error: 'occupied',
@@ -368,11 +369,11 @@ describe('server-stats', () => {
     await gw.handleServerCreate(asSocket(owner), { id: 'srv', name: 'мой' });
     await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'чат' });
     await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'voice', name: 'эфир' });
-    await gw.handleChatJoin(asSocket(owner), { room: 'чат', name: 'Хозяин' });
+    await gw.handleChatJoin(asSocket(owner), { room: slugOf('чат'), name: 'Хозяин' });
     await gw.handleChatMessage(asSocket(owner), { text: 'привет' });
 
     const talker = connect(gw, server, { id: 'talker' });
-    gw.handleJoin(asSocket(talker), { room: 'эфир', name: 'Гость' });
+    gw.handleJoin(asSocket(talker), { room: slugOf('эфир'), name: 'Гость' });
 
     expect(await gw.handleServerStats(asSocket(owner), { id: 'srv' })).toEqual({
       ok: true,

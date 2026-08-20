@@ -16,7 +16,7 @@ import {
   MAX_SERVERS,
   MAX_SERVERS_PER_PERSON,
   RegistryService,
-  slugifyChannel,
+  channelSlug,
 } from './registry.service';
 import { createdBy, ownedBy } from './ownership';
 import { clientIp, hashServerPassword, issueUnlockToken } from './unlock';
@@ -337,7 +337,9 @@ export class RegistryHandlers {
     // В закрытый сервер канал создаёт только разблокировавший его сокет.
     if (!this.perimeter.isOpenTo(client, srv)) return { ok: false, error: 'forbidden' };
     const rawName = trimmed(payload?.name, LIMIT.name);
-    const slug = slugifyChannel(rawName);
+    // Адрес комнаты несёт метку своего сервера — см. `channelSlug`. Поэтому
+    // столкнуться слаг может только со своим же каналом на этом же сервере.
+    const slug = channelSlug(rawName, serverId);
     if (!slug) return { ok: false, error: 'bad-name' };
     if (this.registry.channels.length >= MAX_CHANNELS)
       return { ok: false, error: 'limit', scope: 'install', limit: MAX_CHANNELS };
@@ -348,8 +350,10 @@ export class RegistryHandlers {
       MAX_CHANNELS_PER_SERVER
     )
       return { ok: false, error: 'limit', scope: 'server', limit: MAX_CHANNELS_PER_SERVER };
-    // Слаг уникален глобально (комнаты голоса/чата ключуются по нему) — один слаг
-    // на тип по всем серверам, повторное создание не плодит дубликаты.
+    // Проверка всё равно глобальная: слаг уникален по всей инсталляции (по нему
+    // ключуются комнаты и лента), и уникальный индекс в базе устроен так же.
+    // Метка сервера делает это столкновение своим — но полагаться на неё как на
+    // доказательство нельзя: слаги, приехавшие с 0.x, метки не носят.
     if (this.registry.channels.some((c) => c.type === type && c.slug === slug))
       return { ok: false, error: 'exists' };
 

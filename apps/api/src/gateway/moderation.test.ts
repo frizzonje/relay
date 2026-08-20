@@ -11,6 +11,7 @@ import {
   personCookie,
   say,
   settle,
+  slugOf,
   useGatewayStand,
 } from './gateway.testkit';
 
@@ -93,16 +94,16 @@ describe('бан', () => {
     await ownServer(gw, h);
 
     const g = await connectAs(gw, server, guest.cookie, { id: 'g' });
-    const id = await say(gw, g, 'болталка', 'привет');
-    gw.handleJoin(asSocket(g), { room: 'эфир' });
-    await gw.handleChatJoin(asSocket(h), { room: 'болталка' });
+    const id = await say(gw, g, slugOf('болталка'), 'привет');
+    gw.handleJoin(asSocket(g), { room: slugOf('эфир') });
+    await gw.handleChatJoin(asSocket(h), { room: slugOf('болталка') });
     g.clear();
 
     expect(await gw.handleModerationBan(asSocket(h), { id })).toEqual({ ok: true });
 
     // С причиной: канал на месте, ушёл человек. Клиент по ней и говорит правду
     // вместо «канал удалён».
-    expect(g.last('chat-closed')).toEqual({ slug: 'болталка', reason: 'banned' });
+    expect(g.last('chat-closed')).toEqual({ slug: slugOf('болталка'), reason: 'banned' });
     expect(g.data.room).toBeUndefined();
     const servers = g.last('servers') as { id: string }[];
     expect(servers.map((s) => s.id)).toEqual([MAIN]);
@@ -124,9 +125,9 @@ describe('бан', () => {
     const { sock: g } = await knock(gw, server, guest.cookie, 'g');
     expect((g.last('servers') as { id: string }[]).map((s) => s.id)).toEqual([MAIN]);
 
-    gw.handleJoin(asSocket(g), { room: 'эфир' });
+    gw.handleJoin(asSocket(g), { room: slugOf('эфир') });
     expect(g.data.room).toBeUndefined();
-    await gw.handleChatJoin(asSocket(g), { room: 'болталка' });
+    await gw.handleChatJoin(asSocket(g), { room: slugOf('болталка') });
     expect(g.data.chatRoom).toBeUndefined();
   });
 
@@ -137,8 +138,8 @@ describe('бан', () => {
     const h = await connectAs(gw, server, host.cookie, { id: 'h' });
     await ownServer(gw, h);
     const g = await connectAs(gw, server, guest.cookie, { id: 'g' });
-    const id = await say(gw, g, 'болталка', 'привет');
-    await gw.handleChatJoin(asSocket(h), { room: 'болталка' });
+    const id = await say(gw, g, slugOf('болталка'), 'привет');
+    await gw.handleChatJoin(asSocket(h), { room: slugOf('болталка') });
 
     expect(await gw.handleModerationBan(asSocket(h), { id, everywhere: true })).toEqual({
       ok: false,
@@ -153,8 +154,8 @@ describe('бан', () => {
     const h = await connectAs(gw, server, host.cookie, { id: 'h' });
     await ownServer(gw, h);
     const o = await connectAs(gw, server, other.cookie, { id: 'o' });
-    const id = await say(gw, h, 'болталка', 'моё слово');
-    await gw.handleChatJoin(asSocket(o), { room: 'болталка' });
+    const id = await say(gw, h, slugOf('болталка'), 'моё слово');
+    await gw.handleChatJoin(asSocket(o), { room: slugOf('болталка') });
 
     expect(await gw.handleModerationBan(asSocket(o), { id })).toEqual({
       ok: false,
@@ -176,8 +177,8 @@ describe('бан', () => {
     const h = await connectAs(gw, server, host.cookie, { id: 'h' });
     await ownServer(gw, h);
     const b = await connectAs(gw, server, boss.cookie, { id: 'b' });
-    const id = await say(gw, b, 'болталка', 'зашёл посмотреть');
-    await gw.handleChatJoin(asSocket(h), { room: 'болталка' });
+    const id = await say(gw, b, slugOf('болталка'), 'зашёл посмотреть');
+    await gw.handleChatJoin(asSocket(h), { room: slugOf('болталка') });
 
     expect(await gw.handleModerationBan(asSocket(h), { id })).toEqual({
       ok: false,
@@ -193,8 +194,8 @@ describe('бан', () => {
     const h = await connectAs(gw, server, host.cookie, { id: 'h' });
     await ownServer(gw, h);
     const nobody = connect(gw, server, { id: 'n' });
-    const id = await say(gw, nobody, 'болталка', 'здрасьте');
-    await gw.handleChatJoin(asSocket(h), { room: 'болталка' });
+    const id = await say(gw, nobody, slugOf('болталка'), 'здрасьте');
+    await gw.handleChatJoin(asSocket(h), { room: slugOf('болталка') });
 
     expect(await gw.handleModerationBan(asSocket(h), { id })).toEqual({
       ok: false,
@@ -209,8 +210,8 @@ describe('бан', () => {
     const h = await connectAs(gw, server, host.cookie, { id: 'h' });
     await ownServer(gw, h);
     const g = await connectAs(gw, server, guest.cookie, { id: 'g' });
-    const id = await say(gw, g, 'болталка', 'привет');
-    await gw.handleChatJoin(asSocket(h), { room: 'болталка' });
+    const id = await say(gw, g, slugOf('болталка'), 'привет');
+    await gw.handleChatJoin(asSocket(h), { room: slugOf('болталка') });
     await gw.handleModerationBan(asSocket(h), { id });
 
     const list = await gw.handleModerationBans(asSocket(h), { server: 'srv' });
@@ -239,8 +240,8 @@ describe('бан', () => {
     const h = await connectAs(gw, server, host.cookie, { id: 'h' });
     await ownServer(gw, h);
     const g = await connectAs(gw, server, guest.cookie, { id: 'g' });
-    const id = await say(gw, g, 'болталка', 'привет');
-    await gw.handleChatJoin(asSocket(h), { room: 'болталка' });
+    const id = await say(gw, g, slugOf('болталка'), 'привет');
+    await gw.handleChatJoin(asSocket(h), { room: slugOf('болталка') });
     await gw.handleModerationBan(asSocket(h), { id });
 
     const s = await connectAs(gw, server, stranger.cookie, { id: 's' });
@@ -302,8 +303,8 @@ describe('бан', () => {
     const h = await connectAs(gw, server, host.cookie, { id: 'h' });
     await ownServer(gw, h);
     const g = await connectAs(gw, server, guest.cookie, { id: 'g' });
-    const id = await say(gw, g, 'болталка', 'дурное слово');
-    await gw.handleChatJoin(asSocket(h), { room: 'болталка' });
+    const id = await say(gw, g, slugOf('болталка'), 'дурное слово');
+    await gw.handleChatJoin(asSocket(h), { room: slugOf('болталка') });
     server.clearAll();
 
     await gw.handleChatEdit(asSocket(h), { id, text: 'подменённое' });

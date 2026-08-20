@@ -14,7 +14,7 @@ import { issueSession } from '../identity/session';
 import type { Attachment, UploadsService } from '../uploads';
 import type { Channel, PersistedRegistry, ServerEntry } from './registry';
 import { ChatService } from './chat.service';
-import { RegistryService } from './registry.service';
+import { RegistryService, channelSlug } from './registry.service';
 import { SignalingGateway } from './signaling.gateway';
 import { FakeServer, asSocket, type FakeSocket } from './testkit';
 
@@ -280,6 +280,17 @@ export async function knock(gw: SignalingGateway, server: FakeServer, cookie: st
   const refused = await server.run(sock);
   if (!refused) gw.handleConnection(asSocket(sock));
   return { sock, refused };
+}
+
+/**
+ * Адрес канала по его имени — тем же расчётом, что и сервер (`channelSlug`).
+ *
+ * Считать его в тесте руками нельзя: слаг несёт метку своего сервера, и
+ * литерал «болталка» в ожидании означал бы, что тест проверяет не поведение, а
+ * собственную догадку о том, как оно устроено.
+ */
+export function slugOf(name: string, serverId = 'srv'): string {
+  return channelSlug(name, serverId);
 }
 
 /** Свой сервер с текстовым и голосовым каналами — то, чем владеет создатель. */

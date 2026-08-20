@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueGuestToken, issueToken } from '../auth/auth';
 import { asSocket } from './testkit';
-import { MAIN, connect, makeGateway, settle, useGatewayStand } from './gateway.testkit';
+import { MAIN, connect, makeGateway, settle, slugOf, useGatewayStand } from './gateway.testkit';
 
 /**
  * Контур доступа: кто это, что ему здесь можно и куда его не пускают.
@@ -161,14 +161,14 @@ describe('server-unlock', () => {
     const guest = connect(gw, server, { id: 'guest' });
     gw.handleConnection(asSocket(guest));
     expect((guest.last('channels') as { slug: string }[]).map((c) => c.slug)).not.toContain(
-      'тайный-чат',
+      slugOf('тайный чат'),
     );
     guest.clear();
 
     await gw.handleServerUnlock(asSocket(guest), { id: 'srv', password: 'пароль' });
     expect(guest.last('server-unlock-result')).toMatchObject({ id: 'srv', ok: true });
     expect((guest.last('channels') as { slug: string }[]).map((c) => c.slug)).toContain(
-      'тайный-чат',
+      slugOf('тайный чат'),
     );
     expect(guest.got('voice-presence')).toBe(true);
   });
@@ -253,7 +253,7 @@ describe('server-unlock', () => {
     const again = server.connect({ id: 'again', auth: { unlock: [token] } });
     gw.handleConnection(asSocket(again));
     expect((again.last('channels') as { slug: string }[]).map((c) => c.slug)).toContain(
-      'тайный-чат',
+      slugOf('тайный чат'),
     );
   });
 
@@ -319,8 +319,8 @@ describe('server-unlock', () => {
     });
     settle();
     const outsider = connect(gw, server, { id: 'outsider' });
-    gw.handleJoin(asSocket(outsider), { room: 'тайный-зов', name: 'чужак' });
-    expect(outsider.last('voice-locked')).toEqual({ room: 'тайный-зов' });
+    gw.handleJoin(asSocket(outsider), { room: slugOf('тайный зов'), name: 'чужак' });
+    expect(outsider.last('voice-locked')).toEqual({ room: slugOf('тайный зов') });
   });
 
   it('гость пароли не подбирает', async () => {
@@ -476,9 +476,9 @@ describe('guest-kick', () => {
       type: 'voice',
       name: 'тайный эфир',
     });
-    const { token } = issueGuestToken('тайный-эфир', { listen: true });
+    const { token } = issueGuestToken(slugOf('тайный эфир'), { listen: true });
     const guest = connect(gw, server, { id: 'guest', clientId: 'dev-guest', guest: token });
-    gw.handleJoin(asSocket(guest), { room: 'тайный-эфир', name: 'Гость' });
+    gw.handleJoin(asSocket(guest), { room: slugOf('тайный эфир'), name: 'Гость' });
     settle();
 
     // Канала он не видит — значит и того, кто в нём сидит, для него нет.
@@ -510,9 +510,9 @@ describe('sfu-token', () => {
 
   it('выдаёт пропуск с адресом медиасервера и запоминает выдачу', async () => {
     const { gw, owner } = await withSfuChannel();
-    const res = await gw.handleSfuToken(asSocket(owner), { room: 'эфир', name: 'Хозяин' });
+    const res = await gw.handleSfuToken(asSocket(owner), { room: slugOf('эфир'), name: 'Хозяин' });
     expect(res).toMatchObject({ ok: true, url: 'https://relay.example/sfu' });
-    expect(owner.data.sfuPassRoom).toBe('эфир');
+    expect(owner.data.sfuPassRoom).toBe(slugOf('эфир'));
   });
 
   it('без настроенного медиасервера — unavailable', async () => {
@@ -527,7 +527,7 @@ describe('sfu-token', () => {
   it('настроен, но лежит — тоже unavailable: пропуск в мёртвый сервер хуже отказа', async () => {
     const { gw, owner } = await withSfuChannel();
     sfuHealthy.mockResolvedValue(false);
-    expect(await gw.handleSfuToken(asSocket(owner), { room: 'эфир' })).toEqual({
+    expect(await gw.handleSfuToken(asSocket(owner), { room: slugOf('эфир') })).toEqual({
       ok: false,
       error: 'unavailable',
     });
@@ -551,15 +551,17 @@ describe('sfu-token', () => {
 
   it('комнату берут из сокета, если её не назвали', async () => {
     const { gw, owner } = await withSfuChannel();
-    gw.handleJoin(asSocket(owner), { room: 'эфир', name: 'Хозяин' });
+    gw.handleJoin(asSocket(owner), { room: slugOf('эфир'), name: 'Хозяин' });
     expect(await gw.handleSfuToken(asSocket(owner), {})).toMatchObject({ ok: true });
   });
 
   it('гость проходит в свою комнату и только в неё', async () => {
     const { gw, server } = await withSfuChannel();
-    const { token } = issueGuestToken('эфир');
+    const { token } = issueGuestToken(slugOf('эфир'));
     const guest = connect(gw, server, { guest: token });
-    expect(await gw.handleSfuToken(asSocket(guest), { room: 'эфир' })).toMatchObject({ ok: true });
+    expect(await gw.handleSfuToken(asSocket(guest), { room: slugOf('эфир') })).toMatchObject({
+      ok: true,
+    });
     expect(await gw.handleSfuToken(asSocket(guest), { room: 'voice-obshchii-sfu' })).toEqual({
       ok: false,
       error: 'forbidden',
@@ -579,7 +581,7 @@ describe('sfu-token', () => {
       mode: 'sfu',
     });
     const stranger = connect(gw, server);
-    expect(await gw.handleSfuToken(asSocket(stranger), { room: 'тайный-эфир' })).toEqual({
+    expect(await gw.handleSfuToken(asSocket(stranger), { room: slugOf('тайный эфир') })).toEqual({
       ok: false,
       error: 'not-sfu',
     });

@@ -7,6 +7,7 @@ import {
   makeGateway,
   personCookie,
   settle,
+  slugOf,
   useGatewayStand,
 } from './gateway.testkit';
 
@@ -161,7 +162,7 @@ describe('упоминания', () => {
     await gw.handleServerCreate(asSocket(owner), { id: 'srv', name: 'тайный', password: 'пароль' });
     await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'тайны' });
     settle();
-    await gw.handleChatJoin(asSocket(owner), { room: 'тайны' });
+    await gw.handleChatJoin(asSocket(owner), { room: slugOf('тайны') });
     await gw.handleChatMessage(asSocket(owner), {
       text: '@Аня, сюда',
       mentions: [anya.fingerprint],
@@ -175,7 +176,7 @@ describe('упоминания', () => {
     a.clear();
     await gw.handleServerUnlock(asSocket(a), { id: 'srv', password: 'пароль' });
     await until(() => a.got('mentions'), 'счётчик упоминаний');
-    expect(a.last('mentions')).toEqual({ counts: { тайны: 1 } });
+    expect(a.last('mentions')).toEqual({ counts: { [slugOf('тайны')]: 1 } });
   });
 
   describe('подсказка после «@»', () => {

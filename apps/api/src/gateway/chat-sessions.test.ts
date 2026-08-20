@@ -9,6 +9,7 @@ import {
   personCookie,
   putUpload,
   settle,
+  slugOf,
   useGatewayStand,
 } from './gateway.testkit';
 
@@ -92,7 +93,7 @@ describe('chat-join', () => {
     });
 
     const stranger = connect(gw, server, { id: 'stranger' });
-    await gw.handleChatJoin(asSocket(stranger), { room: 'тайный-чат', name: 'Ч' });
+    await gw.handleChatJoin(asSocket(stranger), { room: slugOf('тайный чат'), name: 'Ч' });
     expect(stranger.data.chatRoom).toBeUndefined();
     expect(stranger.got('chat-closed')).toBe(false);
   });
@@ -117,8 +118,8 @@ describe('chat-join', () => {
 
     const a = connect(gw, server, { id: 'a' });
     await gw.handleChatJoin(asSocket(a), { room: 'obshchii', name: 'A' });
-    await gw.handleChatJoin(asSocket(a), { room: 'второй', name: 'A' });
-    expect(a.data.chatRoom).toBe('chat:второй');
+    await gw.handleChatJoin(asSocket(a), { room: slugOf('второй'), name: 'A' });
+    expect(a.data.chatRoom).toBe(`chat:${slugOf('второй')}`);
     expect(a.rooms.has('chat:obshchii')).toBe(false);
   });
 
@@ -294,7 +295,7 @@ describe('chat-message', () => {
       type: 'text',
       name: 'тайный чат',
     });
-    await gw.handleChatJoin(asSocket(owner), { room: 'тайный-чат', name: 'Х' });
+    await gw.handleChatJoin(asSocket(owner), { room: slugOf('тайный чат'), name: 'Х' });
     const stranger = connect(gw, server, { id: 'stranger' });
     settle();
     server.clearAll();

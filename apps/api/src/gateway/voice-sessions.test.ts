@@ -8,6 +8,7 @@ import {
   makeGateway,
   personCookie,
   settle,
+  slugOf,
   useGatewayStand,
 } from './gateway.testkit';
 
@@ -183,7 +184,7 @@ describe('join / leave', () => {
     });
 
     const stranger = connect(gw, server, { id: 'stranger' });
-    gw.handleJoin(asSocket(stranger), { room: 'тайный-эфир', name: 'Ч' });
+    gw.handleJoin(asSocket(stranger), { room: slugOf('тайный эфир'), name: 'Ч' });
     expect(stranger.data.room).toBeUndefined();
   });
 

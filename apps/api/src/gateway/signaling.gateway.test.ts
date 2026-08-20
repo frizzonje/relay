@@ -12,6 +12,7 @@ import {
   personCookie,
   say,
   settle,
+  slugOf,
   useGatewayStand,
   type AnyGw,
 } from './gateway.testkit';
@@ -297,8 +298,8 @@ describe('личное: непрочитанное и настройки', () =>
     await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'мой' });
     await gw.handleChannelCreate(asSocket(a), { serverId: 'srv', type: 'text', name: 'болталка' });
     settle();
-    await gw.handleReadMark(asSocket(a), { slug: 'болталка', ts: 7_000 });
-    const channel = (gw as AnyGw).registry.channels.find((c) => c.slug === 'болталка')!;
+    await gw.handleReadMark(asSocket(a), { slug: slugOf('болталка'), ts: 7_000 });
+    const channel = (gw as AnyGw).registry.channels.find((c) => c.slug === slugOf('болталка'))!;
 
     expect(await gw.handleChannelDelete(asSocket(a), { id: channel.id })).toEqual({ ok: true });
     // Каскада у отметок нет намеренно (они не должны запирать удаление канала),
@@ -320,9 +321,9 @@ describe('поиск по истории', () => {
     await gw.handleChannelCreate(asSocket(a), { serverId: 'srv', type: 'text', name: 'кухня' });
     settle();
 
-    await gw.handleChatJoin(asSocket(a), { room: 'кухня', name: 'A' });
+    await gw.handleChatJoin(asSocket(a), { room: slugOf('кухня'), name: 'A' });
     await gw.handleChatMessage(asSocket(a), { text: 'чайник на кухне' });
-    await gw.handleChatJoin(asSocket(a), { room: 'болталка', name: 'A' });
+    await gw.handleChatJoin(asSocket(a), { room: slugOf('болталка'), name: 'A' });
     await gw.handleChatMessage(asSocket(a), { text: 'чайник закипел' });
     return { gw, server, a };
   }
@@ -338,7 +339,9 @@ describe('поиск по истории', () => {
   it('по серверу — по всем его каналам, а не только по открытому', async () => {
     const { gw, a } = await withTalk();
     const res = await gw.handleChatSearch(asSocket(a), { query: 'чайник', scope: 'server' });
-    expect(res.hits.map((h) => h.slug).sort()).toEqual(['болталка', 'кухня']);
+    expect(res.hits.map((h) => h.slug).sort()).toEqual(
+      [slugOf('болталка'), slugOf('кухня')].sort(),
+    );
   });
 
   it('чужой сервер в область не попадает', async () => {
@@ -359,7 +362,7 @@ describe('поиск по истории', () => {
     await gw.handleServerCreate(asSocket(owner), { id: 'srv', name: 'тайный', password: 'п' });
     await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'тайны' });
     settle();
-    await gw.handleChatJoin(asSocket(owner), { room: 'тайны', name: 'Хозяин' });
+    await gw.handleChatJoin(asSocket(owner), { room: slugOf('тайны'), name: 'Хозяин' });
     await gw.handleChatMessage(asSocket(owner), { text: 'пароль от сейфа' });
 
     // Чужой сокет сидит в своём канале — область «сервер» считается от него, и
@@ -464,8 +467,8 @@ describe('закреплённые', () => {
     const h = await connectAs(gw, server, host.cookie, { id: 'h' });
     await ownServer(gw, h);
     const g = await connectAs(gw, server, guest.cookie, { id: 'g' });
-    const id = await say(gw, g, 'болталка', 'важное слово');
-    await gw.handleChatJoin(asSocket(h), { room: 'болталка' });
+    const id = await say(gw, g, slugOf('болталка'), 'важное слово');
+    await gw.handleChatJoin(asSocket(h), { room: slugOf('болталка') });
     server.clearAll();
     return { gw, server, h, g, id };
   }
@@ -488,7 +491,7 @@ describe('закреплённые', () => {
     await gw.handleChatPin(asSocket(h), { id, on: true });
 
     const fresh = connect(gw, server, { id: 'fresh' });
-    await gw.handleChatJoin(asSocket(fresh), { room: 'болталка' });
+    await gw.handleChatJoin(asSocket(fresh), { room: slugOf('болталка') });
     const page = fresh.last('chat-history') as {
       pins: number;
       messages: { text: string; pinned?: true }[];
@@ -503,7 +506,7 @@ describe('закреплённые', () => {
 
     // Спрашивать может любой, кто в канале: закрепление — то, что канал
     // показывает всем, и прятать его от читателей значило бы прятать шапку.
-    const res = (await gw.handleChatPins(asSocket(g), { slug: 'болталка' })) as {
+    const res = (await gw.handleChatPins(asSocket(g), { slug: slugOf('болталка') })) as {
       ok: true;
       pins: { id: string; text: string }[];
     };
@@ -529,9 +532,9 @@ describe('закреплённые', () => {
       count: 0,
     });
     expect(g.last('chat-pinned')).toEqual({ id, pinned: false, count: 0 });
-    expect(await gw.handleChatPins(asSocket(h), { slug: 'болталка' })).toEqual({
+    expect(await gw.handleChatPins(asSocket(h), { slug: slugOf('болталка') })).toEqual({
       ok: true,
-      slug: 'болталка',
+      slug: slugOf('болталка'),
       pins: [],
     });
   });

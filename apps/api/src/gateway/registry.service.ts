@@ -1,4 +1,5 @@
 import { Injectable, Logger, Optional, type OnModuleInit } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { existsSync, writeFileSync } from 'node:fs';
 import { DataSource, type EntityManager } from 'typeorm';
 import { ChannelRow, ServerRow } from '../db/entities';
@@ -170,6 +171,33 @@ export function slugifyChannel(name: string): string {
     .replace(/-{2,}/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 32);
+}
+
+/** Хвост слага: шесть знаков от id сервера. */
+const SERVER_MARK = 6;
+
+/**
+ * Адрес комнаты для нового канала: слаг имени плюс метка своего сервера.
+ *
+ * Метка нужна потому, что слаг уникален по всей инсталляции — по нему
+ * ключуются комната socket.io и лента чата, — а имена каналов у людей
+ * повторяются: «общий» и «болталка» заводит каждый второй. Без метки первый
+ * такой канал занимал бы имя у всех остальных серверов разом, а отказ во
+ * втором был бы ответом на вопрос, который спрашивать не давали: «есть ли на
+ * этой инсталляции скрытый канал с таким именем» (audit S2). Теперь
+ * столкнуться можно только со своим же каналом на своём же сервере — то есть с
+ * тем, что и так видно в списке.
+ *
+ * Человеку метка не показывается нигде: в интерфейсе канал зовут его именем, а
+ * слаг — это адрес, и живёт он в протоколе. Каналы главного сервера метки не
+ * носят: их набор фиксирован, заводить там нечего, а их слаги знают наизусть и
+ * клиенты, и приглашения.
+ */
+export function channelSlug(name: string, serverId: string): string {
+  const base = slugifyChannel(name);
+  if (!base || serverId === MAIN_SERVER_ID) return base;
+  const mark = createHash('sha256').update(serverId).digest('hex').slice(0, SERVER_MARK);
+  return `${base.slice(0, 32 - SERVER_MARK - 1)}-${mark}`;
 }
 
 /**
