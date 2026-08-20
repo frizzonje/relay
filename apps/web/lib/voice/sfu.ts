@@ -338,7 +338,6 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     if (c.kind === 'video') reportRtp(consumer.track, c.source, peerId);
 
     syncTileVideo(peerId);
-    host.setTileState(peerId, '');
 
     if (c.kind === 'audio') {
       // Звук — в тот же микшер, что и в mesh: громкость по собеседнику, VAD,
@@ -554,10 +553,13 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       // Число своих дорожек — в ту же веху: «встал» без единой из них и есть тот
       // самый немой заход, и по логу это должно читаться одной строкой.
       host.diag('sfu up', `peers=${payload.peers.length} tracks=${producers.size}`);
+      // Успевший прийти до `welcome` в его снимке комнаты не значится — снять
+      // надпись с его плитки больше некому.
+      for (const peerId of names.keys()) sayTileState(peerId);
       for (const peer of payload.peers) {
         names.set(peer.peerId, peer.name || tx('voice.peer.fallback'));
         host.addTile(peer.peerId, peer.name || tx('voice.peer.fallback'), null, false);
-        host.setTileState(peer.peerId, 'tile.state.connecting');
+        sayTileState(peer.peerId);
         for (const producer of peer.producers) await consume(peer.peerId, producer);
       }
     } catch (err) {
@@ -581,6 +583,20 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     return [sendTransport, recvTransport].some(
       (t) => t && (t.connectionState === 'failed' || t.connectionState === 'disconnected'),
     );
+  }
+
+  /**
+   * Надпись «соединение…» на плитке собеседника.
+   *
+   * Ждёт она не его, а нас: медиа здесь одно на всех и идёт через сервер, и как
+   * только наши транспорты встали, ждать больше нечего. Раньше надпись снимала
+   * первая удавшаяся подписка — и собеседник, который не публикует ничего
+   * (не выдали микрофон; слушатель закрытого канала своих дорожек не отдаёт
+   * вовсе), оставался в «соединение…» до конца звонка. В mesh этого не бывает:
+   * там надпись снимает `connected` самого соединения, а не приехавшая дорожка.
+   */
+  function sayTileState(peerId: string) {
+    host.setTileState(peerId, ready && !mediaBroken() ? '' : 'tile.state.connecting');
   }
 
   /**
@@ -957,7 +973,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       s.on('peer-joined', ({ peerId, name }: { peerId: string; name: string }) => {
         names.set(peerId, name || tx('voice.peer.fallback'));
         host.addTile(peerId, name || tx('voice.peer.fallback'), null, false);
-        host.setTileState(peerId, 'tile.state.connecting');
+        sayTileState(peerId);
       });
       s.on('new-producer', ({ peerId, producer }: { peerId: string; producer: ProducerInfo }) => {
         void consume(peerId, producer);
