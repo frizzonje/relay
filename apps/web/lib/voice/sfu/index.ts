@@ -1,21 +1,13 @@
 'use client';
 
 import { Device } from 'mediasoup-client';
-import type {
-  IceParameters,
-  RtpCapabilities,
-  RtpParameters,
-  Transport,
-  TransportOptions,
-} from 'mediasoup-client/types';
+import type { IceParameters, Transport, TransportOptions } from 'mediasoup-client/types';
 import { io, type Socket } from 'socket.io-client';
 import { tx } from '@/lib/i18n';
 import type { TransportHost, VoiceTransport } from '../types';
 import {
   type Ack,
   type ConsumerLayers,
-  type ConsumerPayload,
-  type PeerSnapshot,
   type ProducerInfo,
   type Source,
   type WelcomePayload,
@@ -38,13 +30,6 @@ import { createSubscriber } from './subscribe';
  * Сигналинг — отдельный socket.io на путь `/sfu/`, рядом с основным сокетом
  * api. Пропуск (короткоживущий токен) выдаёт api, см. `apps/sfu/src/token.ts`.
  */
-
-// Столько молчания входящей дорожки считаем сбоем, а не паузой в разговоре.
-// Порог тот же, что и в mesh: мут у нас — `track.enabled = false`, RTP при этом
-// продолжает идти, так что молчащий собеседник байты всё равно шлёт.
-const SILENCE_MS = 8_000;
-
-// ─────────────────────────────────────────────────────────────────────────
 
 /**
  * WebView-обёртки прячутся из UA: WKWebView (десктоп на macOS) не пишет туда ни
