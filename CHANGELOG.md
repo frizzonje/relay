@@ -94,6 +94,11 @@ enough; give it 2 GB of swap.
 
 ### Fixed
 
+- **`relay update` works again.** It asked GitHub for the newest release and
+  got back the desktop app's — the two are released from the same repository —
+  and then died trying to fetch a server stack out of it. It reads version tags
+  now, and so does `install.sh`, which had been quietly falling back to
+  `:latest` on every fresh install instead of pinning the release it installed.
 - **The password to a locked server no longer sits in your browser.** It was
   kept there so the server would still be open to you after a reconnect; a
   signed pass does that now. It is not your secret either — it is the one

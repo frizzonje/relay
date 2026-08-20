@@ -30,8 +30,15 @@ done
 echo "$url" >>/tmp/curl.log
 case "$url" in
   *ipify*|*ifconfig.me*) printf '203.0.113.7'; exit 0 ;;
-  *api.github.com/repos/*/releases/latest)
-    printf '{\n  "tag_name": "v%s"\n}\n' "${STUB_LATEST:-9.9.9}"; exit 0 ;;
+  *api.github.com/repos/*/tags*)
+    # The real repository's answer, in the real repository's shape: one line,
+    # a moving `nightly` tag, the desktop app's own releases, and the stack's
+    # versions in whatever order GitHub feels like — 0.10.0 above 0.9.0 so a
+    # lexical sort would get it wrong.
+    if [ -n "${STUB_NO_STACK_TAGS:-}" ]; then
+      printf '[{"name":"nightly","x":1},{"name":"desktop-v0.6.1","x":2}]'; exit 0
+    fi
+    printf '[{"name":"nightly","x":1},{"name":"desktop-v0.6.1","x":2},{"name":"v%s","x":3},{"name":"v0.10.0","x":4},{"name":"v0.9.0","x":5}]' "${STUB_LATEST:-9.9.9}"; exit 0 ;;
   https://*/ ) exit 0 ;;   # the health probe at the end
 esac
 ref="$(echo "$url" | sed -n 's#.*githubusercontent.com/[^/]*/[^/]*/\([^/]*\)/.*#\1#p')"
@@ -128,6 +135,19 @@ has  "and that names are picked again" "picks a name" "$OUT"
 has  "a backup was taken before anything moved" "Backup: /opt/relay/backups/relay-backup-before-1.0-" "$OUT"
 has  "and it says how to go back" "relay restore /opt/relay/backups/" "$OUT"
 has  "the stack file was replaced afterwards" "Stack files downloaded" "$OUT"
+
+echo
+echo "── the desktop app's releases are not the stack's (found on a live install)"
+has  "asked for tags, not for /releases/latest" "/tags?per_page=100" "$OUT"
+check "never asked GitHub for the latest release" "0" "$(echo "$OUT" | grep -c 'releases/latest' | tr -d ' ')"
+
+echo
+echo "── a repository with desktop tags and no stack tags yet"
+OUT="$(run -e STUB_NO_STACK_TAGS=1)"
+check "installer finished cleanly" "INSTALLER_EXIT=0" "$(echo "$OUT" | grep -o 'INSTALLER_EXIT=[0-9]*')"
+has  "says there is nothing published to pin to" "No published release found" "$OUT"
+has  "and follows :latest instead of a desktop tag" "RELAY_VERSION=latest" "$OUT"
+check "did not try to fetch a stack from desktop-v0.6.1" "0" "$(echo "$OUT" | grep -c 'desktop-v0.6.1' | tr -d ' ')"
 
 echo
 echo "── a release too old to carry the new files falls back to the branch"

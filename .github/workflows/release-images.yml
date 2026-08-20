@@ -16,6 +16,14 @@
 # a side effect — and across a major it is a decision to be taken by hand, once
 # the installed base has been given a way over (see the case below).
 #
+# Tag only — do NOT create a GitHub Release object for `vX.Y.Z`. The desktop
+# app is released from this same repository, and its auto-updater points at
+# `/releases/latest/download/latest.json`: the newest Release wins that URL, so
+# a release page written for the stack would send every desktop installation
+# looking for an asset that is not there. Nothing here needs one — images are
+# built from the pushed tag, and the installer reads tags too (install.sh,
+# `latest_release`), for exactly this reason.
+#
 # Shape of the pipeline: everything that can say "no" runs first and in
 # parallel (gate → e2e, and the sfu smoke run alongside them), all three images
 # are pushed under the version number, and only then does `promote` move

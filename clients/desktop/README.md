@@ -255,7 +255,10 @@ CI линтит оба рецепта в arch-контейнере (`namcap` + �
 
 - **Канал** — стабильные релизы `desktop-v*` (endpoint
   `…/releases/latest/download/latest.json`; `nightly`-пре-релизы апдейтер
-  игнорирует, `/releases/latest/` отдаёт только не-prerelease).
+  игнорирует, `/releases/latest/` отдаёт только не-prerelease). **Этот URL
+  принадлежит десктопу целиком:** релиз стека, оформленный как GitHub Release,
+  перебьёт его и уведёт апдейтер к чужим ассетам — поэтому серверные версии
+  живут тегами без страницы релиза (см. шапку `.github/workflows/release-images.yml`).
 - **Логика** — целиком в Rust ([`main.rs`](src-tauri/src/main.rs),
   `check_updates` / `install_update`); удалённому web-UI JS-API апдейтера НЕ
   даём — обмен только событиями Tauri (`check-updates` / `install-update` →

@@ -95,13 +95,24 @@ if [ "$(id -u)" -ne 0 ]; then
   die "Please run as root. Re-run with:  curl -fsSL ${RAW_BASE}/install.sh | sudo bash"
 fi
 
-# Newest published release, without jq — a fresh Debian box has curl and nothing
-# else. Prints nothing when GitHub is unreachable or has no releases yet; every
-# caller treats that as "follow :latest" rather than as an error.
+# The newest published version. Tags, not releases: the images are built by the
+# tag (see .github/workflows/release-images.yml), and a GitHub "release" is a
+# separate object that may simply never have been created for it. Asking
+# /releases/latest also answers with the desktop app's own releases, which live
+# as `desktop-v0.6.1` in the same repository — pinning an installation to one of
+# those pins it to a tag that has no stack images behind it.
+#
+# So: plain `vX.Y.Z` only (a prerelease `v1.0.0-rc1` is deliberately not one of
+# them), highest number wins rather than whatever order GitHub feels like
+# returning, and `tr` first because the API answers on a single line and a
+# greedy `.*` would otherwise walk to the last tag on it — the oldest.
 latest_release() {
-  curl -fsSL --max-time 10 "https://api.github.com/repos/${RELAY_REPO}/releases/latest" 2>/dev/null \
-    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p' | head -n1
+  curl -fsSL --max-time 10 "https://api.github.com/repos/${RELAY_REPO}/tags?per_page=100" 2>/dev/null \
+    | tr ',' '\n' \
+    | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' \
+    | sort -t. -k1,1n -k2,2n -k3,3n | tail -n1
 }
+
 
 hr
 printf '%s  relay self-host installer%s\n' "$B" "$N"

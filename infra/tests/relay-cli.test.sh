@@ -30,9 +30,11 @@ while [ \$# -gt 0 ]; do
 done
 echo "\$url" >>"$WORK/curl.log"
 case "\$url" in
-  *api.github.com/repos/*/releases/latest)
+  *api.github.com/repos/*/tags*)
     if [ -n "\${STUB_NO_GITHUB:-}" ]; then exit 22; fi
-    printf '{\n  "tag_name": "v%s",\n  "name": "rel"\n}\n' "\${STUB_LATEST:-9.9.9}"; exit 0 ;;
+    # As the real repository answers it: the desktop app publishes its own tags
+    # here too, and `relay update` must not walk an installation onto one.
+    printf '[{"name":"nightly","x":1},{"name":"desktop-v0.6.1","x":2},{"name":"v%s","x":3},{"name":"v0.10.0","x":4},{"name":"v0.9.0","x":5}]' "\${STUB_LATEST:-9.9.9}"; exit 0 ;;
 esac
 # https://raw.githubusercontent.com/<owner>/<repo>/<ref>/<path>
 ref="\$(echo "\$url" | sed -n 's#.*githubusercontent.com/[^/]*/[^/]*/\([^/]*\)/.*#\1#p')"
@@ -121,6 +123,18 @@ contains "the CLI updates itself too" "infra/relay-cli.sh" "$(cat "$WORK/curl.lo
 check "stale local edit replaced" "" "$(grep -c 'stale local edit' "$D/Caddyfile" | tr -d ' ' | sed 's/^0$//')"
 check "old files kept" "1" "$(ls -d "$D"/backups/stack-* 2>/dev/null | wc -l | tr -d ' ')"
 contains "images pulled and stack restarted" "up -d --remove-orphans" "$(cat "$WORK/docker.log")"
+
+echo
+echo "── `relay update` does not walk onto the desktop app's tags"
+# Found on a live server: /releases/latest answered `desktop-v0.6.1` — the
+# desktop app is released from this repository too — and every `relay update`
+# in the field died on "cannot download" from a tag that has no stack in it.
+D="$WORK/u0"; mkinstall "$D" "RELAY_VERSION=0.8.0" "RELAY_REPO=frizzonje/relay"
+: >"$WORK/curl.log"
+OUT="$(STUB_LATEST=9.9.9 relay "$D" update -y)"
+check "landed on the newest stack version" "RELAY_VERSION=9.9.9" "$(grep '^RELAY_VERSION=' "$D/.env")"
+check "nothing was fetched from a desktop tag" "0" "$(grep -c 'desktop-v0.6.1' "$WORK/curl.log" | tr -d ' ')"
+contains "asked for tags" "/tags?per_page=100" "$(cat "$WORK/curl.log")"
 
 echo
 echo "── update fills in secrets a 0.x .env never had"
