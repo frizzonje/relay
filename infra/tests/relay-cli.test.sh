@@ -125,7 +125,7 @@ check "old files kept" "1" "$(ls -d "$D"/backups/stack-* 2>/dev/null | wc -l | t
 contains "images pulled and stack restarted" "up -d --remove-orphans" "$(cat "$WORK/docker.log")"
 
 echo
-echo "── `relay update` does not walk onto the desktop app's tags"
+echo "── 'relay update' does not walk onto the desktop app's tags"
 # Found on a live server: /releases/latest answered `desktop-v0.6.1` — the
 # desktop app is released from this repository too — and every `relay update`
 # in the field died on "cannot download" from a tag that has no stack in it.
@@ -268,7 +268,10 @@ contains "reads a password full of shell metacharacters" "0.8.0" "$OUT"
 check "and does not execute it" "no" "$([ -e /tmp/pwned ] && echo yes || echo no)"
 relay "$D" update -y 1.2.3 >/dev/null
 check "rewriting the version keeps the password intact" 'SITE_PASSWORD=a$(touch /tmp/pwned)`x`b=c' "$(grep '^SITE_PASSWORD=' "$D/.env")"
-check ".env stays 0600" "600" "$(stat -f '%Lp' "$D/.env" 2>/dev/null || stat -c '%a' "$D/.env")"
+# GNU first, BSD second, and not the other way round: `stat -f` on coreutils is
+# "display filesystem status", which succeeds and answers something else — so
+# the BSD form can never be the one that fails into the fallback.
+check ".env stays 0600" "600" "$(stat -c '%a' "$D/.env" 2>/dev/null || stat -f '%Lp' "$D/.env")"
 
 echo
 printf '  %d passed, %d failed\n' "$PASS" "$FAIL"
