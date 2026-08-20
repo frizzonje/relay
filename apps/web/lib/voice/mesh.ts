@@ -8,8 +8,15 @@ import { tx } from '@/lib/i18n';
 import { boostVideoBitrate, boostAudioBitrate } from '@/lib/sdp';
 import type { UplinkStatus } from '@/stores/voice';
 import type { TransportHost, VoiceTransport } from './types';
-import { gradeQuality, pingGrade, type NetSnapshot } from './quality';
-import { netDelta, readStats, toHistory, worseUplink } from './stats';
+import { gradeQuality, pingGrade } from './quality';
+import {
+  netDelta,
+  readStats,
+  toHistory,
+  worseUplink,
+  type NetSnapshot,
+  type StatsSnapshot,
+} from './stats';
 
 /**
  * Mesh-транспорт: каждый шлёт своё медиа каждому напрямую (perfect negotiation,
@@ -546,7 +553,31 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
 
   // ── Метрики ───────────────────────────────────────────────────────────
 
-  async function updateVoicePing() {
+  /**
+   * Один снимок с каждого соединения за тик — и три читателя на него.
+   *
+   * Раньше пинг, палочки и сторож тишины ходили в `getStats` каждый сам, то
+   * есть на пятерых с видео выходило пятнадцать полных снимков статистики
+   * каждые три секунды. Дело даже не в работе: это были три РАЗНЫХ момента
+   * времени, и сторож видел байты, которых палочки в том же тике уже не
+   * видели. Свести такие показания в одну картину нельзя в принципе.
+   */
+  async function collectStats(): Promise<Map<string, StatsSnapshot>> {
+    const snaps = new Map<string, StatsSnapshot>();
+    for (const [id, peer] of peers) {
+      // Сводное состояние, а не сырой connectionState: на Safari/iOS последний
+      // ненадёжен (висит в 'connecting' при живом медиа).
+      if (peer.connState !== 'connected') continue;
+      try {
+        snaps.set(id, readStats(await peer.pc.getStats()));
+      } catch {
+        /* getStats может кинуть на закрывающемся pc — пропускаем пира */
+      }
+    }
+    return snaps;
+  }
+
+  function updateVoicePing(snaps: Map<string, StatsSnapshot>) {
     if (!room) return;
 
     if (peers.size === 0) {
@@ -555,20 +586,12 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     }
 
     let rttMs: number | null = null;
-    let anyConnected = false;
-    for (const [, peer] of peers) {
-      // Сводное состояние, а не сырой connectionState: на Safari/iOS последний
-      // ненадёжен (висит в 'connecting' при живом медиа), и панель пинга иначе
-      // вечно показывала бы «устанавливаем связь» при работающем звонке.
-      if (peer.connState !== 'connected') continue;
-      anyConnected = true;
-      try {
-        const ms = readStats(await peer.pc.getStats()).rttMs;
-        if (ms !== null && (rttMs === null || ms < rttMs)) rttMs = ms;
-      } catch {
-        /* getStats может кинуть на закрывающемся pc — игнорируем */
-      }
+    for (const snap of snaps.values()) {
+      if (snap.rttMs !== null && (rttMs === null || snap.rttMs < rttMs)) rttMs = snap.rttMs;
     }
+    // «Устанавливаем связь» и «меряем» — разные вещи: связь есть, а цифры ещё
+    // не приехали. Отвечает на это состояние соединения, а не наличие снимка.
+    const anyConnected = [...peers.values()].some((p) => p.connState === 'connected');
 
     if (rttMs === null) {
       host.setPing({
@@ -583,7 +606,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     host.setPing({ waiting: false, ms: rttMs, grade: pingGrade(rttMs), label: '' });
   }
 
-  async function updatePeerQuality() {
+  function updatePeerQuality(snaps: Map<string, StatsSnapshot>) {
     if (!room) return;
     // Худшее «узкое место» аплинка по всем пирам (bandwidth важнее cpu). Считаем
     // за один проход и раскладываем в стор после цикла — это СВОЙ показатель, общий.
@@ -608,14 +631,8 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
         continue;
       }
 
-      let report: RTCStatsReport;
-      try {
-        report = await peer.pc.getStats();
-      } catch {
-        /* getStats может кинуть на закрывающемся pc — пропускаем пира */
-        continue;
-      }
-      const snap = readStats(report);
+      const snap = snaps.get(id);
+      if (!snap) continue; // соединение закрылось под руками сборщика
       // Своё «узкое место» — общее на всех: аплинк у нас один, а видим мы его
       // с каждого соединения по-своему. Берём худшее.
       worstUplink = worseUplink(worstUplink, snap.uplink);
@@ -653,19 +670,16 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
   //
   // В лог кладём currentDirection каждого transceiver'а: если тишина от кривого
   // направления m-line после glare, а не от сети, это видно только там.
-  async function monitorAudioFlow() {
+  function monitorAudioFlow(snaps: Map<string, StatsSnapshot>) {
     const now = Date.now();
     for (const [id, peer] of peers) {
       if (peer.connState !== 'connected') {
         audioFlow.delete(id);
         continue;
       }
-      let bytes = 0;
-      try {
-        bytes = readStats(await peer.pc.getStats()).audioBytesRecv;
-      } catch {
-        continue;
-      }
+      const snap = snaps.get(id);
+      if (!snap) continue;
+      const bytes = snap.audioBytesRecv;
       const prev = audioFlow.get(id);
       if (!prev || bytes > prev.bytes) {
         audioFlow.set(id, { bytes, since: now });
@@ -869,9 +883,14 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     },
 
     pollStats() {
-      void updateVoicePing();
-      void monitorAudioFlow();
-      void updatePeerQuality();
+      void (async () => {
+        const snaps = await collectStats();
+        updateVoicePing(snaps);
+        // Палочки — до сторожа: сторож чинит связь, и после его ступени снимок
+        // этого тика описывал бы соединение, которого уже нет.
+        updatePeerQuality(snaps);
+        monitorAudioFlow(snaps);
+      })();
     },
 
     renamePeer(id, name) {

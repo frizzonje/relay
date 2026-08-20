@@ -11,15 +11,6 @@ import type { TileNet, UplinkStatus } from '@/stores/voice';
  * означали бы в двух режимах разное.
  */
 
-/** Снимок счётчиков с прошлого тика: потери/приём — для % за интервал, байты — для кбит/с. */
-export interface NetSnapshot {
-  lost: number;
-  recv: number;
-  bytesSent: number;
-  bytesRecv: number;
-  ts: number;
-}
-
 /**
  * Класс качества по потерям (главный враг звука) и RTT. Пороги в духе Discord:
  * сперва смотрим на потери — они рвут голос сильнее задержки.

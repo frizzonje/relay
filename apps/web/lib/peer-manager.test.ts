@@ -62,6 +62,9 @@ class FakePC {
   closed = false;
   // Что вернёт getStats — тест подменяет, чтобы разыграть «звук перестал идти».
   stats: Map<string, Record<string, unknown>> = new Map();
+  // Сколько раз за тик у соединения спросили статистику: читателей трое, а
+  // снимок должен быть один (иначе они видят три разных момента времени).
+  statCalls = 0;
 
   constructor() {
     FakePC.instances.push(this);
@@ -97,6 +100,7 @@ class FakePC {
     this.restarts += 1;
   }
   async getStats() {
+    this.statCalls += 1;
     return this.stats;
   }
   close() {
@@ -292,6 +296,36 @@ describe('PeerManager — лестница восстановления', () => 
     expect(first.closed).toBe(true);
     expect(FakePC.instances).toHaveLength(2);
     expect(FakePC.instances[1].localDescription?.type).toBe('answer');
+  });
+});
+
+describe('PeerManager — метрики', () => {
+  async function callWith(peerId = 'aaa') {
+    sockets.id = 'zzz';
+    sockets.connected = true;
+    await voice.joinVoice('room1', 'Канал 1');
+    await fire('peers', [{ id: peerId, name: 'A' }]);
+    return FakePC.instances[0];
+  }
+
+  it('за тик у соединения статистику спрашивают один раз, а не трижды', async () => {
+    const pc = await callWith();
+    pc.setState('connected');
+    pc.statCalls = 0;
+
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(pc.statCalls).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(pc.statCalls).toBe(2);
+  });
+
+  it('пока связь не встала, статистику не спрашивают вовсе', async () => {
+    const pc = await callWith();
+    pc.statCalls = 0;
+
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(pc.statCalls).toBe(0);
   });
 });
 

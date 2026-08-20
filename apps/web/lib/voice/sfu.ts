@@ -14,8 +14,16 @@ import { io, type Socket } from 'socket.io-client';
 import { tx } from '@/lib/i18n';
 import type { UplinkStatus } from '@/stores/voice';
 import type { TransportHost, VoiceTransport } from './types';
-import { gradeQuality, pingGrade, type NetSnapshot } from './quality';
-import { netDelta, readStats, toHistory, worseUplink } from './stats';
+import { gradeQuality, pingGrade } from './quality';
+import {
+  netDelta,
+  readStats,
+  sumStats,
+  toHistory,
+  worseUplink,
+  type NetSnapshot,
+  type StatsSnapshot,
+} from './stats';
 
 /**
  * SFU-транспорт: своё медиа уходит на медиасервер ОДИН раз, он раздаёт его
@@ -143,6 +151,9 @@ function createDevice(): Device {
     throw err;
   }
 }
+
+/** Отсев пропавших снимков, он же сужение типа: `undefined` из карты сюда не едет. */
+const isSnapshot = (s: StatsSnapshot | undefined): s is StatsSnapshot => s !== undefined;
 
 /** Чужая дорожка, которую мы слушаем: сам consumer плюс чья она и какой роли. */
 interface ConsumerEntry {
@@ -808,29 +819,41 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     host.setPing({ waiting: false, ms: rtt, grade: pingGrade(rtt), label: '' });
   }
 
-  async function updatePeerQuality(rtt: number | null) {
+  /**
+   * Один снимок с каждой чужой дорожки за тик — и два читателя на него.
+   *
+   * Палочки и сторож тишины спрашивали каждый свой `getStats`, то есть звук
+   * собеседника опрашивался дважды за тик и в два разных момента: сторож видел
+   * байты, которых палочки в том же тике уже не видели.
+   */
+  async function collectConsumerStats(): Promise<Map<string, StatsSnapshot>> {
+    const snaps = new Map<string, StatsSnapshot>();
+    for (const [producerId, entry] of [...consumers]) {
+      if (entry.consumer.closed) continue;
+      try {
+        snaps.set(producerId, readStats(await entry.consumer.getStats()));
+      } catch {
+        /* consumer мог закрыться между тиками */
+      }
+    }
+    return snaps;
+  }
+
+  function updatePeerQuality(rtt: number | null, snaps: Map<string, StatsSnapshot>) {
     // Связь до сервера развалилась — мерить нечего и незачем: см. `dimTileNet`.
     if (mediaBroken()) {
       dimTileNet();
       return;
     }
     for (const peerId of names.keys()) {
-      const mine = [...consumers.values()].filter((e) => e.peerId === peerId);
+      const mine = [...consumers].filter(([, e]) => e.peerId === peerId);
       if (mine.length === 0) {
         netHistory.delete(peerId); // ещё ничего не слушаем — мерить нечего
         continue;
       }
 
-      const reports: RTCStatsReport[] = [];
-      for (const entry of mine) {
-        try {
-          reports.push(await entry.consumer.getStats());
-        } catch {
-          /* consumer мог закрыться между тиками — считаем по остальным */
-        }
-      }
       // Дорожек у собеседника несколько, а плитка одна: складываем в один снимок.
-      const snap = readStats(reports);
+      const snap = sumStats(mine.map(([producerId]) => snaps.get(producerId)).filter(isSnapshot));
 
       // Потери и битрейт — за интервал, а не накопленным итогом с начала звонка.
       const now = Date.now();
@@ -838,7 +861,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       netHistory.set(peerId, toHistory(snap, now));
 
       // Слой берём с камеры: у демонстрации он один, показывать нечего.
-      const cam = mine.find((e) => e.source === 'cam');
+      const cam = mine.find(([, e]) => e.source === 'cam')?.[1];
       const layer = cam ? (gotLayer.get(cam.consumer.id) ?? null) : null;
 
       host.setTileNet(peerId, {
@@ -888,7 +911,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
   // Условия «звук шёл и оборвался» здесь, в отличие от mesh, нет намеренно:
   // consumer существует только потому, что у собеседника есть дорожка, — и
   // ноль байт с самого начала как раз и означает ту самую вечную паузу.
-  async function monitorAudioFlow() {
+  async function monitorAudioFlow(snaps: Map<string, StatsSnapshot>) {
     // Лестница уже идёт своим ходом — второй раз чинить то же самое незачем.
     if (!ready || lost || mediaBroken()) return;
 
@@ -898,12 +921,9 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
 
     for (const [producerId, entry] of [...consumers]) {
       if (entry.consumer.kind !== 'audio' || entry.consumer.closed) continue;
-      let bytes = 0;
-      try {
-        bytes = readStats(await entry.consumer.getStats()).audioBytesRecv;
-      } catch {
-        continue; // consumer мог закрыться между тиками
-      }
+      const snap = snaps.get(producerId);
+      if (!snap) continue; // дорожка закрылась под руками сборщика
+      const bytes = snap.audioBytesRecv;
       const prev = audioFlow.get(producerId);
       if (!prev || bytes > prev.bytes) {
         audioFlow.set(producerId, { bytes, since: now, kicks: 0 });
@@ -1096,10 +1116,13 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     pollStats() {
       void (async () => {
         const rtt = await serverRtt();
+        const snaps = await collectConsumerStats();
         updatePing(rtt);
-        await updatePeerQuality(rtt);
+        // Палочки — до сторожа: сторож чинит связь, и после его ступени снимок
+        // этого тика описывал бы дорожки, которых уже нет.
+        updatePeerQuality(rtt, snaps);
         await updateUplink();
-        await monitorAudioFlow();
+        await monitorAudioFlow(snaps);
       })();
     },
 

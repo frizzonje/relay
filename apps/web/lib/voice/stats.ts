@@ -1,7 +1,7 @@
 'use client';
 
 import type { UplinkStatus } from '@/stores/voice';
-import { kbps, limitReason, type NetSnapshot } from './quality';
+import { kbps, limitReason } from './quality';
 
 /**
  * Разбор отчёта `getStats()` — один на оба транспорта.
@@ -91,11 +91,38 @@ interface StatsRecord {
 }
 
 /**
- * Сложить один или несколько отчётов в снимок.
+ * Сложить два снимка в один.
  *
- * Несколько — это случай медиасервера: у собеседника там своя дорожка на
- * каждую роль, и каждая отвечает своим отчётом. Складывать их приходится
- * именно так, а не по очереди: собеседник на плитке один.
+ * Нужно там, где источников больше одного, а показать надо одно: у
+ * собеседника на медиасервере своя дорожка на каждую роль, каждая отвечает
+ * своим отчётом, а плитка у него одна. Счётчики складываются, RTT берётся
+ * лучший (вместе с путём, который его дал), остальное — последнее известное.
+ */
+export function mergeStats(a: StatsSnapshot, b: StatsSnapshot): StatsSnapshot {
+  const better = b.rttMs !== null && (a.rttMs === null || b.rttMs < a.rttMs);
+  return {
+    rttMs: better ? b.rttMs : a.rttMs,
+    relay: better ? b.relay : a.relay,
+    lost: a.lost + b.lost,
+    recv: a.recv + b.recv,
+    bytesRecv: a.bytesRecv + b.bytesRecv,
+    bytesSent: a.bytesSent + b.bytesSent,
+    audioBytesRecv: a.audioBytesRecv + b.audioBytesRecv,
+    jitterMs: b.jitterMs ?? a.jitterMs,
+    videoRes: b.videoRes ?? a.videoRes,
+    fps: b.fps ?? a.fps,
+    codec: b.codec ?? a.codec,
+    uplink: worseUplink(a.uplink, b.uplink),
+  };
+}
+
+/** Сложить сколько угодно снимков; из ничего выходит пустой. */
+export function sumStats(snaps: StatsSnapshot[]): StatsSnapshot {
+  return snaps.reduce(mergeStats, emptySnapshot());
+}
+
+/**
+ * Разобрать отчёт `getStats()` (или несколько — они складываются).
  */
 export function readStats(input: RTCStatsReport | RTCStatsReport[]): StatsSnapshot {
   const snap = emptySnapshot();
@@ -156,6 +183,15 @@ export function readStats(input: RTCStatsReport | RTCStatsReport[]): StatsSnapsh
     }
   }
   return snap;
+}
+
+/** Снимок счётчиков с прошлого тика: потери/приём — для % за интервал, байты — для кбит/с. */
+export interface NetSnapshot {
+  lost: number;
+  recv: number;
+  bytesSent: number;
+  bytesRecv: number;
+  ts: number;
 }
 
 /** Счётчики этого тика — в историю, чтобы на следующем было с чем сравнить. */
