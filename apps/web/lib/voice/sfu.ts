@@ -113,6 +113,11 @@ const TOP_SPATIAL_LAYER = 2;
 // дальше. Столько же ждёт mesh на своём ICE-restart.
 const RECOVER_WINDOW_MS = 8_000;
 
+// Столько молчания входящей дорожки считаем сбоем, а не паузой в разговоре.
+// Порог тот же, что и в mesh: мут у нас — `track.enabled = false`, RTP при этом
+// продолжает идти, так что молчащий собеседник байты всё равно шлёт.
+const SILENCE_MS = 8_000;
+
 // Сколько ждём медиасервер на входе: welcome + оба транспорта. Не поднялись —
 // это отказ, а не «ещё чуть-чуть»: дирижёр уведёт звонок в p2p.
 const SETUP_TIMEOUT_MS = 12_000;
@@ -145,6 +150,13 @@ function createDevice(): Device {
   }
 }
 
+/** Чужая дорожка, которую мы слушаем: сам consumer плюс чья она и какой роли. */
+interface ConsumerEntry {
+  consumer: Consumer;
+  peerId: string;
+  source: Source;
+}
+
 export function createSfuTransport(host: TransportHost): VoiceTransport {
   let sock: Socket | null = null;
   let device: Device | null = null;
@@ -153,7 +165,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
 
   const producers = new Map<Source, Producer>();
   // Consumer'ы по producerId — так их снимает `producer-closed`.
-  const consumers = new Map<string, { consumer: Consumer; peerId: string; source: Source }>();
+  const consumers = new Map<string, ConsumerEntry>();
   const names = new Map<string, string>();
   // Какая видеодорожка сейчас отдана плитке собеседника (null — показываем
   // аватарку). По ней `syncTileVideo` решает, есть ли что менять.
@@ -161,6 +173,10 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
   // Счётчики прошлого тика по собеседникам — из них считаются потери за
   // интервал и мгновенный битрейт (см. quality.ts).
   const netHistory = new Map<string, NetSnapshot>();
+  // Входящий звук по producerId: сколько байт видели в прошлый раз, когда они
+  // в последний раз росли и сколько раз мы уже будили эту дорожку (см.
+  // `monitorAudioFlow`).
+  const audioFlow = new Map<string, { bytes: number; since: number; kicks: number }>();
   // Реально доехавший слой simulcast по consumerId — сервер сообщает его сам
   // (`consumer-layers`), это факт, а не наша заявка в `preferred-layers`.
   const gotLayer = new Map<string, number | null>();
@@ -422,6 +438,9 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     if (!entry) return;
     consumers.delete(producerId);
     gotLayer.delete(entry.consumer.id);
+    // Счётчик байт принадлежит этому consumer'у: у следующего он начнётся с
+    // нуля, и сравнивать его со старым значило бы объявить тишиной пересборку.
+    audioFlow.delete(producerId);
     entry.consumer.close();
     // Дорожки не стало — плитке нужен новый объект потока, иначе она об этом не
     // узнает (`removetrack` скриптовый `removeTrack()` тоже не порождает) и
@@ -910,6 +929,84 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     host.setUplink(worst);
   }
 
+  // ── Сторож односторонней тишины ───────────────────────────────────────
+  //
+  // Самая частая жалоба на звонок: «связь есть, палочки горят, а звука нет, и
+  // само не проходит». В mesh её ловит `monitorAudioFlow` по байтам входящего
+  // аудио; здесь до сих пор не ловил никто, хотя на медиасервере у этого сбоя
+  // есть свой отдельный путь, вдобавок к сетевому: consumer приезжает на паузе
+  // и снимается с неё отдельным запросом `resume`. Не дошёл запрос — дорожка
+  // осталась на паузе навсегда, и снаружи это неотличимо от «прислали тишину».
+  //
+  // Отсюда и лестница, и её первая ступень, которой в mesh быть не может:
+  // повторить `resume`. Дальше — общая сетевая: переизбрать ICE, потом собрать
+  // транспорты заново.
+  //
+  // Условия «звук шёл и оборвался» здесь, в отличие от mesh, нет намеренно:
+  // consumer существует только потому, что у собеседника есть дорожка, — и
+  // ноль байт с самого начала как раз и означает ту самую вечную паузу.
+  async function monitorAudioFlow() {
+    // Лестница уже идёт своим ходом — второй раз чинить то же самое незачем.
+    if (!ready || lost || mediaBroken()) return;
+
+    const now = Date.now();
+    const wake: { entry: ConsumerEntry; secs: number }[] = [];
+    let worstKick = 0;
+
+    for (const [producerId, entry] of [...consumers]) {
+      if (entry.consumer.kind !== 'audio' || entry.consumer.closed) continue;
+      let bytes = 0;
+      try {
+        const stats = await entry.consumer.getStats();
+        stats.forEach((r) => {
+          if (r.type === 'inbound-rtp')
+            bytes += (r as { bytesReceived?: number }).bytesReceived ?? 0;
+        });
+      } catch {
+        continue; // consumer мог закрыться между тиками
+      }
+      const prev = audioFlow.get(producerId);
+      if (!prev || bytes > prev.bytes) {
+        audioFlow.set(producerId, { bytes, since: now, kicks: 0 });
+        // Молчал, а теперь пошёл — снять с плитки надпись, которую поставили мы.
+        if (prev?.kicks) sayTileState(entry.peerId);
+        continue;
+      }
+      if (now - prev.since <= SILENCE_MS) continue;
+
+      // Байты не растут дольше порога. Отметку времени двигаем сразу: она же и
+      // не даёт лестнице сорваться в цикл — следующая попытка не раньше чем
+      // через SILENCE_MS.
+      const kicks = prev.kicks + 1;
+      const secs = Math.round((now - prev.since) / 1000);
+      audioFlow.set(producerId, { bytes, since: now, kicks });
+      const name = names.get(entry.peerId) ?? entry.peerId;
+      console.warn(
+        `[sfu] нет входящего звука от «${name}» (${entry.peerId}) ${secs}с; bytesReceived=${bytes}`,
+      );
+      host.setTileState(entry.peerId, 'tile.state.reconnecting');
+      if (kicks === 1) wake.push({ entry, secs });
+      worstKick = Math.max(worstKick, kicks);
+    }
+
+    // Ступень 1 — по каждой молчащей дорожке отдельно: она и молчит отдельно.
+    for (const { entry, secs } of wake) {
+      host.diag('sfu silence', `${names.get(entry.peerId) ?? entry.peerId} ${secs}s: resume`);
+      if (!(await ask('resume', { consumerId: entry.consumer.id }))) {
+        host.diag('sfu resume failed', `wake ${entry.peerId}`);
+      }
+    }
+    // Ступени 2 и 3 — общие: чинится не дорожка, а путь до сервера. Поэтому и
+    // одна попытка на тик, сколько бы дорожек ни молчало.
+    if (worstKick === 2) {
+      host.diag('sfu silence', 'stage 2: restart-ice');
+      await restartIce();
+    } else if (worstKick > 2) {
+      host.diag('sfu silence', 'stage 3: rebuild transports');
+      await rebuildTransports();
+    }
+  }
+
   // ── Реализация интерфейса ─────────────────────────────────────────────
 
   /** Полный разбор: свои дорожки, чужие, транспорты и сам сокет. */
@@ -928,6 +1025,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     names.clear();
     shownVideo.clear();
     netHistory.clear();
+    audioFlow.clear();
     gotLayer.clear();
     focusedId = null;
     clearTimers();
@@ -1062,6 +1160,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         updatePing(rtt);
         await updatePeerQuality(rtt);
         await updateUplink();
+        await monitorAudioFlow();
       })();
     },
 
