@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { issueGuestToken } from '../auth/auth';
 import { asSocket } from './testkit';
 import {
@@ -8,6 +8,7 @@ import {
   personCookie,
   settle,
   slugOf,
+  until,
   useGatewayStand,
 } from './gateway.testkit';
 
@@ -23,12 +24,6 @@ import {
 useGatewayStand();
 
 describe('упоминания', () => {
-  /** Дождаться того, что гейтвей делает после подключения асинхронно. */
-  async function until(check: () => boolean, what = 'ожидаемое событие'): Promise<void> {
-    for (let i = 0; i < 400 && !check(); i += 1) await vi.advanceTimersByTimeAsync(5);
-    if (!check()) throw new Error(`не дождались: ${what}`);
-  }
-
   /** Двое в одном канале — минимум, на котором упоминание кого-то означает. */
   async function twoInChannel() {
     const { gw, server } = await makeGateway();
