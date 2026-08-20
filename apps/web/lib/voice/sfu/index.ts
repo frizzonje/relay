@@ -21,6 +21,7 @@ import {
   type WelcomePayload,
 } from './protocol';
 import { createPublisher } from './publish';
+import { createLadder } from './recovery';
 import { createSubscriber, type ConsumerEntry } from './subscribe';
 import { gradeQuality, pingGrade } from '../quality';
 import {
@@ -46,18 +47,10 @@ import {
  * api. Пропуск (короткоживущий токен) выдаёт api, см. `apps/sfu/src/token.ts`.
  */
 
-// Окно на каждую ступень лестницы восстановления: не поднялись за него — идём
-// дальше. Столько же ждёт mesh на своём ICE-restart.
-const RECOVER_WINDOW_MS = 8_000;
-
 // Столько молчания входящей дорожки считаем сбоем, а не паузой в разговоре.
 // Порог тот же, что и в mesh: мут у нас — `track.enabled = false`, RTP при этом
 // продолжает идти, так что молчащий собеседник байты всё равно шлёт.
 const SILENCE_MS = 8_000;
-
-// Сколько ждём медиасервер на входе: welcome + оба транспорта. Не поднялись —
-// это отказ, а не «ещё чуть-чуть»: дирижёр уведёт звонок в p2p.
-const SETUP_TIMEOUT_MS = 12_000;
 
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -107,7 +100,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     recvTransport: () => recvTransport,
     device: () => device,
     ask,
-    linked: () => ready && !mediaBroken(),
+    linked: () => ladder.isUp() && !mediaBroken(),
   });
 
   // Счётчики прошлого тика по собеседникам — из них считаются потери за
@@ -118,18 +111,18 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
   // `monitorAudioFlow`).
   const audioFlow = new Map<string, { bytes: number; since: number; kicks: number }>();
 
-  // Лестница восстановления: 0 — всё в порядке, 1 — сделан ICE-restart,
-  // 2 — транспорты пересобраны. Дальше идти некуда, решает дирижёр.
-  let recoverStage = 0;
-  /** Сказано ли на плитках, что связь чинится (см. `tellTiles`). */
-  let saidReconnecting = false;
-  let failTimer: ReturnType<typeof setTimeout> | null = null;
-  let setupTimer: ReturnType<typeof setTimeout> | null = null;
-  let socketTimer: ReturnType<typeof setTimeout> | null = null;
-  // ready — мы хоть раз встали (лестница до этого момента бессмысленна);
-  // lost — уже сдались и позвали дирижёра, второй раз звать не надо.
-  let ready = false;
-  let lost = false;
+  // Лестница восстановления — третий предмет. Своё состояние (ступень, три
+  // сторожа, «встали» и «сдались») она держит сама, а ступени получает отсюда:
+  // чинить связь умеем только мы, знать, когда и в каком порядке, — только она.
+  const ladder = createLadder({
+    host,
+    broken: mediaBroken,
+    hasSocket: () => sock !== null,
+    socketConnected: () => sock?.connected === true,
+    restartIce,
+    rebuild: rebuildTransports,
+    tellTiles,
+  });
 
   /** Запрос с ack. Ошибку не глотаем — возвращаем `null` и пишем в консоль. */
   function ask<T>(event: string, payload: unknown): Promise<({ ok: true } & T) | null> {
@@ -177,26 +170,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     }
 
     transport.on('connectionstatechange', (state) => {
-      if (state === 'connected') {
-        // Встали (сами или после ступени лестницы) — сбрасываем её.
-        if (failTimer) clearTimeout(failTimer);
-        failTimer = null;
-        recoverStage = 0;
-        // Транспорта два, и встать они могут не одновременно: пока второй лежит,
-        // связи всё ещё нет, и снимать надпись рано.
-        if (!mediaBroken()) tellTiles(false);
-        return;
-      }
-      // 'disconnected' часто сам проходит за секунду-другую (перескок сети),
-      // поэтому даём ему фору; 'failed' — окончательно, лечим сразу.
-      if (state === 'failed' || state === 'disconnected') {
-        host.diag('sfu transport', `${direction} ${state}`);
-        // Только когда звонок уже стоял: на входе на плитках своя надпись, и
-        // «переподключение…» вместо «соединение…» было бы про другое.
-        if (ready) tellTiles(true);
-      }
-      if (state === 'failed') scheduleRecovery(0);
-      else if (state === 'disconnected') scheduleRecovery(4_000);
+      ladder.transportState(direction, state);
     });
 
     return transport;
@@ -224,9 +198,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       // каждая — отдельный запрос с ответом (до 10 с ожидания), и в людной
       // комнате их сумма легко перебирала сторож входа. Сторож срабатывал на
       // полностью исправном соединении и уводил весь звонок в p2p.
-      ready = true;
-      if (setupTimer) clearTimeout(setupTimer);
-      setupTimer = null;
+      ladder.markUp();
       // Число своих дорожек — в ту же веху: «встал» без единой из них и есть тот
       // самый немой заход, и по логу это должно читаться одной строкой.
       host.diag('sfu up', `peers=${payload.peers.length} tracks=${publisher.count()}`);
@@ -246,16 +218,13 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       // Упало ДО того, как мы встали, — это несостоявшийся вход (дирижёр уводит
       // в p2p безусловно). Упало после — мы уже на связи и слышны, решение о
       // переезде принимается по составу комнаты, как при любой другой потере.
-      giveUp(ready ? 'lost' : 'setup');
+      ladder.giveUp(ladder.isUp() ? 'lost' : 'setup');
     }
   }
 
-  // ── Лестница восстановления ───────────────────────────────────────────
+  // ── Ступени лестницы ──────────────────────────────────────────────────
   //
-  // В mesh лестница чинила связь с КАЖДЫМ собеседником отдельно (ICE-restart →
-  // пересборка relay-only). Здесь собеседник ровно один — сервер, — поэтому и
-  // лестница одна на звонок, зато её обрыв уносит сразу всех: последняя ступень
-  // не «снять пира», а позвать дирижёра (он решит, ехать ли в p2p).
+  // Когда их звать, решает `recovery.ts`; здесь — чем именно чинить.
 
   function mediaBroken(): boolean {
     return [sendTransport, recvTransport].some(
@@ -264,7 +233,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
   }
 
   /**
-   * Сказать на плитках, что связь чинится, — и убрать надпись, когда починили.
+   * Что видно на плитках, пока лестница идёт: надпись и погашенные палочки.
    * Транспорт у медиасервера один на всех, поэтому и надпись на всех сразу:
    * развалился он, а не связь с кем-то одним.
    *
@@ -274,14 +243,8 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
    * человек оставался с неподвижными плитками, без звука и без единого слова о
    * том, что происходит. В mesh это есть с самого начала (handleStateChange), и
    * разница между транспортами тут была не решением, а недосмотром.
-   *
-   * Помним, сказали ли уже (`saidReconnecting`): снимать надпись, которую
-   * ставили не мы, нельзя — на входе там стоит «соединение…», и погасить его
-   * раньше времени значило бы объявить готовым то, чего ещё нет.
    */
   function tellTiles(broken: boolean) {
-    if (broken === saidReconnecting) return;
-    saidReconnecting = broken;
     if (broken) dimTileNet();
     subscriber.sayAll(broken ? 'reconnecting' : 'settled');
   }
@@ -316,39 +279,6 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         layer: null,
       });
     }
-  }
-
-  function scheduleRecovery(delayMs: number) {
-    // Лестница уже идёт; мы ещё не вставали; мы уже сдались и позвали дирижёра.
-    if (failTimer || !ready || lost) return;
-    failTimer = setTimeout(() => {
-      failTimer = null;
-      void recover();
-    }, delayMs);
-  }
-
-  async function recover() {
-    if (!sock || !mediaBroken()) {
-      recoverStage = 0; // отпустило само, пока ждали
-      return;
-    }
-    if (recoverStage === 0) {
-      recoverStage = 1;
-      host.setStatus('voice.status.sfuReconnecting');
-      host.diag('sfu recover', 'stage 1: restart-ice');
-      await restartIce();
-      scheduleRecovery(RECOVER_WINDOW_MS); // сторож: не помогло — следующая ступень
-      return;
-    }
-    if (recoverStage === 1) {
-      recoverStage = 2;
-      host.setStatus('voice.status.sfuRebuilding');
-      host.diag('sfu recover', 'stage 2: rebuild transports');
-      await rebuildTransports();
-      scheduleRecovery(RECOVER_WINDOW_MS);
-      return;
-    }
-    giveUp('lost');
   }
 
   /** Ступень 1: переизбрать ICE, не трогая дорожки. Лечит смену сетевого пути. */
@@ -398,29 +328,11 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     // молчаливым успехом. Считаем это потерей — дирижёр уведёт в p2p.
     if (!(await publisher.publishLocal())) {
       host.diag('sfu rebuild failed', 'mic not published');
-      giveUp('lost');
+      ladder.giveUp('lost');
       return;
     }
     for (const { peerId, info } of wanted) await subscriber.consume(peerId, info);
     await subscriber.drainPending();
-  }
-
-  /** Лестница кончилась. Куда ехать дальше — не наше решение, а дирижёра. */
-  function giveUp(reason: 'setup' | 'lost') {
-    if (lost) return; // дирижёр уже позван — второй раз незачем
-    lost = true;
-    clearTimers();
-    host.setStatus('voice.status.sfuUnavailable');
-    host.transportLost(reason);
-  }
-
-  function clearTimers() {
-    for (const timer of [failTimer, setupTimer, socketTimer]) {
-      if (timer) clearTimeout(timer);
-    }
-    failTimer = null;
-    setupTimer = null;
-    socketTimer = null;
   }
 
   // ── Палочки качества ──────────────────────────────────────────────────
@@ -455,7 +367,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         waiting: true,
         ms: null,
         grade: null,
-        label: ready ? 'ping.measuring' : 'ping.connecting',
+        label: ladder.isUp() ? 'ping.measuring' : 'ping.connecting',
       });
       return;
     }
@@ -542,7 +454,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
   // ноль байт с самого начала как раз и означает ту самую вечную паузу.
   async function monitorAudioFlow(snaps: Map<string, StatsSnapshot>) {
     // Лестница уже идёт своим ходом — второй раз чинить то же самое незачем.
-    if (!ready || lost || mediaBroken()) return;
+    if (!ladder.isUp() || ladder.gaveUp() || mediaBroken()) return;
 
     const now = Date.now();
     const wake: { entry: ConsumerEntry; secs: number }[] = [];
@@ -613,11 +525,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     // но своё состояние обнуляем сами.
     netHistory.clear();
     audioFlow.clear();
-    clearTimers();
-    recoverStage = 0;
-    saidReconnecting = false;
-    ready = false;
-    lost = false;
+    ladder.reset();
     sock?.removeAllListeners();
     sock?.disconnect();
     sock = null;
@@ -649,17 +557,14 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       // Сторож входа: медиасервер не поднял нас за отведённое время — это отказ,
       // а не «ещё чуть-чуть». Дирижёр уведёт звонок в p2p, вместо того чтобы
       // держать человека в тишине с крутилкой.
-      setupTimer = setTimeout(() => {
-        setupTimer = null;
-        if (!ready) giveUp('setup');
-      }, SETUP_TIMEOUT_MS);
+      ladder.armSetup();
 
       // Сокет не открылся вовсе (сервер лежит, прокси не пускает) — ждать сторож
       // незачем, ответ уже известен.
       s.on('connect_error', (err) => {
         console.warn('[sfu] connect_error:', err.message);
         host.diag('sfu connect_error', err.message);
-        if (!ready) giveUp('setup');
+        if (!ladder.isUp()) ladder.giveUp('setup');
       });
 
       s.on('welcome', (payload: WelcomePayload) => void onWelcome(payload));
@@ -686,19 +591,12 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       // ICE живёт отдельно от WS, — но переподключиться сокет не сможет: пропуск
       // одноразовый и уже протух. Новый умеет выписать только дирижёр.
       s.on('disconnect', () => {
-        if (!ready || lost) return;
-        host.diag('sfu signaling lost');
-        host.setStatus('voice.status.sfuSignalingLost');
-        if (socketTimer) clearTimeout(socketTimer);
-        socketTimer = setTimeout(() => {
-          socketTimer = null;
-          if (!sock?.connected) giveUp('lost');
-        }, RECOVER_WINDOW_MS);
+        ladder.signalingLost();
       });
       s.on('sfu-error', ({ error }: { error: string }) => {
         console.error('[sfu] rejected:', error);
         host.diag('sfu rejected', error);
-        giveUp(ready ? 'lost' : 'setup');
+        ladder.giveUp(ladder.isUp() ? 'lost' : 'setup');
       });
     },
 
