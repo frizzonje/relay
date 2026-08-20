@@ -379,7 +379,7 @@ describe('chat-edit / chat-delete / chat-react / chat-typing', () => {
   it('реакция ставится и снимается тем же нажатием', async () => {
     const { gw, a, b, id } = await withMessage();
     await gw.handleChatReact(asSocket(b), { id, emoji: '🔥' });
-    expect(a.last('chat-reaction')).toEqual({ id, reactions: { '🔥': ['B'] } });
+    expect(a.last('chat-reaction')).toEqual({ id, reactions: { '🔥': [{ nick: 'B' }] } });
     await gw.handleChatReact(asSocket(b), { id, emoji: '🔥' });
     expect(a.last('chat-reaction')).toEqual({ id, reactions: {} });
   });
@@ -388,7 +388,52 @@ describe('chat-edit / chat-delete / chat-react / chat-typing', () => {
     const { gw, a, b, id } = await withMessage();
     await gw.handleChatReact(asSocket(a), { id, emoji: '👍' });
     await gw.handleChatReact(asSocket(b), { id, emoji: '👍' });
-    expect(a.last('chat-reaction')).toEqual({ id, reactions: { '👍': ['A', 'B'] } });
+    expect(a.last('chat-reaction')).toEqual({
+      id,
+      reactions: { '👍': [{ nick: 'A' }, { nick: 'B' }] },
+    });
+  });
+
+  /**
+   * Последняя дверь, открытая самоназванием (audit S1): до 1.0 реакция
+   * подписывалась ником, и тёзка снимал чужую как свою.
+   */
+  it('реакция подписана отпечатком, и тёзка чужую не снимает', async () => {
+    const { gw, server } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const twin = await personCookie('Аня');
+    const one = await connectAs(gw, server, anya.cookie, { id: 'one' });
+    const other = await connectAs(gw, server, twin.cookie, { id: 'two' });
+    await gw.handleChatJoin(asSocket(one), { room: 'obshchii' });
+    await gw.handleChatJoin(asSocket(other), { room: 'obshchii' });
+    await gw.handleChatMessage(asSocket(one), { text: 'исходное' });
+    const id = (one.last('chat') as { id: string }).id;
+
+    await gw.handleChatReact(asSocket(one), { id, emoji: '🔥' });
+    expect(other.last('chat-reaction')).toEqual({
+      id,
+      reactions: { '🔥': [{ fingerprint: anya.fingerprint, nick: 'Аня' }] },
+    });
+
+    // Тот же эмодзи от тёзки: своей у неё нет, значит это вторая реакция, а не
+    // снятие чужой.
+    await gw.handleChatReact(asSocket(other), { id, emoji: '🔥' });
+    expect(other.last('chat-reaction')).toEqual({
+      id,
+      reactions: {
+        '🔥': [
+          { fingerprint: anya.fingerprint, nick: 'Аня' },
+          { fingerprint: twin.fingerprint, nick: 'Аня' },
+        ],
+      },
+    });
+
+    // А своя снимается — по отпечатку, а не по совпадению имени.
+    await gw.handleChatReact(asSocket(other), { id, emoji: '🔥' });
+    expect(other.last('chat-reaction')).toEqual({
+      id,
+      reactions: { '🔥': [{ fingerprint: anya.fingerprint, nick: 'Аня' }] },
+    });
   });
 
   it('эмодзи вне белого списка и чужой id не проходят', async () => {

@@ -465,7 +465,7 @@ export class ChatHandlers {
     client.to(room).emit('chat-typing', { name });
   }
 
-  // Тогл реакции на сообщение: тег добавляется/снимается из набора по эмодзи.
+  // Тогл реакции на сообщение: человек добавляется/снимается из набора по эмодзи.
   // Состояние храним в истории канала и рассылаем всем читающим — как и сами сообщения.
   async react(client: AppSocket, payload: ChatReactPayload) {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
@@ -478,8 +478,13 @@ export class ChatHandlers {
     const msg = await this.chat.findAny(this.chat.slug(room), id);
     if (!msg) return;
 
-    const name = this.chats.nameOf(client);
-    const reactions = this.chat.toggleReaction(msg, name, emoji);
+    // Подпись реакции — отпечаток ключа, а ник рядом с ним лишь снимок того,
+    // как этот человек звался в ту минуту (audit S1).
+    const speaker = this.perimeter.speaker(client);
+    const who = speaker
+      ? { fingerprint: speaker.fingerprint, nick: speaker.nick }
+      : { nick: this.chats.nameOf(client) };
+    const reactions = this.chat.toggleReaction(msg, who, emoji);
     await this.chat.saveReactions(id, reactions);
 
     this.server.to(room).emit('chat-reaction', { id, reactions });

@@ -8,6 +8,7 @@ import {
   type ChatMessage,
   type MentionRef,
   type ReactionMap,
+  type Reactor,
   type ReplyRef,
 } from './protocol';
 import { RegistryService } from './registry.service';
@@ -237,6 +238,15 @@ function toMessage(row: MessageRow): ChatMessage {
     ...(row.mentions?.length ? { mentions: row.mentions } : {}),
     ...(row.pins?.length ? { pinned: true as const } : {}),
   };
+}
+
+/**
+ * Один ли это человек. Отпечаток сильнее ника и не сравнивается с ним никогда:
+ * «у меня ключ, а у записи его нет» — это разные люди, даже если имя совпало.
+ */
+function sameReactor(a: Reactor, b: Reactor): boolean {
+  if (a.fingerprint || b.fingerprint) return a.fingerprint === b.fingerprint;
+  return a.nick === b.nick;
 }
 
 @Injectable()
@@ -700,16 +710,24 @@ export class ChatService implements OnModuleInit {
     return REACTION_EMOJIS.has(emoji);
   }
 
-  /** Тогл реакции: повторный эмодзи снимает свою. Возвращает новый набор. */
-  toggleReaction(msg: ChatMessage, name: string, emoji: string): ReactionMap {
+  /**
+   * Тогл реакции: повторный эмодзи снимает свою. Возвращает новый набор.
+   *
+   * «Своя» — по отпечатку ключа, а не по нику: ники не уникальны, и до 1.0
+   * тёзка снимал чужую реакцию и голосовал от чужого имени (audit S1). У
+   * записи без отпечатка — а такие остались от прежних версий — своим считается
+   * только тот, у кого ключа нет тоже: иначе достаточно было бы назваться.
+   */
+  toggleReaction(msg: ChatMessage, who: Reactor, emoji: string): ReactionMap {
     const reactions: ReactionMap = { ...(msg.reactions ?? {}) };
     const list = reactions[emoji] ?? [];
-    if (list.includes(name)) {
-      const next = list.filter((n) => n !== name);
+    const mine = list.filter((r) => sameReactor(r, who));
+    if (mine.length) {
+      const next = list.filter((r) => !sameReactor(r, who));
       if (next.length) reactions[emoji] = next;
       else delete reactions[emoji];
     } else {
-      reactions[emoji] = [...list, name];
+      reactions[emoji] = [...list, who];
     }
     return reactions;
   }

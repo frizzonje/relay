@@ -457,7 +457,13 @@ export type SfuTokenResult =
 
 // ── Что живёт в состоянии ───────────────────────────────────────────────────
 
-export type ReactionMap = Record<string, string[]>;
+/** Кто поставил реакцию: отпечаток ключа и ник на тот момент (audit S1). */
+export interface Reactor {
+  fingerprint?: string;
+  nick: string;
+}
+
+export type ReactionMap = Record<string, Reactor[]>;
 
 /**
  * Снимок цитируемого сообщения (reply) — копией, а не ссылкой: исходное могут

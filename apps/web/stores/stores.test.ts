@@ -263,8 +263,8 @@ describe('лента чата', () => {
 
   it('реакция, правка и удаление находят сообщение по id', () => {
     s().setHistory([msg('1'), msg('2')]);
-    s().applyReaction('1', { '🔥': ['A'] });
-    expect(s().messages[0].reactions).toEqual({ '🔥': ['A'] });
+    s().applyReaction('1', { '🔥': [{ nick: 'A' }] });
+    expect(s().messages[0].reactions).toEqual({ '🔥': [{ nick: 'A' }] });
     s().applyEdit('2', 'переписал', 555);
     expect(s().messages[1]).toMatchObject({ text: 'переписал', editedTs: 555 });
     s().applyDelete('1');

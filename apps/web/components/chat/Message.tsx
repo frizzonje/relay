@@ -200,18 +200,27 @@ function ReactionBar({
   id,
   reactions,
   me,
+  myFingerprint,
 }: {
   id: string;
   reactions: NonNullable<ChatMessage['reactions']>;
   me: string;
+  myFingerprint?: string;
 }) {
-  const entries = Object.entries(reactions).filter(([, names]) => names.length > 0);
+  const entries = Object.entries(reactions).filter(([, people]) => people.length > 0);
   if (!entries.length) return null;
   return (
     <div className="mt-1 flex flex-wrap gap-1">
       <AnimatePresence initial={false}>
-        {entries.map(([emoji, names]) => {
-          const mine = names.includes(me);
+        {entries.map(([emoji, people]) => {
+          // «Моя» реакция — по отпечатку ключа: имена не уникальны, и по ним
+          // подсвеченной оказалась бы чужая реакция тёзки (audit S1). Именем
+          // сверяемся только там, где ключа нет ни у кого, — у реакций, которые
+          // остались от версий до 1.0.
+          const mine = people.some((r) =>
+            r.fingerprint || myFingerprint ? r.fingerprint === myFingerprint : r.nick === me,
+          );
+          const names = people.map((r) => r.nick);
           return (
             <motion.button
               key={emoji}
@@ -681,7 +690,14 @@ export const Message = memo(function Message({
               {msg.attachment && <MessageAttachment att={msg.attachment} />}
             </>
           )}
-          {msg.id && msg.reactions && <ReactionBar id={msg.id} reactions={msg.reactions} me={me} />}
+          {msg.id && msg.reactions && (
+            <ReactionBar
+              id={msg.id}
+              reactions={msg.reactions}
+              me={me}
+              myFingerprint={myFingerprint}
+            />
+          )}
         </div>
       </div>
       {editing && (

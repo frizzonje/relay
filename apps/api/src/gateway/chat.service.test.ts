@@ -95,11 +95,11 @@ describe('переписка переживает рестарт', () => {
 
   it('и реакции вместе с ним', async () => {
     const msg = await say('привет');
-    await chat.saveReactions(msg.id!, { '👍': ['Б'] });
+    await chat.saveReactions(msg.id!, { '👍': [{ fingerprint: 'бб', nick: 'Б' }] });
 
     const after = await restart();
     const [restored] = (await after.history('obshchii')).messages;
-    expect(restored.reactions).toEqual({ '👍': ['Б'] });
+    expect(restored.reactions).toEqual({ '👍': [{ fingerprint: 'бб', nick: 'Б' }] });
   });
 
   it('время последней реплики известно сразу, без первой новой', async () => {
