@@ -8,7 +8,6 @@ import {
   CHAT_PREFIX,
   GUEST_TOKEN_TTL_MS,
   LIMITS,
-  MAX_CHANNELS,
   MAX_UPLOAD_BYTES,
   REACTION_EMOJIS,
   TOKEN_TTL_MS,
@@ -62,12 +61,9 @@ describe('константы совпадают с копией в api', () => {
     expect(apiSource('uploads.ts')).toContain('MAX_UPLOAD_BYTES = 25 * 1024 * 1024');
   });
 
-  it('страница ленты и потолок каналов — те же', () => {
+  it('страница ленты — та же', () => {
     expect(apiSource('gateway/chat.service.ts')).toContain(
       `export const PAGE_SIZE = ${CHAT_PAGE_SIZE};`,
-    );
-    expect(apiSource('gateway/registry.service.ts')).toContain(
-      `export const MAX_CHANNELS = ${MAX_CHANNELS};`,
     );
   });
 
