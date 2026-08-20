@@ -44,6 +44,8 @@ export interface SubscribeDeps {
 
 export interface Subscriber {
   consume(peerId: string, info: ProducerInfo): Promise<void>;
+  /** Подписаться на всё, что объявилось, пока транспорт ещё не стоял. */
+  drainPending(): Promise<void>;
   dropConsumer(producerId: string): void;
   /** Собеседник появился: плитка, имя, надпись. Дорожки приедут следом. */
   addPeer(peerId: string, name: string): void;
@@ -82,6 +84,10 @@ export function createSubscriber({
   // (`consumer-layers`), это факт, а не наша заявка в `preferred-layers`.
   const gotLayer = new Map<string, number | null>();
   let focusedId: string | null = null;
+  // Чужие дорожки, объявленные раньше, чем у нас встал приёмный транспорт.
+  // Подписаться на них в тот момент нельзя, а забыть — значит остаться без
+  // звука до конца звонка (см. ниже).
+  const pending: { peerId: string; info: ProducerInfo }[] = [];
 
   function tracksOf(peerId: string, kind: 'audio' | 'video'): MediaStreamTrack[] {
     return [...consumers.values()]
@@ -188,9 +194,23 @@ export function createSubscriber({
 
   return {
     async consume(peerId, info) {
+      // На один producer — один consumer. Иначе `drainPending` подписался бы
+      // второй раз на то, что уже слушаем, и сервер послушно отдал бы копию.
+      if (consumers.has(info.id)) return;
       const transport = recvTransport();
       const dev = device();
-      if (!transport || !dev) return;
+      if (!transport || !dev) {
+        // Собеседник объявил дорожку раньше, чем мы успели построить приёмный
+        // транспорт, — а он строится двумя запросами к серверу, так что окно
+        // это открыто на каждом входе и на каждой пересборке. Кто вошёл в
+        // канал вторым, в своём `welcome` видел первого ЕЩЁ БЕЗ дорожек, и
+        // единственное сообщение о них — то самое, которое мы сейчас держим в
+        // руках. Потерять его значит не услышать человека до конца звонка;
+        // раньше оно молча терялось.
+        pending.push({ peerId, info });
+        host.diag('sfu consume deferred', `${info.source} from ${peerId}`);
+        return;
+      }
       const res = await ask<{ consumer: ConsumerPayload }>('consume', {
         transportId: transport.id,
         producerId: info.id,
@@ -246,6 +266,11 @@ export function createSubscriber({
       }
     },
 
+    async drainPending() {
+      const queued = pending.splice(0);
+      for (const { peerId, info } of queued) await this.consume(peerId, info);
+    },
+
     dropConsumer,
 
     addPeer(peerId, name) {
@@ -291,6 +316,7 @@ export function createSubscriber({
     sayTileState,
 
     clear() {
+      pending.length = 0;
       consumers.forEach((e) => e.consumer.close());
       consumers.clear();
       names.clear();

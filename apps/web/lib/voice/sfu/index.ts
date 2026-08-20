@@ -237,6 +237,9 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         subscriber.addPeer(peer.peerId, peer.name);
         for (const producer of peer.producers) await subscriber.consume(peer.peerId, producer);
       }
+      // То, что объявилось, пока мы строились. Обязательно после снимка
+      // комнаты: в нём тех же дорожек может уже и не быть.
+      await subscriber.drainPending();
     } catch (err) {
       console.error('[sfu] setup failed:', err);
       host.diag('sfu setup failed', String((err as Error)?.message ?? err));
@@ -399,6 +402,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       return;
     }
     for (const { peerId, info } of wanted) await subscriber.consume(peerId, info);
+    await subscriber.drainPending();
   }
 
   /** Лестница кончилась. Куда ехать дальше — не наше решение, а дирижёра. */
