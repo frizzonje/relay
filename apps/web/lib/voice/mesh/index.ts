@@ -4,18 +4,9 @@ import type { IceServer } from '@relay/shared';
 import { getSocket } from '@/lib/socket';
 import { getIceServers } from '@/lib/config';
 import { tx } from '@/lib/i18n';
-import type { UplinkStatus } from '@/stores/voice';
 import type { TransportHost, VoiceTransport } from '../types';
-import { gradeQuality, pingGrade } from '../quality';
-import {
-  netDelta,
-  readStats,
-  toHistory,
-  worseUplink,
-  type NetSnapshot,
-  type StatsSnapshot,
-} from '../stats';
 import { createSenders } from './senders';
+import { createMetrics } from './metrics';
 import { createNegotiation } from './negotiation';
 import { createLadder, signalingUp } from './recovery';
 import { createSilence } from './silence';
@@ -59,23 +50,8 @@ function combinedConnState(pc: RTCPeerConnection): PeerConnState {
   return 'connecting';
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Качество связи на каждой плитке (Discord-подобные «палочки»)
-// ─────────────────────────────────────────────────────────────────────────
-// Тот же getStats, что кормит панель пинга, но пер-пир: RTT (candidate-pair),
-// потери пакетов (дельта packetsLost/Received между тиками) и джиттер аудио.
-// Копим предыдущий снимок счётчиков, чтобы считать потери за интервал, а не
-// накопленным итогом с начала звонка. Результат кладём в tile.net — рисует
-// SignalBars в VideoTile.
-
-// Пороги, проценты и битрейт — в lib/voice/quality.ts: те же цифры считает
-// SFU-транспорт, и расходиться им нельзя (палочки должны значить одно и то же).
-
-// ─────────────────────────────────────────────────────────────────────────
-
 export function createMeshTransport(host: TransportHost): VoiceTransport {
   const peers = new Map<string, Peer>();
-  const netHistory = new Map<string, NetSnapshot>();
 
   let room: string | null = null;
   let iceServers: IceServer[] = [{ urls: ['stun:stun.l.google.com:19302'] }];
@@ -110,6 +86,25 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     },
   });
   const silence = createSilence({ host, signalingUp });
+  const metrics = createMetrics({
+    host,
+    silence,
+    peers: () =>
+      new Map(
+        [...peers].map(([id, peer]) => [
+          id,
+          { name: peer.name, pc: peer.pc, connected: peer.connState === 'connected' },
+        ]),
+      ),
+    inRoom: () => room !== null,
+    repair: (peerId, fix) => {
+      const peer = peers.get(peerId);
+      if (!peer) return;
+      host.setTileState(peerId, 'tile.state.reconnecting');
+      if (fix === 'restart-ice') peer.pc.restartIce();
+      else ladder.rebuild(peerId);
+    },
+  });
 
   // ── Сигналинг (perfect negotiation) ───────────────────────────────────
 
@@ -242,7 +237,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     peers.delete(peerId);
     senders.forget(peerId);
     silence.forget(peerId);
-    netHistory.delete(peerId);
+    metrics.forget(peerId);
     host.cleanupPeerAudio(peerId);
   }
 
@@ -260,132 +255,6 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       const urls = Array.isArray(s.urls) ? s.urls : [s.urls];
       return urls.some((u) => typeof u === 'string' && /^turns?:/i.test(u));
     });
-  }
-
-  // ── Метрики ───────────────────────────────────────────────────────────
-
-  /**
-   * Один снимок с каждого соединения за тик — и три читателя на него.
-   *
-   * Раньше пинг, палочки и сторож тишины ходили в `getStats` каждый сам, то
-   * есть на пятерых с видео выходило пятнадцать полных снимков статистики
-   * каждые три секунды. Дело даже не в работе: это были три РАЗНЫХ момента
-   * времени, и сторож видел байты, которых палочки в том же тике уже не
-   * видели. Свести такие показания в одну картину нельзя в принципе.
-   */
-  async function collectStats(): Promise<Map<string, StatsSnapshot>> {
-    const snaps = new Map<string, StatsSnapshot>();
-    for (const [id, peer] of peers) {
-      // Сводное состояние, а не сырой connectionState: на Safari/iOS последний
-      // ненадёжен (висит в 'connecting' при живом медиа).
-      if (peer.connState !== 'connected') continue;
-      try {
-        snaps.set(id, readStats(await peer.pc.getStats()));
-      } catch {
-        /* getStats может кинуть на закрывающемся pc — пропускаем пира */
-      }
-    }
-    return snaps;
-  }
-
-  function updateVoicePing(snaps: Map<string, StatsSnapshot>) {
-    if (!room) return;
-
-    if (peers.size === 0) {
-      host.setPing({ waiting: true, ms: null, grade: null, label: 'ping.alone' });
-      return;
-    }
-
-    let rttMs: number | null = null;
-    for (const snap of snaps.values()) {
-      if (snap.rttMs !== null && (rttMs === null || snap.rttMs < rttMs)) rttMs = snap.rttMs;
-    }
-    // «Устанавливаем связь» и «меряем» — разные вещи: связь есть, а цифры ещё
-    // не приехали. Отвечает на это состояние соединения, а не наличие снимка.
-    const anyConnected = [...peers.values()].some((p) => p.connState === 'connected');
-
-    if (rttMs === null) {
-      host.setPing({
-        waiting: true,
-        ms: null,
-        grade: null,
-        label: anyConnected ? 'ping.measuring' : 'ping.connecting',
-      });
-      return;
-    }
-
-    host.setPing({ waiting: false, ms: rttMs, grade: pingGrade(rttMs), label: '' });
-  }
-
-  function updatePeerQuality(snaps: Map<string, StatsSnapshot>) {
-    if (!room) return;
-    // Худшее «узкое место» аплинка по всем пирам (bandwidth важнее cpu). Считаем
-    // за один проход и раскладываем в стор после цикла — это СВОЙ показатель, общий.
-    let worstUplink: UplinkStatus = 'ok';
-
-    for (const [id, peer] of peers) {
-      // Связь переустанавливается — палочки гаснут (bad), метрики неизвестны.
-      if (peer.connState !== 'connected') {
-        netHistory.delete(id);
-        host.setTileNet(id, {
-          grade: 'bad',
-          rttMs: null,
-          lossPct: null,
-          jitterMs: null,
-          relay: null,
-          sendKbps: null,
-          recvKbps: null,
-          videoRes: null,
-          fps: null,
-          codec: null,
-        });
-        continue;
-      }
-
-      const snap = snaps.get(id);
-      if (!snap) continue; // соединение закрылось под руками сборщика
-      // Своё «узкое место» — общее на всех: аплинк у нас один, а видим мы его
-      // с каждого соединения по-своему. Берём худшее.
-      worstUplink = worseUplink(worstUplink, snap.uplink);
-
-      // Потери и битрейт — за интервал, а не накопленным итогом с начала звонка.
-      const now = Date.now();
-      const delta = netDelta(netHistory.get(id), snap, now);
-      netHistory.set(id, toHistory(snap, now));
-
-      host.setTileNet(id, {
-        grade: gradeQuality(snap.rttMs, delta.lossPct ?? 0),
-        rttMs: snap.rttMs,
-        lossPct: delta.lossPct,
-        jitterMs: snap.jitterMs,
-        relay: snap.relay,
-        sendKbps: delta.sendKbps,
-        recvKbps: delta.recvKbps,
-        videoRes: snap.videoRes,
-        fps: snap.fps,
-        codec: snap.codec,
-      });
-    }
-
-    host.setUplink(worstUplink);
-  }
-
-  // Сторож односторонней тишины: считает он (mesh/silence.ts), а чинит лестница.
-  function fixSilence(snaps: Map<string, StatsSnapshot>) {
-    const probes = [...peers].map(([id, peer]) => ({
-      id,
-      name: peer.name,
-      pc: peer.pc,
-      connected: peer.connState === 'connected',
-      audioBytesRecv: snaps.get(id)?.audioBytesRecv ?? null,
-    }));
-    for (const { peerId, fix } of silence.check(probes)) {
-      const peer = peers.get(peerId);
-      if (!peer) continue;
-      host.setTileState(peerId, 'tile.state.reconnecting');
-      if (fix === 'restart-ice') peer.pc.restartIce();
-      else ladder.rebuild(peerId);
-    }
   }
 
   // ── Реализация интерфейса ─────────────────────────────────────────────
@@ -442,7 +311,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       negotiation.forgetAll();
       senders.forgetAll();
       silence.forgetAll();
-      netHistory.clear();
+      metrics.reset();
       room = null;
       host.setUplink('ok'); // пиров нет — своё «узкое место» сбрасываем
     },
@@ -476,14 +345,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     },
 
     pollStats() {
-      void (async () => {
-        const snaps = await collectStats();
-        updateVoicePing(snaps);
-        // Палочки — до сторожа: сторож чинит связь, и после его ступени снимок
-        // этого тика описывал бы соединение, которого уже нет.
-        updatePeerQuality(snaps);
-        fixSilence(snaps);
-      })();
+      void metrics.tick();
     },
 
     renamePeer(id, name) {
