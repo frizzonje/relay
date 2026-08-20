@@ -16,7 +16,7 @@ import type { Channel, PersistedRegistry, ServerEntry } from './registry';
 import { ChatService } from './chat.service';
 import { RegistryService } from './registry.service';
 import { SignalingGateway } from './signaling.gateway';
-import { FakeServer, asSocket } from './testkit';
+import { FakeServer, asSocket, type FakeSocket } from './testkit';
 
 /**
  * Общий стенд для тестов гейтвея.
@@ -264,4 +264,35 @@ export function connect(
 /** Прокрутить дебаунсы (presence, реестр каналов, активность чата). */
 export function settle() {
   vi.advanceTimersByTime(200);
+}
+
+// ── Готовые ходы, которые повторяются во многих файлах ────────────────────
+
+/** Сделать человека владельцем инсталляции — тем же путём, что и ссылка. */
+export async function makeOwner(owner: OwnerService, identityId: string): Promise<void> {
+  const { token } = await owner.issue();
+  await owner.claim(token, identityId);
+}
+
+/** Попытка подключения вместе с тем, чем ответила дверь. */
+export async function knock(gw: SignalingGateway, server: FakeServer, cookie: string, id?: string) {
+  const sock = server.connect({ id, cookie });
+  const refused = await server.run(sock);
+  if (!refused) gw.handleConnection(asSocket(sock));
+  return { sock, refused };
+}
+
+/** Свой сервер с текстовым и голосовым каналами — то, чем владеет создатель. */
+export async function ownServer(gw: SignalingGateway, sock: FakeSocket, id = 'srv') {
+  await gw.handleServerCreate(asSocket(sock), { id, name: 'мой' });
+  await gw.handleChannelCreate(asSocket(sock), { serverId: id, type: 'text', name: 'болталка' });
+  await gw.handleChannelCreate(asSocket(sock), { serverId: id, type: 'voice', name: 'эфир' });
+  settle();
+}
+
+/** Сказать что-нибудь в канале и вернуть id сказанного. */
+export async function say(gw: SignalingGateway, sock: FakeSocket, slug: string, text: string) {
+  await gw.handleChatJoin(asSocket(sock), { room: slug });
+  await gw.handleChatMessage(asSocket(sock), { text });
+  return (sock.last('chat') as { id: string }).id;
 }

@@ -21,6 +21,7 @@ export default defineConfig({
         'src/**/*.test.ts',
         // Стенды для тестов, не продуктовый код.
         'src/gateway/testkit.ts',
+        'src/gateway/gateway.testkit.ts',
         'src/db/testing.ts',
         // Точки сборки без собственной логики: main.ts поднимает Nest и слушает
         // порт прямо при импорте (его проверяемая часть вынесена в http-gate.ts),
