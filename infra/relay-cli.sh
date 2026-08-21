@@ -408,10 +408,12 @@ make_backup() {
     -v "$stage/cfg":/snap/cfg:ro \
     ${dbmount[@]+"${dbmount[@]}"} \
     -v "$DIR/backups":/out \
-    alpine tar czf "/out/$out" -C /snap . \
+    alpine sh -c 'tar czf "/out/$1" -C /snap . && chmod 600 "/out/$1"' sh "$out" \
     || die "Backup failed."
-  # 0600: .env is in there, and $DIR/backups is not a private directory.
-  chmod 600 "$DIR/backups/$out"
+  # 0600 from birth, and locked by the same root that created it: the archive
+  # carries .env, and `chmod` from outside is a request the file's owner can
+  # refuse — silently, since nobody checks its exit code. Which is exactly what
+  # happens wherever the CLI is not run as root and docker writes as root.
   ok "Backup: $DIR/backups/$out"
   printf '  %sRestore it with: relay restore %s/backups/%s%s\n' "$DIM" "$DIR" "$out" "$N"
 }
