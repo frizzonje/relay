@@ -487,13 +487,14 @@ export class RegistryService implements OnModuleInit {
   }
 
   /**
-   * Публичная форма реестра серверов: без хэша пароля, с флагом `locked` и с
+   * Публичная форма реестра серверов: без хэша пароля, с флагом `locked`, с
+   * `unlocked` (закрытые серверы, чей пароль спрашивающий уже предъявлял) и с
    * `mine` — «этой записью управляешь ты». Наружу уходит именно флаг, а не
    * clientId владельца: рассылать id значило бы раздавать всем то единственное,
    * чем правило владения и держится (см. ./ownership).
    */
-  publicServers(who: Claimant): PublicServer[] {
-    return this.servers.map((s) => publicServer(s, who));
+  publicServers(who: Claimant, unlocked?: Set<string>): PublicServer[] {
+    return this.servers.map((s) => publicServer(s, who, unlocked));
   }
 
   /** Кто из создателей вообще встречается в этих записях (см. gateway.ownerKey). */

@@ -42,14 +42,18 @@ export class Directory {
   }
 
   /**
-   * Публичная форма реестра серверов: без хэша пароля, с флагом `locked` и с
+   * Публичная форма реестра серверов: без хэша пароля, с флагом `locked`, с
+   * `unlocked` (пароль этого закрытого сервера сокет уже предъявлял) и с
    * `mine` — «этой записью управляешь ты». Наружу уходит именно флаг, а не
    * clientId владельца: рассылать id значило бы раздавать всем то единственное,
    * чем правило владения и держится (см. ./ownership).
    */
   serversFor(client: AppSocket): PublicServer[] {
     const banned = this.perimeter.bannedFrom(client);
-    const all = this.registry.publicServers(this.perimeter.claimant(client));
+    const all = this.registry.publicServers(
+      this.perimeter.claimant(client),
+      this.perimeter.unlockedOf(client),
+    );
     return banned?.size ? all.filter((s) => !banned.has(s.id)) : all;
   }
 
@@ -67,11 +71,13 @@ export class Directory {
   }
 
   /**
-   * Реестр серверов почти одинаков для всех: различает сокеты ровно один бит —
-   * `mine` у записей, созданных этим устройством. Поэтому и группируем по
-   * владению: у кого в реестре ничего своего нет (подавляющее большинство),
-   * получают один и тот же payload, а отдельная сборка достаётся только тем,
-   * кто прямо сейчас онлайн и чем-то владеет.
+   * Реестр серверов почти одинаков для всех: различают сокеты `mine` у записей,
+   * созданных этим устройством, и `unlocked` у закрытых серверов, чьи пароли
+   * этот сокет предъявлял. Поэтому и группируем по владению вместе с набором
+   * разблокировок: у кого в реестре ничего своего нет и ничего не открыто
+   * (подавляющее большинство), получают один и тот же payload, а отдельная
+   * сборка достаётся только тем, кто прямо сейчас онлайн и чем-то владеет или
+   * что-то открыл.
    *
    * Гости пропускаются, как и в рассылке каналов: по инвайту человек пришит к
    * своему эфиру и реестра не получает вовсе — ни на подключении, ни правкой.
@@ -84,7 +90,10 @@ export class Directory {
     const byOwner = new Map<string, PublicServer[]>();
     for (const sock of this.server.sockets.sockets.values()) {
       if (this.perimeter.isGuest(sock)) continue;
-      const key = this.ownerKey(sock, owners);
+      const key =
+        this.registry.visibilityKey(this.perimeter.unlockedOf(sock)) +
+        '\u0001' +
+        this.ownerKey(sock, owners);
       let payload = byOwner.get(key);
       if (!payload) {
         payload = this.serversFor(sock);

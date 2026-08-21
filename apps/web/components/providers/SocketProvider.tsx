@@ -222,8 +222,13 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       for (const { id } of storedServerPasswords()) {
         if (!ids.has(id)) forgetServerPassword(id);
       }
+      // Пропуск выметаем и тогда, когда сервер на месте, а разблокировки по
+      // пропуску нет: он мёртв — протух, пароль сменили или его вовсе сняли.
+      // Живой пропуск в этом списке всегда виден флагом `unlocked`: реестр
+      // собирается после разбора handshake.
       for (const id of unlockTokenIds()) {
-        if (!ids.has(id)) dropUnlockToken(id);
+        const srv = list.find((s) => s?.id === id);
+        if (!srv || !srv.unlocked) dropUnlockToken(id);
       }
     });
 

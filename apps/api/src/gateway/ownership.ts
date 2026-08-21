@@ -93,14 +93,25 @@ export function normalizeClientId(raw: unknown): string | undefined {
   return typeof raw === 'string' ? raw.trim().slice(0, 64) || undefined : undefined;
 }
 
-/** Публичная форма сервера: без хэша пароля, с флагом `locked` и `mine`. */
-export function publicServer(entry: ServerEntry, who: Claimant) {
+/**
+ * Публичная форма сервера: без хэша пароля, с флагами `locked`, `unlocked` и
+ * `mine`.
+ *
+ * `unlocked` — состояние спрашивающего сокета, а не записи: пароль этого
+ * сервера на нём уже предъявляли (сам человек или пропуск из handshake).
+ * Наружу он уходит потому, что клиент иначе о нём не знает: после
+ * перезагрузки страницы вкладка пуста, а сокет — нет, и замок возвращался бы
+ * на открытый сервер вместе с требованием пароля, который серверу не нужен.
+ * У сервера без пароля флага нет вовсе — открывать там нечего.
+ */
+export function publicServer(entry: ServerEntry, who: Claimant, unlocked?: Set<string>) {
   return {
     id: entry.id,
     name: entry.name,
     ...(entry.emoji ? { emoji: entry.emoji } : {}),
     removable: entry.removable,
     ...(entry.passwordHash ? { locked: true as const } : {}),
+    ...(entry.passwordHash && unlocked?.has(entry.id) ? { unlocked: true as const } : {}),
     ...(ownedBy(entry, who) ? { mine: true as const } : {}),
     ...(moderatedBy(entry, who) ? { moderated: true as const } : {}),
   };

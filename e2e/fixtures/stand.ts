@@ -163,10 +163,21 @@ export async function say(page: Page, text: string): Promise<void> {
 /**
  * Свой сервер с первым текстовым каналом — чтобы разговаривать в своём, а не в
  * чужом: модерирует сервер его создатель, и права проверяются только там.
+ *
+ * С паролем сервер становится закрытым: в рейке он у всех, а каналы — только у
+ * тех, кто пароль ввёл.
  */
-export async function createServer(page: Page, server: string, channel: string): Promise<void> {
+export async function createServer(
+  page: Page,
+  server: string,
+  channel: string,
+  options: { password?: string } = {},
+): Promise<void> {
   await page.getByRole('button', { name: 'Create a server' }).click();
   await page.getByPlaceholder('My server').fill(server);
+  if (options.password) {
+    await page.getByPlaceholder('no password — an open server').fill(options.password);
+  }
   await page.getByRole('button', { name: 'Create server' }).click();
   litter.push({ page, server });
   // Создание сервера само зовёт завести первый канал — окно уже открыто, и

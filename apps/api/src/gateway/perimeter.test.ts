@@ -288,6 +288,49 @@ describe('server-unlock', () => {
     );
   });
 
+  // Регрессия 1.0. Пропуск открывал сокет, но не говорил об этом клиенту:
+  // список разблокированных жил в памяти вкладки, а перезагрузка её стирает.
+  // Каналы после перезахода были видны, а замок в рейке возвращался — и клик по
+  // своему же серверу просил пароль, который серверу давно не нужен. Отсюда
+  // «после перезахода надо заново вводить все пароли».
+  it('реестр серверов называет открытые этому сокету: после перезахода замка нет', async () => {
+    const { gw, server } = await withLocked();
+    const first = connect(gw, server, { id: 'first' });
+    await gw.handleServerUnlock(asSocket(first), { id: 'srv', password: 'пароль' });
+    const { token } = first.last('server-unlock-result') as { token: string };
+
+    const again = server.connect({ id: 'again', auth: { unlock: [token] } });
+    gw.handleConnection(asSocket(again));
+    const seen = (
+      again.last('servers') as { id: string; locked?: boolean; unlocked?: boolean }[]
+    ).find((s) => s.id === 'srv');
+    expect(seen).toMatchObject({ locked: true, unlocked: true });
+  });
+
+  // Флаг — состояние сокета, а не записи. Рассылка реестра группирует сокеты
+  // ради дешевизны, и без разблокировок в ключе группы первый же сосед,
+  // создавший сервер, раздал бы всем чужую разблокировку — или отобрал свою.
+  it('в рассылке флаг у каждого свой: чужая разблокировка не раздаётся', async () => {
+    const { gw, server } = await withLocked();
+    const opened = connect(gw, server, { id: 'opened' });
+    const bare = connect(gw, server, { id: 'bare' });
+    await gw.handleServerUnlock(asSocket(opened), { id: 'srv', password: 'пароль' });
+
+    // Любая правка реестра — и он уезжает всем сразу.
+    await gw.handleServerCreate(asSocket(bare), { id: 'other', name: 'открытый' });
+    settle();
+
+    const srvOf = (sock: { last(e: string): unknown }) =>
+      (sock.last('servers') as { id: string; unlocked?: boolean }[]).find((s) => s.id === 'srv');
+    expect(srvOf(opened)?.unlocked).toBe(true);
+    expect(srvOf(bare)?.unlocked).toBeUndefined();
+    // Открытый сервер флага не носит вовсе: открывать там нечего.
+    expect(
+      (opened.last('servers') as { id: string; unlocked?: boolean }[]).find((s) => s.id === 'other')
+        ?.unlocked,
+    ).toBeUndefined();
+  });
+
   it('без пропуска после реконнекта каналов закрытого сервера не видно', async () => {
     const { gw, server } = await withLocked();
     const bare = server.connect({ id: 'bare', auth: {} });

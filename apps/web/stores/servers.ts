@@ -10,9 +10,11 @@ import { DEFAULT_SERVERS, MAIN_SERVER_ID } from '@/lib/constants';
  * выбор: какой сервер сейчас открыт в сайдбаре (сокет об этом не знает).
  *
  * Закрытые (под паролем) серверы приходят с флагом `locked`. `unlockedIds` —
- * те, к которым мы ввели верный пароль в этой сессии (сервер разблокировал наш
- * сокет и прислал их каналы). `unlockTargetId`/`unlockError` обслуживают модалку
- * ввода пароля.
+ * те, что открыты нашему сокету прямо сейчас. Список ведёт сервер: он же
+ * присылает `unlocked` у записи и знает про пропуска, уехавшие в handshake
+ * (см. lib/unlock-tokens). Считать по памяти вкладки нельзя — перезагрузка её
+ * стирает, а пропуск живёт, и на открытом сервере снова висел бы замок с
+ * требованием пароля. `unlockTargetId`/`unlockError` обслуживают модалку ввода.
  */
 interface ServersState {
   servers: Server[];
@@ -41,8 +43,15 @@ export const useServersStore = create<ServersState>((set) => ({
       activeServerId: servers.some((sv) => sv.id === s.activeServerId)
         ? s.activeServerId
         : MAIN_SERVER_ID,
+      // Разблокировки берём из того же списка: их считает сервер под наш сокет.
+      // Опоздать этот ответ не может — реестр он собирает уже после того, как
+      // разобрал пропуска из handshake и принял введённый пароль, а порядок
+      // сообщений в сокете сохраняется.
+      unlockedIds: servers.filter((sv) => sv.unlocked).map((sv) => sv.id),
     })),
   setActiveServer: (id) => set({ activeServerId: id }),
+  // Пароль только что приняли (`server-unlock-result`). Ждать следующей
+  // рассылки реестра незачем: она едет на правку реестра, а не на наш пароль.
   markUnlocked: (id) =>
     set((s) => ({
       unlockedIds: s.unlockedIds.includes(id) ? s.unlockedIds : [...s.unlockedIds, id],
