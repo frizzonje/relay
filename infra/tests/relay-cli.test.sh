@@ -56,13 +56,17 @@ case "\$*" in
   # Enough of a dump to look like one: the backup refuses to wrap an archive
   # around an empty file, and that refusal is worth keeping in the way.
   *pg_dump*) echo "-- relay dump"; echo "CREATE TABLE messages (id int);" ;;
-  *"tar czf /out/"*)
+  *"tar czf"*)
     # The pre-upgrade backup goes through this. It has to leave a file behind:
-    # the CLI chmods the archive it just wrote, and a stub that reports success
-    # without producing one would fail the update for a reason no server has.
+    # the CLI hands the archive over to its caller right after writing it, and a
+    # stub that reports success without producing a file would fail the update
+    # for a reason no server has. The name comes out of the arguments, not out
+    # of the command line: the command line carries `"/out/$1"` unexpanded,
+    # because the real one locks the file in the same shell that writes it.
     all="\$*"
     outdir="\$(echo "\$all" | sed -n 's#.*-v \([^ ]*\):/out .*#\1#p')"
-    name="\${all##*tar czf /out/}"; name="\${name%% *}"
+    name=""
+    for a in "\$@"; do case "\$a" in *.tar.gz) name="\${a##*/}" ;; esac; done
     if [ -n "\$outdir" ] && [ -n "\$name" ]; then : >"\$outdir/\$name"; fi ;;
   *"up -d"*)
     # Fail only the first N attempts: the new version does not come up, the
