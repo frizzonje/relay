@@ -166,7 +166,16 @@ export function ServerRail() {
   }
 
   return (
-    <nav className="panel panel-rail relative z-10 flex w-16 shrink-0 flex-col items-center gap-2 border-r border-line py-3">
+    <nav
+      // Прокрутка только на телефоне. Серверов бывает полсотни (MAX_SERVERS), а
+      // высоты у телефона — на десяток: без неё нижние плашки, «создать сервер»
+      // и шестерёнка просто уезжали за нижний край экрана, и дотянуться до них
+      // было нечем. На десктопе прокрутку не включаем: `overflow-y` тянет за
+      // собой `overflow-x`, а вправо из рейки выезжает плашка с именем сервера
+      // — она бы обрезалась по ширине в 64 пикселя. На тач-экране этой плашки и
+      // так не бывает: она живёт на ховере.
+      className="panel panel-rail relative z-10 flex w-16 shrink-0 flex-col items-center gap-2 border-r border-line py-3 max-md:overflow-y-auto max-md:overscroll-contain"
+    >
       {/* Главный сервер — relay: наш знак mesh-триады на чистой брендовой плашке */}
       <div className="group/srv relative">
         <Pill active={activeServerId === mainId} unread={mainUnread} />

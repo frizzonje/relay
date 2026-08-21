@@ -184,7 +184,11 @@ function ChannelSoundMark({ slug }: { slug: string }) {
   );
 }
 
-/** Заголовок секции с необязательной кнопкой «+» (появляется на ховере, как в Discord). */
+/**
+ * Заголовок секции с необязательной кнопкой «+» (появляется на ховере, как в
+ * Discord). На тач-экранах ховера нет — там она видна всегда, как «⋯» и «ссылка»
+ * в строке канала: иначе единственный путь завести канал невидим с телефона.
+ */
 function Category({
   children,
   onAdd,
@@ -204,7 +208,7 @@ function Category({
           onClick={onAdd}
           title={addLabel}
           aria-label={addLabel}
-          className="grid h-4 w-4 place-items-center rounded text-text-muted opacity-0 outline-none transition-opacity hover:text-text-header focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/cat:opacity-100"
+          className="grid h-4 w-4 place-items-center rounded text-text-muted opacity-0 outline-none transition-opacity hover:text-text-header focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover/cat:opacity-100 max-md:h-7 max-md:w-7 max-md:opacity-100"
         >
           <Icon name="plus" className="text-sm" />
         </button>

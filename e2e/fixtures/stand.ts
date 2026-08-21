@@ -1,4 +1,5 @@
 import {
+  devices,
   expect,
   test as base,
   type Browser,
@@ -52,6 +53,13 @@ export function unique(name: string): string {
 export interface PersonOptions {
   /** Разрешения контексту: голосовым спекам нужен микрофон. */
   permissions?: string[];
+  /**
+   * Человек с телефона: узкий экран и тач вместо мыши. Именно тач тут главное —
+   * на мобильной раскладке половина кнопок раньше жила на ховере, которого на
+   * телефоне не бывает, и спек с настольным браузером узкого окна этого не
+   * ловит (мышь в нём есть).
+   */
+  mobile?: boolean;
 }
 
 /**
@@ -68,6 +76,7 @@ export async function person(
 ): Promise<Page> {
   const ctx = await browser.newContext({
     ignoreHTTPSErrors: true,
+    ...(options.mobile ? devices['Pixel 7'] : {}),
     ...(options.permissions ? { permissions: options.permissions } : {}),
   });
   await ctx.addCookies([{ name: 'relay-lang', value: 'en', url: BASE }]);
