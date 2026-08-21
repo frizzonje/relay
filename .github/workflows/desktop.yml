@@ -40,6 +40,17 @@ jobs:
           set -euo pipefail
           if [[ "$GITHUB_REF" == refs/tags/desktop-v* ]]; then
             tag="${GITHUB_REF#refs/tags/}"
+            # Создаём релиз здесь же, с человеческими примечаниями из файла.
+            # Матрица ниже (tauri-action) в существующий релиз только заливает
+            # установщики и тело не трогает — это проверено на nightly, где
+            # текст пишется ровно так же и переживает четыре сборки подряд.
+            # `|| true` — на повторном прогоне тега релиз уже есть.
+            notes=clients/desktop/RELEASE_NOTES.md
+            [ -f "$notes" ] || notes=/dev/null
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Relay Desktop ${tag#desktop-}" \
+              --notes-file "$notes" || true
             echo "tag=$tag"                  >> "$GITHUB_OUTPUT"
             echo "name=Relay Desktop $tag"   >> "$GITHUB_OUTPUT"
             echo "prerelease=false"          >> "$GITHUB_OUTPUT"
@@ -105,7 +116,9 @@ jobs:
           # Релиз уже создан job'ой setup — заливаем в него установщики.
           tagName: ${{ needs.setup.outputs.tag }}
           releaseName: ${{ needs.setup.outputs.name }}
-          # Release notes are kept in English (user-facing).
+          # Запасной текст: он попадает в релиз только если тот ещё не
+          # создан — то есть при ручном запуске без тега. У релиза по тегу
+          # тело уже написано job'ой setup из clients/desktop/RELEASE_NOTES.md.
           releaseBody: |
             Relay desktop client for macOS, Windows and Linux.
 
@@ -115,6 +128,28 @@ jobs:
           releaseDraft: false
           prerelease: ${{ needs.setup.outputs.prerelease }}
           args: ${{ matrix.args }}
+
+  # Юнит-тесты Rust-ядра. Отдельной джобой, а не шагом матрицы: релиз они
+  # задерживать не должны, а их отсутствие обходилось дороже — в
+  # `identity.rs` лежат проверки хранения ключа (секрет переживает круг,
+  # мусор ключом не становится, у каждого origin свой файл, файл 0600), и до
+  # сих пор их не запускал никто. Тест, который не исполняется, — это не
+  # покрытие, а его вид.
+  test:
+    name: cargo test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: System deps (WebKitGTK, appindicator)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev build-essential
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/desktop/src-tauri
+      - run: cargo test --manifest-path clients/desktop/src-tauri/Cargo.toml
 
   # Arch has no .deb/.rpm; the client ships as AUR PKGBUILDs
   # (clients/desktop/packaging/arch). This job keeps those recipes honest —
