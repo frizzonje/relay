@@ -1,4 +1,4 @@
-// Мост «нативный звук демонстрации → MediaStreamTrack» для оболочки Tauri.
+// Мост «нативный звук демонстрации → MediaStreamTrack» для оболочки на Windows.
 //
 // В десктоп-оболочке на Windows звук экрана снимается НАТИВНО (WASAPI
 // process-loopback с исключением процесса relay — clients/desktop/src-tauri/
@@ -14,19 +14,17 @@
 // PCM попадает в AudioWorklet (public/screen-audio-worklet.js), а тот играет его
 // в MediaStreamAudioDestinationNode — его дорожку и отдаём в WebRTC-микс.
 
-type TauriEvent<T> = { payload: T };
-type UnlistenFn = () => void;
-interface TauriGlobal {
-  event: {
-    listen: <T>(event: string, handler: (e: TauriEvent<T>) => void) => Promise<UnlistenFn>;
-    emit: (event: string, payload?: unknown) => Promise<void>;
-  };
-}
+// Мост — общий (lib/shell-bridge.ts). Linux-оболочка этих событий не знает
+// вовсе, и не должна: там нативного звука экрана нет (портал Wayland отдаёт
+// только видео, а loopback-захват Chromium умеет на Windows и macOS). Путь
+// гейтится проверкой «Windows + оболочка» ниже, так что до эмита дело не дойдёт.
 
-function tauri(): TauriGlobal | null {
-  if (typeof window === 'undefined') return null;
-  return (window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__ ?? null;
-}
+import { shellBridge } from '@/lib/shell-bridge';
+
+/** Форма события оболочки: payload и больше ничего. */
+type ShellEvent<T> = { payload: T };
+/** Что возвращает `listen`: функция, снимающая подписку. */
+type UnlistenFn = () => void;
 
 /**
  * Сообщить оболочке, что открылся (`true`) или закрылся (`false`) нативный
@@ -39,16 +37,16 @@ function tauri(): TauriGlobal | null {
  * — в обработчике `screen-picker` (clients/desktop/src-tauri/src/main.rs).
  */
 export function notifyScreenPicker(open: boolean): void {
-  const t = tauri();
+  const t = shellBridge();
   if (!t) return;
-  void t.event.emit('screen-picker', open).catch(() => {
+  void t.emit('screen-picker', open).catch(() => {
     /* оболочка старая или прав нет — на демонстрацию это не влияет */
   });
 }
 
 /** Оболочка Tauri именно на Windows: только там есть нативный process-loopback. */
 export function isDesktopWindows(): boolean {
-  if (!tauri()) return false;
+  if (!shellBridge()) return false;
   const ua =
     (navigator as unknown as { userAgentData?: { platform?: string } }).userAgentData?.platform ||
     navigator.userAgent ||
@@ -86,7 +84,7 @@ function decodeFrame(b64: string): Float32Array {
  * повторный вызов сперва глушит предыдущий сеанс.
  */
 export async function startNativeScreenAudio(): Promise<MediaStreamTrack | null> {
-  const t = tauri();
+  const t = shellBridge();
   if (!t) return null;
   await stopNativeScreenAudio(); // не копим два сеанса
 
@@ -103,7 +101,7 @@ export async function startNativeScreenAudio(): Promise<MediaStreamTrack | null>
     };
 
     // Формат приходит один раз — по нему строим граф под точную частоту дискретизации.
-    const onFormat = async (e: TauriEvent<{ sampleRate: number }>) => {
+    const onFormat = async (e: ShellEvent<{ sampleRate: number }>) => {
       if (ctx) return; // граф уже собран
       const sampleRate = e.payload?.sampleRate || 48000;
       try {
@@ -121,20 +119,20 @@ export async function startNativeScreenAudio(): Promise<MediaStreamTrack | null>
       }
     };
 
-    const onFrame = (e: TauriEvent<string>) => {
+    const onFrame = (e: ShellEvent<string>) => {
       if (!node || typeof e.payload !== 'string') return;
       const pcm = decodeFrame(e.payload);
       // Транзитом отдаём буфер воркеру (transferable — без копии).
       node.port.postMessage(pcm, [pcm.buffer]);
     };
 
-    void t.event
+    void t
       .listen<{ sampleRate: number }>('screen-audio-format', onFormat)
       .then((u) => unlisten.push(u));
-    void t.event.listen<string>('screen-audio-frame', onFrame).then((u) => unlisten.push(u));
+    void t.listen<string>('screen-audio-frame', onFrame).then((u) => unlisten.push(u));
 
     // Просим Rust начать захват.
-    void t.event.emit('screen-audio-start');
+    void t.emit('screen-audio-start');
 
     // Нет формата за 4 с — считаем, что нативный путь недоступен, идём без звука.
     startTimer = setTimeout(() => {
@@ -149,7 +147,7 @@ export async function startNativeScreenAudio(): Promise<MediaStreamTrack | null>
 
 /** Остановить нативный захват и разобрать граф. Безопасно звать повторно. */
 export async function stopNativeScreenAudio(): Promise<void> {
-  const t = tauri();
+  const t = shellBridge();
   if (startTimer) {
     clearTimeout(startTimer);
     startTimer = null;
@@ -162,7 +160,7 @@ export async function stopNativeScreenAudio(): Promise<void> {
     }
   }
   unlisten = [];
-  if (t) void t.event.emit('screen-audio-stop');
+  if (t) void t.emit('screen-audio-stop');
   try {
     node?.disconnect();
     dest?.disconnect();

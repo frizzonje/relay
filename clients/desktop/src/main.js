@@ -613,8 +613,12 @@ function checkWebrtc() {
 
   // Тот же факт — в relay-update.log, чтобы он был виден в логе с машины
   // пользователя, а не только на экране, который никто не сфотографировал.
+  // Эта страница живёт в обеих оболочках, и мост у них в разных местах:
+  // Tauri кладёт его в `__TAURI__.event`, Electron — в `__RELAY_SHELL__`
+  // (см. apps/web/lib/shell-bridge.ts).
   try {
-    window.__TAURI__?.event?.emit('webrtc-missing', navigator.userAgent);
+    const shell = window.__TAURI__?.event ?? window.__RELAY_SHELL__;
+    shell?.emit('webrtc-missing', navigator.userAgent);
   } catch {
     /* мост не поднялся — баннера на экране достаточно */
   }

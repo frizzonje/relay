@@ -1,7 +1,7 @@
-# relay desktop (Windows / Linux / macOS) — Tauri v2
+# relay desktop (Windows / macOS) — Tauri v2
 
 Нативная оболочка над существующим web-клиентом: Rust-ядро + системный webview
-(WebView2 на Windows, WebKitGTK на Linux, WKWebView на macOS). Весь UI приходит
+(WebView2 на Windows, WKWebView на macOS; Linux живёт отдельно — см. ниже). Весь UI приходит
 из webview бесплатно — десктоп-клиент не реализует протокол сам, а добавляет то,
 чего нет у браузера:
 
@@ -9,36 +9,34 @@
   push-to-talk;
 - бейдж непрочитанного, нативные уведомления;
 - автообновление (tauri-plugin-updater), установщики: MSI/NSIS (Windows),
-  AppImage/deb/rpm (Linux), dmg (macOS); Arch Linux — через AUR
-  ([packaging/arch](packaging/arch)).
+  dmg (macOS).
 
-## ⚠️ Linux: звонков в этой оболочке НЕТ
+## Linux здесь больше нет — он на Electron
 
-**Системный WebKitGTK собран без WebRTC — на Linux голос не работает и не может
-заработать никакими правками нашего кода.** Проверено на Arch (`webkit2gtk-4.1`
-2.52.5, x86_64 и aarch64) и Ubuntu 22.04 (2.50.4): `getUserMedia` на месте,
-а `RTCPeerConnection` в движке `undefined`, символов `createOffer` /
-`addIceCandidate` в `libwebkit2gtk-4.1.so.0` нет вовсе.
+**Системный WebKitGTK собран без WebRTC, и на Linux эта оболочка звонить не
+могла никогда.** Проверено ещё раз 21.08.2026 на самых свежих стабильных
+сборках: Debian 13 (2.52.5) — `RTCPeerConnection` в движке `undefined` даже при
+выставленном `enable-webrtc`; Fedora 44 (2.52.5) — в `libwebkit2gtk-4.1.so.0`
+нет ни `createOffer`, ни `addIceCandidate`. Причина внешняя: upstream держит
+`-DENABLE_WEB_RTC=OFF` по умолчанию, и ни один мейнстрим-дистрибутив флаг не
+включает.
 
-Причина внешняя: upstream WebKitGTK держит `-DENABLE_WEB_RTC=OFF` по умолчанию и
-не кладёт WebRTC в тарболы, поэтому **ни один** мейнстрим-дистрибутив не собирает
-его с поддержкой звонков. Включается только самосбором WebKit, и по отзывам он
-там работает лишь под X11 (на Wayland — ошибки GBM).
+Поэтому Linux-клиент теперь свой — Electron поверх того же web-UI:
+[`clients/desktop-linux`](../desktop-linux). Тот же мост событий, тот же файл
+ключа личности, тот же `~/relay-update.log`; из этой сборки Linux-цели убраны
+(CI собирает только Windows и macOS), а старые Linux-клиенты переезжают на
+новую оболочку одним обновлением — `latest.json` для `linux-x86_64` указывает
+на её AppImage.
 
-Из этого следуют две вещи, которые важно не забыть:
+Что из этого стоит помнить, если руки потянутся вернуть Linux сюда:
 
-1. **Правки GStreamer-плагинов, `permission-request`, DMABUF и прочего звонков не
-   чинят.** Всё это необходимо, но недостаточно: без `RTCPeerConnection` соединение
-   не начинается вообще. Такие попытки уже были — `e3c5f28`, `f69c725`, `06c7095`.
-2. **Пока движок не заменён, оболочка обязана говорить об этом вслух.** Экран
-   выбора сервера проверяет `RTCPeerConnection` (`checkWebrtc` в
-   [`src/main.js`](src/main.js)) и показывает баннер; факт уходит в
-   `~/relay-update.log` строкой `WEBRTC MISSING`. В web-UI то же самое
-   гейтит вход в канал (`apps/web/lib/voice-support.ts`) — раньше клиент
-   заходил в голосовой канал, зажигал микрофон и молчал без единой ошибки.
-
-Настоящее решение — движок с WebRTC на Linux (Chromium-оболочка). Пока его нет,
-Linux-пользователям для голоса нужен браузер.
+1. **Правки GStreamer-плагинов, `permission-request`, DMABUF и прочего звонков
+   не чинят.** Всё это необходимо, но недостаточно: без `RTCPeerConnection`
+   соединение не начинается вообще. Такие попытки уже были — `e3c5f28`,
+   `f69c725`, `06c7095`.
+2. **Проверка «умеет ли движок звонить» осталась в web-UI**
+   (`apps/web/lib/voice-support.ts`) — она гейтит вход в голосовой канал в любом
+   браузере с урезанным движком, не только в оболочке.
 
 ## Архитектура
 
@@ -165,18 +163,10 @@ clients/desktop/
     capabilities/default.json  права локального окна (server-picker)
     capabilities/remote.json   права удалённого web-UI: только core:event
     icons/           знак relay (mesh-триада): icon.svg + сгенерённый набор
-  packaging/
-    arch/            AUR PKGBUILD-ы (relay-desktop-bin / relay-desktop) +
-                     release.sh (бамп версии/чек-сумм) — см. packaging/arch/README.md
 ```
 
-> ✅ **Собирается на двух платформах.**
-> - **macOS arm64** (Tauri 2.11): `cargo tauri build` → `relay.app` + `relay_0.1.0.dmg`,
->   приложение стартует и закрывается чисто.
-> - **Linux arm64**: `cargo tauri build --bundles deb` в `rust:1-bookworm` (Docker)
->   → `relay_0.1.0_arm64.deb` (1.9 МБ), корректный пакет — `/usr/bin/relay-desktop`
->   (ELF aarch64), `.desktop`-лаунчер, hicolor-иконки, зависимости
->   `libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1`.
+> ✅ **Собирается на macOS arm64** (Tauri 2.11): `cargo tauri build` → `relay.app`
+> + `relay_0.1.0.dmg`, приложение стартует и закрывается чисто.
 >
 > Иконки закоммичены — CI/сборка работают без предварительных шагов.
 > Windows-инсталляторы (MSI/NSIS) собираются только на Windows-раннере — из CI
@@ -187,35 +177,20 @@ clients/desktop/
 ```bash
 # требования: Rust stable + системные deps
 #   Windows: WebView2 (есть в Win11), MSVC Build Tools
-#   Linux:   libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
 #   macOS:   Xcode Command Line Tools
 cargo install tauri-cli --version '^2.0'      # даёт `cargo tauri`
 cd clients/desktop
 cargo tauri dev                                # dev-окно с экраном выбора сервера
 ```
 
-Полный бандл (`cargo tauri build`) собирает `.app`/`.dmg` (macOS),
-`.msi`/NSIS (Windows), `.AppImage`/`.deb` (Linux) — иконки уже в репозитории.
+Полный бандл (`cargo tauri build`) собирает `.app`/`.dmg` (macOS) и `.msi`/NSIS
+(Windows) — иконки уже в репозитории. Linux-целей здесь нет: клиент под Linux
+живёт в [`clients/desktop-linux`](../desktop-linux).
 
-## Arch Linux (AUR)
+## Arch Linux
 
-tauri-bundler не умеет в pacman-пакеты, а Arch-юзер ждёт `paru -S`, а не
-скачивания тарбола из релиза. Поэтому клиент под Arch раздаётся идиоматично —
-**PKGBUILD-ами в AUR**, каноном которых служат рецепты в
-[`packaging/arch`](packaging/arch) (версионируются вместе с кодом, на релизе
-копируются в AUR-репозитории). **В сам AUR пакеты пока не выложены** — до этого
-момента ставить только сборкой из `packaging/arch`. Два пакета по стандартной
-AUR-схеме:
-
-- **`relay-desktop-bin`** — репак официального `relay_<ver>_amd64.deb` из релиза
-  (ставится за секунды, Rust не нужен);
-- **`relay-desktop`** — сборка из тега системным тулчейном (Node/pnpm не нужны:
-  `frontendDist` статичен и впекается в бинарь, `cargo build` — и всё).
-
-CI линтит оба рецепта в arch-контейнере (`namcap` + проверка, что `.SRCINFO`
-парсится) — job `arch` в [`desktop.yml`](../../.github/workflows/desktop.yml).
-Бамп версии/чек-сумм и публикация — `packaging/arch/release.sh` и
-[packaging/arch/README.md](packaging/arch/README.md).
+Пакет для Arch собирается из AppImage Linux-клиента и живёт вместе с ним —
+[`clients/desktop-linux/packaging/arch`](../desktop-linux/packaging/arch).
 
 ## Готово (нативная связка)
 
@@ -304,8 +279,8 @@ CI линтит оба рецепта в arch-контейнере (`namcap` + �
    - включить автозапуск → перелогиниться: relay поднялся свёрнутым, окно
      достаётся пунктом трея «Открыть relay», модалка обновления при этом не
      выпрыгивает (вместо неё системное уведомление); выключить автозапуск →
-     запись из автозагрузки исчезла. Проверить на Windows и Linux отдельно:
-     реализации автозапуска там разные (реестр / `~/.config/autostart`).
+     запись из автозагрузки исчезла (на Windows это реестр, на macOS —
+     LaunchAgent, и проверять их надо по отдельности).
    - Экран выбора сервера прогнан на всех путях (автопереход, отмена, `#pick`,
      недавние, битые адреса, гонка «обогнали другой попыткой») в браузере; в
      живом webview проверен только удачный автопереход. Осталось руками:
@@ -315,20 +290,6 @@ CI линтит оба рецепта в arch-контейнере (`namcap` + �
 
 - **macOS arm64** — `cargo tauri build` → `relay.app` + `.dmg`, приложение
   стартует (окно с выбором сервера) и закрывается без ошибок.
-- **Linux arm64** — воспроизводимо в Docker без локального тулчейна:
-
-  ```bash
-  docker run --rm -v "$PWD":/mono -w /mono/clients/desktop rust:1-bookworm bash -c '
-    apt-get update -qq && apt-get install -y --no-install-recommends \
-      libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-      librsvg2-dev libxdo-dev build-essential curl ca-certificates >/dev/null
-    curl -L --proto "=https" -sSf \
-      https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-    cargo binstall -y tauri-cli
-    cargo tauri build --bundles deb'
-  # → src-tauri/target/release/bundle/deb/relay_0.1.0_arm64.deb (проверено dpkg-deb)
-  ```
-
 - **Windows** — MSI/NSIS собираются только на Windows; гоняются из CI
   ([desktop.yml](../../.github/workflows/desktop.yml)).
 - **Смок 0.4.0 (macOS)** — `cargo tauri dev` с чужим `identifier` (чтобы не

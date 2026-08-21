@@ -33,7 +33,7 @@ function setEngine(opts: {
     configurable: true,
     writable: true,
   });
-  g.window = opts.tauri ? { __TAURI__: {} } : {};
+  g.window = opts.tauri ? { __TAURI__: { event: {} } } : {};
 
   delete g.RTCPeerConnection;
   delete g.webkitRTCPeerConnection;

@@ -1,0 +1,66 @@
+{
+  "name": "relay-desktop-linux",
+  "version": "1.0.0",
+  "private": true,
+  "description": "relay — voice and chat on your own server",
+  "license": "MIT",
+  "main": "src/main.js",
+  "desktopName": "relay.desktop",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --linux AppImage",
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "electron": "43.4.1",
+    "electron-builder": "^26.0.12"
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2"
+  },
+  "build": {
+    "appId": "app.relay.desktop",
+    "productName": "relay",
+    "executableName": "relay",
+    "artifactName": "relay_${version}_linux_${arch}.AppImage",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../desktop/src",
+        "to": "picker"
+      },
+      {
+        "from": "../desktop/src-tauri/icons",
+        "to": "icons"
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Network",
+      "icon": "../desktop/src-tauri/icons/icon.png",
+      "synopsis": "relay — голос и чат",
+      "desktop": {
+        "entry": {
+          "Name": "relay",
+          "Categories": "Network;InstantMessaging;Chat;",
+          "StartupWMClass": "relay"
+        }
+      },
+      "syncDesktopName": true
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://github.com/frizzonje/relay/releases/latest/download/"
+      }
+    ]
+  }
+}

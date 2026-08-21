@@ -2,29 +2,46 @@
 
 Выжимка живых задач из плана редизайна — сам редизайн завершён, и его план в
 репозиторий не входит. Здесь только то, что ещё не сделано. Решения по стеку
-приняты 2026-07-03: iOS — Swift/SwiftUI,
-Windows/Linux/macOS — Tauri v2, Android — Kotlin/Compose, позже.
+приняты 2026-07-03: iOS — Swift/SwiftUI, Windows/macOS — Tauri v2,
+Android — Kotlin/Compose, позже. 2026-08-21 к ним добавилось ещё одно: Linux —
+Electron, потому что системный WebKitGTK собран без WebRTC и звонков в
+Tauri-оболочке там не бывает (`clients/desktop-linux`).
 
 Контракт для всех не-JS клиентов — [../../protocol.md](../../protocol.md); web остаётся
 референс-реализацией.
 
-## desktop (Tauri v2)
+## desktop — Windows/macOS (Tauri v2)
 
-Отгружен: трей, глобальный хоткей PTT, автостарт, автообновление на Windows и
-macOS, свой пикер серверов с en/ru.
+Отгружен: трей, глобальный хоткей PTT, автостарт, автообновление, свой пикер
+серверов с en/ru.
 
 Осталось:
 
 - **подпись установщиков** — сейчас SmartScreen и Gatekeeper ругаются на первом
   запуске. Упирается в покупку сертификатов, не в код;
-- **AUR** — PKGBUILD'ы лежат в `clients/desktop/packaging/arch`, но не
-  опубликованы;
 - **звук демонстрации экрана на macOS** — WKWebView его не отдаёт, нужен путь
   через ScreenCaptureKit → WebRTC. На Windows решено нативно (WASAPI
-  process-loopback с исключением дерева процессов webview);
-- **звонки на Linux невозможны** — дистрибутивные сборки WebKitGTK собраны с
-  `-DENABLE_WEB_RTC=OFF`. Не чинится с нашей стороны; лечится только своим
-  Chromium-шеллом. Подробности — `clients/desktop/README.md`.
+  process-loopback с исключением дерева процессов webview).
+
+## desktop — Linux (Electron)
+
+Отгружен (2026-08-21): звонки, трей, автозапуск, автообновление AppImage, ключ
+личности в главном процессе, общий с Tauri-клиентом экран выбора сервера. Живой
+прогон — `clients/desktop-linux/testbench`: оболочка звонит браузеру на стенде.
+
+Осталось:
+
+- **глобальный PTT-хоткей** — на X11 сделать можно хоть завтра, на Wayland
+  упирается в портал GlobalShortcuts с открытыми багами (регрессия в Electron
+  40.x, `Registry.Register` при xdg-desktop-portal ≥ 1.20). Пока фича не
+  анонсируется вовсе: оболочка не шлёт `pttDefault`, и web-UI строку не рисует;
+- **системный звук демонстрации экрана** — портал отдаёт только видео,
+  loopback-захват Chromium есть лишь на Windows и macOS;
+- **AUR** — PKGBUILD лежит в `clients/desktop-linux/packaging/arch`, но не
+  опубликован;
+- **живая проверка на настоящей машине** — стенд в Docker доказывает звонок и
+  ключ, но не трей конкретного DE, не автозапуск после перелогина и не портал
+  демонстрации экрана на Wayland.
 
 ## iOS (Swift/SwiftUI)
 

@@ -1,4 +1,5 @@
 import { authMessage } from '@relay/shared';
+import { inShell } from './shell-bridge';
 import { SignerError, type Signer, getSigner } from './signer';
 
 /**
@@ -135,18 +136,17 @@ export function describeDevice(): string {
   // ищет «приложение на ноутбуке», и `Safari · macOS` (а в WKWebView и вовсе
   // `browser · macOS`) он там не узнает. Браузер на той же машине — отдельное
   // устройство с отдельным ключом, и различать их надо с одного взгляда.
-  const engine =
-    typeof window !== 'undefined' && window.__TAURI__
-      ? 'relay desktop'
-      : /Firefox/.test(ua)
-        ? 'Firefox'
-        : /Edg\//.test(ua)
-          ? 'Edge'
-          : /Chrome|Chromium/.test(ua)
-            ? 'Chrome'
-            : /Safari/.test(ua)
-              ? 'Safari'
-              : 'browser';
+  const engine = inShell()
+    ? 'relay desktop'
+    : /Firefox/.test(ua)
+      ? 'Firefox'
+      : /Edg\//.test(ua)
+        ? 'Edge'
+        : /Chrome|Chromium/.test(ua)
+          ? 'Chrome'
+          : /Safari/.test(ua)
+            ? 'Safari'
+            : 'browser';
   const os = /Windows/.test(ua)
     ? 'Windows'
     : /Mac OS X/.test(ua)

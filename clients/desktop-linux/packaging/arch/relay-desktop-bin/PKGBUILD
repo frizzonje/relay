@@ -1,0 +1,75 @@
+# Maintainer: relay contributors <https://github.com/frizzonje/relay>
+#
+# Binary package: repackages the official AppImage that CI publishes with every
+# desktop release (relay_<ver>_linux_x86_64.AppImage) into a native pacman
+# package. Nothing is compiled — install in seconds.
+#
+# Why the AppImage and not a .deb, as before: on Linux relay is an Electron
+# shell (clients/desktop-linux), not the Tauri one. The system WebKitGTK that
+# Tauri uses is built without WebRTC, so that client could never make a call —
+# see clients/desktop-linux/README.md.
+#
+# The AppImage carries its own Electron runtime, so the dependency list is the
+# usual Chromium one, not the WebKitGTK stack.
+#
+# `pkgver` and `sha256sums` are bumped per release by ../release.sh (it runs
+# `updpkgsums` to pin the real checksum; the committed template keeps SKIP
+# because the checksum only exists once the release is published).
+
+pkgname=relay-desktop-bin
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="relay desktop client — Electron shell over the relay web app (prebuilt)"
+arch=('x86_64')
+url="https://github.com/frizzonje/relay"
+license=('MIT')
+depends=('gtk3' 'nss' 'alsa-lib' 'libxss' 'libnotify' 'hicolor-icon-theme')
+optdepends=('libappindicator-gtk3: tray icon on desktops that need it'
+            'xdg-desktop-portal: screen sharing on Wayland'
+            'pipewire: screen sharing on Wayland')
+provides=('relay-desktop')
+conflicts=('relay-desktop')
+# Prebuilt Electron binaries: stripping or rebuilding debug info breaks them.
+options=('!strip' '!debug' '!emptydirs')
+source=("relay-${pkgver}.AppImage::${url}/releases/download/desktop-v${pkgver}/relay_${pkgver}_linux_x86_64.AppImage")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "${srcdir}"
+  chmod +x "relay-${pkgver}.AppImage"
+  # --appimage-extract unpacks without FUSE, so this works in a clean chroot.
+  "./relay-${pkgver}.AppImage" --appimage-extract >/dev/null
+  # Inside the AppImage the launcher points at AppRun; in the package the entry
+  # point is /usr/bin/relay-desktop.
+  sed -i 's|^Exec=.*|Exec=/usr/bin/relay-desktop %U|' squashfs-root/*.desktop
+}
+
+package() {
+  cd "${srcdir}"
+  install -d "${pkgdir}/opt/relay"
+  cp -a squashfs-root/. "${pkgdir}/opt/relay/"
+
+  # Chromium's setuid sandbox helper. Without the setuid bit the app refuses to
+  # start unless launched with --no-sandbox — and running a browser engine
+  # without its sandbox is exactly what we don't want on someone's machine.
+  if [ -f "${pkgdir}/opt/relay/chrome-sandbox" ]; then
+    chmod 4755 "${pkgdir}/opt/relay/chrome-sandbox"
+  fi
+
+  install -Dm755 /dev/stdin "${pkgdir}/usr/bin/relay-desktop" <<'LAUNCH'
+#!/bin/sh
+# The binary inside the AppImage payload is named after productName (relay).
+exec /opt/relay/relay "$@"
+LAUNCH
+
+  install -Dm644 squashfs-root/relay.desktop \
+    "${pkgdir}/usr/share/applications/relay.desktop"
+
+  # Icons ship inside the payload in the usual hicolor layout.
+  if [ -d squashfs-root/usr/share/icons ]; then
+    cp -a squashfs-root/usr/share/icons "${pkgdir}/usr/share/"
+  fi
+
+  install -Dm644 "${srcdir}/squashfs-root/LICENSE"* \
+    "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE" 2>/dev/null || true
+}

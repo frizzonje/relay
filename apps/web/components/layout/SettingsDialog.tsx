@@ -372,7 +372,10 @@ function globalKeyWarning(combo: string): string | null {
 function PttKeybindRow() {
   const t = useT();
   const shell = useDesktopStore((s) => s.shell);
-  if (!shell) return null;
+  // `pttDefault` — признак того, что оболочка вообще умеет глобальный хоткей.
+  // Linux-оболочка его не шлёт, и рекордер клавиш там не рисуется: строка,
+  // которая ничего не назначает, хуже отсутствующей строки.
+  if (!shell || shell.pttDefault === undefined) return null;
 
   const warning = shell.ptt ? globalKeyWarning(shell.ptt) : null;
   const note = shell.pttError
@@ -388,7 +391,7 @@ function PttKeybindRow() {
     <KeybindRow
       label={t('settings.hotkeys.ptt')}
       hint={t('settings.hotkeys.ptt.hint')}
-      combo={shell.ptt}
+      combo={shell.ptt ?? null}
       onCombo={setPttShortcut}
       onClear={() => setPttShortcut(null)}
       note={note}

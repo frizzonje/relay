@@ -39,7 +39,7 @@ Want to build from source or hack on it? See [Quick start](#quick-start-from-sou
 - **Closed perimeter** — single login password (HMAC cookie), one origin behind Caddy, automatic TLS via Let's Encrypt. What that does and does not cover: [Privacy and encryption](#privacy-and-encryption)
 - **Interface in English and Russian** — resolved server-side from the browser's `Accept-Language` on the first visit (so the first paint is already right), remembered in a cookie, switchable in Settings → Appearance. Adding a language is one JSON file — see [Localization](#localization)
 - **TURN profile** — coturn for calls behind strict NAT (mobile networks, CGNAT), including TURN over TLS on 5349
-- **Native clients** — desktop (Tauri) with tray, global push-to-talk hotkey and auto-updates on Windows and macOS (on Linux the shell is chat-only — see [Clients](#clients)); iOS in progress
+- **Native clients** — desktop with tray, autostart and auto-updates on all three systems (Tauri on Windows/macOS, Electron on Linux — see [Clients](#clients)); global push-to-talk hotkey on Windows and macOS; iOS in progress
 
 ## Call topology
 
@@ -82,14 +82,14 @@ The last line is the trade, and it was made on purpose rather than forgotten. En
 |---|---|---|---|
 | Web | [`apps/web`](apps/web) | Next.js 15 / React 19 | reference client — full feature set on every OS |
 | Windows / macOS | [`clients/desktop`](clients/desktop) | Tauri v2 (Rust + system webview) | shipping — MSI/NSIS, dmg; tray, global push-to-talk hotkey, auto-updates |
-| Linux | [`clients/desktop`](clients/desktop) | Tauri v2 (Rust + system webview) | AppImage/deb/rpm — **chat only, no calls** (see below) |
+| Linux | [`clients/desktop-linux`](clients/desktop-linux) | Electron (Chromium) | shipping — AppImage; calls, tray, autostart, auto-updates (no global hotkey yet) |
 | iOS | [`clients/ios`](clients/ios) | Swift / SwiftUI + WebRTC.xcframework | in progress — login, chat and audio calls over P2P mesh |
 | Android | — | Kotlin / Compose | not started |
 
-**Downloads:** [Releases](https://github.com/frizzonje/relay/releases) (tags `desktop-v*`; `nightly` is a pre-release built from `main`). Installers are not code-signed yet, so Windows SmartScreen and macOS Gatekeeper warn on first run. Arch Linux PKGBUILDs live in [`clients/desktop/packaging/arch`](clients/desktop/packaging/arch) but are not published to the AUR yet — build them from the repo.
+**Downloads:** [Releases](https://github.com/frizzonje/relay/releases) (tags `desktop-v*`; `nightly` is a pre-release built from `main`). Installers are not code-signed yet, so Windows SmartScreen and macOS Gatekeeper warn on first run. Arch Linux gets a PKGBUILD that repackages the AppImage — [`clients/desktop-linux/packaging/arch`](clients/desktop-linux/packaging/arch) — not published to the AUR yet, so build it from the repo.
 
-> [!IMPORTANT]
-> **The Linux desktop shell cannot make calls.** Distro builds of WebKitGTK ship with `-DENABLE_WEB_RTC=OFF`, so `RTCPeerConnection` does not exist in the webview and no change on our side can fix it. Chat, uploads and notifications work; for voice and video on Linux use the web client in Chromium or Firefox. Details and the evidence: [clients/desktop/README.md](clients/desktop/README.md).
+> [!NOTE]
+> **Why Linux has a different shell.** Tauri uses the system webview, and distro builds of WebKitGTK ship with `-DENABLE_WEB_RTC=OFF`: `RTCPeerConnection` does not exist there, so that client could never make a call (re-checked on 2026-08-21 against Debian 13 and Fedora 44, both WebKitGTK 2.52.5). The Linux client is therefore an Electron shell over the same web UI, with the same event bridge, the same identity key file and the same log. Details and the evidence: [clients/desktop-linux/README.md](clients/desktop-linux/README.md).
 
 Native clients implement one contract — [docs/protocol.md](docs/protocol.md) — and never import each other's code.
 
@@ -103,8 +103,9 @@ apps/
 packages/
   shared/     @relay/shared — shared contract: types, socket events, HMAC auth
 clients/
-  desktop/    Windows/Linux/macOS — Tauri v2
-  ios/        iOS — Swift/SwiftUI + WebRTC.xcframework
+  desktop/       Windows/macOS — Tauri v2
+  desktop-linux/ Linux — Electron (WebKitGTK has no WebRTC)
+  ios/           iOS — Swift/SwiftUI + WebRTC.xcframework
 infra/        Caddyfile, dev/e2e compose
 e2e/          Playwright tests
 docs/         architecture, frontend, backend, protocol, plans/

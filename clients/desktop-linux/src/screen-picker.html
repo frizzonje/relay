@@ -1,0 +1,136 @@
+<!doctype html>
+<!-- Выбор источника демонстрации экрана (только X11 — на Wayland это делает
+     системный портал). Токены и знак — те же, что у экрана выбора сервера в
+     clients/desktop/src/index.html; общей сборки у этих страниц нет, поэтому
+     при правке брендовых цветов править обе. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>relay</title>
+    <style>
+      :root {
+        --bg: #08090b;
+        --panel: #0d0f12;
+        --line: #1c2027;
+        --text: #e6e8ec;
+        --muted: #8b93a1;
+        --accent: #5b8cff;
+        font-family: 'IBM Plex Sans', system-ui, sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+      header {
+        padding: 18px 20px 10px;
+      }
+      h1 {
+        font-size: 15px;
+        margin: 0;
+        font-weight: 600;
+      }
+      p {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      #tabs {
+        display: flex;
+        gap: 6px;
+        padding: 12px 20px 0;
+      }
+      .tab {
+        background: none;
+        border: 1px solid var(--line);
+        color: var(--muted);
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .tab[aria-selected='true'] {
+        color: var(--text);
+        border-color: var(--accent);
+      }
+      #list {
+        flex: 1;
+        overflow-y: auto;
+        display: grid;
+        gap: 12px;
+        padding: 14px 20px;
+        grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+        align-content: start;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 8px;
+        cursor: pointer;
+        text-align: left;
+        color: inherit;
+        font: inherit;
+      }
+      .card:hover,
+      .card:focus-visible {
+        border-color: var(--accent);
+        outline: none;
+      }
+      .card img {
+        width: 100%;
+        aspect-ratio: 16 / 10;
+        object-fit: cover;
+        border-radius: 6px;
+        background: #000;
+      }
+      .card span {
+        display: block;
+        margin-top: 6px;
+        font-size: 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      footer {
+        padding: 12px 20px;
+        border-top: 1px solid var(--line);
+        display: flex;
+        justify-content: flex-end;
+      }
+      button.cancel {
+        background: none;
+        border: 1px solid var(--line);
+        color: var(--text);
+        padding: 8px 16px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 13px;
+      }
+      #empty {
+        color: var(--muted);
+        font-size: 13px;
+        padding: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1 id="title">Share your screen</h1>
+      <p id="hint">relay will show the selected source to everyone in the call.</p>
+    </header>
+    <div id="tabs">
+      <button class="tab" data-kind="screen" aria-selected="true" id="tab-screen">Screens</button>
+      <button class="tab" data-kind="window" aria-selected="false" id="tab-window">Windows</button>
+    </div>
+    <div id="list"></div>
+    <footer><button class="cancel" id="cancel">Cancel</button></footer>
+    <script src="./screen-picker.js"></script>
+  </body>
+</html>

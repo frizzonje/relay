@@ -1,10 +1,14 @@
 import { isPublicKey, isSignature } from '@relay/shared';
 import { SignerError, type Signer } from './signer';
+import { shellBridge, type ShellBridge } from './shell-bridge';
+
+export type { ShellBridge };
 
 /**
  * Подписыватель десктоп-оболочки: ключа здесь нет, есть право попросить.
  *
- * Пара живёт в Rust (clients/desktop/src-tauri/src/identity.rs) — в webview ей
+ * Пара живёт в оболочке (Rust — clients/desktop/src-tauri/src/identity.rs,
+ * Node — clients/desktop-linux/src/identity.js) — в webview ей
  * нельзя: `put` записи с `CryptoKey` вешает процесс хранилища WKWebView
  * намертво, а сырые байты в IndexedDB достаёт любой скрипт страницы. Отсюда
  * форма: страница знает свой публичный ключ и умеет получать подписи, но не
@@ -36,17 +40,6 @@ interface Reply {
   publicKey?: string;
   signature?: string;
   error?: { kind?: string; detail?: string };
-}
-
-/** События Tauri в том объёме, в каком они нужны здесь (см. lib/desktop.ts). */
-export interface ShellBridge {
-  listen<T>(event: string, handler: (e: { payload: T }) => void): Promise<() => void>;
-  emit(event: string, payload?: unknown): Promise<void>;
-}
-
-export function tauriBridge(): ShellBridge | null {
-  if (typeof window === 'undefined') return null;
-  return (window.__TAURI__?.event as ShellBridge | undefined) ?? null;
 }
 
 /**
@@ -134,7 +127,7 @@ function linkTo(bridge: ShellBridge): ShellLink {
  * без неё нечего показывать серверу, и лучше узнать о немой оболочке здесь,
  * чем на середине входа.
  */
-export async function shellSigner(bridge: ShellBridge | null = tauriBridge()): Promise<Signer> {
+export async function shellSigner(bridge: ShellBridge | null = shellBridge()): Promise<Signer> {
   if (!bridge) throw new SignerError('shell', 'моста с оболочкой нет');
 
   const shell = linkTo(bridge);

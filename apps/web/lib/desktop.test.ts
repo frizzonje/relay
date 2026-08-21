@@ -4,10 +4,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /**
  * Мост web ↔ десктоп-оболочка (lib/desktop.ts). Контракт держится на строковых
- * именах событий и форме payload'ов — TypeScript через границу Tauri их не
- * проверяет, а опечатка означает молча неработающую фичу (Rust просто никогда
- * не получит событие). Поэтому имена и payload'ы фиксируем тестом; парная
- * сторона — `handle.listen(...)` в clients/desktop/src-tauri/src/main.rs.
+ * именах событий и форме payload'ов — TypeScript через границу оболочки их не
+ * проверяет, а опечатка означает молча неработающую фичу (оболочка просто
+ * никогда не получит событие). Поэтому имена и payload'ы фиксируем тестом;
+ * парные стороны — `handle.listen(...)` в clients/desktop/src-tauri/src/main.rs
+ * (Tauri, Windows/macOS) и `handle(...)` в clients/desktop-linux/src/main.js
+ * (Electron, Linux).
  *
  * Голоса и сторов тут нет: проверяем ровно мост, остальное замокано.
  */
@@ -122,8 +124,57 @@ describe('оболочка отказала в подписке на событ�
     const fresh = await import('@/lib/desktop');
     await expect(fresh.initDesktopBridge()).resolves.toBeUndefined();
 
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining('remote.json'), denied);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('мост не поднялся'), denied);
     expect(emit).not.toHaveBeenCalled(); // без подписок ничего не шлём
     spy.mockRestore();
+  });
+});
+
+/**
+ * Вторая оболочка. На Linux мост живёт не в `window.__TAURI__`, а в
+ * `window.__RELAY_SHELL__` (движок там Electron — WebKitGTK не умеет WebRTC),
+ * и весь смысл lib/shell-bridge.ts в том, что остальной код разницы не видит.
+ * Проверяем именно это: те же имена событий ходят через другой транспорт.
+ */
+describe('оболочка на Electron (Linux)', () => {
+  it('мост поднимается и шлёт те же события', async () => {
+    vi.resetModules(); // сбросить одноразовый `initialized` внутри модуля
+    window.__TAURI__ = undefined;
+    const shellEmit = vi.fn(() => Promise.resolve());
+    const shellListeners: Record<string, Handler> = {};
+    window.__RELAY_SHELL__ = {
+      kind: 'electron',
+      listen: (event: string, handler: Handler) => {
+        shellListeners[event] = handler;
+        return Promise.resolve(() => {});
+      },
+      emit: shellEmit,
+    } as unknown as typeof window.__RELAY_SHELL__;
+
+    // resetModules даёт мосту СВОЙ экземпляр стора — спрашивать надо его же,
+    // иначе проверка читает стор из прошлых кейсов файла.
+    const fresh = await import('@/lib/desktop');
+    const { useDesktopStore: freshStore } = await import('@/stores/desktop');
+    await fresh.initDesktopBridge();
+
+    expect(freshStore.getState().isDesktop).toBe(true);
+    expect(shellEmit).toHaveBeenCalledWith('desktop-settings-get');
+    expect(Object.keys(shellListeners).sort()).toEqual([
+      'desktop-settings',
+      'ptt',
+      'update-status',
+    ]);
+
+    // Ответ оболочки без полей хоткея — «фичи нет», а не «хоткей выключен».
+    shellListeners['desktop-settings']({
+      payload: { autostart: false, autostartError: null, version: '1.0.0' },
+    });
+    expect(freshStore.getState().shell).toEqual({
+      autostart: false,
+      autostartError: null,
+      version: '1.0.0',
+    });
+
+    window.__RELAY_SHELL__ = undefined;
   });
 });

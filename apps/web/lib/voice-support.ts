@@ -1,4 +1,5 @@
 import { tx } from '@/lib/i18n';
+import { inShell } from '@/lib/shell-bridge';
 
 /**
  * Умеет ли движок вообще звонить — проверка ДО входа в голосовой канал.
@@ -38,8 +39,7 @@ function hasPeerConnection(): boolean {
  * «обновите браузер» бесполезен, нужен другой клиент.
  */
 function noWebrtcMessage(): string {
-  const isDesktopShell =
-    typeof window !== 'undefined' && Boolean((window as { __TAURI__?: unknown }).__TAURI__);
+  const isDesktopShell = inShell();
   const isLinux = typeof navigator !== 'undefined' && /linux/i.test(navigator.userAgent ?? '');
 
   if (isDesktopShell && isLinux) {

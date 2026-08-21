@@ -1,5 +1,13 @@
-# Сборка десктоп-клиента (clients/desktop, Tauri v2). Отдельно от основного CI:
-# у нативного клиента свой тулчейн (Rust), pnpm/turbo его не трогают.
+# Сборка десктоп-клиентов. Отдельно от основного CI: у нативных клиентов свой
+# тулчейн (Rust, Electron), pnpm/turbo их не трогают.
+#
+# Клиентов два, и это следствие движков, а не вкусов:
+#   • Windows и macOS — clients/desktop, Tauri v2 + системный webview;
+#   • Linux — clients/desktop-linux, Electron: системный WebKitGTK собран без
+#     WebRTC (`-DENABLE_WEB_RTC=OFF` в upstream), и звонков в нём нет вовсе.
+# Оба клиента едут в ОДИН релиз `desktop-v*`, и Linux-сборка дописывает себя в
+# `latest.json` — иначе установленные Tauri-клиенты на Linux остались бы без
+# дороги на новую оболочку.
 #
 # Триггеры:
 #   • push в main         → «катящийся» пре-релиз `nightly` (перезаписывается
@@ -78,25 +86,10 @@ jobs:
         include:
           - { os: macos-latest, args: "--target aarch64-apple-darwin" }
           - { os: macos-latest, args: "--target x86_64-apple-darwin" }
-          - { os: ubuntu-22.04, args: "" }
           - { os: windows-latest, args: "" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Linux system deps (WebKitGTK, appindicator, GStreamer)
-        if: matrix.os == 'ubuntu-22.04'
-        # GStreamer runtime plugins are needed on the builder because the
-        # AppImage bundles the media framework (bundleMediaFramework in
-        # tauri.conf.json) — without them WebKit inside the AppImage has no
-        # autoaudiosink/pulsesrc and voice calls are silent (seen on Arch).
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
-            libayatana-appindicator3-dev librsvg2-dev build-essential \
-            gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-            gstreamer1.0-plugins-bad gstreamer1.0-pulseaudio \
-            gstreamer1.0-pipewire gstreamer1.0-alsa gstreamer1.0-gl
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -129,6 +122,131 @@ jobs:
           prerelease: ${{ needs.setup.outputs.prerelease }}
           args: ${{ matrix.args }}
 
+
+  # Linux-клиент: Electron-оболочка (clients/desktop-linux) → AppImage.
+  #
+  # Идёт ПОСЛЕ матрицы, а не рядом с ней: последним шагом джоба дописывает
+  # платформу `linux-x86_64` в `latest.json`, который заливает tauri-action, —
+  # значит файл к этому моменту уже должен быть в релизе. Дописывать
+  # обязательно: у людей стоит старый Tauri-клиент, его апдейтер смотрит именно
+  # в `latest.json`, и без этой строки они навсегда остались бы на оболочке,
+  # которая не умеет звонить.
+  linux:
+    name: linux AppImage (Electron)
+    needs: [setup, build]
+    runs-on: ubuntu-22.04
+    env:
+      TAG: ${{ needs.setup.outputs.tag }}
+      # Ключ подписи держим в env джобы, а не только в шаге: контекст `secrets`
+      # в `if` шага не разрешён, а `env` — да, и без этого шаг подписи упал бы
+      # на разборе условия у любого, кто форкнул репозиторий без секретов.
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: clients/desktop-linux/package-lock.json
+      - name: Build the AppImage
+        working-directory: clients/desktop-linux
+        # Без `--publish never` намеренно: с ним electron-builder не пишет
+        # `latest-linux.yml`, а это и есть канал обновлений. Ничего при этом не
+        # публикуется — провайдер `generic` заливать не умеет, релиз собираем
+        # сами шагом ниже.
+        # Юнит-тесты идут ДО сборки: в них лежит формат ключа личности и записи
+        # автозапуска — то, что общее с Tauri-клиентом и ломается молча.
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+          npx electron-builder --linux AppImage
+
+      - name: Sign it with the updater key
+        # Тот же ключ, что подписывает Tauri-обновления: строку в latest.json
+        # старый клиент проверит именно им. Нет секрета — нет и подписи; тогда
+        # AppImage всё равно уйдёт в релиз, но переезда старых клиентов не будет.
+        if: env.TAURI_SIGNING_PRIVATE_KEY != ''
+        working-directory: clients/desktop-linux
+        run: |
+          set -euo pipefail
+          printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > /tmp/updater.key
+          appimage=$(ls dist/*.AppImage)
+          npx --yes @tauri-apps/cli@2 signer sign \
+            -f /tmp/updater.key -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" "$appimage"
+          rm -f /tmp/updater.key
+
+      - name: Upload to the release and point the updater at it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: clients/desktop-linux
+        run: |
+          set -euo pipefail
+          appimage=$(ls dist/*.AppImage)
+          name=$(basename "$appimage")
+          # latest-linux.yml — канал обновлений уже самой Electron-оболочки
+          # (electron-updater, provider generic на releases/latest/download/).
+          gh release upload "$TAG" "$appimage" dist/latest-linux*.yml \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+          # …а latest.json — канал СТАРЫХ клиентов на Tauri. Дописываем в него
+          # linux-платформу, чтобы они переехали сюда одним обновлением.
+          if [ ! -f "$appimage.sig" ]; then
+            echo "::warning::нет подписи — latest.json не трогаем, старые Linux-клиенты не переедут"
+            exit 0
+          fi
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" -p latest.json -D /tmp || {
+            echo "::warning::latest.json в релизе нет — обновлять нечего"; exit 0; }
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$name"
+          jq --arg url "$url" --arg sig "$(cat "$appimage.sig")" \
+            '.platforms["linux-x86_64"] = { signature: $sig, url: $url }' \
+            /tmp/latest.json > /tmp/latest.patched.json
+          mv /tmp/latest.patched.json /tmp/latest.json
+          gh release upload "$TAG" /tmp/latest.json --repo "$GITHUB_REPOSITORY" --clobber
+
+  # Живой прогон Linux-оболочки: она звонит браузеру на поднятом стенде. Это
+  # единственная проверка, которая доказывает главное — что клиент под Linux
+  # вообще умеет голос (на Tauri-оболочке не умел никогда).
+  linux-call:
+    name: linux shell call (e2e)
+    runs-on: ubuntu-latest
+    env:
+      SITE_PASSWORD: testpass123
+      POSTGRES_PASSWORD: testpass123
+    steps:
+      - uses: actions/checkout@v4
+      - name: Up prod stack (e2e overlay)
+        run: docker compose -f docker-compose.yml -f infra/docker-compose.e2e.yml up -d --build
+      - name: Wait for Caddy to serve the site over TLS
+        run: |
+          for i in $(seq 60); do
+            if docker exec relay-caddy-1 wget -q --no-check-certificate -O /dev/null https://relay.test/api/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Caddy never started serving https://relay.test"; docker logs relay-caddy-1; exit 1
+      - name: Bench image (Playwright + Electron)
+        run: docker build -f clients/desktop-linux/testbench/Dockerfile -t relay-linux-bench clients/desktop-linux
+      - name: Call from the shell to a browser
+        run: |
+          CADDY_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' relay-caddy-1)
+          docker run --rm --network relay_default --add-host "relay.test:$CADDY_IP" --ipc=host \
+            -v "$PWD":/work -w /work/e2e \
+            -e BASE_URL=https://relay.test -e SITE_PASSWORD -e CI=1 \
+            -e RELAY_LINUX_SHELL=/shell/desktop-linux \
+            relay-linux-bench \
+            sh -c '
+              set -e
+              # Electron не смотрит в NODE_PATH — кладём оболочку рядом с её
+              # зависимостями (и вместе с соседним clients/desktop, откуда
+              # берётся общий экран выбора сервера).
+              cp -a /work/clients /shell
+              ln -sfn /bench/node_modules /shell/desktop-linux/node_modules
+              npm install --no-save @playwright/test@1.55.0
+              xvfb-run -a npx playwright test tests/linux-shell.spec.ts
+            '
+
   # Юнит-тесты Rust-ядра. Отдельной джобой, а не шагом матрицы: релиз они
   # задерживать не должны, а их отсутствие обходилось дороже — в
   # `identity.rs` лежат проверки хранения ключа (секрет переживает круг,
@@ -151,9 +269,9 @@ jobs:
           workspaces: clients/desktop/src-tauri
       - run: cargo test --manifest-path clients/desktop/src-tauri/Cargo.toml
 
-  # Arch has no .deb/.rpm; the client ships as AUR PKGBUILDs
-  # (clients/desktop/packaging/arch). This job keeps those recipes honest —
-  # it lints them with namcap and proves each parses into a valid .SRCINFO.
+  # Arch gets the Linux client the idiomatic way — an AUR PKGBUILD that
+  # repackages the released AppImage (clients/desktop-linux/packaging/arch). This job
+  # keeps that recipe honest: namcap plus a valid .SRCINFO.
   # Independent of the release matrix: a broken PKGBUILD shouldn't wait for a tag.
   arch:
     name: arch package (lint)
@@ -168,9 +286,9 @@ jobs:
           set -euo pipefail
           # makepkg/namcap refuse to run as root — do the work as an unprivileged user.
           useradd -m builder
-          cp -a clients/desktop/packaging/arch /tmp/arch
+          cp -a clients/desktop-linux/packaging/arch /tmp/arch
           chown -R builder /tmp/arch
-          for d in relay-desktop-bin relay-desktop; do
+          for d in relay-desktop-bin; do
             echo "::group::$d"
             runuser -u builder -- bash -c "cd /tmp/arch/$d && makepkg --printsrcinfo >/dev/null && namcap PKGBUILD"
             echo "::endgroup::"

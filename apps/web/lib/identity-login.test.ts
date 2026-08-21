@@ -188,7 +188,18 @@ describe('имя устройства', () => {
       userAgent:
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)',
     });
-    vi.stubGlobal('window', { __TAURI__: {} });
+    vi.stubGlobal('window', { __TAURI__: { event: {} } });
     expect(describeDevice()).toBe('relay desktop · macOS');
+  });
+
+  it('Linux-оболочка (Electron) — тоже relay desktop, а не Chrome', () => {
+    // Иначе клиент на Linux оказался бы в списке устройств «Chrome · Linux» —
+    // неотличимо от браузера на той же машине, у которого свой ключ.
+    vi.stubGlobal('navigator', {
+      userAgent:
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Electron/43.4.1 Safari/537.36',
+    });
+    vi.stubGlobal('window', { __RELAY_SHELL__: { listen: () => {}, emit: () => {} } });
+    expect(describeDevice()).toBe('relay desktop · Linux');
   });
 });

@@ -62,6 +62,18 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.browser } },
   },
 
+  // Linux-оболочка (Electron): главный процесс и preload — CommonJS в Node,
+  // страница выбора источника демонстрации — обычный браузерный скрипт.
+  {
+    files: ['clients/desktop-linux/src/**/*.js', 'clients/desktop-linux/test/**/*.js'],
+    languageOptions: { globals: { ...globals.node }, sourceType: 'commonjs' },
+    rules: { '@typescript-eslint/no-require-imports': 'off' },
+  },
+  {
+    files: ['clients/desktop-linux/src/screen-picker.js'],
+    languageOptions: { globals: { ...globals.browser }, sourceType: 'script' },
+  },
+
   // AudioWorklet демо-звука: исполняется в отдельном worklet-скоупе, где нет ни
   // window, ни модульной сборки, зато есть свои глобалы (globals.browser их не
   // знает) — без этого файл падает на no-undef.

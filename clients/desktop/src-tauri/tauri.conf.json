@@ -29,17 +29,6 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
-    "linux": {
-      "appimage": {
-        "bundleMediaFramework": true
-      },
-      "deb": {
-        "depends": ["gstreamer1.0-plugins-good", "gstreamer1.0-pipewire | gstreamer1.0-pulseaudio"]
-      },
-      "rpm": {
-        "depends": ["gstreamer1-plugins-good"]
-      }
-    },
     "macOS": {
       "entitlements": "entitlements.plist"
     },

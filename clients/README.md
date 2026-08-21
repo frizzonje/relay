@@ -7,10 +7,10 @@
 | Платформа | Каталог | Стек | Статус |
 |---|---|---|---|
 | Web | [`apps/web`](../apps/web) | Next.js 15 / React 19 | ✅ работает (референс-клиент) |
-| Windows / Linux | [`desktop/`](desktop/) | Tauri v2 (Rust + системный webview) | ✅ собирается: macOS arm64 (.app/.dmg) + Linux arm64 (.deb) проверены; Windows/Linux-x86_64 — из CI |
+| Windows / macOS | [`desktop/`](desktop/) | Tauri v2 (Rust + системный webview) | ✅ отгружен: MSI/NSIS, dmg |
+| Linux | [`desktop-linux/`](desktop-linux/) | Electron (Chromium) | ✅ отгружен: AppImage. Своя оболочка потому, что системный WebKitGTK собран без WebRTC — звонков в Tauri-сборке на Linux не бывает |
 | iOS | [`ios/`](ios/) | Swift / SwiftUI + WebRTC.xcframework | план в README |
 | Android | `android/` (позже) | Kotlin / Compose + webrtc-android | не начат |
-| macOS | — | покрывается Tauri-сборкой desktop | бонус |
 
 ## Принципы
 
@@ -19,5 +19,9 @@
   `packages/shared` **и** `docs/protocol.md` в одном коммите.
 - **Web — референс.** Поведение спорных мест сверяется с `apps/web`
   (`lib/voice.ts` — эталон сигналинга и perfect negotiation).
+- **Оболочки говорят одними событиями.** У десктопа две оболочки (Tauri и
+  Electron), но мост с web-UI один: имена событий и payload'ы общие, и web
+  находит его через `apps/web/lib/shell-bridge.ts`. Добавил событие — добавь в
+  оба списка (`capabilities/remote.json` и `desktop-linux/src/events.js`).
 - **Дизайн** — единый: токены цветов, типографика (IBM Plex), раскладки экранов
   сверяются с `apps/web` как эталонной реализацией.

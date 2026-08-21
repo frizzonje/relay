@@ -1,7 +1,9 @@
-// Мост между web-UI и десктоп-оболочкой (Tauri v2, clients/desktop). В обычном
-// браузере — полный no-op: всё гейтится наличием window.__TAURI__ (появляется
-// только внутри оболочки, включён `withGlobalTauri` в tauri.conf.json). Оболочка
-// не форкает фронт — связь только через события Tauri:
+// Мост между web-UI и десктоп-оболочкой. В обычном браузере — полный no-op:
+// всё гейтится наличием моста (см. lib/shell-bridge.ts). Оболочек две и они
+// говорят одними и теми же событиями: Tauri v2 на Windows/macOS
+// (clients/desktop) и Electron на Linux (clients/desktop-linux, там системный
+// WebKitGTK не умеет WebRTC). Оболочка не форкает фронт — связь только через
+// события:
 //
 //   • Rust → сюда: `ptt` (bool) от глобального хоткея → микрофон (desktopPtt),
 //     `desktop-settings` → текущие настройки оболочки (хоткей, автозапуск);
@@ -20,9 +22,7 @@ import { useDesktopStore, type ShellSettings, type UpdateStatus } from '@/stores
 import { useUiStore } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import { tx } from '@/lib/i18n';
-
-type TauriEvent<T> = { payload: T };
-type UnlistenFn = () => void;
+import { inShell, shellBridge } from '@/lib/shell-bridge';
 
 /** Сырой статус обновления от Rust (событие `update-status`). */
 interface UpdateStatusPayload {
@@ -47,31 +47,18 @@ function toUpdateStatus(p: UpdateStatusPayload): UpdateStatus {
   }
 }
 
-interface TauriGlobal {
-  event: {
-    listen: <T>(event: string, handler: (e: TauriEvent<T>) => void) => Promise<UnlistenFn>;
-    emit: (event: string, payload?: unknown) => Promise<void>;
-  };
-}
-
-declare global {
-  interface Window {
-    __TAURI__?: TauriGlobal;
-  }
-}
-
 let initialized = false;
 
 /**
- * Отправить событие оболочке, не проглотив отказ. Права удалённого origin
- * выдаёт capabilities/remote.json; если origin под них не подошёл, Tauri
- * отклоняет вызов — а `void emit(...)` делал это молча, и снаружи выглядело
- * так, будто оболочка просто ничего не умеет: нативные настройки не
- * появляются, ошибки нет. Теперь причина видна в консоли.
+ * Отправить событие оболочке, не проглотив отказ. Оболочка вправе отказать:
+ * у Tauri origin может не подойти под capabilities/remote.json, у Electron
+ * события нет в списке моста (clients/desktop-linux/src/events.js). `void
+ * emit(...)` делал это молча, и снаружи выглядело так, будто оболочка просто
+ * ничего не умеет: нативные настройки не появляются, ошибки нет. Теперь
+ * причина видна в консоли.
  */
 function send(event: string, payload?: unknown) {
-  if (typeof window === 'undefined') return;
-  const ev = window.__TAURI__?.event;
+  const ev = shellBridge();
   if (!ev) return;
   // Без payload'а зовём emit одним аргументом: у события-запроса (например
   // `desktop-settings-get`) payload'а нет вовсе, и подсовывать undefined незачем.
@@ -124,23 +111,23 @@ const INSTALL_WATCHDOG_MS = 240_000;
  */
 export async function initDesktopBridge() {
   if (initialized || typeof window === 'undefined') return;
-  const tauri = window.__TAURI__;
-  if (!tauri) return; // обычный браузер — нативных фич нет
+  const bridge = shellBridge();
+  if (!bridge) return; // обычный браузер — нативных фич нет
   initialized = true;
 
   // Мы внутри оболочки — настройки покажут блок обновлений.
   useDesktopStore.getState().setDesktop(true);
 
-  // Подписки требуют права `core:event` у ЭТОГО origin. Нет права — listen
-  // отклоняется, и без catch первый же `await` тихо ронял всю инициализацию:
-  // мост выглядел живым (isDesktop=true), но событий не было ни в одну сторону.
+  // Подписка может быть отклонена (у Tauri — нет `core:event` у ЭТОГО origin),
+  // и без catch первый же `await` тихо ронял всю инициализацию: мост выглядел
+  // живым (isDesktop=true), но событий не было ни в одну сторону.
   try {
     // Rust эмитит `ptt` при нажатии/отпускании глобального хоткея.
-    await tauri.event.listen<boolean>('ptt', (e) => desktopPtt(e.payload === true));
+    await bridge.listen<boolean>('ptt', (e) => desktopPtt(e.payload === true));
 
     // Настройки оболочки. Ответ на них — заодно признак того, что оболочка вообще
     // умеет в настройки: клиенты до 0.4.0 промолчат, и UI их не покажет.
-    await tauri.event.listen<ShellSettings>('desktop-settings', (e) => {
+    await bridge.listen<ShellSettings>('desktop-settings', (e) => {
       useDesktopStore.getState().setShell(e.payload);
     });
 
@@ -149,7 +136,7 @@ export async function initDesktopBridge() {
     // продлевает его на время загрузки. `check-updates` фоновые (авто/трей) сюда
     // `checking` больше НЕ шлют — «Проверяю…» ставит только кнопка (checkForUpdates),
     // иначе запоздавший фоновый `checking` мог перекрыть уже показанный результат.
-    await tauri.event.listen<UpdateStatusPayload>('update-status', (e) => {
+    await bridge.listen<UpdateStatusPayload>('update-status', (e) => {
       const status = toUpdateStatus(e.payload);
       useDesktopStore.getState().setUpdate(status);
       if (status.kind === 'installing') armWatchdog(INSTALL_WATCHDOG_MS);
@@ -158,7 +145,9 @@ export async function initDesktopBridge() {
   } catch (err) {
     console.error(
       '[desktop] мост не поднялся: оболочка отклонила подписку на события. ' +
-        'Обычно это origin вне capabilities/remote.json (например, нестандартный порт).',
+        'У Tauri (Windows/macOS) это обычно origin вне capabilities/remote.json ' +
+        '(например, нестандартный порт); у Electron (Linux) — событие вне списка ' +
+        'моста (clients/desktop-linux/src/events.js).',
       err,
     );
     return;
@@ -231,7 +220,7 @@ export function switchServer() {
  * так покажет статус, системная подсказка не нужна.
  */
 export function checkForUpdates() {
-  if (typeof window === 'undefined' || !window.__TAURI__) return;
+  if (!inShell()) return;
   useDesktopStore.getState().setUpdate({ kind: 'checking' });
   armWatchdog(CHECK_WATCHDOG_MS); // не залипнуть на «Проверяю…», если ответ потеряется
   send('check-updates', { notify: false });
@@ -242,7 +231,7 @@ export function checkForUpdates() {
  * и перезапустить»). Явное действие пользователя — только так Rust ставит апдейт.
  */
 export function installUpdate() {
-  if (typeof window === 'undefined' || !window.__TAURI__) return;
+  if (!inShell()) return;
   // Оптимистично переводим в «Устанавливаю…»: прячем кнопку (нет двойного клика)
   // и взводим сторож сразу — Rust сначала перепроверит релиз (до ~120с) и лишь
   // потом пришлёт свой `installing`. Версию берём из уже найденного апдейта.

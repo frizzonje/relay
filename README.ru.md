@@ -39,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/frizzonje/relay/main/install.sh | b
 - **Закрытый контур** — единый пароль входа (HMAC-кука), один origin за Caddy, автоматический TLS через Let's Encrypt. Что он покрывает, а что нет: [Приватность и шифрование](#приватность-и-шифрование)
 - **Интерфейс на английском и русском** — язык определяется на сервере по `Accept-Language` при первом заходе (первый кадр сразу на нужном языке), запоминается в куке, меняется в «Настройки → Внешний вид». Новый язык — это один JSON-файл, см. [Локализацию](#локализация)
 - **TURN-профиль** — coturn для звонков через строгие NAT (мобильные сети, CGNAT), в том числе TURN over TLS на 5349
-- **Нативные клиенты** — десктоп (Tauri) с треем, глобальным хоткеем push-to-talk и автообновлением на Windows и macOS (на Linux оболочка умеет только чат — см. [Клиенты](#клиенты)); iOS в работе
+- **Нативные клиенты** — десктоп с треем, автозапуском и автообновлением на всех трёх системах (Tauri на Windows/macOS, Electron на Linux — см. [Клиенты](#клиенты)); глобальный хоткей push-to-talk на Windows и macOS; iOS в работе
 
 ## Топология звонка
 
@@ -82,14 +82,14 @@ curl -fsSL https://raw.githubusercontent.com/frizzonje/relay/main/install.sh | b
 |---|---|---|---|
 | Web | [`apps/web`](apps/web) | Next.js 15 / React 19 | референс-клиент — полный набор возможностей на любой ОС |
 | Windows / macOS | [`clients/desktop`](clients/desktop) | Tauri v2 (Rust + системный webview) | выпускается — MSI/NSIS, dmg; трей, глобальный хоткей push-to-talk, автообновление |
-| Linux | [`clients/desktop`](clients/desktop) | Tauri v2 (Rust + системный webview) | AppImage/deb/rpm — **только чат, без звонков** (см. ниже) |
+| Linux | [`clients/desktop-linux`](clients/desktop-linux) | Electron (Chromium) | отгружен — AppImage; звонки, трей, автозапуск, автообновление (глобального хоткея пока нет) |
 | iOS | [`clients/ios`](clients/ios) | Swift / SwiftUI + WebRTC.xcframework | в работе — логин, чат и аудиозвонки по p2p-mesh |
 | Android | — | Kotlin / Compose | не начат |
 
-**Скачать:** [Releases](https://github.com/frizzonje/relay/releases) (теги `desktop-v*`; `nightly` — пре-релиз с `main`). Установщики пока не подписаны, поэтому Windows SmartScreen и macOS Gatekeeper ругаются при первом запуске. PKGBUILD-ы для Arch лежат в [`clients/desktop/packaging/arch`](clients/desktop/packaging/arch), но в AUR ещё не опубликованы — собирайте из репозитория.
+**Скачать:** [Releases](https://github.com/frizzonje/relay/releases) (теги `desktop-v*`; `nightly` — пре-релиз с `main`). Установщики пока не подписаны, поэтому Windows SmartScreen и macOS Gatekeeper ругаются при первом запуске. PKGBUILD-ы для Arch лежат в [`clients/desktop-linux/packaging/arch`](clients/desktop-linux/packaging/arch), но в AUR ещё не опубликованы — собирайте из репозитория.
 
 > [!IMPORTANT]
-> **Десктоп-оболочка на Linux не умеет звонить.** Дистрибутивные сборки WebKitGTK идут с `-DENABLE_WEB_RTC=OFF`, поэтому `RTCPeerConnection` в webview просто нет, и правками нашего кода это не лечится. Чат, вложения и уведомления работают; для голоса и видео на Linux используйте web-клиент в Chromium или Firefox. Подробности и доказательства — [clients/desktop/README.md](clients/desktop/README.md).
+> **Почему на Linux другая оболочка.** Tauri берёт системный webview, а дистрибутивные сборки WebKitGTK идут с `-DENABLE_WEB_RTC=OFF`: `RTCPeerConnection` там просто нет, и звонить такой клиент не мог никогда (перепроверено 21.08.2026 на Debian 13 и Fedora 44, обе с WebKitGTK 2.52.5). Поэтому Linux-клиент — Electron поверх того же web-UI: тот же мост событий, тот же файл ключа личности, тот же лог. Подробности и доказательства — [clients/desktop-linux/README.md](clients/desktop-linux/README.md).
 
 Нативные клиенты реализуют один контракт — [docs/protocol.md](docs/protocol.md) — и не импортируют код друг друга.
 
@@ -103,7 +103,8 @@ apps/
 packages/
   shared/     @relay/shared — общий контракт: типы, socket-события, HMAC-auth
 clients/
-  desktop/    Windows/Linux/macOS — Tauri v2
+  desktop/       Windows/macOS — Tauri v2
+  desktop-linux/ Linux — Electron (в WebKitGTK нет WebRTC)
   ios/        iOS — Swift/SwiftUI + WebRTC.xcframework
 infra/        Caddyfile, dev/e2e compose
 e2e/          Playwright-тесты

@@ -1,4 +1,5 @@
 import { SIGN_ALGORITHM, toBase64Url } from '@relay/shared';
+import { inShell } from './shell-bridge';
 
 /**
  * Подписыватель — то, чем устройство доказывает, что оно это оно.
@@ -205,11 +206,6 @@ export async function webSigner(store: KeyStore = indexedDbStore()): Promise<Sig
       }
     },
   };
-}
-
-/** Мы внутри десктоп-оболочки? Там веб-путь к ключу запрещён. */
-function inShell(): boolean {
-  return typeof window !== 'undefined' && !!window.__TAURI__;
 }
 
 /**
