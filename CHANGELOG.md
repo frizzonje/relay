@@ -5,7 +5,7 @@ it: every entry says what changes on your machine and for the people using it.
 Releases before 1.0.0 are on the [releases page](https://github.com/frizzonje/relay/releases) —
 reconstructing notes for them after the fact would be invention, not history.
 
-## 1.0.0 — unreleased
+## 1.0.0 — 2026-08-21
 
 Two things carry this release, and everything else in it exists because those
 two unlocked it: **the conversation stops evaporating**, and **a person is a
@@ -120,6 +120,15 @@ enough; give it 2 GB of swap.
 - Switching a channel to the transport a client is already on no longer rebuilds
   its connections, which used to cost seconds of silence to the one person the
   switch was meant to help.
+
+### The desktop client
+
+Released alongside, from this same repository, as
+[`desktop-v1.0.0`](https://github.com/frizzonje/relay/releases/tag/desktop-v1.0.0):
+one version number now covers the app, the images and the packages. Its own
+notes are on that page — the short version is that on the desktop your key is
+created and kept outside the browser engine, in the system's own store, because
+the browser path for it does not work there.
 
 ### Not in this release
 
