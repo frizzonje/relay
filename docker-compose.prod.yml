@@ -127,6 +127,10 @@ services:
       - TURN_URLS=${TURN_URLS:-}
       - TURN_USERNAME=${TURN_USERNAME:-webrtc}
       - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
+      # Секрет временных учёток TURN: api подписывает им выдачу, coturn
+      # проверяет подпись. Одна переменная на обе стороны — иначе они
+      # разъедутся, и разъедутся молча (см. apps/api/src/turn.ts).
+      - TURN_SECRET=${TURN_SECRET:-}
       # Media server: enabled by SFU_SECRET alone (same key as the sfu service).
       # Empty => api mints no passes and the SFU mode stays disabled in the UI.
       - SFU_URL=${SFU_URL:-/}
@@ -246,6 +250,10 @@ services:
       - SERVER_HOST=${SERVER_HOST:-localhost}
       - TURN_USERNAME=${TURN_USERNAME:-webrtc}
       - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
+      # Секрет временных учёток TURN: api подписывает им выдачу, coturn
+      # проверяет подпись. Одна переменная на обе стороны — иначе они
+      # разъедутся, и разъедутся молча (см. apps/api/src/turn.ts).
+      - TURN_SECRET=${TURN_SECRET:-}
       - TURN_EXTERNAL_IP=${TURN_EXTERNAL_IP:-}
     volumes:
       - caddy_data:/certs:ro

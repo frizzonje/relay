@@ -142,13 +142,33 @@ for RANGE in $DENIED_V6; do
   DENYFLAGS="$DENYFLAGS --denied-peer-ip=$RANGE"
 done
 
+# Чем доказывают право ретранслировать.
+#
+# TURN_SECRET — временные учётки (TURN REST API): сервер не хранит
+# пользователей вовсе, а проверяет HMAC-SHA1 от логина, в котором записан срок
+# годности. Выдаёт их api (`apps/api/src/turn.ts`), читая ту же переменную из
+# того же `.env`, — разойтись стороны не могут. Секрет наружу не уходит, а
+# выданное протухает само, без рестарта и без обрыва чужих звонков.
+#
+# Без него — как было до 1.0: одна пара логин-пароль на всю инсталляцию,
+# бессрочная, и она же в открытую отдаётся каждому вошедшему. Оставлено ради
+# инсталляций, чей `.env` написан руками; про это говорится вслух, потому что
+# молчаливая небезопасная настройка — худший вид настройки.
+if [ -n "${TURN_SECRET:-}" ]; then
+  AUTHFLAGS="--use-auth-secret --static-auth-secret=$TURN_SECRET"
+  echo "coturn: временные учётки (HMAC), общий секрет из TURN_SECRET"
+else
+  AUTHFLAGS="--lt-cred-mech --user=${TURN_USERNAME:-webrtc}:${TURN_CREDENTIAL:-}"
+  echo "coturn: статическая пара «${TURN_USERNAME:-webrtc}:…» — бессрочная и общая."
+  echo "coturn: задайте TURN_SECRET, чтобы перейти на временные учётки."
+fi
+
 # shellcheck disable=SC2086 # флаги должны разбиться на слова
 exec turnserver -n --log-file=stdout \
   --realm="$HOST" \
   --listening-port=3478 \
   --min-port=49160 --max-port=49200 \
-  --lt-cred-mech \
-  --user="${TURN_USERNAME:-webrtc}:${TURN_CREDENTIAL:-}" \
+  $AUTHFLAGS \
   $TLSFLAGS --no-cli \
   --no-multicast-peers \
   $DENYFLAGS \

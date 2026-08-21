@@ -240,8 +240,9 @@ CI (`.github/workflows/ci.yml`) runs the same three groups on pushes to `main`/`
 | `RETENTION_DAYS` | `14` | How long messages and their attachments live. `0` (or `forever`) keeps everything with no limit; `ephemeral` keeps nothing at all |
 | `DOMAIN` | `localhost` | Host for Caddy. `localhost` → self-signed CA, real domain → Let's Encrypt. A public IP also gets a Let's Encrypt certificate, but needs the issuer block `install.sh` writes into `tls-mode.caddy` |
 | `SERVER_HOST` | `localhost` | Host for the ICE config and coturn realm |
-| `TURN_USERNAME` | `webrtc` | TURN user |
-| `TURN_CREDENTIAL` | _(empty)_ | TURN server password. Required with `--profile turn` |
+| `TURN_SECRET` | _(empty)_ | Signing key shared by api and coturn. Required with `--profile turn`. Nobody types it and it never leaves the server: api signs a one-day credential per browser with it, coturn checks the signature |
+| `TURN_TTL_SECONDS` | `86400` | How long an issued TURN credential stays valid |
+| `TURN_USERNAME` / `TURN_CREDENTIAL` | `webrtc` / _(empty)_ | The static, never-expiring pair used before 1.0. Honoured only while `TURN_SECRET` is unset, and kept for one case: `TURN_URLS` pointing at somebody else's relay that works that way |
 | `TURN_EXTERNAL_IP` | _(empty)_ | Public IP behind 1:1 NAT (cloud VMs) |
 | `STUN_URLS` / `TURN_URLS` | — | Override the ICE servers handed to clients |
 | `SFU_SECRET` | _(empty)_ | Pass-signing key shared by api and sfu. Empty → the SFU mode stays off |

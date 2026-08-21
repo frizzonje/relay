@@ -117,6 +117,10 @@ services:
       - TURN_URLS=${TURN_URLS:-}
       - TURN_USERNAME=${TURN_USERNAME:-webrtc}
       - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
+      # Секрет временных учёток TURN: api подписывает им выдачу, coturn
+      # проверяет подпись. Одна переменная на обе стороны — иначе они
+      # разъедутся, и разъедутся молча (см. apps/api/src/turn.ts).
+      - TURN_SECRET=${TURN_SECRET:-}
       # Медиасервер: включается заданием SFU_SECRET (тот же ключ, что у сервиса
       # sfu) — без него api не выдаст ни одного пропуска и режим SFU в интерфейсе
       # останется выключенным. SFU_URL по умолчанию «тот же origin»: сигналинг
@@ -252,6 +256,10 @@ services:
       - SERVER_HOST=${SERVER_HOST:-localhost}
       - TURN_USERNAME=${TURN_USERNAME:-webrtc}
       - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
+      # Секрет временных учёток TURN: api подписывает им выдачу, coturn
+      # проверяет подпись. Одна переменная на обе стороны — иначе они
+      # разъедутся, и разъедутся молча (см. apps/api/src/turn.ts).
+      - TURN_SECRET=${TURN_SECRET:-}
       - TURN_EXTERNAL_IP=${TURN_EXTERNAL_IP:-}
     volumes:
       # Серты Caddy (read-only) — для TURN over TLS. Тот же том, что пишет caddy.

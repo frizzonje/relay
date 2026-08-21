@@ -3,14 +3,43 @@ import { guestTokenFromLocation } from './socket';
 
 /**
  * Конфиг с бэка (`GET /api/config`): ICE-серверы (туда подставляются STUN/TURN
- * из окружения) и признак поднятого медиасервера. Тянем один раз и кэшируем на
- * сессию — обе половины нужны разным местам, но запрос один.
+ * из окружения) и признак поднятого медиасервера. Кэшируем — обе половины
+ * нужны разным местам, но запрос один. Кэш не вечный: у ответа два срока
+ * годности, и оба ниже.
  */
 const FALLBACK: IceServer[] = [
   { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
 ];
 
 let cache: Promise<ConfigResponse> | null = null;
+
+/**
+ * Когда протухнут выданные нам учётки TURN (unix-секунды). `Infinity` — либо
+ * TURN статический, либо его нет: тогда конфиг не портится со временем и
+ * перечитывать его незачем.
+ */
+let iceValidUntil = Number.POSITIVE_INFINITY;
+
+/**
+ * За сколько до конца срока идём за новой парой. Час-другой запаса нужен не
+ * ради точности, а ради разговора: coturn проверяет срок и при продлении
+ * аренды, поэтому пара, взятая на последней минуте, оборвала бы звонок посреди
+ * фразы. Сутки жизни минус этот запас — всё ещё сутки.
+ */
+const ICE_REFRESH_MARGIN_SEC = 2 * 60 * 60;
+
+/**
+ * Верхний срок жизни кэша — на случай, когда в ответе поменялось не про TURN.
+ * Медиасервер, поднятый после того как вкладку открыли, оставался выключенным
+ * в интерфейсе до перезагрузки страницы (ревизия, «Мелкое, но чинить»): выдача
+ * пропусков живость проверяла, а переключатель врал. Запроса это не стоит
+ * почти никогда — конфиг перечитывается лениво, когда его спросят, а спрашивают
+ * его при входе в канал и в About.
+ */
+const CACHE_MAX_AGE_SEC = 10 * 60;
+
+/** Когда ответ приехал (unix-секунды). */
+let fetchedAt = 0;
 
 function fetchConfig(): Promise<ConfigResponse> {
   const base = process.env.NEXT_PUBLIC_API_URL || '';
@@ -21,9 +50,12 @@ function fetchConfig(): Promise<ConfigResponse> {
     credentials: 'include',
     ...(guest ? { headers: { authorization: `Bearer ${guest}` } } : {}),
   })
-    .then((res) => {
+    .then(async (res) => {
       if (!res.ok) throw new Error(`config ${res.status}`);
-      return res.json() as Promise<ConfigResponse>;
+      const data = (await res.json()) as ConfigResponse;
+      iceValidUntil = typeof data.iceExpiresAt === 'number' ? data.iceExpiresAt : Infinity;
+      fetchedAt = Date.now() / 1000;
+      return data;
     })
     .catch((err) => {
       // Бэк недоступен — звонок всё равно должен собраться на публичном STUN,
@@ -38,7 +70,21 @@ function fetchConfig(): Promise<ConfigResponse> {
 }
 
 function getConfig(): Promise<ConfigResponse> {
-  if (!cache) cache = fetchConfig();
+  // Кэш на сессию — но у сессии теперь есть срок годности: учётки для TURN
+  // выдаются на сутки и на каждого свои. Вкладка, открытая со вчера, иначе
+  // звонила бы с просроченной парой — и не «с ошибкой», а молча мимо
+  // ретранслятора, то есть без звука ровно там, где TURN и нужен.
+  const now = Date.now() / 1000;
+  if (
+    cache &&
+    (now >= iceValidUntil - ICE_REFRESH_MARGIN_SEC || now >= fetchedAt + CACHE_MAX_AGE_SEC)
+  )
+    cache = null;
+  if (!cache) {
+    iceValidUntil = Infinity;
+    fetchedAt = now;
+    cache = fetchConfig();
+  }
   return cache;
 }
 

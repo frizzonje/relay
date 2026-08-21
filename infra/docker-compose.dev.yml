@@ -80,6 +80,10 @@ services:
       - TURN_URLS=${TURN_URLS:-}
       - TURN_USERNAME=${TURN_USERNAME:-webrtc}
       - TURN_CREDENTIAL=${TURN_CREDENTIAL:-}
+      # Секрет временных учёток TURN: api подписывает им выдачу, coturn
+      # проверяет подпись. Одна переменная на обе стороны — иначе они
+      # разъедутся, и разъедутся молча (см. apps/api/src/turn.ts).
+      - TURN_SECRET=${TURN_SECRET:-}
       - SFU_URL=${SFU_URL:-/}
       - SFU_SECRET=${SFU_SECRET:-}
       # В dev sfu остаётся в bridge-сети (host-сеть в Docker Desktop не работает),

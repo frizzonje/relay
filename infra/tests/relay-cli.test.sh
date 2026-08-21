@@ -102,11 +102,18 @@ D="$WORK/i1"; mkinstall "$D" "RELAY_VERSION=0.8.0"
 : >"$WORK/docker.log"; relay "$D" up >/dev/null
 check "no features -> no profiles" "compose -f docker-compose.prod.yml up -d" "$(cat "$WORK/docker.log")"
 
-D="$WORK/i2"; mkinstall "$D" "TURN_CREDENTIAL=abc"
+D="$WORK/i2"; mkinstall "$D" "TURN_SECRET=abc"
 : >"$WORK/docker.log"; relay "$D" up >/dev/null
 check "TURN in .env -> --profile turn" "compose -f docker-compose.prod.yml --profile turn up -d" "$(cat "$WORK/docker.log")"
 
-D="$WORK/i3"; mkinstall "$D" "TURN_CREDENTIAL=abc" "SFU_SECRET=xyz"
+# The name 1.0 stopped writing, still in the .env of everything installed before
+# it. Read only the new one and their relay would come back up without its
+# relay server — calls behind strict NAT gone, and nothing said about it.
+D="$WORK/i2b"; mkinstall "$D" "TURN_CREDENTIAL=abc"
+: >"$WORK/docker.log"; relay "$D" up >/dev/null
+check "the pre-1.0 name still turns the profile on" "compose -f docker-compose.prod.yml --profile turn up -d" "$(cat "$WORK/docker.log")"
+
+D="$WORK/i3"; mkinstall "$D" "TURN_SECRET=abc" "SFU_SECRET=xyz"
 : >"$WORK/docker.log"; relay "$D" up >/dev/null
 check "both -> both profiles" "compose -f docker-compose.prod.yml --profile turn --profile sfu up -d" "$(cat "$WORK/docker.log")"
 

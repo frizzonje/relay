@@ -109,6 +109,49 @@ describe('конфиг с бэка', () => {
     });
   });
 
+  /**
+   * Учётки TURN теперь временные, и кэш «на сессию» вместе с ними перестал
+   * быть верным навсегда. Вкладка, открытая со вчера, обязана сходить за новой
+   * парой — иначе она будет звонить с просроченной, и не с ошибкой, а тишиной.
+   */
+  it('пара при смерти — за конфигом идут заново', async () => {
+    const soon = Math.floor(Date.now() / 1000) + 60;
+    fetchMock.mockResolvedValue(ok({ iceServers: [{ urls: ['turn:x'] }], iceExpiresAt: soon }));
+    const { getIceServers } = await import('./config');
+    await getIceServers();
+    await getIceServers();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('пара свежая — лишнего запроса нет', async () => {
+    const later = Math.floor(Date.now() / 1000) + 24 * 60 * 60;
+    fetchMock.mockResolvedValue(ok({ iceServers: [{ urls: ['turn:x'] }], iceExpiresAt: later }));
+    const { getIceServers } = await import('./config');
+    await getIceServers();
+    await getIceServers();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Тот же кэш, но про другое поле: медиасервер, поднятый после того как
+   * вкладку открыли, оставался выключенным в интерфейсе до перезагрузки —
+   * пропуска на него api выдавал, а переключатель говорил «нет».
+   */
+  it('медиасервер, поднявшийся позже, доезжает без перезагрузки страницы', async () => {
+    const started = Date.now();
+    fetchMock.mockResolvedValueOnce(
+      ok({ iceServers: [{ urls: ['stun:x'] }], sfu: { available: false } }),
+    );
+    const { isSfuAvailable } = await import('./config');
+    expect(await isSfuAvailable()).toBe(false);
+
+    vi.spyOn(Date, 'now').mockReturnValue(started + 11 * 60 * 1000);
+    fetchMock.mockResolvedValueOnce(
+      ok({ iceServers: [{ urls: ['stun:x'] }], sfu: { available: true } }),
+    );
+    expect(await isSfuAvailable()).toBe(true);
+  });
+
   it('обычный участник ходит с кукой и без Bearer', async () => {
     fetchMock.mockResolvedValue(ok({ iceServers: [{ urls: ['stun:x'] }] }));
     const { getIceServers } = await import('./config');

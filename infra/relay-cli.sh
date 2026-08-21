@@ -89,7 +89,11 @@ env_set() {
 # compose file reads, so there is no second source of truth to drift from.
 profiles() {
   local args=""
-  if [ -n "$(env_get TURN_CREDENTIAL)" ]; then args="--profile turn"; fi
+  # Either name means the same feature: TURN_SECRET is what 1.0 writes (signed,
+  # expiring credentials), TURN_CREDENTIAL is the static pair installations
+  # older than that still carry. Asking about one only would silently drop the
+  # relay from the stack of whichever half is not asked about.
+  if [ -n "$(env_get TURN_SECRET)$(env_get TURN_CREDENTIAL)" ]; then args="--profile turn"; fi
   if [ -n "$(env_get SFU_SECRET)" ]; then args="${args:+$args }--profile sfu"; fi
   printf '%s' "$args"
 }

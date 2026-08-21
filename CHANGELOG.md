@@ -91,6 +91,15 @@ enough; give it 2 GB of swap.
   that typed it.
 - **Renaming and deleting is tied to a key**, not to whichever browser created
   the entry.
+- **The TURN relay stops handing out a password that never expires.** Every
+  person who logged in was given the same relay credentials, in the clear, and
+  they worked forever — including for someone who had long since stopped being
+  a user of your relay, and whose only way out was changing `.env` and cutting
+  everyone's calls at once. Credentials are now signed, one per browser, and
+  valid for a day (`TURN_SECRET`, `TURN_TTL_SECONDS`). `install.sh` generates
+  the key; nobody ever types it and it never leaves the server. A hand-written
+  `.env` with the old `TURN_USERNAME`/`TURN_CREDENTIAL` pair keeps working as
+  before — that is what somebody else's relay server looks like.
 
 ### Fixed
 

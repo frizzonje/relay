@@ -167,11 +167,20 @@ AppModule
 {
   "iceServers": [
     {"urls": ["stun:..."]},
-    {"urls": ["turn:..."], "username": "...", "credential": "..."}
-  ]
+    {"urls": ["turn:..."], "username": "1755820800:9f3c1a2b", "credential": "..."}
+  ],
+  "iceExpiresAt": 1755820800
 }
 ```
-Читает переменные `STUN_URLS`, `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL`. Если не заданы — возвращает STUN Google.
+Читает `STUN_URLS`, `TURN_URLS` и `TURN_SECRET`. Не заданы — возвращает STUN Google.
+
+Пара для TURN выдаётся на каждый запрос своя и на сутки (`TURN_TTL_SECONDS`):
+логин — это срок годности, пароль — HMAC-SHA1 от логина на `TURN_SECRET`, тот же
+секрет проверяет coturn (`apps/api/src/turn.ts`, `infra/coturn-entrypoint.sh`).
+`iceExpiresAt` — когда пара перестанет работать; по нему вкладка, открытая со
+вчера, знает, что конфиг пора перечитать. Без `TURN_SECRET` отдаётся статическая
+пара `TURN_USERNAME`/`TURN_CREDENTIAL` — так было до 1.0, и так остаётся для
+чужого TURN-сервера с бессрочной парой.
 
 ### `POST /api/upload`
 

@@ -1,5 +1,6 @@
 import { Controller, Get } from '@nestjs/common';
 import { retention, type RetentionMode } from './db/retention.service';
+import { issueTurnCredentials, turnSecret } from './turn';
 import { sfuHealthy } from './sfu/sfu-health';
 import { serverVersion } from './version';
 
@@ -25,15 +26,23 @@ export class ConfigController {
     retentionDays: number;
     retentionMode: RetentionMode;
     version: string;
+    iceExpiresAt?: number;
   }> {
     const iceServers: IceServer[] = [];
 
     // Без TURN звонок не соберётся между «строгими» NAT (мобильные сети и т.п.)
-    const credential = process.env.TURN_CREDENTIAL ?? '';
-    const username = process.env.TURN_USERNAME || 'webrtc';
+    //
+    // Два способа доказать ретранслятору, что мы свои. Временная пара (secret)
+    // — основной: она подписана, живёт сутки и у каждого своя. Статическая —
+    // то, что было до 1.0, и остаётся ровно для одного случая: TURN_URLS
+    // смотрит на чужой сервер, у которого своя вечная пара и нашего секрета
+    // нет. См. turn.ts.
+    const secret = turnSecret();
+    const staticCredential = process.env.TURN_CREDENTIAL ?? '';
+    const staticUsername = process.env.TURN_USERNAME || 'webrtc';
     const host = process.env.SERVER_HOST;
-    // Свой coturn поднят (профиль turn): у него есть учётка и публичный хост.
-    const haveOwnTurn = !!credential && !!host && host !== 'localhost';
+    // Свой coturn поднят (профиль turn): у него есть секрет и публичный хост.
+    const haveOwnTurn = !!(secret || staticCredential) && !!host && host !== 'localhost';
 
     // STUN: явный список приоритетен. Иначе — свой coturn (он же отвечает как STUN
     // на 3478, лишняя внешняя зависимость ни к чему) + публичные Google как резерв
@@ -61,9 +70,24 @@ export class ConfigController {
       ];
     }
 
-    // TURN без учётных данных бесполезен — добавляем только при наличии обоих
-    if (turnUrls.length && credential) {
-      iceServers.push({ urls: turnUrls, username, credential });
+    // TURN без учётных данных бесполезен — добавляем только при наличии обоих.
+    // Срок годности уезжает клиенту отдельным полем: без него вкладка не может
+    // знать, что её пара скисла, и молча звонила бы мимо ретранслятора.
+    let iceExpiresAt: number | undefined;
+    if (turnUrls.length && secret) {
+      const pass = issueTurnCredentials(secret);
+      iceServers.push({
+        urls: turnUrls,
+        username: pass.username,
+        credential: pass.credential,
+      });
+      iceExpiresAt = pass.expiresAt;
+    } else if (turnUrls.length && staticCredential) {
+      iceServers.push({
+        urls: turnUrls,
+        username: staticUsername,
+        credential: staticCredential,
+      });
     }
 
     // Медиасервер поднимается отдельным профилем compose (`--profile sfu`) и
@@ -85,6 +109,7 @@ export class ConfigController {
       // нужен тому, кто уже вошёл (свериться с клиентом), и не нужен
       // никому снаружи — раздавать его всем подряд незачем.
       version: serverVersion(),
+      ...(iceExpiresAt ? { iceExpiresAt } : {}),
     };
   }
 }

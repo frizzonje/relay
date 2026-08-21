@@ -4,6 +4,7 @@ const sfuHealthy = vi.hoisted(() => vi.fn(async () => false));
 vi.mock('./sfu/sfu-health', () => ({ sfuHealthy }));
 
 import { ConfigController } from './config.controller';
+import { signTurnUsername } from './turn';
 
 /**
  * ICE-конфиг — единственное, что решает, соберётся ли звонок за строгим NAT.
@@ -13,6 +14,8 @@ import { ConfigController } from './config.controller';
  */
 
 const ENV = [
+  'TURN_SECRET',
+  'TURN_TTL_SECONDS',
   'TURN_CREDENTIAL',
   'TURN_USERNAME',
   'TURN_URLS',
@@ -103,6 +106,57 @@ describe('TURN', () => {
     process.env.TURN_URLS = 'turn:чужой.example:3478';
     const { iceServers } = await read();
     expect(iceServers.find((s) => s.credential)!.urls).toEqual(['turn:чужой.example:3478']);
+  });
+});
+
+/**
+ * Временные учётки. Главное, что здесь проверяется, — что пара действительно
+ * разная и что срок уезжает клиенту: без срока вкладка не может знать, когда
+ * её пара скиснет, и тихо звонила бы мимо ретранслятора.
+ */
+describe('TURN: временные учётки', () => {
+  beforeEach(() => {
+    process.env.TURN_SECRET = 'ключ подписи';
+    process.env.SERVER_HOST = 'relay.example';
+  });
+
+  it('логин со сроком, пароль — подпись, и срок отдельным полем', async () => {
+    const cfg = await read();
+    const turn = cfg.iceServers.find((s) => s.credential)!;
+    expect(turn.username).toMatch(/^\d{10}:[0-9a-f]{8}$/);
+    expect(turn.credential).toBe(signTurnUsername('ключ подписи', turn.username!));
+    expect(cfg.iceExpiresAt).toBe(Number(turn.username!.split(':')[0]));
+  });
+
+  it('двум запросам — две разные пары: отозвать одну не значит оборвать всех', async () => {
+    const first = (await read()).iceServers.find((s) => s.credential)!;
+    const second = (await read()).iceServers.find((s) => s.credential)!;
+    expect(first.username).not.toBe(second.username);
+  });
+
+  it('секрет наружу не уходит ни в каком виде', async () => {
+    expect(JSON.stringify(await read())).not.toContain('ключ подписи');
+  });
+
+  /**
+   * Статическая пара — это чужой TURN-сервер, у которого нашего секрета нет.
+   * Своему секрету она уступает: иначе включивший TURN_SECRET получил бы пару,
+   * которую его же coturn отвергнет, — и звонки пропали бы после «улучшения».
+   */
+  it('при своём секрете прежняя статическая пара не отдаётся', async () => {
+    process.env.TURN_CREDENTIAL = 'старый пароль';
+    process.env.TURN_USERNAME = 'webrtc';
+    const turn = (await read()).iceServers.find((s) => s.credential)!;
+    expect(turn.credential).not.toBe('старый пароль');
+    expect(turn.username).not.toBe('webrtc');
+  });
+
+  it('без секрета срок не выдумывается — статической паре его взять неоткуда', async () => {
+    delete process.env.TURN_SECRET;
+    process.env.TURN_CREDENTIAL = 'секрет';
+    const cfg = await read();
+    expect(cfg.iceServers.find((s) => s.credential)!.credential).toBe('секрет');
+    expect(cfg.iceExpiresAt).toBeUndefined();
   });
 });
 

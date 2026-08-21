@@ -246,11 +246,14 @@ fi
 
 # ── 6. TURN ──────────────────────────────────────────────────────────────────
 hr
-USE_TURN=0; TURN_CREDENTIAL=""
+USE_TURN=0; TURN_SECRET=""
 if ask_yn "Enable TURN relay? (recommended — fixes calls on mobile/CGNAT/strict NAT)" "Y"; then
   USE_TURN=1
-  TURN_CREDENTIAL="$(gen_secret)"
-  ok "  TURN enabled (credential generated)."
+  # A signing key, not a password: nobody ever types this and it never leaves
+  # the server. api signs a one-day credential per browser with it, coturn
+  # checks the signature (infra/coturn-entrypoint.sh, apps/api/src/turn.ts).
+  TURN_SECRET="$(gen_secret)"
+  ok "  TURN enabled (relay credentials are per-session and expire in a day)."
 fi
 
 # ── 6b. Media server (SFU) ───────────────────────────────────────────────────
@@ -407,8 +410,7 @@ fi
   echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
   echo "DOMAIN=${DOMAIN}"
   echo "SERVER_HOST=${SERVER_HOST}"
-  echo "TURN_USERNAME=webrtc"
-  echo "TURN_CREDENTIAL=${TURN_CREDENTIAL}"
+  echo "TURN_SECRET=${TURN_SECRET}"
   # On cloud VMs behind 1:1 NAT the public IP differs from the local one;
   # coturn needs it advertised for relay candidates.
   if [ "$USE_TURN" = 1 ] && [ -n "$PUBIP" ]; then

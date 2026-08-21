@@ -9,6 +9,8 @@ check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); printf '  ok   %s\n' "$1"
   else FAIL=$((FAIL+1)); printf '  FAIL %s\n       expected: %s\n       actual:   %s\n' "$1" "$2" "$3"; fi; }
 has() { if echo "$3" | grep -qF "$2"; then PASS=$((PASS+1)); printf '  ok   %s\n' "$1"
   else FAIL=$((FAIL+1)); printf '  FAIL %s (missing: %s)\n' "$1" "$2"; fi; }
+hasnt() { if echo "$3" | grep -qF "$2"; then FAIL=$((FAIL+1)); printf '  FAIL %s (present: %s)\n' "$1" "$2"
+  else PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; fi; }
 
 INNER_SH="$(mktemp)"
 cat >"$INNER_SH" <<'INNER'
@@ -113,7 +115,11 @@ has  "the CLI was downloaded, not baked in" "/relay/v9.9.9/infra/relay-cli.sh" "
 has  "relay-cli.sh is on disk" "relay-cli.sh" "$OUT"
 has  "the shim points at it" 'exec bash "$RELAY_DIR/relay-cli.sh"' "$OUT"
 has  "the shim knows the directory" 'RELAY_DIR="/opt/relay"' "$OUT"
-has  "TURN answered yes -> credential written" "TURN_CREDENTIAL=" "$OUT"
+has  "TURN answered yes -> signing secret written" "TURN_SECRET=" "$OUT"
+# The static pair is what 0.x wrote, and api handed it to every browser in the
+# clear. A fresh install must not carry the name at all: leave it in .env and
+# coturn goes back to one never-expiring password shared by everyone.
+hasnt "and the old never-expiring pair is gone" "TURN_CREDENTIAL=" "$OUT"
 has  "SFU answered yes -> secret written" "SFU_SECRET=" "$OUT"
 has  "a database password was generated without asking" "POSTGRES_PASSWORD=" "$OUT"
 

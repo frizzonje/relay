@@ -301,6 +301,15 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
 
     join(newRoom) {
       room = newRoom;
+      // Перед разговором — свежие ICE-серверы. Обычно это ничего не стоит:
+      // конфиг лежит в кэше и запроса не будет. Запрос случится ровно тогда,
+      // когда выданные нам учётки TURN подходят к концу срока (lib/config.ts),
+      // — то есть у вкладки, открытой со вчера, а таких большинство к утру.
+      void getIceServers()
+        .then((servers) => {
+          if (servers.length) iceServers = servers;
+        })
+        .catch(() => {});
     },
 
     leave() {

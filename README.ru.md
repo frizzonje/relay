@@ -240,8 +240,9 @@ CI (`.github/workflows/ci.yml`) гоняет те же три группы на 
 | `RETENTION_DAYS` | `14` | Сколько живут сообщения и их вложения. `0` (или `forever`) — хранить без срока, `ephemeral` — не хранить вовсе |
 | `DOMAIN` | `localhost` | Хост для Caddy. `localhost` → self-signed CA, реальный домен → Let's Encrypt. Публичный IP тоже получает сертификат Let's Encrypt, но требует issuer-блока, который `install.sh` пишет в `tls-mode.caddy` |
 | `SERVER_HOST` | `localhost` | Хост для ICE-конфига и realm coturn |
-| `TURN_USERNAME` | `webrtc` | Пользователь TURN |
-| `TURN_CREDENTIAL` | _(пусто)_ | Пароль TURN-сервера. Обязателен при `--profile turn` |
+| `TURN_SECRET` | _(пусто)_ | Ключ подписи, общий у api и coturn. Обязателен при `--profile turn`. Его никто не вводит и он никуда не уходит: api подписывает им пару на сутки и на каждого свою, coturn проверяет подпись |
+| `TURN_TTL_SECONDS` | `86400` | Сколько живёт выданная пара, в секундах |
+| `TURN_USERNAME` / `TURN_CREDENTIAL` | `webrtc` / _(пусто)_ | Бессрочная пара на всех — как было до 1.0. Действует, только пока не задан `TURN_SECRET`, и оставлена ради одного случая: `TURN_URLS` смотрит на чужой ретранслятор, устроенный именно так |
 | `TURN_EXTERNAL_IP` | _(пусто)_ | Публичный IP за 1:1 NAT (облачные VM) |
 | `STUN_URLS` / `TURN_URLS` | — | Переопределение ICE-серверов, выдаваемых клиентам |
 | `SFU_SECRET` | _(пусто)_ | Ключ подписи пропусков, общий для api и sfu. Пусто → режим SFU выключен |
