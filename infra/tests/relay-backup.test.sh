@@ -55,11 +55,12 @@ seed() { # put known content into the scratch volumes
 echo "── backup carries everything a rebuild needs (B7.3)"
 seed
 OUT="$(relay backup)"
-# The path the command itself printed, not the newest file in the directory:
-# these archives are named by the second, and asking the directory made the
-# test depend on how fast the machine got here.
-archive_of() { echo "$1" | sed -n 's/^.*Backup: \(.*\.tar\.gz\)$/\1/p' | tail -1; }
-TAR="$(archive_of "$OUT")"
+# The newest archive is the one just written — which is true only because the
+# CLI refuses to write over a name that is taken (make_backup). Before that,
+# two backups inside one second were one file, and "the newest" was whichever
+# had survived.
+newest() { ls -t "$D"/backups/relay-backup-*.tar.gz 2>/dev/null | head -1; }
+TAR="$(newest)"
 check "a tarball was produced" "yes" "$([ -n "$TAR" ] && echo yes || echo no)"
 LIST="$(tar tzf "$TAR" 2>/dev/null)"
 for want in ./u/photo.jpg ./u/state/registry.json ./c/certs/site.crt ./cfg/.env \
@@ -94,13 +95,19 @@ cp "$D/docker-compose.prod.yml" "$WORK/compose.keep"
 awk '/^  db:/{skip=1} /^  api:/{skip=0} !skip' "$WORK/compose.keep" >"$D/docker-compose.prod.yml"
 : >"$WORK/compose.log"
 OUT="$(relay backup)"
-PRE="$(archive_of "$OUT")"
+PRE="$(newest)"
 check "an archive was still written" "yes" "$([ -n "$PRE" ] && echo yes || echo no)"
 check "it says what is in it" "yes" "$(echo "$OUT" | grep -q 'files and configuration only' && echo yes || echo no)"
 check "no dump was attempted" "no" "$(grep -q 'pg_dump' "$WORK/compose.log" && echo yes || echo no)"
+# Listed once into a variable, not piped into `grep -q` three times: `-q`
+# stops reading at the first match, tar gets EPIPE, and `pipefail` turns a
+# successful match into a failed pipeline — the error is even printed, as
+# "tar: stdout: write error", right next to a check that says the file is
+# missing.
+PRELIST="$(tar tzf "$PRE" 2>/dev/null)"
 check "and the archive carries the uploads and the config" "yes" \
-  "$(tar tzf "$PRE" | grep -qxF ./cfg/.env && tar tzf "$PRE" | grep -qxF ./u/photo.jpg && echo yes || echo no)"
-check "with no empty dump inside it" "no" "$(tar tzf "$PRE" | grep -qxF ./db.sql && echo yes || echo no)"
+  "$(echo "$PRELIST" | grep -qxF ./cfg/.env && echo "$PRELIST" | grep -qxF ./u/photo.jpg && echo yes || echo no)"
+check "with no empty dump inside it" "no" "$(echo "$PRELIST" | grep -qxF ./db.sql && echo yes || echo no)"
 cp "$WORK/compose.keep" "$D/docker-compose.prod.yml"
 rm -f "$PRE"
 
