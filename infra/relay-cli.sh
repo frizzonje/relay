@@ -408,12 +408,15 @@ make_backup() {
     -v "$stage/cfg":/snap/cfg:ro \
     ${dbmount[@]+"${dbmount[@]}"} \
     -v "$DIR/backups":/out \
-    alpine sh -c 'tar czf "/out/$1" -C /snap . && chmod 600 "/out/$1"' sh "$out" \
+    alpine sh -c 'tar czf "/out/$1" -C /snap . && chmod 600 "/out/$1" && chown "$2" "/out/$1"' \
+      sh "$out" "$(id -u):$(id -g)" \
     || die "Backup failed."
-  # 0600 from birth, and locked by the same root that created it: the archive
-  # carries .env, and `chmod` from outside is a request the file's owner can
-  # refuse — silently, since nobody checks its exit code. Which is exactly what
-  # happens wherever the CLI is not run as root and docker writes as root.
+  # Locked and handed over inside the container, by the root that created the
+  # file. The archive carries .env, so 0600 is not optional — and `chmod` from
+  # outside is a request the file's owner can refuse, silently, since nobody
+  # checks its exit code: run the CLI as anyone but root and the archive stayed
+  # 0644 while the command said it was done. The `chown` is the other half:
+  # 0600 owned by root is an archive its own author cannot restore.
   ok "Backup: $DIR/backups/$out"
   printf '  %sRestore it with: relay restore %s/backups/%s%s\n' "$DIM" "$DIR" "$out" "$N"
 }
