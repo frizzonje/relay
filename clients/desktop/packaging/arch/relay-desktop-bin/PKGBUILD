@@ -12,7 +12,7 @@
 # because the checksum only exists once the release is published).
 
 pkgname=relay-desktop-bin
-pkgver=0.3.7
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="relay desktop client — native Tauri shell over the relay web app (prebuilt)"
 arch=('x86_64')
@@ -29,7 +29,7 @@ conflicts=('relay-desktop')
 # The upstream binary is already stripped with LTO; leave it untouched.
 options=('!strip')
 source=("relay-desktop-${pkgver}.deb::${url}/releases/download/desktop-v${pkgver}/relay_${pkgver}_amd64.deb")
-sha256sums=('SKIP')
+sha256sums=('c65501755d3fe4bfa9e7af9722ff713a6cdc51acfe3476f94de9a09c7e62014a')
 
 package() {
   cd "${srcdir}"

@@ -8,7 +8,7 @@
 # tauri-bundler emit a .deb/AppImage, which is the idiomatic makepkg way.
 
 pkgname=relay-desktop
-pkgver=0.3.7
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="relay desktop client — native Tauri shell over the relay web app"
 arch=('x86_64' 'aarch64')
