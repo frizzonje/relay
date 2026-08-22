@@ -170,11 +170,13 @@ jobs:
         working-directory: clients/desktop-linux
         run: |
           set -euo pipefail
-          printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > /tmp/updater.key
           appimage=$(ls dist/*.AppImage)
+          # Ключ передаём ТОЛЬКО через env: CLI читает его из
+          # TAURI_SIGNING_PRIVATE_KEY сам, и добавить к этому файл (-f) нельзя —
+          # --private-key и --private-key-path объявлены конфликтующими, команда
+          # падает с exit 2, ничего не подписав.
           npx --yes @tauri-apps/cli@2 signer sign \
-            -f /tmp/updater.key -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" "$appimage"
-          rm -f /tmp/updater.key
+            -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" "$appimage"
 
       - name: Upload to the release and point the updater at it
         env:
