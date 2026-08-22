@@ -5,7 +5,7 @@ import { ask } from '@/lib/channels';
 import { tx } from '@/lib/i18n';
 import { useChannelsStore } from '@/stores/channels';
 import { useChatStore } from '@/stores/chat';
-import { useUiStore } from '@/stores/ui';
+import { targetRoom, useUiStore } from '@/stores/ui';
 
 /**
  * Поиск по истории: что спросили, что нашлось и куда после этого попадают.
@@ -122,10 +122,13 @@ export const useSearchStore = create<SearchState>((set, get) => ({
     if (!id || !channel) return;
 
     // В свой канал заходим сперва: окно спрашивают у того канала, в котором
-    // сокет сидит, а сам вход заодно проверяет права.
-    if (useUiStore.getState().textRoom !== hit.slug) {
+    // сокет сидит, а сам вход заодно проверяет права. Вход отложен на время,
+    // пока уходит прежняя лента (см. pendingScene), — дожидаемся его, иначе
+    // окно спросим у канала, из которого человек уже ушёл.
+    if (targetRoom(useUiStore.getState()) !== hit.slug) {
       useUiStore.getState().openText(hit.slug, channel.name);
     }
+    await useUiStore.getState().sceneSettled();
 
     const win = await ask<ChatWindowResult>('chat-around', { id });
     // Пока ждали ответ, человек ушёл в другой канал — чужое окно ему не надо.

@@ -1,6 +1,8 @@
 'use client';
 
+import { AnimatePresence, motion } from 'framer-motion';
 import { Icon } from '@/components/ui/icon';
+import { tabPanel } from '@/lib/motion';
 import { cn } from '@/lib/utils';
 import { usePinsStore } from '@/stores/pins';
 import { useSearchStore } from '@/stores/search';
@@ -26,21 +28,38 @@ export function Topbar() {
 
   return (
     <div className="panel flex h-[52px] shrink-0 items-center gap-2.5 overflow-hidden border-b border-line px-4 shadow-[0_1px_2px_rgba(0,0,0,0.2)] max-md:hidden">
-      <span className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap font-bold text-text-header">
-        {view === 'voice' ? (
-          <>
-            <Icon name="volume-2" className="text-xl text-text-muted" />
-            {voiceLabel}
-          </>
-        ) : view === 'text' ? (
-          <>
-            <span className="text-text-faint">#</span>
-            {textLabel}
-          </>
-        ) : (
-          t('topbar.noChannel')
-        )}
-      </span>
+      {/* Имя канала меняется вместе со сценой — и переезжает так же, как её
+          содержимое: подмена текста на месте выглядела бы опечаткой. */}
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.span
+          key={
+            view === 'text'
+              ? `text:${textLabel}`
+              : view === 'voice'
+                ? `voice:${voiceLabel}`
+                : 'lobby'
+          }
+          variants={tabPanel}
+          initial="hidden"
+          animate="show"
+          exit="exit"
+          className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap font-bold text-text-header"
+        >
+          {view === 'voice' ? (
+            <>
+              <Icon name="volume-2" className="text-xl text-text-muted" />
+              {voiceLabel}
+            </>
+          ) : view === 'text' ? (
+            <>
+              <span className="text-text-faint">#</span>
+              {textLabel}
+            </>
+          ) : (
+            t('topbar.noChannel')
+          )}
+        </motion.span>
+      </AnimatePresence>
 
       {view === 'text' && (
         <div className="ml-auto flex shrink-0 items-center gap-0.5">

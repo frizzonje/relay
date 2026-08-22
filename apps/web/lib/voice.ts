@@ -568,7 +568,7 @@ export function setListenOnly(on: boolean) {
 export async function joinVoice(newRoom: string, label: string) {
   // Уже на связи в этой комнате — значит, мы просто смотрели текст: показываем сетку
   if (newRoom === room) {
-    useUiStore.setState({ view: 'voice', voiceRoom: room, voiceLabel: label });
+    useUiStore.getState().openVoice(room, label);
     return;
   }
 
@@ -616,7 +616,7 @@ export async function joinVoice(newRoom: string, label: string) {
 
   room = newRoom;
 
-  useUiStore.setState({ view: 'voice', voiceRoom: room, voiceLabel: label });
+  useUiStore.getState().openVoice(room, label);
 
   addTile('local', msg('common.you', { name: myName() }), localStream, true);
   applyMute();
@@ -683,11 +683,10 @@ export function leaveVoice(hard = true) {
 
   // Голос отключили, но текстовый канал мог остаться открытым — показываем его
   const ui = useUiStore.getState();
+  ui.clearVoice();
   if (ui.textRoom) {
-    useUiStore.setState({ view: 'text', voiceRoom: null, voiceLabel: '' });
     setStatus('voice.status.inTextChannel', { channel: ui.textLabel || '# ' + ui.textRoom });
   } else {
-    useUiStore.setState({ view: 'lobby', voiceRoom: null, voiceLabel: '' });
     setStatus('voice.status.disconnected');
   }
 }
@@ -717,7 +716,8 @@ export function renameSelf(name: string) {
  */
 export function showVoiceStage() {
   if (!room) return;
-  useUiStore.setState({ view: 'voice', mobilePanel: 'stage' });
+  const ui = useUiStore.getState();
+  ui.openVoice(room, ui.voiceLabel);
 }
 
 // ─────────────────────────────────────────────────────────────────────────

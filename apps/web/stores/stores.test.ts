@@ -9,6 +9,7 @@ import { PREF_STORAGE } from '@/lib/prefs';
 import { isChannelLoud, useNotifyStore } from './notify';
 import { isServerUnlocked, useServersStore } from './servers';
 import { LAST_READ_KEY, channelMentions, isChannelUnread, useUnreadStore } from './unread';
+import { useUiStore } from './ui';
 
 /**
  * Сторы интерфейса. Самый содержательный здесь — «непрочитанное»: время в нём
@@ -444,5 +445,85 @@ describe('разблокировка автоплея', () => {
     expect(useAudioUnlockStore.getState().shown).toBe(true);
     useAudioUnlockStore.getState().dismiss();
     expect(useAudioUnlockStore.getState().shown).toBe(false);
+  });
+});
+
+/**
+ * Переход между сценами отложен на время, пока прежняя гаснет: до конца
+ * анимации на экране должно оставаться то, из чего человек уходит, — иначе
+ * гаснет уже подменённая начинка (пустая лента нового канала).
+ */
+describe('переходы между сценами', () => {
+  const ui = () => useUiStore.getState();
+
+  beforeEach(() => {
+    useUiStore.setState({
+      view: 'lobby',
+      textRoom: null,
+      textLabel: '',
+      voiceRoom: null,
+      voiceLabel: '',
+      pendingScene: null,
+      stageLive: true,
+      mobilePanel: 'nav',
+    });
+  });
+
+  it('пока сцена на экране, канал меняется только после её ухода', () => {
+    ui().openText('obshchii', 'общий');
+    // Сцена ещё прежняя — гаснуть должно лобби, а не пустой канал.
+    expect([ui().view, ui().textRoom]).toEqual(['lobby', null]);
+    expect(ui().pendingScene).toEqual({ view: 'text', textRoom: 'obshchii', textLabel: 'общий' });
+    // А панель на мобиле переключилась сразу: она и есть ответ на тап.
+    expect(ui().mobilePanel).toBe('stage');
+
+    ui().commitScene();
+    expect([ui().view, ui().textRoom, ui().textLabel]).toEqual(['text', 'obshchii', 'общий']);
+    expect(ui().pendingScene).toBe(null);
+  });
+
+  it('соседний текстовый канал — такой же переход, как выход из лобби', () => {
+    useUiStore.setState({ view: 'text', textRoom: 'obshchii', textLabel: 'общий' });
+    ui().openText('flud', 'флуд');
+    expect(ui().textRoom).toBe('obshchii');
+    ui().commitScene();
+    expect(ui().textRoom).toBe('flud');
+  });
+
+  it('гаснуть нечему — переходим сразу', () => {
+    useUiStore.setState({ stageLive: false });
+    ui().openText('obshchii', 'общий');
+    expect([ui().view, ui().textRoom, ui().pendingScene]).toEqual(['text', 'obshchii', null]);
+  });
+
+  it('та же сцена (сменилась подпись) не ждёт анимации', () => {
+    useUiStore.setState({ view: 'text', textRoom: 'obshchii', textLabel: 'общий' });
+    ui().openText('obshchii', 'общий чат');
+    expect([ui().textLabel, ui().pendingScene]).toEqual(['общий чат', null]);
+  });
+
+  it('выход из текста возвращает к сетке, если голос остался', () => {
+    useUiStore.setState({ view: 'text', textRoom: 'obshchii', textLabel: 'общий' });
+    useUiStore.setState({ voiceRoom: 'kuhnya', voiceLabel: 'кухня' });
+    ui().leaveText();
+    expect(ui().pendingScene).toEqual({ view: 'voice', textRoom: null, textLabel: '' });
+    ui().commitScene();
+    expect([ui().view, ui().textRoom]).toEqual(['voice', null]);
+  });
+
+  it('ожидающий перехода дожидается именно момента показа', async () => {
+    useUiStore.setState({ view: 'text', textRoom: 'obshchii', textLabel: 'общий' });
+    ui().openText('flud', 'флуд');
+    let settled = false;
+    const waiting = ui()
+      .sceneSettled()
+      .then(() => {
+        settled = true;
+      });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    ui().commitScene();
+    await waiting;
+    expect([settled, ui().textRoom]).toEqual([true, 'flud']);
   });
 });

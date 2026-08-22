@@ -12,6 +12,7 @@ import {
   type UploadResponse,
 } from '@relay/shared';
 import { cn } from '@/lib/utils';
+import { STAGE_FADE_MS } from '@/lib/motion';
 import { Icon } from '@/components/ui/icon';
 import { fmtBytes } from '@/lib/format';
 import { getSocket } from '@/lib/socket';
@@ -129,6 +130,8 @@ export function ChatPanel() {
   const rt = useRichT();
   const textLabel = useUiStore((s) => s.textLabel);
   const textRoom = useUiStore((s) => s.textRoom);
+  const pendingScene = useUiStore((s) => s.pendingScene);
+  const commitScene = useUiStore((s) => s.commitScene);
   const callsign = useUiStore((s) => s.callsign);
   const messages = useChatStore((s) => s.messages);
   const typing = useChatStore((s) => s.typing);
@@ -642,6 +645,12 @@ export function ChatPanel() {
   const firstUnreadIdx =
     dividerTs > 0 ? messages.findIndex((m) => !m.system && m.ts > dividerTs) : -1;
 
+  // Переход в соседний текстовый канал: вид сцены тот же, гаснет одна лента.
+  // `nextRoom` — куда идём, `textRoom` — что ещё на экране; пока они разные,
+  // старую ленту показываем как есть, а новую не рисуем вовсе.
+  const nextRoom = pendingScene?.view === 'text' ? pendingScene.textRoom : textRoom;
+  const changingRoom = nextRoom !== textRoom;
+
   return (
     <div
       className="relative flex min-h-0 flex-1 flex-col"
@@ -650,65 +659,83 @@ export function ChatPanel() {
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
-      <div
-        ref={scrollRef}
-        onScroll={onScroll}
-        // Лента — единственный прокручиваемый контейнер, у которого есть
-        // поведение (подгрузка вверх), и e2e должен находить именно его, а не
-        // угадывать по классам вёрстки.
-        data-feed
-        className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-4 pb-2 pt-4"
-      >
-        {/* Верх ленты отвечает на вопрос «а что было раньше?» — и три ответа
-            на него разные: выше есть ещё, выше начало канала, выше уже
-            удалено ретенцией. Рисовать их одинаково значит врать. */}
-        {more ? (
-          <div className="px-4 pb-3 pt-7 text-center text-[13px] leading-[1.5] text-text-muted">
-            {loadingMore ? t('chat.history.loading') : '⋯'}
-          </div>
-        ) : (
-          <div className="px-4 pb-3 pt-7 text-center text-[13px] leading-[1.5] text-text-muted">
-            {rt('chat.start', {
-              channel: <b className="text-text-header">#{textLabel}</b>,
-            })}
-            {/* Край ленты объясняет себя тремя разными способами, потому что
-                «выше уже удалено», «выше ничего и не было» и «здесь вообще не
-                хранят» — три разные вещи для того, кто сюда смотрит. */}
-            {retention.mode === 'days' && (
-              <div className="pt-1 text-text-muted/70">
-                {t('chat.history.edge', { days: retention.days })}
-              </div>
-            )}
-            {retention.mode === 'ephemeral' && (
-              <div className="pt-1 text-text-muted/70">{t('chat.history.ephemeral')}</div>
-            )}
-          </div>
-        )}
-        {messages.map((m, i) => (
-          <div key={m.id ?? i}>
-            {i === firstUnreadIdx && <UnreadDivider />}
-            <Message
-              msg={m}
-              mine={!m.system && m.name === me}
-              me={me}
-              myFingerprint={myFingerprint}
-              enter={enterAnim}
-              editing={editingId === m.id}
-              onReply={startReply}
-              onStartEdit={startEdit}
-              onSubmitEdit={submitEdit}
-              onCancelEdit={cancelEdit}
-              moderated={moderated}
-              owner={owner}
-              onDelete={deleteMessage}
-              onBan={banAuthor}
-              onJumpTo={jumpTo}
-              onPin={pinMessage}
-              retentionDays={retention.days}
-            />
-          </div>
-        ))}
-      </div>
+      {/* Смена канала гасит ленту и зажигает новую — тем же движением, каким
+          меняются сцены (Stage), только мельче: композер с недописанным,
+          вложения и шапка канала при этом остаются на месте. Пока лента
+          гаснет, канал в сторе прежний — потому в ней всё ещё видно то, из
+          чего человек уходит, а не пустоту нового канала. */}
+      <AnimatePresence mode="wait" initial={false} onExitComplete={commitScene}>
+        <motion.div
+          key={nextRoom ?? 'none'}
+          ref={scrollRef}
+          onScroll={onScroll}
+          // Лента — единственный прокручиваемый контейнер, у которого есть
+          // поведение (подгрузка вверх), и e2e должен находить именно его, а не
+          // угадывать по классам вёрстки.
+          data-feed
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: STAGE_FADE_MS / 1000 }}
+          className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-4 pb-2 pt-4"
+        >
+          {!changingRoom && (
+            <>
+              {/* Верх ленты отвечает на вопрос «а что было раньше?» — и три
+                  ответа на него разные: выше есть ещё, выше начало канала,
+                  выше уже удалено ретенцией. Рисовать их одинаково значит
+                  врать. */}
+              {more ? (
+                <div className="px-4 pb-3 pt-7 text-center text-[13px] leading-[1.5] text-text-muted">
+                  {loadingMore ? t('chat.history.loading') : '⋯'}
+                </div>
+              ) : (
+                <div className="px-4 pb-3 pt-7 text-center text-[13px] leading-[1.5] text-text-muted">
+                  {rt('chat.start', {
+                    channel: <b className="text-text-header">#{textLabel}</b>,
+                  })}
+                  {/* Край ленты объясняет себя тремя разными способами, потому
+                      что «выше уже удалено», «выше ничего и не было» и «здесь
+                      вообще не хранят» — три разные вещи для того, кто сюда
+                      смотрит. */}
+                  {retention.mode === 'days' && (
+                    <div className="pt-1 text-text-muted/70">
+                      {t('chat.history.edge', { days: retention.days })}
+                    </div>
+                  )}
+                  {retention.mode === 'ephemeral' && (
+                    <div className="pt-1 text-text-muted/70">{t('chat.history.ephemeral')}</div>
+                  )}
+                </div>
+              )}
+              {messages.map((m, i) => (
+                <div key={m.id ?? i}>
+                  {i === firstUnreadIdx && <UnreadDivider />}
+                  <Message
+                    msg={m}
+                    mine={!m.system && m.name === me}
+                    me={me}
+                    myFingerprint={myFingerprint}
+                    enter={enterAnim}
+                    editing={editingId === m.id}
+                    onReply={startReply}
+                    onStartEdit={startEdit}
+                    onSubmitEdit={submitEdit}
+                    onCancelEdit={cancelEdit}
+                    moderated={moderated}
+                    owner={owner}
+                    onDelete={deleteMessage}
+                    onBan={banAuthor}
+                    onJumpTo={jumpTo}
+                    onPin={pinMessage}
+                    retentionDays={retention.days}
+                  />
+                </div>
+              ))}
+            </>
+          )}
+        </motion.div>
+      </AnimatePresence>
 
       {/* Drag-overlay поверх ленты */}
       <AnimatePresence>

@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import { readOwnerToken, readPairCode } from '@relay/shared';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/lib/use-mobile';
-import { useUiStore, type MobilePanel } from '@/stores/ui';
+import { targetView, useUiStore, type MobilePanel } from '@/stores/ui';
 import { useOwnerStore } from '@/stores/owner';
 import { usePairingStore } from '@/stores/pairing';
 import { AdmitDeviceDialog } from '@/components/layout/AdmitDeviceDialog';
@@ -45,7 +45,8 @@ const panelFade = {
 export function AppShell() {
   const panel = useUiStore((s) => s.mobilePanel);
   const view = useUiStore((s) => s.view);
-  const stageView = useUiStore((s) => s.stageView);
+  // Куда идём — по нему решаем про панели: ждать конца анимации сцены им незачем.
+  const going = useUiStore(targetView);
   const textRoom = useUiStore((s) => s.textRoom);
   const voiceRoom = useUiStore((s) => s.voiceRoom);
   const setMobilePanel = useUiStore((s) => s.setMobilePanel);
@@ -54,8 +55,8 @@ export function AppShell() {
   // Открыли канал (текст/голос) — на мобиле сразу показываем сцену, чтобы не
   // приходилось тапать «Сцена» руками. На десктопе панель игнорируется.
   useEffect(() => {
-    if (view === 'text' || view === 'voice') setMobilePanel('stage');
-  }, [view, textRoom, voiceRoom, setMobilePanel]);
+    if (going === 'text' || going === 'voice') setMobilePanel('stage');
+  }, [going, textRoom, voiceRoom, setMobilePanel]);
 
   // Ссылка из QR: код связки приезжает во фрагменте адреса — так его снимает
   // системная камера телефона, минуя сканер внутри приложения. Фрагмент сразу
@@ -89,14 +90,14 @@ export function AppShell() {
   const hasPeople = view === 'voice' || view === 'text';
   const effective: MobilePanel = panel === 'people' && !hasPeople ? 'stage' : panel;
 
-  // Ширину колонка состава меняет не вместе со сменой вида, а когда сцена
-  // догасла (`stageView`). Место она забирает у сцены, и раньше это
-  // происходило под ЕЩЁ ВИДИМЫМ лобби: карточка состояния сервера на глазах
-  // съезжала к центру нового, узкого места, а на неширокoм окне ещё и
-  // ужималась — за мгновение до того, как исчезнуть вовсе. Само содержимое
-  // колонки при этом решает за себя: лишние доли секунды оно обрезано нулевой
-  // шириной, а не показано впустую.
-  const roomForPeople = stageView === 'voice' || stageView === 'text';
+  // Ширину колонка состава меняет не вместе с кликом, а когда сцена догасла:
+  // `view` — это то, что НА ЭКРАНЕ (см. pendingScene). Место она забирает у
+  // сцены, и раньше это происходило под ЕЩЁ ВИДИМЫМ лобби: карточка состояния
+  // сервера на глазах съезжала к центру нового, узкого места, а на неширокoм
+  // окне ещё и ужималась — за мгновение до того, как исчезнуть вовсе. Само
+  // содержимое колонки при этом решает за себя: лишние доли секунды оно
+  // обрезано нулевой шириной, а не показано впустую.
+  const roomForPeople = view === 'voice' || view === 'text';
 
   // На десктопе видны все колонки разом — там анимации смены панели быть не должно.
   const shown = (which: MobilePanel) => (mobile ? (effective === which ? 'in' : 'out') : 'in');

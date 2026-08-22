@@ -7,7 +7,7 @@ import { Icon } from '@/components/ui/icon';
 import { Logo } from '@/components/ui/Logo';
 import { cn } from '@/lib/utils';
 import { listItem, springLayout } from '@/lib/motion';
-import { useUiStore } from '@/stores/ui';
+import { targetRoom, targetView, useUiStore } from '@/stores/ui';
 import { useChannelsStore } from '@/stores/channels';
 import { useServersStore } from '@/stores/servers';
 import { useUnreadStore, channelMentions, isChannelUnread } from '@/stores/unread';
@@ -367,8 +367,11 @@ function ChannelRow({
 export function Sidebar() {
   const t = useT();
   const rt = useRichT();
-  const view = useUiStore((s) => s.view);
-  const textRoom = useUiStore((s) => s.textRoom);
+  // Подсветка строки — про то, КУДА мы идём, а не про то, что ещё на экране:
+  // прежняя сцена гаснет доли секунды, и всё это время список каналов должен
+  // уже показывать выбранный (см. pendingScene).
+  const view = useUiStore(targetView);
+  const textRoom = useUiStore(targetRoom);
   const voiceRoom = useUiStore((s) => s.voiceRoom);
   const leaveText = useUiStore((s) => s.leaveText);
   const callsign = useUiStore((s) => s.callsign);
