@@ -1,7 +1,7 @@
 import { Injectable, Logger, Optional, type OnModuleInit } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { existsSync, writeFileSync } from 'node:fs';
-import { DataSource, type EntityManager } from 'typeorm';
+import { DataSource, In, type EntityManager } from 'typeorm';
 import { ChannelRow, ServerRow } from '../db/entities';
 import { Channel, MIGRATED_MARKER, REGISTRY_FILE, ServerEntry, loadRegistry } from './registry';
 import { type Claimant, type PublicServer, ownedBy, publicServer } from './ownership';
@@ -27,6 +27,9 @@ import { type Claimant, type PublicServer, ownedBy, publicServer } from './owner
 
 /** Главный сервер relay — неудаляем; его id носят все каналы по умолчанию. */
 export const MAIN_SERVER_ID = 'relay-main';
+
+/** Типы каналов, которыми распоряжается реестр. Беседы (`dm`) — не его дело. */
+export const REGISTRY_CHANNEL_TYPES = ['text', 'voice'];
 
 /**
  * Потолки. Их два вида, и они про разное (audit S2).
@@ -126,7 +129,10 @@ function toServerEntry(row: ServerRow): ServerEntry {
 function toChannel(row: ChannelRow): Channel {
   return {
     id: row.id,
-    serverId: row.serverId,
+    // Непусто гарантирует вызывающий: сюда попадают только строки, уже
+    // отфильтрованные по REGISTRY_CHANNEL_TYPES, — а у беседы (`dm`,
+    // server_id = null) в реестре нет представления вовсе.
+    serverId: row.serverId!,
     type: row.type as Channel['type'],
     name: row.name,
     slug: row.slug,
@@ -210,7 +216,16 @@ async function deleteMissing(
   keep: string[],
 ): Promise<void> {
   const qb = m.createQueryBuilder().delete().from(entity);
-  if (keep.length) qb.where('id NOT IN (:...keep)', { keep });
+  // Реестр пишется полным снимком, и «чего нет в снимке — удалить» верно
+  // ровно для того, чем реестр владеет. Беседы в снимке нет никогда, и без
+  // этой оговорки первая же перезапись реестра унесла бы всю переписку
+  // инсталляции — молча и каскадом.
+  if (entity === ChannelRow) {
+    qb.where('type IN (:...types)', { types: REGISTRY_CHANNEL_TYPES });
+    if (keep.length) qb.andWhere('id NOT IN (:...keep)', { keep });
+  } else if (keep.length) {
+    qb.where('id NOT IN (:...keep)', { keep });
+  }
   await qb.execute();
 }
 
@@ -273,7 +288,13 @@ export class RegistryService implements OnModuleInit {
 
     const [servers, channels] = await Promise.all([
       this.db.getRepository(ServerRow).find({ order: { position: 'ASC' } }),
-      this.db.getRepository(ChannelRow).find({ order: { position: 'ASC' } }),
+      // Только то, чем владеет реестр. Беседы (`dm`) — тоже строки в
+      // `channels`, но они принадлежат двоим, а реестр рассылается всем: попав
+      // сюда, беседа уехала бы в чужой сайдбар одним своим существованием.
+      this.db.getRepository(ChannelRow).find({
+        where: { type: In(REGISTRY_CHANNEL_TYPES) },
+        order: { position: 'ASC' },
+      }),
     ]);
 
     this.servers.length = 0;

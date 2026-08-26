@@ -103,12 +103,17 @@ export class ChannelRow {
   @PrimaryColumn({ type: 'text' })
   id!: string;
 
-  @Column({ type: 'text', name: 'server_id' })
-  serverId!: string;
+  /**
+   * Сервер, которому канал принадлежит. Пусто — у канала сервера нет, и такой
+   * канал сегодня ровно один по смыслу: беседа двоих (`type = 'dm'`). Кто в
+   * ней участвует, знает `conversations`.
+   */
+  @Column({ type: 'text', name: 'server_id', nullable: true })
+  serverId!: string | null;
 
   @ManyToOne(() => ServerRow, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'server_id' })
-  server!: ServerRow;
+  server!: ServerRow | null;
 
   /** `text` | `voice`. */
   @Column({ type: 'text' })
@@ -541,6 +546,48 @@ export class PinRow {
   pinnedAt!: Date;
 }
 
+/**
+ * Беседа двоих. Строка появляется в момент, когда переписку открыли, а не
+ * когда в неё написали: список «с кем я говорю» обязан помнить и пустой
+ * разговор, иначе открытая и закрытая беседа исчезала бы из раздела.
+ *
+ * Пара нормализована (`a < b` лексикографически) — тем же порядком считается и
+ * адрес канала, поэтому «я открыл переписку» и «он открыл переписку» приводят
+ * к одной строке, а не к двум.
+ *
+ * Внешний ключ здесь есть (в отличие от соседей по слою 3) и он намеренный:
+ * беседа без канала — это переписка без ленты, состояние, которого не должно
+ * существовать ни мгновения. Личности внешним ключом не связаны по общей
+ * причине: строка личности не должна запирать чужую переписку.
+ */
+@Entity('conversations')
+@Index('conversations_pair_key', ['a', 'b'], { unique: true })
+@Index('conversations_a_idx', ['a'])
+@Index('conversations_b_idx', ['b'])
+export class ConversationRow {
+  @PrimaryColumn({ type: 'uuid' })
+  id!: string;
+
+  /** Канал беседы: `type = 'dm'`, `server_id = null`, слаг равен id. */
+  @Column({ type: 'text', name: 'channel_id', unique: true })
+  channelId!: string;
+
+  @ManyToOne(() => ChannelRow, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'channel_id' })
+  channel!: ChannelRow;
+
+  /** Меньшая из двух личностей. */
+  @Column({ type: 'uuid' })
+  a!: string;
+
+  /** Большая из двух. */
+  @Column({ type: 'uuid' })
+  b!: string;
+
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
+  createdAt!: Date;
+}
+
 /** Всё, что знает DataSource. Порядок — как в файле: реестр, чат, личности. */
 export const ENTITIES = [
   ServerRow,
@@ -554,4 +601,5 @@ export const ENTITIES = [
   ReadRow,
   PrefRow,
   PinRow,
+  ConversationRow,
 ];

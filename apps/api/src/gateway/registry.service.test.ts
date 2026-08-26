@@ -189,4 +189,30 @@ describe('запись реестра', () => {
       'two',
     ]);
   });
+
+  it('беседа не попадает в реестр и переживает его перезапись', async () => {
+    const registry = await makeRegistry();
+    const channelId = 'dm-0123456789abcdef01234567';
+    await db.getRepository(ChannelRow).insert({
+      id: channelId,
+      serverId: null,
+      type: 'dm',
+      name: 'беседа',
+      slug: channelId,
+      removable: true,
+      mode: null,
+      creatorId: null,
+      creatorIdentityId: null,
+      position: 0,
+    });
+
+    await registry.load();
+
+    // В реестре её нет: реестр рассылается всем, а беседа — двоих.
+    expect(registry.channels.some((c) => c.id === channelId)).toBe(false);
+    // И полная перезапись реестра её не снесла вместе с историей.
+    await registry.persist();
+    await registry.flush();
+    expect(await db.getRepository(ChannelRow).countBy({ id: channelId })).toBe(1);
+  });
 });
