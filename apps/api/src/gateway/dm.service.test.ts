@@ -198,6 +198,16 @@ describe('память сервиса', () => {
     expect(dm.slugsOf('11111111-1111-1111-1111-111111111111')).toEqual([]);
   });
 
+  it('после открытия знает подпись обеих сторон, не только собеседника', async () => {
+    // Обе личности заведены ПОСЛЕ onModuleInit — единственный источник записи
+    // про инициатора беседы это open(), а не стартовый SELECT.
+    const me = await person('я');
+    const you = await person('ты');
+    await dm.open(me.id, you.fingerprint);
+    expect(dm.peerView(me.id)?.nick).toBe('я');
+    expect(dm.peerView(you.id)?.nick).toBe('ты');
+  });
+
   it('помнит ник для подписи и обновляет его при переименовании', async () => {
     const me = await person('я');
     const you = await person('ты');

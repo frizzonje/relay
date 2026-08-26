@@ -1,7 +1,7 @@
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
-import { ChannelRow, ConversationRow, IdentityRow } from '../db/entities';
+import { ChannelRow, ConversationRow } from '../db/entities';
 
 /** Адрес беседы всегда начинается с этого — по нему её и узнают в ленте. */
 export const DM_PREFIX = 'dm-';
@@ -100,16 +100,23 @@ export class DmService implements OnModuleInit {
     meId: string,
     peerFingerprint: string,
   ): Promise<{ ok: true; view: DmConversationView } | { ok: false; reason: DmOpenFailure }> {
-    const peer = await this.db
-      .getRepository(IdentityRow)
-      .findOne({ where: { fingerprint: peerFingerprint } });
+    // Обе стороны одним запросом: собеседник — по отпечатку, я — по id.
+    // `nicks` обязана расти по обеим половинам беседы (см. комментарий у поля
+    // `nicks`): открыл я — и в чужом процессе, где я окажусь чьим-то `peer`,
+    // и в моём собственном, где я сам себе `meId`, должно быть чем ответить
+    // на `peerView`.
+    const rows: Array<{ id: string; fingerprint: string; nick: string }> = await this.db.query(
+      'SELECT id, fingerprint, nick FROM identities WHERE fingerprint = $1 OR id = $2',
+      [peerFingerprint, meId],
+    );
+    const peer = rows.find((r) => r.fingerprint === peerFingerprint);
     if (!peer) return { ok: false, reason: 'unknown' };
     if (peer.id === meId) return { ok: false, reason: 'self' };
 
     const slug = DmService.address(meId, peer.id);
     if (!this.known.has(slug)) await this.create(slug, meId, peer.id);
-    if (!this.nicks.has(peer.id))
-      this.nicks.set(peer.id, { fingerprint: peer.fingerprint, nick: peer.nick });
+    for (const row of rows)
+      this.nicks.set(row.id, { fingerprint: row.fingerprint, nick: row.nick });
 
     const [last] = await this.previews([slug], meId);
     return {
