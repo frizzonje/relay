@@ -59,6 +59,8 @@ export const LIMIT = {
   /** Диагностическая веха звонка и её пояснение — только в лог. */
   diagEvent: 48,
   diagDetail: 200,
+  /** Строка поиска собеседника в `dm-people`: отпечаток и ник короче. */
+  dmQuery: 64,
 } as const;
 
 /**
@@ -305,6 +307,21 @@ export interface SfuTokenPayload {
 export interface VoiceDiagPayload {
   event?: unknown;
   detail?: unknown;
+}
+
+/** Кому пишем: отпечаток ключа, а не ник — ники не уникальны. */
+export interface DmOpenPayload {
+  fingerprint?: unknown;
+}
+
+/** В ленту какой беседы садимся — тот же слаг, что вернул `dm-open`. */
+export interface DmJoinPayload {
+  slug?: unknown;
+}
+
+/** Поиск по списку собеседников: нику или отпечатку. Пусто — весь список. */
+export interface DmPeoplePayload {
+  query?: unknown;
 }
 
 // ── Что уходит ack'ом ───────────────────────────────────────────────────────

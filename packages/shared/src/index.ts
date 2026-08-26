@@ -195,6 +195,93 @@ export const REACTION_EMOJIS = ['👍', '👎', '❤️', '😂', '🔥', '🫡'
 export type ReactionEmoji = (typeof REACTION_EMOJIS)[number];
 
 // ─────────────────────────────────────────────────────────────────────────
+// Личные сообщения
+// ─────────────────────────────────────────────────────────────────────────
+
+/** С этого начинается адрес беседы. Дальше — 24 знака шестнадцатеричных. */
+export const DM_PREFIX = 'dm-';
+
+/** Докуда обрезана последняя реплика в списке переписок. */
+export const DM_PREVIEW_LIMIT = 120;
+
+/** Сколько людей отдаётся на один запрос выбора собеседника. */
+export const DM_PEOPLE_LIMIT = 30;
+
+/**
+ * Беседа это или обычный канал. Проверяем не только префикс, но и форму
+ * хвоста: «dm-обсуждение» — законное имя текстового канала, и спутать их
+ * значило бы отдать его ленту под правила ЛС.
+ */
+export function isDmSlug(slug: string): boolean {
+  return /^dm-[0-9a-f]{24}$/.test(slug);
+}
+
+/** Собеседник: лицо рисуется по отпечатку, подпись — ником. */
+export interface DmPeer {
+  fingerprint: string;
+  nick: string;
+}
+
+/** Человек в списке выбора: тот же собеседник плюс «когда его видели». */
+export interface DmPerson extends DmPeer {
+  /** 0 — не видели ни разу. */
+  lastSeenTs: number;
+}
+
+/** Строка раздела ЛС. */
+export interface DmConversation {
+  /** Адрес беседы: он же слаг ленты, в которую входит `dm-join`. */
+  slug: string;
+  peer: DmPeer;
+  /** Время последней реплики; 0 — переписки ещё не было. */
+  lastTs: number;
+  /** Последняя реплика, обрезанная до DM_PREVIEW_LIMIT. */
+  preview: string;
+  previewMine: boolean;
+}
+
+export interface DmOpenPayload {
+  /** Кому пишем. Именно отпечаток: ники не уникальны. */
+  fingerprint: string;
+}
+
+export type DmOpenResult =
+  | { ok: true; conversation: DmConversation }
+  /** `unknown` — такой личности инсталляция не знает; `forbidden` — ЛС не для тебя (гость, бан). */
+  | { ok: false; error: 'unknown' | 'self' | 'forbidden' };
+
+export interface DmJoinPayload {
+  slug: string;
+}
+
+export type DmJoinResult = { ok: true } | { ok: false; error: 'unknown' | 'forbidden' };
+
+export type DmListResult =
+  | { ok: true; conversations: DmConversation[] }
+  | { ok: false; error: 'forbidden' };
+
+export interface DmPeoplePayload {
+  /** Поиск по нику или отпечатку. Пусто — просто список. */
+  query?: string;
+}
+
+export type DmPeopleResult = { ok: true; people: DmPerson[] } | { ok: false; error: 'forbidden' };
+
+/**
+ * В беседе написали. Летит ДВОИМ участникам, а не всем, — тем и отличается от
+ * `chat-activity`, который рассылается по инсталляции. Превью здесь есть
+ * намеренно: список переписок рисует последнюю реплику, и второй запрос ради
+ * неё был бы запросом на каждое сообщение.
+ */
+export interface DmActivityRelay {
+  slug: string;
+  ts: number;
+  preview: string;
+  previewMine: boolean;
+  peer: DmPeer;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Каналы (реестр направлений)
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -1105,6 +1192,17 @@ export interface ClientToServerEvents {
     payload: MentionSuggestPayload,
     cb: (res: MentionSuggestResult) => void,
   ) => void;
+  /** Открыть (или найти) переписку с этим отпечатком. */
+  'dm-open': (payload: DmOpenPayload, cb: (res: DmOpenResult) => void) => void;
+  /** Мои переписки — спрашивается при входе в раздел. */
+  'dm-list': (cb: (res: DmListResult) => void) => void;
+  /**
+   * Сесть в ленту беседы. Отдельная дверь от `chat-join`: канал пускает по
+   * видимости в реестре, беседа — по членству в паре.
+   */
+  'dm-join': (payload: DmJoinPayload, cb: (res: DmJoinResult) => void) => void;
+  /** Кого инсталляция видела — список для выбора собеседника. */
+  'dm-people': (payload: DmPeoplePayload, cb: (res: DmPeopleResult) => void) => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1237,6 +1335,8 @@ export interface ServerToClientEvents {
    * транспортам, и тишина оказывается взаимной.
    */
   'voice-locked': (payload: VoiceLockedRelay) => void;
+  /** В одной из моих переписок написали. Только двоим участникам. */
+  'dm-activity': (payload: DmActivityRelay) => void;
 }
 
 /** Вход в этот голосовой канал закрыт: нужен пароль сервера. */

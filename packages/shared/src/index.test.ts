@@ -6,12 +6,14 @@ import {
   AUTH_COOKIE,
   CHAT_PAGE_SIZE,
   CHAT_PREFIX,
+  DM_PREFIX,
   GUEST_TOKEN_TTL_MS,
   LIMITS,
   MAX_UPLOAD_BYTES,
   PROTOCOL_VERSION,
   REACTION_EMOJIS,
   TOKEN_TTL_MS,
+  isDmSlug,
   issueGuestToken,
   issueToken,
   parseCookies,
@@ -110,5 +112,17 @@ describe('прочее', () => {
 
   it('набор реакций заморожен по типу и не содержит дублей', () => {
     expect(new Set(REACTION_EMOJIS).size).toBe(REACTION_EMOJIS.length);
+  });
+});
+
+describe('адрес беседы', () => {
+  it('узнаётся по префиксу', () => {
+    expect(isDmSlug(`${DM_PREFIX}0123456789abcdef01234567`)).toBe(true);
+  });
+
+  it('не путается с каналом, чьё имя начинается так же', () => {
+    // Канал «dm-обсуждение» — законное имя, и лента у него обычная.
+    expect(isDmSlug('dm-obsuzhdenie')).toBe(false);
+    expect(isDmSlug('lounge')).toBe(false);
   });
 });
