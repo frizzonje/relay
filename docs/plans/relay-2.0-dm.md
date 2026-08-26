@@ -733,7 +733,7 @@ export class DmService implements OnModuleInit {
    */
   static address(aId: string, bId: string): string {
     const [a, b] = aId < bId ? [aId, bId] : [bId, aId];
-    const hash = createHash('sha256').update(`${a} ${b}`).digest('hex');
+    const hash = createHash('sha256').update(`${a}:${b}`).digest('hex');
     return DM_PREFIX + hash.slice(0, ADDRESS_LEN);
   }
 
