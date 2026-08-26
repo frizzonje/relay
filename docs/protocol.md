@@ -310,7 +310,7 @@ lastSeenTs }[]` (`lastSeenTs: 0` — не видели ни разу), либо
 2. Socket.io-подключение с токеном в `auth`-поле (или `Authorization`-заголовке,
    §2.3) → принять `servers`/`channels`/`voice-presence`.
 3. Чат: `chat-join` → история/roster → `chat-message`/`chat-react`.
-4. Звонок: `GET /api/config` → `join` → offer'ы всем из `peers` по правилам 7.2
+4. Звонок: `GET /api/config` → `join` → offer'ы всем из `peers` по правилам 8.2
    → `media-update` → рендер треков.
 5. Обработать: `disconnect` сразу после connect (= кука протухла → релогин),
    `server-unlock-result`, реконнект с повторным `join`.

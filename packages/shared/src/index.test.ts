@@ -7,6 +7,7 @@ import {
   CHAT_PAGE_SIZE,
   CHAT_PREFIX,
   DM_PREFIX,
+  DM_PREVIEW_LIMIT,
   GUEST_TOKEN_TTL_MS,
   LIMITS,
   MAX_UPLOAD_BYTES,
@@ -81,6 +82,18 @@ describe('константы совпадают с копией в api', () => {
   it('префикс комнаты чата тот же — по нему сервер и клиент находят одну ленту', () => {
     expect(apiSource('gateway/chat.service.ts')).toContain(
       `export const CHAT_PREFIX = '${CHAT_PREFIX}';`,
+    );
+  });
+
+  it('префикс адреса беседы тот же — по нему обе стороны узнают ЛС среди каналов', () => {
+    expect(apiSource('gateway/dm.service.ts')).toContain(
+      `export const DM_PREFIX = '${DM_PREFIX}';`,
+    );
+  });
+
+  it('обрезка превью последней реплики та же — иначе список переписок и dm-activity разойдутся', () => {
+    expect(apiSource('gateway/dm.service.ts')).toContain(
+      `export const DM_PREVIEW_LIMIT = ${DM_PREVIEW_LIMIT};`,
     );
   });
 
