@@ -14,6 +14,7 @@ import { issueSession } from '../identity/session';
 import type { Attachment, UploadsService } from '../uploads';
 import type { Channel, PersistedRegistry, ServerEntry } from './registry';
 import { ChatService } from './chat.service';
+import { DmService } from './dm.service';
 import { RegistryService, channelSlug } from './registry.service';
 import { SignalingGateway } from './signaling.gateway';
 import { FakeServer, asSocket, type FakeSocket } from './testkit';
@@ -168,7 +169,9 @@ export async function makeGateway(saved: PersistedRegistry = {}) {
     '/nonexistent/relay/registry.json.migrated',
   );
   await registry.onModuleInit();
-  const chat = new ChatService(db, registry);
+  const dmService = new DmService(db);
+  await dmService.onModuleInit();
+  const chat = new ChatService(db, registry, dmService);
   await chat.onModuleInit();
   const identities = new IdentityService(db);
   const owner = new OwnerService(db);
@@ -189,7 +192,7 @@ export async function makeGateway(saved: PersistedRegistry = {}) {
   // Узнавание личности вешается миддлварой — заводим её и здесь, иначе тест
   // проверял бы гейтвей, у которого этой двери нет вовсе.
   gw.afterInit(server.asServer());
-  return { gw, server, registry, chat, identities, owner, roles, reads, prefs };
+  return { gw, server, registry, chat, dm: dmService, identities, owner, roles, reads, prefs };
 }
 
 /**

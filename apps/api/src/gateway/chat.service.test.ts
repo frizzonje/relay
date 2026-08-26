@@ -13,6 +13,7 @@ import {
   mentionedIn,
   searchTerms,
 } from './chat.service';
+import { DmService } from './dm.service';
 import { RegistryService } from './registry.service';
 
 /**
@@ -26,6 +27,7 @@ const NOWHERE = '/nonexistent/relay/registry.json';
 
 let db: DataSource;
 let registry: RegistryService;
+let dm: DmService;
 let chat: ChatService;
 
 beforeAll(async () => {
@@ -40,7 +42,9 @@ beforeEach(async () => {
   await resetDatabase(db);
   registry = new RegistryService(db, NOWHERE, NOWHERE + '.migrated');
   await registry.onModuleInit();
-  chat = new ChatService(db, registry);
+  dm = new DmService(db);
+  await dm.onModuleInit();
+  chat = new ChatService(db, registry, dm);
   await chat.onModuleInit();
 });
 
@@ -48,7 +52,9 @@ beforeEach(async () => {
 async function restart(): Promise<ChatService> {
   const again = new RegistryService(db, NOWHERE, NOWHERE + '.migrated');
   await again.onModuleInit();
-  const service = new ChatService(db, again);
+  const dmAgain = new DmService(db);
+  await dmAgain.onModuleInit();
+  const service = new ChatService(db, again, dmAgain);
   await service.onModuleInit();
   return service;
 }
@@ -108,6 +114,37 @@ describe('переписка переживает рестарт', () => {
     // По этому времени сайдбар зажигает «непрочитано» — если кэш не прогреть,
     // все каналы после рестарта выглядят так, будто в них никогда не писали.
     expect(after.lastTs('obshchii')).toBe(msg.ts);
+  });
+});
+
+describe('беседа тоже канал', () => {
+  /** Личность в базе — тем же способом, что и в dm.service.test.ts. */
+  async function person(nick: string): Promise<{ id: string; fingerprint: string }> {
+    const id = randomUUID();
+    const fingerprint = `fp-${id.slice(0, 8)}`;
+    await db.getRepository(IdentityRow).insert({
+      id,
+      publicKey: `key-${id}`,
+      fingerprint,
+      nick,
+      createdAt: new Date(),
+      lastSeenAt: new Date(),
+    });
+    return { id, fingerprint };
+  }
+
+  it('ведёт ленту беседы так же, как ленту канала', async () => {
+    const me = await person('я');
+    const you = await person('ты');
+    const opened = await dm.open(me.id, you.fingerprint);
+    const slug = opened.ok ? opened.view.slug : '';
+
+    const msg = await chat.add(slug, { name: 'я', identityId: me.id, text: 'привет' });
+    expect(msg?.text).toBe('привет');
+
+    const page = await chat.history(slug);
+    expect(page.messages.map((m) => m.text)).toEqual(['привет']);
+    expect(chat.lastTs(slug)).toBe(msg?.ts);
   });
 });
 

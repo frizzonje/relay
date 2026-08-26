@@ -11,6 +11,7 @@ import {
   type Reactor,
   type ReplyRef,
 } from './protocol';
+import { DmService } from './dm.service';
 import { RegistryService } from './registry.service';
 
 /**
@@ -257,6 +258,7 @@ export class ChatService implements OnModuleInit {
   constructor(
     private readonly db: DataSource,
     private readonly registry: RegistryService,
+    private readonly dm: DmService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -734,18 +736,30 @@ export class ChatService implements OnModuleInit {
 
   // ── Внутреннее ────────────────────────────────────────────────────────────
 
-  /** Текстовый канал с таким слагом — из реестра в памяти, без похода в базу. */
+  /**
+   * Канал с таким слагом. Сперва реестр (текстовые каналы, самый частый
+   * случай), затем беседы: они тоже строки в `channels`, но реестр о них не
+   * знает намеренно (см. `dm.service`), и без второго вопроса ЛС оставались бы
+   * лентой, в которую нельзя написать.
+   */
   private channelId(slug: string): string | undefined {
-    return this.registry.channels.find((c) => c.type === 'text' && c.slug === slug)?.id;
+    return (
+      this.registry.channels.find((c) => c.type === 'text' && c.slug === slug)?.id ??
+      this.dm.channelIdOf(slug)
+    );
   }
 
   /**
    * Обратный ход: слаг канала по его id. Нужен поиску — в базе у реплики
    * записан id канала, а клиент оперирует слагами, и переводить одно в другое
-   * должна та сторона, у которой реестр под рукой.
+   * должна та сторона, у которой реестр под рукой. У беседы слаг и id канала —
+   * одна и та же строка, поэтому второй вопрос ей не задаётся.
    */
   private slugOf(channelId: string): string | undefined {
-    return this.registry.channels.find((c) => c.id === channelId)?.slug;
+    return (
+      this.registry.channels.find((c) => c.id === channelId)?.slug ??
+      this.dm.channelIdOf(channelId)
+    );
   }
 
   /**
