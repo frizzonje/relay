@@ -7,6 +7,7 @@ import { MessageTimeMillis1759100000000 } from './1759100000000-MessageTimeMilli
 import { Mentions1759200000000 } from './1759200000000-Mentions';
 import { ReactionIdentity1759300000000 } from './1759300000000-ReactionIdentity';
 import { DirectMessages1760000000000 } from './1760000000000-DirectMessages';
+import { Settings1761000000000 } from './1761000000000-Settings';
 
 /**
  * Миграции по порядку. Список руками, а не `migrations: ['dist/**']` по маске:
@@ -23,4 +24,5 @@ export const MIGRATIONS = [
   Mentions1759200000000,
   ReactionIdentity1759300000000,
   DirectMessages1760000000000,
+  Settings1761000000000,
 ];

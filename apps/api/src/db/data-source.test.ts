@@ -44,8 +44,8 @@ describe('настройки подключения', () => {
   });
 
   it('знает все сущности и миграции', () => {
-    expect(opts.entities).toHaveLength(12);
-    expect(opts.migrations).toHaveLength(9);
+    expect(opts.entities).toHaveLength(14);
+    expect(opts.migrations).toHaveLength(10);
   });
 });
 
