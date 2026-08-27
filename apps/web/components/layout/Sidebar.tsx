@@ -498,7 +498,9 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="panel panel-sidebar flex w-[238px] shrink-0 flex-col border-r border-line max-md:grow">
+    // `max-md:w-full` — см. тот же комментарий в DmList: обёртка вокруг тулбара
+    // и списка на телефоне стала колонкой, и `grow` там тянет по высоте.
+    <aside className="panel panel-sidebar flex w-[238px] shrink-0 flex-col border-r border-line max-md:w-full max-md:grow">
       {/* Шапка — иконка активного сервера и его имя (стык 52px, как топбар) */}
       <div className="flex h-[52px] shrink-0 items-center gap-2 border-b border-line px-4 shadow-[0_1px_2px_rgba(0,0,0,0.2)]">
         {isMain ? (

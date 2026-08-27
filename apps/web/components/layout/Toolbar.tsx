@@ -139,18 +139,18 @@ function ToolbarRail({ targets }: { targets: Target[] }) {
 }
 
 /**
- * Сколько лиц помещается в рейку, не превращая её в список переписок.
+ * Сколько лиц показывать. Одно число на обе раскладки — «последние, с кем
+ * говорил» не должно значить разное в зависимости от ширины экрана.
  *
- * Шесть — не вкус, а высота: три цели с разделителем занимают ~180px, каждое
- * лицо ещё 52, и на шестом рейка укладывается примерно в 490px. Прокрутки тут
- * нарочно нет — `overflow-y` обрезал бы и всплывающие подсказки с ником, и
- * пилюлю непрочитанного: по CSS прокрутка по одной оси делает `visible` по
- * второй недостижимым.
+ * Шесть — не вкус, а мера: в рейке три цели с разделителем занимают ~180px,
+ * каждое лицо ещё 52, и на шестом она укладывается примерно в 490px; в полосе
+ * на телефоне шесть целей по 44px с зазорами — это 304px, то есть ровно та
+ * ширина, что остаётся от 375 за вычетом полей.
  */
-const RAIL_PEERS = 6;
+const RECENT_PEERS = 6;
 
 /**
- * Стек лиц под разделителем: с кем говорили последними.
+ * Стек лиц: с кем говорили последними.
  *
  * Это не украшение, а вторая половина того же решения, что свернуло список
  * переписок при входе в беседу (см. `openDm` в stores/ui.ts). Список подменяет
@@ -158,13 +158,33 @@ const RAIL_PEERS = 6;
  * два клика каждый раз — плохой размен. Лица закрывают частый случай: перейти
  * к тому, с кем и так переписываешься, — один клик, не открывая ничего.
  *
- * Порядок — тот же, что в списке (свежие сверху): `useDmStore` держит
+ * Порядок — тот же, что в списке (свежие первыми): `useDmStore` держит
  * `conversations` отсортированными, здесь берётся только начало.
+ *
+ * `strip` — раскладка полосы (телефон): лица встают в строку под тремя целями,
+ * а не столбцом под разделителем. Компонент один на обе: выбор переписок,
+ * непрочитанное и переход — одно и то же решение, и разъехаться этим двум
+ * представлениям нельзя.
  */
-function RecentPeers() {
+function RecentPeers({ strip }: { strip?: boolean }) {
   const conversations = useDmStore((s) => s.conversations);
-  const recent = conversations.slice(0, RAIL_PEERS);
+  const recent = conversations.slice(0, RECENT_PEERS);
   if (recent.length === 0) return null;
+
+  if (strip) {
+    return (
+      // Прокрутка по X здесь допустима: в рейке её запрещала всплывающая
+      // подсказка (`overflow` по одной оси делает `visible` по второй
+      // недостижимым), а на телефоне подсказки нет — ховера не бывает.
+      // Полоса строго одна строка: разрастись во вторую значит съесть список
+      // каналов, ради которого этот экран и открыт.
+      <div className="-mx-2 mt-1.5 flex gap-1.5 overflow-x-auto border-t border-line px-2 pt-1.5">
+        {recent.map((c) => (
+          <PeerFace key={c.slug} conversation={c} strip />
+        ))}
+      </div>
+    );
+  }
 
   return (
     <>
@@ -181,12 +201,17 @@ function RecentPeers() {
 }
 
 /**
- * Одно лицо в рейке. Ник — во всплывающей подсказке слева (рейка стоит у
- * правого края, и подсказка вправо ушла бы за экран), отпечаток — нет: на
- * четырёх десятках пикселей он нечитаем, а само лицо и есть отпечаток, только
- * рисунком (см. lib/identicon.ts).
+ * Одно лицо. Ник — во всплывающей подсказке слева (рейка стоит у правого края,
+ * и подсказка вправо ушла бы за экран), отпечаток — нет: на четырёх десятках
+ * пикселей он нечитаем, а само лицо и есть отпечаток, только рисунком (см.
+ * lib/identicon.ts).
+ *
+ * В полосе (`strip`) от этого остаётся только цель и метка непрочитанного:
+ * подсказки на телефоне не бывает — она держится на ховере, — а метку нельзя
+ * вешать на внешний край, потому что внешнего края у горизонтальной полосы
+ * нет: соседнее лицо стоит вплотную. Поэтому там точка ВНУТРИ цели.
  */
-function PeerFace({ conversation }: { conversation: DmConversation }) {
+function PeerFace({ conversation, strip }: { conversation: DmConversation; strip?: boolean }) {
   const active = useUiStore((s) => s.dmRoom === conversation.slug);
   const openDm = useUiStore((s) => s.openDm);
   const unread = useUnreadIn(conversation.slug, active);
@@ -208,29 +233,44 @@ function PeerFace({ conversation }: { conversation: DmConversation }) {
         <Identicon fingerprint={conversation.peer.fingerprint} size={30} />
       </button>
 
-      {/* Пилюля справа, а не слева: рейка съехала к правому краю экрана, и
-          метка «здесь есть непрочитанное» должна лежать на внешней стороне,
-          иначе она упирается в сцену. */}
-      <span
-        aria-hidden
-        className={cn(
-          'pointer-events-none absolute -right-2 top-1/2 w-1 -translate-y-1/2 rounded-l bg-white transition-all duration-200',
-          active ? 'h-8' : 'h-0 opacity-0 group-hover/face:h-4 group-hover/face:opacity-100',
-          unread && !active && 'h-2 opacity-100',
-        )}
-      />
+      {strip ? (
+        // Точка у самого лица, а не в углу цели: цель 44px, лицо в ней 30px, и
+        // метка в углу коробки висела бы в пустоте отдельно от того, к чему
+        // относится. Знак и цвет — те же, что у строки списка переписок
+        // (см. DmList); кольцо по цвету полосы отделяет её от рисунка лица.
+        unread && (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-accent-strong ring-2 ring-bg-sidebar"
+          />
+        )
+      ) : (
+        <>
+          {/* Пилюля справа, а не слева: рейка съехала к правому краю экрана, и
+              метка «здесь есть непрочитанное» должна лежать на внешней стороне,
+              иначе она упирается в сцену. */}
+          <span
+            aria-hidden
+            className={cn(
+              'pointer-events-none absolute -right-2 top-1/2 w-1 -translate-y-1/2 rounded-l bg-white transition-all duration-200',
+              active ? 'h-8' : 'h-0 opacity-0 group-hover/face:h-4 group-hover/face:opacity-100',
+              unread && !active && 'h-2 opacity-100',
+            )}
+          />
 
-      <span
-        role="tooltip"
-        className={cn(
-          'glass glass-3 pointer-events-none absolute right-full top-1/2 z-30 mr-3 -translate-y-1/2',
-          'translate-x-[6px] scale-95 whitespace-nowrap px-3 py-1.5 text-[13px] font-semibold text-text-header opacity-0 shadow-xl',
-          'transition-all duration-150 group-hover/face:translate-x-0 group-hover/face:scale-100 group-hover/face:opacity-100',
-        )}
-      >
-        {nick}
-        <span className="absolute left-full top-1/2 -ml-px h-2 w-2 -translate-y-1/2 rotate-45 bg-bg-elev" />
-      </span>
+          <span
+            role="tooltip"
+            className={cn(
+              'glass glass-3 pointer-events-none absolute right-full top-1/2 z-30 mr-3 -translate-y-1/2',
+              'translate-x-[6px] scale-95 whitespace-nowrap px-3 py-1.5 text-[13px] font-semibold text-text-header opacity-0 shadow-xl',
+              'transition-all duration-150 group-hover/face:translate-x-0 group-hover/face:scale-100 group-hover/face:opacity-100',
+            )}
+          >
+            {nick}
+            <span className="absolute left-full top-1/2 -ml-px h-2 w-2 -translate-y-1/2 rotate-45 bg-bg-elev" />
+          </span>
+        </>
+      )}
     </div>
   );
 }
@@ -241,26 +281,29 @@ function ToolbarStrip({ targets }: { targets: Target[] }) {
   return (
     <nav
       aria-label={t('toolbar.label')}
-      className="panel panel-sidebar flex shrink-0 gap-1.5 border-b border-line px-2 py-2"
+      className="panel panel-sidebar flex shrink-0 flex-col border-b border-line px-2 py-2"
     >
-      {targets.map((target) => (
-        <TargetButton
-          key={target.key}
-          target={target}
-          tooltip={target.disabled ? soon : target.label}
-          accessibleLabel={accessibleLabel(target, soon)}
-          showLabel
-          className={cn(
-            // Та же логика, что и в рейке: кольцо — в базовой строке, вне веток.
-            'flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 rounded-[10px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong',
-            target.disabled
-              ? 'cursor-not-allowed text-text-faint'
-              : target.active
-                ? 'bg-bg-active text-text-header'
-                : 'text-text-muted hover:bg-bg-hover hover:text-text-header',
-          )}
-        />
-      ))}
+      <div className="flex gap-1.5">
+        {targets.map((target) => (
+          <TargetButton
+            key={target.key}
+            target={target}
+            tooltip={target.disabled ? soon : target.label}
+            accessibleLabel={accessibleLabel(target, soon)}
+            showLabel
+            className={cn(
+              // Та же логика, что и в рейке: кольцо — в базовой строке, вне веток.
+              'flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 rounded-[10px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong',
+              target.disabled
+                ? 'cursor-not-allowed text-text-faint'
+                : target.active
+                  ? 'bg-bg-active text-text-header'
+                  : 'text-text-muted hover:bg-bg-hover hover:text-text-header',
+            )}
+          />
+        ))}
+      </div>
+      <RecentPeers strip />
     </nav>
   );
 }

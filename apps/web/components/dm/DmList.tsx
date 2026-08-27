@@ -101,7 +101,11 @@ export function DmList() {
   const [pickerOpen, setPickerOpen] = useState(false);
 
   return (
-    <aside className="panel panel-sidebar relative flex w-[238px] shrink-0 flex-col border-r border-line max-md:grow">
+    // `max-md:w-full` — не украшение: обёртка вокруг тулбара и списка стала на
+    // телефоне КОЛОНКОЙ (см. AppShell), а в колонке `grow` тянет по высоте, не
+    // по ширине. Без явной ширины список остаётся 238px посреди 375, и справа
+    // от него висит мёртвая полоса. Ровно то же и у Sidebar.
+    <aside className="panel panel-sidebar relative flex w-[238px] shrink-0 flex-col border-r border-line max-md:w-full max-md:grow">
       <div className="flex h-[52px] shrink-0 items-center justify-between border-b border-line px-4 shadow-[0_1px_2px_rgba(0,0,0,0.2)]">
         <span className="truncate font-bold text-text-header">{t('dm.title')}</span>
         <button
@@ -109,7 +113,10 @@ export function DmList() {
           onClick={() => setPickerOpen(true)}
           title={t('dm.new')}
           aria-label={t('dm.new')}
-          className="grid h-7 w-7 shrink-0 place-items-center rounded text-text-muted outline-none transition-colors hover:text-text-header focus-visible:ring-2 focus-visible:ring-accent"
+          // На телефоне цель вырастает до 44px — нижняя граница, ниже которой
+          // палец начинает промахиваться (референс, кадр 2c). Значок остаётся
+          // прежнего кегля: расти должна область нажатия, а не рисунок.
+          className="grid h-7 w-7 shrink-0 place-items-center rounded text-text-muted outline-none transition-colors hover:text-text-header focus-visible:ring-2 focus-visible:ring-accent max-md:h-11 max-md:w-11 max-md:-mr-2.5"
         >
           <Icon name="plus" className="text-[16px]" />
         </button>

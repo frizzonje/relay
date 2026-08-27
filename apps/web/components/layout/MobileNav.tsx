@@ -8,6 +8,7 @@ import { Icon } from '@/components/ui/icon';
 import { AnimatedCount } from '@/components/ui/AnimatedCount';
 import { avatarStyle } from '@/lib/avatar';
 import { Identicon } from '@/components/ui/Identicon';
+import { shortFingerprint } from '@/lib/format';
 import type { RosterPerson } from '@relay/shared';
 import { useUiStore, type MobilePanel } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
@@ -87,8 +88,14 @@ function PeopleButton({
  * его прямо над строкой ввода, и печатать приходилось сквозь навигацию. Сверху
  * он не спорит ни с клавиатурой, ни с панелью звонка.
  *
- * На экране каналов шапки нет вовсе: у сайдбара своя (имя сервера), а вторая
- * строка над ней — пустая трата высоты.
+ * На экране каналов шапки нет вовсе: у сайдбара своя (имя сервера) — а в
+ * разделе ЛС своя же у списка переписок; вторая строка над ними — пустая трата
+ * высоты.
+ *
+ * В беседе эта шапка — единственная: собственную шапку `DmThread` на узком
+ * экране прячет, иначе над перепиской стояли бы две полосы по 52px подряд.
+ * Поэтому здесь и лицо собеседника, и его короткий отпечаток: на телефоне
+ * карточки справа (`DmPeerCard`) нет, и назвать человека больше негде.
  */
 export function MobileNav() {
   const t = useT();
@@ -98,6 +105,8 @@ export function MobileNav() {
   const voiceRoom = useUiStore((s) => s.voiceRoom);
   const voiceLabel = useUiStore((s) => s.voiceLabel);
   const textLabel = useUiStore((s) => s.textLabel);
+  const dmPeer = useUiStore((s) => s.dmPeer);
+  const toggleDmSection = useUiStore((s) => s.toggleDmSection);
   const micOn = useVoiceStore((s) => s.micOn);
   const tiles = useVoiceStore((s) => s.tiles);
   const roster = useChatStore((s) => s.roster);
@@ -106,7 +115,10 @@ export function MobileNav() {
 
   // Состав осмыслен только в канале (голос/текст). В лобби вкладку прячем, а
   // если она была активной — считаем активной сцену (иначе пустой экран).
+  // У беседы «состава» нет и быть не может: собеседник один, и всё, что о нём
+  // известно, стоит прямо здесь, в шапке.
   const hasPeople = view === 'voice' || view === 'text';
+  const inDm = view === 'dm';
   const effective: MobilePanel = panel === 'people' && !hasPeople ? 'stage' : panel;
 
   // Направление хода стопки: вперёд (+1) или назад по стрелке (−1).
@@ -139,10 +151,18 @@ export function MobileNav() {
   let key: string;
   let title: string;
   let icon: 'hash' | 'voice' | null = null;
+  let face: string | null = null;
   let sub = '';
   if (people) {
     key = 'people';
     title = t(view === 'voice' ? 'members.title.inChannel' : 'members.title.online');
+  } else if (inDm) {
+    key = `dm:${textLabel}`;
+    title = textLabel;
+    face = dmPeer;
+    // Присутствия у беседы в этапе A нет (см. DmPeerCard) — подпись говорит это
+    // прямо, а не молчит, притворяясь, что человек только что был в сети.
+    sub = t('dm.header.status.unknown');
   } else if (view === 'voice') {
     key = `voice:${voiceLabel}`;
     title = voiceLabel;
@@ -164,7 +184,13 @@ export function MobileNav() {
       <div className="flex h-[52px] items-center gap-1 px-2">
         <button
           type="button"
-          onClick={() => setPanel(people ? 'stage' : 'nav')}
+          // Из беседы шаг назад ведёт в СПИСОК ПЕРЕПИСОК, а не к каналам:
+          // человек пришёл оттуда, и `openDm` свернул список сам (на десктопе
+          // он подменяет каналы, и держать его раскрытым нечем). Голый
+          // `setPanel('nav')` показал бы уже вернувшиеся каналы — и соседние
+          // беседы исчезли бы из-под пальца. `toggleDmSection` при свёрнутом
+          // списке разворачивает его и переводит на панель каналов разом.
+          onClick={() => (people ? setPanel('stage') : inDm ? toggleDmSection() : setPanel('nav'))}
           aria-label={t('mobile.back')}
           className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-text-muted outline-none transition-colors active:bg-bg-hover active:text-text-header"
         >
@@ -186,12 +212,21 @@ export function MobileNav() {
               onClick={() => setPanel('people')}
               className="block w-full min-w-0 px-1 text-left outline-none disabled:cursor-default"
             >
-              <span className="flex items-center gap-1 text-[15px] font-bold leading-tight text-text-header">
+              <span className="flex items-center gap-1.5 text-[15px] font-bold leading-tight text-text-header">
                 {icon === 'hash' && <span className="text-text-faint">#</span>}
                 {icon === 'voice' && (
                   <Icon name="volume-2" className="shrink-0 text-[16px] text-text-muted" />
                 )}
+                {face && <Identicon fingerprint={face} size={24} className="shrink-0" />}
                 <span className="truncate">{title}</span>
+                {/* Ник один человека не называет — тёзки в реестре не редкость
+                    (см. DmList). Отпечаток `shrink-0`, ник `truncate`: длинное
+                    имя ужимается, а различитель остаётся на экране. */}
+                {face && (
+                  <span className="shrink-0 font-mono text-[10px] font-normal tracking-[0.06em] text-text-faint">
+                    {shortFingerprint(face)}
+                  </span>
+                )}
               </span>
               {sub && (
                 <span
@@ -230,6 +265,23 @@ export function MobileNav() {
             className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-text-muted outline-none transition-colors active:bg-bg-hover active:text-text-header"
           >
             <Icon name="search" className="text-[19px]" />
+          </button>
+        )}
+
+        {/* Контекстное действие беседы — звонок. Нарисован, но выключен: экран
+            1:1-звонка распахнётся этапом B (docs/plans/relay-2.0-calls.md).
+            HTML `disabled` ему НЕ ставится — тем же приёмом, что в Toolbar и
+            DmPeerCard: атрибут выбросил бы кнопку из обхода с клавиатуры вместе
+            с единственным объяснением, почему она ничего не делает. */}
+        {inDm && (
+          <button
+            type="button"
+            aria-disabled
+            title={t('dm.soon')}
+            aria-label={`${t('toolbar.call')} — ${t('dm.soon')}`}
+            className="grid h-11 w-11 shrink-0 cursor-not-allowed place-items-center rounded-full text-text-faint outline-none focus-visible:ring-2 focus-visible:ring-line-strong"
+          >
+            <Icon name="phone" className="text-[19px]" strokeWidth={1.8} />
           </button>
         )}
 

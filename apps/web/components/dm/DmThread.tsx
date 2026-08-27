@@ -25,7 +25,10 @@ export function DmThread() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-[52px] shrink-0 items-center gap-2.5 border-b border-line px-4 shadow-[0_1px_2px_rgba(0,0,0,0.2)]">
+      {/* На телефоне ту же самую шапку несёт `MobileNav` — лицо, ник, отпечаток
+          и статус стоят там. Оставить обе значило бы отдать беседе две полосы
+          по 52px из 812 точек экрана, повторив в них одно и то же. */}
+      <div className="flex h-[52px] shrink-0 items-center gap-2.5 border-b border-line px-4 shadow-[0_1px_2px_rgba(0,0,0,0.2)] max-md:hidden">
         {peer && <Identicon fingerprint={peer} size={34} className="shrink-0" />}
         <div className="min-w-0 flex-1 leading-tight">
           <div className="flex items-center gap-1.5">
@@ -38,9 +41,7 @@ export function DmThread() {
           </div>
           {/* Присутствия у беседы в этапе A нет (см. DmPeerCard) — статус в
               шапке говорит то же самое, а не молчит об этом. */}
-          <span className="text-[11.5px] text-text-muted">
-            {t('dm.header.status.unknown')}
-          </span>
+          <span className="text-[11.5px] text-text-muted">{t('dm.header.status.unknown')}</span>
         </div>
       </div>
 
