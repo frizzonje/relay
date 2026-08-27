@@ -1,6 +1,7 @@
 import type { Logger } from '@nestjs/common';
 import type { AppSocket } from './socket-data';
 import type { ChatSessions } from './chat-sessions';
+import type { DmService } from './dm.service';
 import type { IdentityService } from '../identity/identity.service';
 import type { Mentions } from './mentions';
 import type { Perimeter } from './perimeter';
@@ -32,6 +33,7 @@ export class PersonalHandlers {
     private readonly prefs: PrefsService,
     private readonly perimeter: Perimeter,
     private readonly mentions: Mentions,
+    private readonly dm: DmService,
     private readonly logger: Logger,
   ) {}
 
@@ -53,7 +55,7 @@ export class PersonalHandlers {
       ]);
       // `full` — «это весь список». По нему клиент понимает, что может отдать
       // серверу то, что прочитал и настроил без личности, а не только принять.
-      client.emit('reads', { marks: this.marksBySlug(marks), full: true });
+      client.emit('reads', { marks: this.marksBySlug(marks, me.id), full: true });
       client.emit('prefs', { values, full: true });
       // Упоминания — после отметок чтения и не случайно: счётчик считается
       // «сколько раз назвали после того, как канал дочитан», и клиенту он
@@ -73,11 +75,18 @@ export class PersonalHandlers {
    * в протоколе канал всю жизнь звался слагом, и заводить ради этого второе имя
    * канала на проводе незачем. Каналы, которых уже нет, отпадают сами.
    */
-  private marksBySlug(marks: Map<string, number>): Record<string, number> {
+  private marksBySlug(marks: Map<string, number>, meId: string): Record<string, number> {
     const out: Record<string, number> = {};
     for (const channel of this.registry.channels) {
       const ts = marks.get(channel.id);
       if (ts) out[channel.slug] = ts;
+    }
+    // У беседы id канала и слаг — одно и то же, но пройтись по ним всё равно
+    // надо здесь: реестр бесед не знает, а без этой петли «прочитано на
+    // десктопе» не доезжало бы до телефона ровно в личной переписке.
+    for (const slug of this.dm.slugsOf(meId)) {
+      const ts = marks.get(slug);
+      if (ts) out[slug] = ts;
     }
     return out;
   }
@@ -98,10 +107,15 @@ export class PersonalHandlers {
     const slug = trimmed(payload?.slug, LIMIT.slug);
     const ts = typeof payload?.ts === 'number' ? payload.ts : 0;
     const channel = this.registry.channels.find((c) => c.type === 'text' && c.slug === slug);
+    // У беседы канала в реестре нет — её id тот же, что и слаг (см. dm.service).
+    const channelId = channel?.id ?? (this.dm.isDm(slug) ? slug : undefined);
     // Канал, которого этот сокет не видит, ему и не дочитать: иначе отметки
-    // становятся способом перебирать слаги закрытых серверов.
-    if (!channel || !this.perimeter.canSee(client, channel)) return;
-    const mark = await this.reads.mark(me.id, channel.id, ts);
+    // становятся способом перебирать слаги закрытых серверов. У беседы
+    // видимости в этом смысле нет — есть членство, и дочитать чужую переписку,
+    // даже подобрав её адрес, нельзя ровно по той же причине.
+    if (!channelId) return;
+    if (channel ? !this.perimeter.canSee(client, channel) : !this.dm.isMember(slug, me.id)) return;
+    const mark = await this.reads.mark(me.id, channelId, ts);
     if (mark === null) return;
     // Прочитано на десктопе — прочитано и в браузере, прямо сейчас. Это и есть
     // весь смысл переезда: догонять его перезагрузкой страницы было бы почти
@@ -150,6 +164,10 @@ export class PersonalHandlers {
       ? ((await this.identities.nickOf(speaker.id)) ?? speaker.nick)
       : trimmed(payload?.name, LIMIT.tag);
     if (!name) return;
+
+    // Список переписок собеседника рисует эту подпись из своего кэша, а не из
+    // presence, — без этого звонка она осталась бы прежней до перезапуска api.
+    if (speaker) this.dm.rememberNick(speaker.id, name);
 
     // Имя принадлежит личности, а не сокету, — значит и менять его надо у всех
     // сокетов этой личности. Иначе человек, переименовавшийся с телефона,

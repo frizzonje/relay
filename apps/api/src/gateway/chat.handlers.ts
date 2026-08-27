@@ -1,6 +1,7 @@
 import type { AppServer, AppSocket } from './socket-data';
 import type { ChatSessions } from './chat-sessions';
 import type { Directory } from './directory';
+import type { DmService } from './dm.service';
 import type { Mentions } from './mentions';
 import type { Moderation } from './moderation';
 import type { Perimeter } from './perimeter';
@@ -8,6 +9,7 @@ import type { RegistryService } from './registry.service';
 import type { UploadsService } from '../uploads';
 import { BROADCAST_DEBOUNCE_MS } from './directory';
 import { ChatService, MENTION_SUGGEST_LIMIT, searchTerms } from './chat.service';
+import { DM_PREVIEW_LIMIT } from './dm.service';
 import {
   LIMIT,
   str,
@@ -59,6 +61,7 @@ export class ChatHandlers {
     private readonly directory: Directory,
     private readonly moderation: Moderation,
     private readonly mentions: Mentions,
+    private readonly dm: DmService,
     private readonly serverOf: () => AppServer,
   ) {}
 
@@ -292,6 +295,12 @@ export class ChatHandlers {
     // тем, кому канал виден: слаг канала закрытого сервера — часть секрета, и
     // «в тайном канале сейчас пишут» посторонним знать неоткуда.
     const slug = this.chat.slug(room);
+    // Беседа — не канал: её активность знать посторонним неоткуда, и адрес
+    // переписки в общей рассылке был бы ровно тем, чего в ЛС быть не должно.
+    if (this.dm.isDm(slug)) {
+      this.dmActivity(slug, msg, this.perimeter.speaker(client)?.id);
+      return;
+    }
     const channel = this.registry.channels.find((c) => c.type === 'text' && c.slug === slug);
     const srv = channel ? this.registry.servers.find((s) => s.id === channel.serverId) : undefined;
     this.queueChatActivity(slug, msg.ts, srv?.passwordHash ? srv.id : null);
@@ -320,6 +329,38 @@ export class ChatHandlers {
       }
     }, BROADCAST_DEBOUNCE_MS);
     this.activityTimer.unref?.();
+  }
+
+  /**
+   * «В твоей переписке написали» — обеим сторонам и никому больше. Без
+   * коалесцирования: адресатов ровно двое, и копить тут нечего.
+   *
+   * Превью едет в самом событии. Иначе список переписок ходил бы за последней
+   * репликой отдельным запросом — по запросу на каждое сообщение, то есть чаще
+   * всего остального вместе взятого.
+   */
+  private dmActivity(
+    slug: string,
+    msg: { text: string; ts: number },
+    authorId: string | undefined,
+  ): void {
+    const members = this.dm.membersOf(slug);
+    if (!members) return;
+    const preview = msg.text.slice(0, DM_PREVIEW_LIMIT);
+    for (const identityId of members) {
+      const peerId = members.find((id) => id !== identityId) ?? identityId;
+      const peer = this.dm.peerView(peerId);
+      if (!peer) continue;
+      for (const sock of this.perimeter.socketsOf(identityId)) {
+        sock.emit('dm-activity', {
+          slug,
+          ts: msg.ts,
+          preview,
+          previewMine: authorId === identityId,
+          peer,
+        });
+      }
+    }
   }
 
   /**

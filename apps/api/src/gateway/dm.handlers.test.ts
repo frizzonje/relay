@@ -5,6 +5,8 @@ import {
   connectAs,
   makeGateway,
   personCookie,
+  settle,
+  until,
   useGatewayStand,
 } from './gateway.testkit';
 import type { SignalingGateway } from './signaling.gateway';
@@ -154,5 +156,70 @@ describe('список и люди', () => {
     const mine = await connectAs(gw, server, me.cookie);
     const res = await gw.handleDmPeople(asSocket(mine), {});
     expect(res.ok && res.people.map((p) => p.nick)).toEqual(['ты']);
+  });
+});
+
+describe('активность беседы', () => {
+  it('уходит двоим и не уходит третьему', async () => {
+    const me = await personCookie('я');
+    const you = await personCookie('ты');
+    const third = await personCookie('третий');
+    const mine = await connectAs(gw, server, me.cookie);
+    const yours = await connectAs(gw, server, you.cookie);
+    const theirs = await connectAs(gw, server, third.cookie);
+    const opened = await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint });
+    const slug = opened.ok ? opened.conversation.slug : '';
+    await gw.handleDmJoin(asSocket(mine), { slug });
+    yours.clear();
+    theirs.clear();
+
+    await gw.handleChatMessage(asSocket(mine), { text: 'привет' });
+    settle();
+
+    const relay = yours.last('dm-activity') as {
+      slug: string;
+      preview: string;
+      previewMine: boolean;
+    };
+    expect(relay.slug).toBe(slug);
+    expect(relay.preview).toBe('привет');
+    // Для второй стороны реплика не «моя».
+    expect(relay.previewMine).toBe(false);
+    // Никакой глобальной активности с адресом беседы.
+    expect(theirs.got('dm-activity')).toBe(false);
+    expect(theirs.got('chat-activity')).toBe(false);
+    expect(mine.all('chat-activity')).toEqual([]);
+  });
+});
+
+describe('отметки чтения', () => {
+  it('беседа дочитывается и отметка возвращается на другое устройство', async () => {
+    const me = await personCookie('я');
+    const you = await personCookie('ты');
+    const mine = await connectAs(gw, server, me.cookie);
+    const opened = await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint });
+    const slug = opened.ok ? opened.conversation.slug : '';
+    await gw.handleDmJoin(asSocket(mine), { slug });
+    const msg = (await gw.handleChatMessage(asSocket(mine), { text: 'привет' }),
+    mine.last('chat')) as { ts: number };
+
+    // Часы стенда фальшивые и застыли в момент старта теста, а `msg.ts` —
+    // настоящее время базы, которое успело уйти вперёд за несколько
+    // реальных обращений к ней. `reads.mark` не даёт дочитать канал «из
+    // будущего» (см. `reads.service`), так что без этого их надо сперва
+    // догнать — иначе отметка молча срежется до часов стенда.
+    await until(() => Date.now() >= msg.ts, 'часы стенда догнали время реплики');
+    await gw.handleReadMark(asSocket(mine), { slug, ts: msg.ts });
+
+    // Второе устройство подключается уже после отметки — снимок личного он
+    // получает не сразу (см. `handleConnection`: `send()` не дожидаются), и
+    // без этого ожидания проверка ловила бы момент до того, как база успела
+    // ответить, а не отсутствие самой отметки. Ждём именно `mentions` —
+    // последнее, что шлёт `send()`: иначе следующий тест мог бы застать
+    // хвост этого запроса ещё в полёте.
+    const second = await connectAs(gw, server, me.cookie, { id: 'второе', keep: true });
+    await until(() => second.got('mentions'), 'снимок личного для второго устройства');
+    const reads = second.last('reads') as { marks: Record<string, number> };
+    expect(reads.marks[slug]).toBe(msg.ts);
   });
 });

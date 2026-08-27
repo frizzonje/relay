@@ -244,6 +244,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.directory,
     this.moderation,
     this.mentions,
+    this.dm,
     () => this.server,
   );
 
@@ -274,6 +275,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.prefs,
     this.perimeter,
     this.mentions,
+    this.dm,
     this.logger,
   );
 
