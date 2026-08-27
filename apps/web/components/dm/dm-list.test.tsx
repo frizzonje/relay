@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DmList } from './DmList';
+import { shortFingerprint } from '@/lib/format';
 import { useDmStore } from '@/stores/dm';
 import { useUnreadStore } from '@/stores/unread';
 
@@ -22,6 +23,18 @@ import { useUnreadStore } from '@/stores/unread';
  */
 
 const slug = 'dm-0123456789abcdef01234567';
+
+/**
+ * Настоящая форма отпечатка (шестнадцатеричные группы, как в
+ * stores/identity.test.ts) — не `'fp-ты'` из прежней версии теста. У той
+ * строки `shortFingerprint` не находит ни одной hex-группы и возвращает вход
+ * без изменений, так что `'fp-ты'` сама СОДЕРЖИТ `'ты'`: проверка проходила бы
+ * и без отпечатка на экране, и без ника — алиас между полями делал тест
+ * бесполезным. Ник и короткий отпечаток ниже подобраны так, чтобы не быть
+ * подстрокой друг друга ни в одну сторону.
+ */
+const fingerprint = '6668-7aad-f862-bd77';
+const nick = 'Марта';
 
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
@@ -45,11 +58,11 @@ describe('список переписок', () => {
     host.remove();
   });
 
-  it('рисует лицо, ник, превью и счётчик непрочитанного', () => {
+  it('рисует лицо, ник, отпечаток, превью и счётчик непрочитанного', () => {
     useDmStore.getState().setConversations([
       {
         slug,
-        peer: { fingerprint: 'fp-ты', nick: 'ты' },
+        peer: { fingerprint, nick },
         lastTs: 1000,
         preview: 'привет',
         previewMine: false,
@@ -58,7 +71,10 @@ describe('список переписок', () => {
     useUnreadStore.setState({ lastRead: {} });
 
     const out = markup();
-    expect(out).toContain('ты');
+    expect(out).toContain(nick);
+    // Именно рендер короткого отпечатка, а не подстрока, которую мог бы дать
+    // и один только ник, — см. комментарий у фикстур выше.
+    expect(out).toContain(shortFingerprint(fingerprint));
     expect(out).toContain('привет');
     expect(host.querySelector('[data-testid="dm-unread"]')).toBeTruthy();
   });
