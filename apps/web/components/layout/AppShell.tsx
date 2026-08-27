@@ -15,6 +15,7 @@ import { OutdatedGate } from '@/components/layout/OutdatedGate';
 import { ServerRail } from '@/components/layout/ServerRail';
 import { Toolbar } from '@/components/layout/Toolbar';
 import { Sidebar } from '@/components/layout/Sidebar';
+import { DmList } from '@/components/dm/DmList';
 import { Topbar } from '@/components/layout/Topbar';
 import { Controls } from '@/components/layout/Controls';
 import { Members } from '@/components/layout/Members';
@@ -46,6 +47,11 @@ const panelFade = {
 export function AppShell() {
   const panel = useUiStore((s) => s.mobilePanel);
   const view = useUiStore((s) => s.view);
+  // Раздел ЛС подменяет сайдбар списком переписок целиком, а не одной из его
+  // секций: список каналов и список бесед — разные адресные пространства
+  // (см. Toolbar), и держать их на экране одновременно нечем — упрутся в одну
+  // и ту же полосу шириной 238px.
+  const dmSection = useUiStore((s) => s.dmSection);
   // Куда идём — по нему решаем про панели: ждать конца анимации сцены им незачем.
   const going = useUiStore(targetView);
   const textRoom = useUiStore((s) => s.textRoom);
@@ -121,7 +127,7 @@ export function AppShell() {
               сайдбар и так шли бы друг за другом. */}
           <div className="flex min-w-0 flex-1 flex-col md:flex-row">
             <Toolbar />
-            <Sidebar />
+            {dmSection ? <DmList /> : <Sidebar />}
           </div>
         </Panel>
 
