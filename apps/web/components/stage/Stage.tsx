@@ -8,6 +8,8 @@ import { cn } from '@/lib/utils';
 import { Lobby } from '@/components/stage/Lobby';
 import { VideoGrid } from '@/components/stage/VideoGrid';
 import { ChatPanel } from '@/components/chat/ChatPanel';
+import { DmThread } from '@/components/dm/DmThread';
+import { DmPeerCard } from '@/components/dm/DmPeerCard';
 
 /**
  * Сцена (index.html:1559 #stage): показывает лобби / видео-сетку / чат в
@@ -75,6 +77,15 @@ export function Stage() {
           {!changingView && view === 'lobby' && <Lobby />}
           {!changingView && view === 'voice' && <VideoGrid />}
           {!changingView && view === 'text' && <ChatPanel />}
+          {/* Беседа держит свою правую колонку сама (232px, как у голоса/текста
+              состав), а не через колонку каркаса: у ЛС нет ни ростера, ни
+              списка «в сети», которым та колонка служит (см. DmPeerCard). */}
+          {!changingView && view === 'dm' && (
+            <div className="flex min-h-0 flex-1">
+              <DmThread />
+              <DmPeerCard />
+            </div>
+          )}
         </motion.div>
       </AnimatePresence>
     </div>

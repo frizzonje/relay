@@ -130,6 +130,14 @@ export function ChatPanel() {
   const rt = useRichT();
   const textLabel = useUiStore((s) => s.textLabel);
   const textRoom = useUiStore((s) => s.textRoom);
+  const dmRoom = useUiStore((s) => s.dmRoom);
+  // Канал или беседа — по духу один и тот же адрес открытой ленты (сокет
+  // держит на нём ту же комнату, `chat`/`chat-history` приходят по нему же
+  // независимо от типа). ui-стор держит их в разных полях (см. её комментарий
+  // про Scene) ровно затем, чтобы остальной каркас различал их смысл — состав,
+  // реестр каналов, шапка. Ленте это различие ни к чему: ей нужен только сам
+  // адрес, `room`, взамен обеих полей, обнулённых на любой сцене, кроме своей.
+  const room = textRoom ?? dmRoom;
   const pendingScene = useUiStore((s) => s.pendingScene);
   const commitScene = useUiStore((s) => s.commitScene);
   const callsign = useUiStore((s) => s.callsign);
@@ -174,7 +182,7 @@ export function ChatPanel() {
   // Отметка «дочитал до» на момент входа в канал (или момента, когда от него
   // отвернулись) — по ней рисуем линию «новые». Держит её стор, а не локальный
   // стейт: она двигается и без смены канала (свернул окно → вернулся).
-  const dividerTs = useUnreadStore((s) => (textRoom ? (s.divider[textRoom] ?? 0) : 0));
+  const dividerTs = useUnreadStore((s) => (room ? (s.divider[room] ?? 0) : 0));
 
   const fileRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -217,7 +225,7 @@ export function ChatPanel() {
     setMentionToken(null);
     const raf = requestAnimationFrame(() => requestAnimationFrame(() => setEnterAnim(true)));
     return () => cancelAnimationFrame(raf);
-  }, [textRoom]);
+  }, [room]);
 
   // Приехала страница сверху — возвращаем прокрутку туда, где читатель и был.
   // Слоем layout, а не обычным эффектом: между вставкой и правкой scrollTop не
@@ -237,15 +245,15 @@ export function ChatPanel() {
   // сказать явно.
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el || !messages.length || pinnedFor.current === textRoom) return;
-    pinnedFor.current = textRoom;
+    if (!el || !messages.length || pinnedFor.current === room) return;
+    pinnedFor.current = room;
     prevLen.current = messages.length;
     el.scrollTo({ top: el.scrollHeight });
     setHasNew(false);
     // Страница короче экрана, а выше что-то есть: прокрутить вверх человеку
     // нечем, поэтому подтягиваем сами — иначе история выглядит законченной.
     if (el.scrollHeight <= el.clientHeight && useChatStore.getState().more) void loadOlder();
-  }, [messages, textRoom]);
+  }, [messages, room]);
 
   // Автопрокрутка вниз, если уже у дна; иначе, если лента выросла — зажигаем «вниз».
   useEffect(() => {
@@ -347,8 +355,11 @@ export function ChatPanel() {
    * канал — тем же входом, каким он открывается.
    */
   function jumpToBottom() {
-    if (useChatStore.getState().moreAfter && textRoom) {
-      getSocket().emit('chat-join', { room: textRoom, name: myName() });
+    if (useChatStore.getState().moreAfter && room) {
+      // Переспросить канал — тот же вход, каким он открывается; у беседы это
+      // `dm-join`, а не `chat-join` (см. комментарий у `room` выше).
+      if (dmRoom) getSocket().emit('dm-join', { slug: dmRoom }, () => {});
+      else if (textRoom) getSocket().emit('chat-join', { room: textRoom, name: myName() });
       pinnedFor.current = null;
       setHasNew(false);
       return;
@@ -456,7 +467,7 @@ export function ChatPanel() {
 
   async function send(e: React.FormEvent) {
     e.preventDefault();
-    if (!textRoom) return;
+    if (!room) return;
     const t = text.trim();
     if (!t && pending.length === 0) return;
     const files = pending;
@@ -488,7 +499,7 @@ export function ChatPanel() {
   }
 
   async function uploadAndSend(p: PendingFile, replyToId?: string) {
-    if (!textRoom) return;
+    if (!room) return;
     setUploading(true);
     try {
       const fd = new FormData();
@@ -645,11 +656,18 @@ export function ChatPanel() {
   const firstUnreadIdx =
     dividerTs > 0 ? messages.findIndex((m) => !m.system && m.ts > dividerTs) : -1;
 
-  // Переход в соседний текстовый канал: вид сцены тот же, гаснет одна лента.
-  // `nextRoom` — куда идём, `textRoom` — что ещё на экране; пока они разные,
-  // старую ленту показываем как есть, а новую не рисуем вовсе.
-  const nextRoom = pendingScene?.view === 'text' ? pendingScene.textRoom : textRoom;
-  const changingRoom = nextRoom !== textRoom;
+  // Переход в соседний канал или в соседнюю беседу: вид сцены тот же, гаснет
+  // одна лента. `nextRoom` — куда идём, `room` — что ещё на экране; пока они
+  // разные, старую ленту показываем как есть, а новую не рисуем вовсе. Смена
+  // ВИДА (текст↔голос↔беседа) сюда не попадает — там всю сцену гасит Stage, и
+  // этот компонент к моменту перехода уже размонтирован.
+  const nextRoom =
+    pendingScene?.view === 'text'
+      ? pendingScene.textRoom
+      : pendingScene?.view === 'dm'
+        ? pendingScene.dmRoom
+        : room;
+  const changingRoom = nextRoom !== room;
 
   return (
     <div
@@ -691,9 +709,15 @@ export function ChatPanel() {
                 </div>
               ) : (
                 <div className="px-4 pb-3 pt-7 text-center text-[13px] leading-[1.5] text-text-muted">
-                  {rt('chat.start', {
-                    channel: <b className="text-text-header">#{textLabel}</b>,
-                  })}
+                  {/* Беседа — не канал: «это начало канала #Имя» звучало бы
+                      так, будто человек — хэштег. Отдельная фраза без «#». */}
+                  {dmRoom
+                    ? rt('dm.start', {
+                        peer: <b className="text-text-header">{textLabel}</b>,
+                      })
+                    : rt('chat.start', {
+                        channel: <b className="text-text-header">#{textLabel}</b>,
+                      })}
                   {/* Край ленты объясняет себя тремя разными способами, потому
                       что «выше уже удалено», «выше ничего и не было» и «здесь
                       вообще не хранят» — три разные вещи для того, кто сюда
@@ -889,7 +913,11 @@ export function ChatPanel() {
             onPaste={onPaste}
             maxLength={500}
             autoComplete="off"
-            placeholder={t('chat.composer.placeholder', { channel: textLabel })}
+            placeholder={
+              dmRoom
+                ? t('dm.composer.placeholder')
+                : t('chat.composer.placeholder', { channel: textLabel })
+            }
             className="min-w-0 flex-1 bg-transparent px-1 py-1.5 text-[15px] text-text outline-none placeholder:text-text-muted/70"
           />
           <button

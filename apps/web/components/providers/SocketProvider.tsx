@@ -78,8 +78,16 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       typingTimers.clear();
       chat().setTyping([]);
     }
-    /** Слаг открытого сейчас текстового канала (для отметок «прочитано»). */
-    const openSlug = () => ui().textRoom;
+    /**
+     * Слаг открытой сейчас ленты — канала или беседы (для отметок «прочитано»).
+     * `textRoom`/`dmRoom` — взаимоисключающие поля одной сцены (см. `Scene` в
+     * stores/ui.ts: `openText`/`openDm` и все прочие переходы обнуляют
+     * противоположное поле), так что порядок здесь на практике не решает
+     * ничего — оба разом не бывают заполнены. `textRoom` — первым просто по
+     * преемственности: до задачи 11 это был единственный вариант, и весь
+     * остальной код ниже уже настроен на его приоритет.
+     */
+    const openSlug = () => ui().textRoom ?? ui().dmRoom;
 
     /**
      * Список переписок с сервера. Дёргаем при открытии раздела ЛС и заново на
@@ -100,7 +108,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // поверх чата и отскролленная вверх лента — всё это «не смотрим», и
     // сообщения копятся в непрочитанные, как в Discord.
     function watching(): boolean {
-      if (!openSlug() || ui().view !== 'text') return false;
+      if (!openSlug() || (ui().view !== 'text' && ui().view !== 'dm')) return false;
       if (typeof document !== 'undefined') {
         if (document.visibilityState !== 'visible' || !document.hasFocus()) return false;
       }
@@ -216,6 +224,19 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // своя же реплика — не повод звенеть самому себе.
     socket.on('dm-activity', (relay) => {
       dm().applyActivity(relay);
+      // dm-стор держит свою активность отдельно от unread-стора (см. её
+      // комментарий в stores/dm.ts — она про строку в списке переписок).
+      // `openChannel`/`readNow` ниже сверяются со СВОИМ `activity[slug]`, и без
+      // этой строки видели бы беседу так, будто в ней никогда не писали, —
+      // «дочитал» не сдвигался бы, а линия «новые» вставала бы у самого начала
+      // при каждом входе.
+      unread().noteActivity(relay.slug, relay.ts);
+      // Смотрим прямо в эту беседу — читаем её тут же и звеним самому себе не
+      // о чем, ровно как канал, в который сейчас смотрят (см. `mention` ниже).
+      if (relay.slug === openSlug() && watching()) {
+        unread().readNow(relay.slug);
+        return;
+      }
       // Звук и вспышка — тем же путём, что и упоминание в канале: личная
       // реплика ничем не тише той, где тебя назвали (см. notify.ts).
       if (!relay.previewMine) notifyMention(relay.slug);
@@ -391,6 +412,19 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         chat().reset();
         socket.emit('chat-join', { room, name: myName() });
       }
+      // Та же страховка, что и у канала выше: обрыв сорвал бы сокет и с
+      // беседы, а без переспроса `dm-join` лента осталась бы висеть подписанной
+      // на комнату, которой сокет больше не в курсе.
+      const dmRoom = ui().dmRoom;
+      if (dmRoom) {
+        clearTyping();
+        chat().reset();
+        socket.emit('dm-join', { slug: dmRoom }, (res) => {
+          if (res.ok || ui().dmRoom !== dmRoom) return;
+          ui().leaveDm();
+          toast(tx('dm.join.forbidden'));
+        });
+      }
       // Раздел ЛС открыт — список переписок тоже пережил обрыв только на этой
       // вкладке, сервер о нём знать не обязан.
       if (ui().dmSection) requestDmList();
@@ -430,8 +464,34 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       // видимости в реестре), а выход — общему `chat-leave`: беседа и канал
       // делят одну и ту же комнату сокета.
       if (state.dmRoom !== prev.dmRoom) {
+        clearTyping();
         if (state.dmRoom) {
           const slug = state.dmRoom;
+          // Смена одной беседы на другую — свежая лента для новой стороны:
+          // без сброса здесь сообщения ПРЕЖНЕГО собеседника оставались бы на
+          // экране до тех пор, пока не приедет `chat-history` новой беседы
+          // (ChatPanel ничего не увидит, что попросило бы его их спрятать —
+          // `textRoom` в обеих сценах и так null). Тот же ход, что ниже у
+          // текстового канала, здесь важнее вдвойне: это ветка про то, кто
+          // что видит.
+          chat().reset();
+          // Закреплённого в беседе не бывает вовсе (сервер отказывает, см.
+          // задачу 7) — не «сбросить список канала», а закрыть саму панель:
+          // оставленная открытой, она повисла бы пустой над личной перепиской.
+          pins().reset();
+          // dm-стор держит свою активность отдельно (см. её комментарий) —
+          // синхронизируем разовым снимком, иначе unread-стор не знает
+          // времени последней реплики этой беседы и посчитает «дочитал» по
+          // нулю (см. тот же приём в обработчике `dm-activity`).
+          unread().noteActivity(slug, dm().activity[slug] ?? 0);
+          // Вход в беседу: линия «новые» встаёт на прежней отметке чтения,
+          // точка гаснет — ровно как у канала (см. комментарий ниже).
+          unread().openChannel(slug);
+          unread().setAtBottom(true);
+          // Честное состояние, а не оптимистичное `true` — по той же причине,
+          // что и у канала: иначе syncWatch ниже перезатрёт только что
+          // поставленную линию «новые».
+          watched = watching();
           socket.emit('dm-join', { slug }, (res) => {
             // Отказали (не сторона беседы) или адрес не существует — а сцена
             // уже могла уехать дальше, пока шёл ответ: тогда закрывать нечего.
@@ -441,11 +501,16 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             ui().leaveDm();
             toast(tx('dm.join.forbidden'));
           });
-        } else if (!state.textRoom) {
-          // Без общего перехода в текстовый канал: тот уже сделал свой
-          // `chat-join` блоком выше, и `chat-leave` здесь выгнал бы сокет
-          // из комнаты, в которую он только что вошёл этим же переходом.
-          socket.emit('chat-leave');
+        } else {
+          chat().reset();
+          pins().reset();
+          watched = false;
+          if (!state.textRoom) {
+            // Без общего перехода в текстовый канал: тот уже сделал свой
+            // `chat-join` блоком выше, и `chat-leave` здесь выгнал бы сокет
+            // из комнаты, в которую он только что вошёл этим же переходом.
+            socket.emit('chat-leave');
+          }
         }
       }
       syncWatch();
