@@ -15,6 +15,17 @@ export const DM_PREVIEW_LIMIT = 120;
 /** Сколько людей отдаётся на один запрос `dm-people`. */
 export const DM_PEOPLE_LIMIT = 30;
 
+/**
+ * Форма адреса беседы — тот же анкорный шаблон, что `isDmSlug` в
+ * `@relay/shared`: `dm-` и 24 шестнадцатеричных знака, и ничего сверх.
+ * Проверяет именно форму, а не префикс `dm-` целиком: «dm-обсуждение» —
+ * законное имя текстового канала (см. `packages/shared/src/index.ts`), и по
+ * одному префиксу его было бы не отличить от адреса чужой беседы.
+ */
+export function isDmSlug(slug: string): boolean {
+  return /^dm-[0-9a-f]{24}$/.test(slug);
+}
+
 export interface DmPeerView {
   fingerprint: string;
   nick: string;

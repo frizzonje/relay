@@ -67,15 +67,32 @@ describe('channel-create', () => {
     expect((gw as AnyGw).registry.channels.some((c) => c.serverId === 'srv')).toBe(false);
   });
 
-  it('имя, дающее адрес беседы, канал не заводит — префикс занят под ЛС', async () => {
+  it('имя с префиксом dm-, но не в форме адреса, — законное имя канала', async () => {
+    // «dm-обсуждение» задокументирован как легальное имя текстового канала
+    // (packages/shared/src/index.ts) — резервировать надо форму адреса
+    // беседы, а не сам префикс `dm-`.
+    const { gw, owner } = await withOwnServer();
+    const res = await gw.handleChannelCreate(asSocket(owner), {
+      serverId: 'srv',
+      type: 'text',
+      name: 'dm-general',
+    });
+    expect(res.ok).toBe(true);
+    expect((gw as AnyGw).registry.channels.some((c) => c.serverId === 'srv')).toBe(true);
+  });
+
+  it('имя, дающее 24 hex после dm-, тоже не адрес — метка сервера ломает форму', async () => {
+    // Вне главного сервера `channelSlug` всегда дописывает `-<метка>`, и
+    // результат уже не совпадает с анкорным `dm-[0-9a-f]{24}` — даже такое
+    // на вид опасное имя здесь легально.
     const { gw, owner } = await withOwnServer();
     const res = await gw.handleChannelCreate(asSocket(owner), {
       serverId: 'srv',
       type: 'text',
       name: 'dm-0123456789abcdef01234567',
     });
-    expect(res).toEqual({ ok: false, error: 'bad-name' });
-    expect((gw as AnyGw).registry.channels.some((c) => c.serverId === 'srv')).toBe(false);
+    expect(res.ok).toBe(true);
+    expect((gw as AnyGw).registry.channels.some((c) => c.serverId === 'srv')).toBe(true);
   });
 
   it('в главный сервер каналы не добавляют — набор там фиксирован', async () => {

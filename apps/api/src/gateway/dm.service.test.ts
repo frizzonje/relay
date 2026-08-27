@@ -3,7 +3,7 @@ import type { DataSource } from 'typeorm';
 import { randomUUID } from 'node:crypto';
 import { IdentityRow, MessageRow, RoleRow } from '../db/entities';
 import { resetDatabase, testDatabase } from '../db/testing';
-import { DmService } from './dm.service';
+import { DmService, isDmSlug } from './dm.service';
 
 let db: DataSource;
 let dm: DmService;
@@ -43,6 +43,17 @@ describe('адрес беседы', () => {
     const address = DmService.address(a, b);
     expect(address.startsWith('dm-')).toBe(true);
     expect(address).not.toContain('1111');
+  });
+
+  it('isDmSlug узнаёт форму адреса, а не сам префикс dm-', () => {
+    const a = '11111111-1111-1111-1111-111111111111';
+    const b = '22222222-2222-2222-2222-222222222222';
+    expect(isDmSlug(DmService.address(a, b))).toBe(true);
+    // «dm-обсуждение» — законное имя текстового канала (см.
+    // packages/shared/src/index.ts), и по одному префиксу его не отличить
+    // от адреса беседы.
+    expect(isDmSlug('dm-obsuzhdenie')).toBe(false);
+    expect(isDmSlug('lounge')).toBe(false);
   });
 });
 

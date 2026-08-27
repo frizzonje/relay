@@ -4,7 +4,7 @@ import type { AppServer, AppSocket } from './socket-data';
 import type { ChatSessions } from './chat-sessions';
 import type { ChatService } from './chat.service';
 import type { Directory } from './directory';
-import { DM_PREFIX } from './dm.service';
+import { isDmSlug } from './dm.service';
 import type { Mentions } from './mentions';
 import type { Perimeter } from './perimeter';
 import type { ReadsService } from '../identity/reads.service';
@@ -348,12 +348,14 @@ export class RegistryHandlers {
     // столкнуться слаг может только со своим же каналом на этом же сервере.
     const slug = channelSlug(rawName, serverId);
     if (!slug) return { ok: false, error: 'bad-name' };
-    // Префикс `dm-` зарезервирован под адрес беседы (см. `DmService.address`):
-    // на главном сервере метка сервера к слагу не добавляется, и канал с
-    // таким именем занял бы ровно тот же адрес, что и чья-то переписка —
-    // лента одного подменила бы ленту другого. Отдельного отказа не заводим:
-    // для человека это тоже «имя не годится».
-    if (slug.startsWith(DM_PREFIX)) return { ok: false, error: 'bad-name' };
+    // Форма адреса беседы (`dm-` + 24 hex, см. `isDmSlug`) зарезервирована,
+    // а не префикс `dm-` целиком: «dm-обсуждение» — законное имя канала (см.
+    // `packages/shared/src/index.ts`), и отказ по одному префиксу отнял бы у
+    // человека законное имя. `ChatService.channelId()` резолвит сначала
+    // реестр каналов и только потом беседы, поэтому канал с адресом чужой
+    // беседы подменил бы её ленту своей. Отдельного отказа не заводим: для
+    // человека это тоже «имя не годится».
+    if (isDmSlug(slug)) return { ok: false, error: 'bad-name' };
     if (this.registry.channels.length >= MAX_CHANNELS)
       return { ok: false, error: 'limit', scope: 'install', limit: MAX_CHANNELS };
     // Потолок каналов — у сервера, а не у инсталляции: иначе полсотни каналов
