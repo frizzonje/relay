@@ -89,7 +89,7 @@ describe('полоса тулбара на телефоне', () => {
     host.remove();
   });
 
-  it('под тремя целями стоят лица, и каждое — цель не меньше 44px', () => {
+  it('под целями стоят лица, и каждое — цель не меньше 44px', () => {
     render();
     expect(faces().map((b) => b.getAttribute('aria-label'))).toEqual(['Марта', 'Игорь']);
     for (const face of faces()) expect(face.className).toContain('h-11');
@@ -174,13 +174,19 @@ describe('цели тулбара', () => {
     // заведена, её не стерёг никто: `disabled` возвращался — 555 тестов
     // оставались зелёными.
     render();
-    for (const label of [/Звонок|Call/, /Админ|Admin/]) {
-      const button = target(label);
-      expect(button.disabled).toBe(false);
-      expect(button.tabIndex).toBe(0);
-      expect(button.getAttribute('aria-disabled')).toBe('true');
-      expect(button.getAttribute('aria-label')).toMatch(/скоро|soon/i);
-    }
+    const button = target(/Админ|Admin/);
+    expect(button.disabled).toBe(false);
+    expect(button.tabIndex).toBe(0);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(button.getAttribute('aria-label')).toMatch(/скоро|soon/i);
+  });
+
+  it('звонка среди целей нет', () => {
+    // Звонят человеку, а не «вообще»: кнопка стоит в шапке беседы и в карточке
+    // собеседника, где он назван. Цель в рейке вела бы к тому же выбору
+    // собеседника, то есть в те же ЛС, — лишний шаг, притворяющийся разделом.
+    render();
+    expect(target(/Звонок|Call/)).toBeUndefined();
   });
 
   it('бейдж на «ЛС» считает беседы с непрочитанным', () => {

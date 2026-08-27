@@ -21,6 +21,16 @@ import { person, test, unique } from '../fixtures/stand';
  * так что чистить стенд между прогонами не нужно.
  */
 
+/**
+ * Лента на сцене. Именно `main`, а не вся страница: список переписок остаётся
+ * на экране и после выбора беседы (панель ЛС стоит своей колонкой справа и
+ * каналов собой не подменяет), а в строке списка написана та же реплика —
+ * превью. Поиск по всей странице нашёл бы обе и упал бы на неоднозначности.
+ */
+function onStage(page: Page, text: string) {
+  return page.locator('main').getByText(text);
+}
+
 /** Раздел ЛС: кнопка тулбара — единственный вход в него. */
 async function openDirect(page: Page): Promise<void> {
   await page.getByTestId('toolbar-direct').click();
@@ -74,7 +84,7 @@ test('двое переписываются, история переживает
 
   await openDirect(anya);
   await writeTo(anya, him, hello);
-  await expect(anya.getByText(hello)).toBeVisible({ timeout: 15_000 });
+  await expect(onStage(anya, hello)).toBeVisible({ timeout: 15_000 });
 
   // Боря в этот момент в лобби и раздела ЛС не открывал — и всё равно узнаёт о
   // реплике: облачко в углу называет и того, кто написал, и первую строку.
@@ -94,7 +104,7 @@ test('двое переписываются, история переживает
   await expect(borya.getByTestId('dm-unread')).toBeVisible({ timeout: 15_000 });
 
   await row.click();
-  await expect(borya.getByText(hello)).toBeVisible({ timeout: 20_000 });
+  await expect(onStage(borya, hello)).toBeVisible({ timeout: 20_000 });
 });
 
 test('третий не видит чужой переписки', async ({ browser }) => {

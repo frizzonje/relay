@@ -1,9 +1,11 @@
 'use client';
 
+import { AnimatePresence, motion } from 'framer-motion';
 import type { DmConversation } from '@relay/shared';
 import { Icon, type IconName } from '@/components/ui/icon';
 import { Identicon } from '@/components/ui/Identicon';
 import { cn } from '@/lib/utils';
+import { springPop } from '@/lib/motion';
 import { useIsMobile } from '@/lib/use-mobile';
 import { useUiStore } from '@/stores/ui';
 import { useDmStore, useUnreadCount, useUnreadIn } from '@/stores/dm';
@@ -11,7 +13,7 @@ import { useT } from '@/lib/i18n';
 
 /** Одна цель тулбара — общее описание для рейки и полосы. */
 interface Target {
-  key: 'direct' | 'call' | 'admin';
+  key: 'direct' | 'admin';
   icon: IconName;
   label: string;
   active?: boolean;
@@ -30,9 +32,11 @@ interface Target {
  * экране — горизонтальная полоса тех же целей НАД списком каналов (правого края
  * на телефоне нет: там колонки показываются по одной).
  *
- * `Call` и `Admin` нарисованы, но выключены: экран 1:1-звонка и админка
- * распахнутся в следующих этапах (B и C), а подвинуть тулбар второй раз дороже,
- * чем нарисовать под них место заранее неактивным.
+ * Целей две: ЛС и админка. Звонка среди них нет — звонят не «вообще», а
+ * человеку, и кнопка для этого стоит там, где он назван: в шапке беседы и в
+ * карточке собеседника. Отдельная цель в рейке вела бы в никуда: выбирать
+ * собеседника пришлось бы всё равно, то есть открывать те же ЛС.
+ * `Admin` нарисован, но выключен: админка распахнётся этапом C.
  *
  * На `Direct` висит бейдж непрочитанного, под целями — лица тех, с кем говорили
  * последними (`RecentPeers`). Бейдж нужен ровно там, где лиц не хватает: их
@@ -60,7 +64,6 @@ export function Toolbar() {
       testId: 'toolbar-direct',
       badge: unread,
     },
-    { key: 'call', icon: 'phone', label: t('toolbar.call'), disabled: true },
     { key: 'admin', icon: 'shield', label: t('toolbar.admin'), disabled: true },
   ];
 
@@ -109,17 +112,23 @@ function TargetButton({
           понемногу» человек решает по-разному. Больше девяти не пишем — на
           16 точках это уже не число, а пятно; `aria-label` кнопки при этом
           несёт точный счёт (см. accessibleLabel). */}
-      {!!target.badge && (
-        <span
-          aria-hidden
-          className={cn(
-            'absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-danger px-1 text-[10px] font-bold leading-none text-white ring-2',
-            badgeRing,
-          )}
-        >
-          {target.badge > 9 ? '9+' : target.badge}
-        </span>
-      )}
+      <AnimatePresence initial={false}>
+        {!!target.badge && (
+          <motion.span
+            aria-hidden
+            initial={{ scale: 0.4, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.4, opacity: 0 }}
+            transition={springPop}
+            className={cn(
+              'absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-danger px-1 text-[10px] font-bold leading-none text-white ring-2',
+              badgeRing,
+            )}
+          >
+            {target.badge > 9 ? '9+' : target.badge}
+          </motion.span>
+        )}
+      </AnimatePresence>
     </button>
   );
 }
@@ -141,7 +150,9 @@ function ToolbarRail({ targets }: { targets: Target[] }) {
   return (
     <nav
       aria-label={t('toolbar.label')}
-      className="panel panel-rail flex w-16 shrink-0 flex-col items-center gap-2 border-l border-line py-3"
+      // `relative z-30` — чтобы панель ЛС уезжала ЗА рейку, а не поверх неё
+      // (см. DmDrawer): у позиционированного соседа иначе стопка выше.
+      className="panel panel-rail relative z-30 flex w-16 shrink-0 flex-col items-center gap-2 border-l border-line py-3"
     >
       {targets.map((target) => (
         <TargetButton
@@ -177,9 +188,9 @@ function ToolbarRail({ targets }: { targets: Target[] }) {
  * Сколько лиц показывать. Одно число на обе раскладки — «последние, с кем
  * говорил» не должно значить разное в зависимости от ширины экрана.
  *
- * Шесть — не вкус, а мера: в рейке три цели с разделителем занимают ~180px,
- * каждое лицо ещё 52, и на шестом она укладывается примерно в 490px; в полосе
- * на телефоне шесть целей по 44px с зазорами — это 304px, то есть ровно та
+ * Шесть — не вкус, а мера: в рейке две цели с разделителем занимают ~130px,
+ * каждое лицо ещё 52, и на шестом она укладывается примерно в 440px; в полосе
+ * на телефоне шесть лиц по 44px с зазорами — это 304px, то есть ровно та
  * ширина, что остаётся от 375 за вычетом полей.
  */
 const RECENT_PEERS = 6;
@@ -187,11 +198,10 @@ const RECENT_PEERS = 6;
 /**
  * Стек лиц: с кем говорили последними.
  *
- * Это не украшение, а вторая половина того же решения, что свернуло список
- * переписок при входе в беседу (см. `openDm` в stores/ui.ts). Список подменяет
- * собой каналы, поэтому держать его раскрытым нельзя; но и уходить в ЛС через
- * два клика каждый раз — плохой размен. Лица закрывают частый случай: перейти
- * к тому, с кем и так переписываешься, — один клик, не открывая ничего.
+ * Это не украшение: панель со списком уезжает, стоит войти в канал (см.
+ * `openText` в stores/ui.ts), и возвращаться к переписке через раскрытие
+ * списка каждый раз — плохой размен. Лица закрывают частый случай: перейти к
+ * тому, с кем и так переписываешься, — один клик, не открывая ничего.
  *
  * Порядок — тот же, что в списке (свежие первыми): `useDmStore` держит
  * `conversations` отсортированными, здесь берётся только начало.

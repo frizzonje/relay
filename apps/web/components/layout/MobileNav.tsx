@@ -106,7 +106,7 @@ export function MobileNav() {
   const voiceLabel = useUiStore((s) => s.voiceLabel);
   const textLabel = useUiStore((s) => s.textLabel);
   const dmPeer = useUiStore((s) => s.dmPeer);
-  const toggleDmSection = useUiStore((s) => s.toggleDmSection);
+  const showDmList = useUiStore((s) => s.showDmList);
   const micOn = useVoiceStore((s) => s.micOn);
   const tiles = useVoiceStore((s) => s.tiles);
   const roster = useChatStore((s) => s.roster);
@@ -185,12 +185,12 @@ export function MobileNav() {
         <button
           type="button"
           // Из беседы шаг назад ведёт в СПИСОК ПЕРЕПИСОК, а не к каналам:
-          // человек пришёл оттуда, и `openDm` свернул список сам (на десктопе
-          // он подменяет каналы, и держать его раскрытым нечем). Голый
-          // `setPanel('nav')` показал бы уже вернувшиеся каналы — и соседние
-          // беседы исчезли бы из-под пальца. `toggleDmSection` при свёрнутом
-          // списке разворачивает его и переводит на панель каналов разом.
-          onClick={() => (people ? setPanel('stage') : inDm ? toggleDmSection() : setPanel('nav'))}
+          // человек пришёл оттуда, и соседние беседы не должны исчезать
+          // из-под пальца — голый `setPanel('nav')` показал бы каналы.
+          // Именно `showDmList`, а не тумблер: в беседу можно прийти и с
+          // лицом из полосы, при свёрнутом списке, — тумблер на этом шаге
+          // свернул бы его ещё раз и выдал те же каналы.
+          onClick={() => (people ? setPanel('stage') : inDm ? showDmList() : setPanel('nav'))}
           aria-label={t('mobile.back')}
           className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-text-muted outline-none transition-colors active:bg-bg-hover active:text-text-header"
         >

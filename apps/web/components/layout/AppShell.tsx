@@ -16,6 +16,8 @@ import { ServerRail } from '@/components/layout/ServerRail';
 import { Toolbar } from '@/components/layout/Toolbar';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { DmList } from '@/components/dm/DmList';
+import { DmDrawer } from '@/components/dm/DmDrawer';
+import { PeoplePicker } from '@/components/dm/PeoplePicker';
 import { Topbar } from '@/components/layout/Topbar';
 import { Controls } from '@/components/layout/Controls';
 import { Members } from '@/components/layout/Members';
@@ -47,11 +49,13 @@ const panelFade = {
 export function AppShell() {
   const panel = useUiStore((s) => s.mobilePanel);
   const view = useUiStore((s) => s.view);
-  // Раздел ЛС подменяет сайдбар списком переписок целиком, а не одной из его
-  // секций: список каналов и список бесед — разные адресные пространства
-  // (см. Toolbar), и держать их на экране одновременно нечем — упрутся в одну
-  // и ту же полосу шириной 238px.
+  // Раздел ЛС. На телефоне он подменяет сайдбар целиком — там панели показаны
+  // по одной, и втащить второй список рядом некуда. На десктопе не подменяет
+  // ничего: список выезжает справа своей панелью (см. DmDrawer), а каналы
+  // остаются на месте.
   const dmSection = useUiStore((s) => s.dmSection);
+  const pickerOpen = useUiStore((s) => s.peoplePickerOpen);
+  const setPickerOpen = useUiStore((s) => s.setPeoplePickerOpen);
   // Куда идём — по нему решаем про панели: ждать конца анимации сцены им незачем.
   const going = useUiStore(targetView);
   const textRoom = useUiStore((s) => s.textRoom);
@@ -110,7 +114,9 @@ export function AppShell() {
   const shown = (which: MobilePanel) => (mobile ? (effective === which ? 'in' : 'out') : 'in');
 
   return (
-    <div className="flex h-[100dvh] flex-col overflow-hidden md:flex-row">
+    // `relative` — рамка отсчёта для панели ЛС: она встаёт по правому краю
+    // ЭКРАНА, за рейкой тулбара, а не внутри ряда колонок (см. DmDrawer).
+    <div className="relative flex h-[100dvh] flex-col overflow-hidden md:flex-row">
       <MobileNav />
 
       {/* Обёртка панелей: ряд на мобиле (одна видимая панель), contents на десктопе */}
@@ -131,7 +137,7 @@ export function AppShell() {
               сайдбара, под именем сервера (кадр `2a` референса), и потому не
               появляется над списком переписок, к которому отношения не имеет. */}
           <div className="flex min-w-0 flex-1 flex-col md:flex-row">
-            {dmSection ? <DmList /> : <Sidebar />}
+            {mobile && dmSection ? <DmList /> : <Sidebar />}
           </div>
         </Panel>
 
@@ -167,6 +173,16 @@ export function AppShell() {
             На мобиле его здесь нет — там он полоса над списком каналов выше. */}
         {!mobile && <Toolbar />}
       </div>
+
+      {/* Панель ЛС — поверх колонки состава, у правого края экрана. Вне обёртки
+          панелей: на десктопе та превращается в `display:contents` и рамкой
+          отсчёта для `absolute` быть не может. */}
+      {!mobile && <DmDrawer />}
+
+      {/* Выбор собеседника — здесь, а не внутри списка переписок: список ездит
+          вместе с панелью (transform), и палитра внутри него ездила бы следом,
+          вопреки своему `position: fixed`. */}
+      <PeoplePicker open={pickerOpen} onOpenChange={setPickerOpen} />
 
       {/* Одно на приложение: зовут его и из панели устройств, и из ссылки. */}
       <AdmitDeviceDialog />

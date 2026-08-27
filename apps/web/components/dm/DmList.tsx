@@ -1,11 +1,9 @@
 'use client';
 
-import { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import type { DmConversation } from '@relay/shared';
 import { Icon } from '@/components/ui/icon';
 import { Identicon } from '@/components/ui/Identicon';
-import { PeoplePicker } from '@/components/dm/PeoplePicker';
 import { cn } from '@/lib/utils';
 import { fmtListWhen, shortFingerprint } from '@/lib/format';
 import { listItem, springLayout } from '@/lib/motion';
@@ -44,10 +42,14 @@ function DmRow({
       )}
     >
       <Identicon fingerprint={peer.fingerprint} size={34} className="shrink-0" />
+      {/* Две строки с ясным делением: кто (ник и отпечаток) и что (превью,
+          когда, непрочитано). Прежде время и метка стояли отдельным столбцом
+          справа, забирая ширину у обоих рядов разом, — на 232 точках панели
+          (см. DmDrawer) от имени оставалось «Ма…». */}
       <div className="min-w-0 flex-1">
         {/* Ник один не годится — тёзки в реестре не редкость, и отпечаток тут
             не мелкий шрифт для эстетов, а единственное, чем два «Аня» различимы. */}
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-baseline gap-1.5">
           <span
             className={cn(
               'truncate text-[14px]',
@@ -56,39 +58,46 @@ function DmRow({
           >
             {peer.nick}
           </span>
-          <span className="shrink-0 truncate font-mono text-[10px] tracking-[0.06em] text-text-faint">
+          <span className="shrink-0 font-mono text-[10px] tracking-[0.06em] text-text-faint">
             {shortFingerprint(peer.fingerprint)}
           </span>
         </div>
-        <div className="truncate text-[12.5px] text-text-muted">
-          {conversation.preview
-            ? conversation.previewMine
-              ? t('dm.you', { preview: conversation.preview })
-              : conversation.preview
-            : ' '}
+        <div className="flex items-center gap-1.5">
+          <span className="min-w-0 flex-1 truncate text-[12.5px] text-text-muted">
+            {conversation.preview
+              ? conversation.previewMine
+                ? t('dm.you', { preview: conversation.preview })
+                : conversation.preview
+              : ' '}
+          </span>
+          {conversation.lastTs > 0 && (
+            <span className="shrink-0 text-[11px] text-text-faint">
+              {fmtListWhen(conversation.lastTs)}
+            </span>
+          )}
+          {unread && (
+            <span
+              data-testid="dm-unread"
+              aria-hidden
+              className="h-2 w-2 shrink-0 rounded-full bg-accent-strong"
+            />
+          )}
         </div>
-      </div>
-      <div className="ml-auto flex shrink-0 flex-col items-end gap-1.5">
-        {conversation.lastTs > 0 && (
-          <span className="text-[11px] text-text-faint">{fmtListWhen(conversation.lastTs)}</span>
-        )}
-        {unread && (
-          <span
-            data-testid="dm-unread"
-            aria-hidden
-            className="h-2 w-2 rounded-full bg-accent-strong"
-          />
-        )}
       </div>
     </div>
   );
 }
 
 /**
- * Раздел ЛС в сайдбаре: список переписок вместо реестра каналов (см.
- * `AppShell` — подмена решается там, по `dmSection`). Кнопка «+» в шапке
- * открывает выбор собеседника (`PeoplePicker`); клик по строке открывает саму
- * беседу — `useDmStore` её уже знает, второго запроса на сервер не нужно.
+ * Список переписок. Живёт в двух местах и своей ширины не назначает: на
+ * десктопе его несёт выехавшая справа панель (`DmDrawer`), на телефоне — экран
+ * вместо каналов (`AppShell`). Размер даёт носитель, список только заполняет
+ * его целиком, — иначе одно и то же «238px» пришлось бы держать в трёх файлах.
+ *
+ * Кнопка «+» в шапке открывает выбор собеседника: сама палитра стоит в каркасе
+ * (`peoplePickerOpen` в сторе), потому что панель ездит трансформацией и
+ * прибила бы её к себе. Клик по строке открывает беседу — `useDmStore` её уже
+ * знает, второго запроса на сервер не нужно.
  */
 export function DmList() {
   const t = useT();
@@ -104,14 +113,11 @@ export function DmList() {
   // причина, по которой Sidebar подсвечивает текстовый канал через `targetRoom`).
   const activeSlug = useUiStore((s) => sceneTarget(s).dmRoom);
   const openDm = useUiStore((s) => s.openDm);
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const toggleDmSection = useUiStore((s) => s.toggleDmSection);
+  const setPickerOpen = useUiStore((s) => s.setPeoplePickerOpen);
 
   return (
-    // `max-md:w-full` — не украшение: обёртка вокруг тулбара и списка стала на
-    // телефоне КОЛОНКОЙ (см. AppShell), а в колонке `grow` тянет по высоте, не
-    // по ширине. Без явной ширины список остаётся 238px посреди 375, и справа
-    // от него висит мёртвая полоса. Ровно то же и у Sidebar.
-    <aside className="panel panel-sidebar relative flex w-[238px] shrink-0 flex-col border-r border-line max-md:w-full max-md:grow">
+    <aside className="panel panel-sidebar relative flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex h-[52px] shrink-0 items-center justify-between gap-1 border-b border-line px-4 shadow-[0_1px_2px_rgba(0,0,0,0.2)] max-md:pl-1.5">
         {/* Шеврон назад — только на телефоне и только здесь: полоса тулбара, из
             которой сюда пришли, живёт внутри сайдбара (см. Sidebar) и на этом
@@ -138,6 +144,19 @@ export function DmList() {
           className="grid h-7 w-7 shrink-0 place-items-center rounded text-text-muted outline-none transition-colors hover:text-text-header focus-visible:ring-2 focus-visible:ring-accent max-md:h-11 max-md:w-11 max-md:-mr-2.5"
         >
           <Icon name="plus" className="text-[16px]" />
+        </button>
+        {/* Свернуть панель — только на десктопе: там она выехала справа и
+            уезжает обратно за рейку, оставляя язычок (см. DmDrawer). На
+            телефоне тот же ход делает шеврон слева — там панель не ездит, а
+            занимает экран целиком. */}
+        <button
+          type="button"
+          onClick={toggleDmSection}
+          title={t('dm.collapse')}
+          aria-label={t('dm.collapse')}
+          className="grid h-7 w-7 shrink-0 place-items-center rounded text-text-muted outline-none transition-colors hover:text-text-header focus-visible:ring-2 focus-visible:ring-accent max-md:hidden"
+        >
+          <Icon name="chevron-right" className="text-[18px]" />
         </button>
       </div>
 
@@ -184,8 +203,6 @@ export function DmList() {
           </AnimatePresence>
         )}
       </div>
-
-      <PeoplePicker open={pickerOpen} onOpenChange={setPickerOpen} />
     </aside>
   );
 }

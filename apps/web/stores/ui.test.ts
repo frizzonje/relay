@@ -61,15 +61,42 @@ describe('раздел ЛС', () => {
     expect(useUiStore.getState().dmSection).toBe(false);
   });
 
-  it('выбранная переписка сворачивает список — каналы возвращаются', () => {
-    // Беседа уезжает на сцену, а сайдбар отдаётся обратно каналам: иначе
-    // человек, открывший переписку, остаётся без единого канала на экране.
+  it('выбранная переписка НЕ сворачивает список', () => {
+    // Панель со списком стоит справа и каналов собой не подменяет — сворачивать
+    // её на каждый выбор незачем: ходить по перепискам подряд человек будет
+    // чаще, чем открывать их по одной. Раньше она закрывалась сама, и следующая
+    // беседа стоила ещё двух кликов.
     useUiStore.getState().toggleDmSection();
     useUiStore.getState().openDm('dm-0123456789abcdef01234567', 'fp-ты', 'ты');
     const s = useUiStore.getState();
-    expect(s.dmSection).toBe(false);
+    expect(s.dmSection).toBe(true);
     expect(s.view).toBe('dm');
     expect(s.dmRoom).toBe('dm-0123456789abcdef01234567');
+  });
+
+  it('беседа, открытая при свёрнутом списке, его не разворачивает', () => {
+    // Лицо в рейке и облачко зовут тот же `openDm`: там список не спрашивали,
+    // и выезжать ему навстречу человеку, который просил одну переписку, нечего.
+    useUiStore.getState().openDm('dm-0123456789abcdef01234567', 'fp-ты', 'ты');
+    expect(useUiStore.getState().dmSection).toBe(false);
+  });
+
+  it('showDmList разворачивает список, сколько раз его ни позови', () => {
+    // Шаг назад из беседы и язычок свёрнутой панели зовут именно его: тумблер
+    // на их месте закрыл бы список ровно тогда, когда его просили показать.
+    useUiStore.getState().showDmList();
+    expect(useUiStore.getState().dmSection).toBe(true);
+    useUiStore.getState().showDmList();
+    expect(useUiStore.getState().dmSection).toBe(true);
+    expect(useUiStore.getState().mobilePanel).toBe('nav');
+  });
+
+  it('вход в канал уводит панель ЛС с экрана', () => {
+    // То, ради чего панель вообще умеет уезжать: канал занимает сцену целиком,
+    // и список поверх него — чужая полоса на чужом экране.
+    useUiStore.getState().showDmList();
+    useUiStore.getState().openText('obshchii', 'общий');
+    expect(useUiStore.getState().dmSection).toBe(false);
   });
 });
 
