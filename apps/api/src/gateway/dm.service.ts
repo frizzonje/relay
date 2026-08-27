@@ -64,6 +64,14 @@ interface Known {
  * при каждом открытии — беседы не удаляются, поэтому расхождения с базой у неё
  * взяться неоткуда.
  */
+/**
+ * Адрес беседы занят каналом другого типа. Отдельный класс, а не строка в
+ * ошибке: им откатывается транзакция в `create`, и наверху его надо отличить от
+ * настоящего сбоя базы — тот обязан лететь дальше, а не превращаться в тихий
+ * отказ открыть беседу.
+ */
+class SlugTaken extends Error {}
+
 @Injectable()
 export class DmService implements OnModuleInit {
   private readonly logger = new Logger('dm');
@@ -119,16 +127,30 @@ export class DmService implements OnModuleInit {
     // `nicks`): открыл я — и в чужом процессе, где я окажусь чьим-то `peer`,
     // и в моём собственном, где я сам себе `meId`, должно быть чем ответить
     // на `peerView`.
-    const rows: Array<{ id: string; fingerprint: string; nick: string }> = await this.db.query(
-      'SELECT id, fingerprint, nick FROM identities WHERE fingerprint = $1 OR id = $2',
-      [peerFingerprint, meId],
-    );
+    const rows: Array<{ id: string; fingerprint: string; nick: string; banned: boolean }> =
+      await this.db.query(
+        `SELECT i.id, i.fingerprint, i.nick,
+                EXISTS (SELECT 1 FROM roles r
+                         WHERE r.identity_id = i.id AND r.server_id IS NULL AND r.role = 'banned')
+                AS banned
+           FROM identities i
+          WHERE i.fingerprint = $1 OR i.id = $2`,
+        [peerFingerprint, meId],
+      );
     const peer = rows.find((r) => r.fingerprint === peerFingerprint);
     if (!peer) return { ok: false, reason: 'unknown' };
     if (peer.id === meId) return { ok: false, reason: 'self' };
+    // Забаненного на всю инсталляцию `people()` не показывает — а `open()`
+    // отпечаток принимает от кого угодно, и беседа заводилась бы навсегда:
+    // доставить в неё нечего (сокет забаненного рвётся), а строка в списке
+    // висела бы как живой человек. Отвечаем тем же, чем и на незнакомый
+    // отпечаток: кто забанен, из чужого интерфейса видно быть не должно.
+    if (peer.banned) return { ok: false, reason: 'unknown' };
 
     const slug = DmService.address(meId, peer.id);
-    if (!this.known.has(slug)) await this.create(slug, meId, peer.id);
+    if (!this.known.has(slug) && !(await this.create(slug, meId, peer.id))) {
+      return { ok: false, reason: 'unknown' };
+    }
     for (const row of rows)
       this.nicks.set(row.id, { fingerprint: row.fingerprint, nick: row.nick });
 
@@ -265,37 +287,65 @@ export class DmService implements OnModuleInit {
    * человека могут вызвать `open` одновременно с обеих сторон, у обоих один и
    * тот же `slug`, и один из двух insert обязан молча проиграть, а не упасть
    * ошибкой уникальности наружу к вызывающему.
+   *
+   * Возвращает false, если этот адрес уже занят НЕ беседой. Уникальность в
+   * `channels` — по паре `(type, slug)`, поэтому строка `('dm', адрес)` спокойно
+   * ложится рядом с `('text', тот же адрес)`, и `orIgnore` этого не ловит. Сам
+   * сегодняшний сервер такого текстового канала не создаёт (метка сервера ломает
+   * форму адреса), но `importLegacy` переносит слаги 0.x дословно. Дальше
+   * `ChatService.channelId()` ищет по слагу и первым отвечает реестром — и
+   * личная реплика уехала бы в публичный канал, откуда её читает кто угодно.
+   * Худший исход должен быть «беседу не открыть», а не «переписка в общем
+   * канале», поэтому транзакция откатывается, а `known` не пополняется.
    */
-  private async create(slug: string, meId: string, peerId: string): Promise<void> {
+  private async create(slug: string, meId: string, peerId: string): Promise<boolean> {
     const [a, b] = meId < peerId ? [meId, peerId] : [peerId, meId];
-    await this.db.transaction(async (m) => {
-      await m
-        .getRepository(ChannelRow)
-        .createQueryBuilder()
-        .insert()
-        .values({
-          id: slug,
-          serverId: null,
-          type: 'dm',
-          name: slug,
-          slug,
-          removable: true,
-          mode: null,
-          creatorId: null,
-          creatorIdentityId: null,
-          position: 0,
-        })
-        .orIgnore()
-        .execute();
-      await m
-        .getRepository(ConversationRow)
-        .createQueryBuilder()
-        .insert()
-        .values({ id: randomUUID(), channelId: slug, a, b, createdAt: new Date() })
-        .orIgnore()
-        .execute();
-    });
+    try {
+      await this.db.transaction(async (m) => {
+        await m
+          .getRepository(ChannelRow)
+          .createQueryBuilder()
+          .insert()
+          .values({
+            id: slug,
+            serverId: null,
+            type: 'dm',
+            name: slug,
+            slug,
+            removable: true,
+            mode: null,
+            creatorId: null,
+            creatorIdentityId: null,
+            position: 0,
+          })
+          .orIgnore()
+          .execute();
+        await m
+          .getRepository(ConversationRow)
+          .createQueryBuilder()
+          .insert()
+          .values({ id: randomUUID(), channelId: slug, a, b, createdAt: new Date() })
+          .orIgnore()
+          .execute();
+
+        // Читаем обратно ВСЕ строки с этим слагом: если рядом стоит чужая, наша
+        // вставка молча проиграла не гонке, а чужому каналу.
+        const rows = await m.getRepository(ChannelRow).find({ where: { slug } });
+        const foreign = rows.find((row) => row.type !== 'dm');
+        if (foreign) {
+          this.logger.error(
+            `адрес беседы ${slug} занят каналом типа ${foreign.type} — беседа не открыта;` +
+              ' такой канал мог приехать только импортом 0.x',
+          );
+          throw new SlugTaken();
+        }
+      });
+    } catch (err) {
+      if (err instanceof SlugTaken) return false;
+      throw err;
+    }
     this.known.set(slug, { a, b });
+    return true;
   }
 
   /**

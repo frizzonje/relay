@@ -138,7 +138,13 @@ export class PersonalHandlers {
     this.tellOtherDevices(client, me.id, 'prefs', { values: { [key as string]: payload?.value } });
   }
 
-  /** Остальным устройствам того же человека — но не тому, кто это и сделал. */
+  /**
+   * Остальным устройствам того же человека — но не тому, кто это и сделал, и не
+   * на гостевой сокет: он живёт по инвайт-ссылке, часто на чужом устройстве, и
+   * личных отметок ему не положено. С задачи 6 в `reads` ездят и адреса бесед —
+   * сам по себе адрес ничего не открывает, но перечислять на странице инвайта,
+   * с кем человек переписывается, незачем.
+   */
   private tellOtherDevices(
     client: AppSocket,
     identityId: string,
@@ -146,7 +152,8 @@ export class PersonalHandlers {
     data: unknown,
   ): void {
     for (const sock of this.perimeter.socketsOf(identityId)) {
-      if (sock.id !== client.id) sock.emit(event, data);
+      if (sock.id === client.id || this.perimeter.isGuest(sock)) continue;
+      sock.emit(event, data);
     }
   }
 

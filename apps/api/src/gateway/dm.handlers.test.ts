@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { issueGuestToken } from '../auth/auth';
 import { asSocket } from './testkit';
 import {
   connect,
   connectAs,
   makeGateway,
+  makeOwner,
   ownServer,
   personCookie,
   say,
@@ -19,9 +21,11 @@ useGatewayStand();
 
 let gw: SignalingGateway;
 let server: FakeServer;
+let roles: Awaited<ReturnType<typeof makeGateway>>['roles'];
+let owner: Awaited<ReturnType<typeof makeGateway>>['owner'];
 
 beforeEach(async () => {
-  ({ gw, server } = await makeGateway());
+  ({ gw, server, roles, owner } = await makeGateway());
 });
 
 describe('открытие переписки', () => {
@@ -60,6 +64,25 @@ describe('открытие переписки', () => {
     expect(res).toEqual({ ok: false, error: 'self' });
   });
 
+  it('забаненному на инсталляции не написать', async () => {
+    const me = await personCookie('я');
+    const you = await personCookie('ты');
+    const mine = await connectAs(gw, server, me.cookie);
+    // Бан на всю инсталляцию — та же строка ролей, по которой забаненного не
+    // видно в списке людей (`dm-people`). Отпечаток при этом никуда не делся, и
+    // до этой проверки беседа заводилась: доставить в неё нечего, а строка в
+    // списке навсегда выглядела бы как живой человек.
+    const boss = await personCookie('Хозяин');
+    await makeOwner(owner, boss.identityId);
+    await roles.ban(you.identityId, null, boss.identityId);
+
+    const res = await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint });
+
+    // Отвечаем как на незнакомый отпечаток: кто забанен, из чужого интерфейса
+    // видно быть не должно.
+    expect(res).toEqual({ ok: false, error: 'unknown' });
+  });
+
   it('незнакомый отпечаток беседу не открывает', async () => {
     const me = await personCookie('я');
     const mine = await connectAs(gw, server, me.cookie);
@@ -72,9 +95,10 @@ describe('дверь одна на всех', () => {
   it('без личности не открыть список, не войти в беседу и не искать собеседника', async () => {
     const anon = connect(gw, server, { clientId: 'устройство' });
     expect(await gw.handleDmList(asSocket(anon))).toEqual({ ok: false, error: 'forbidden' });
-    expect(
-      await gw.handleDmJoin(asSocket(anon), { slug: 'dm-ffffffffffffffffffffffff' }),
-    ).toEqual({ ok: false, error: 'forbidden' });
+    expect(await gw.handleDmJoin(asSocket(anon), { slug: 'dm-ffffffffffffffffffffffff' })).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
     expect(await gw.handleDmPeople(asSocket(anon), {})).toEqual({ ok: false, error: 'forbidden' });
   });
 });
@@ -193,6 +217,35 @@ describe('активность беседы', () => {
     expect(theirs.got('chat-activity')).toBe(false);
     expect(mine.all('chat-activity')).toEqual([]);
   });
+
+  it('на гостевой сокет той же личности превью не уходит', async () => {
+    const me = await personCookie('я');
+    const you = await personCookie('ты');
+    const mine = await connectAs(gw, server, me.cookie);
+    const yours = await connectAs(gw, server, you.cookie);
+
+    // Тот же человек открыл ссылку-приглашение: сокет и с его кукой личности, и
+    // с гостевым токеном. Гостевой контур урезан намеренно (страница инвайта,
+    // часто чужое устройство), и текст личной переписки на него ехать не должен
+    // — ровно как туда не уходит реестр и упоминания.
+    const { token } = issueGuestToken('voice-obshchii');
+    const guest = server.connect({ cookie: you.cookie, auth: { guest: token } });
+    await server.run(guest);
+    gw.handleConnection(asSocket(guest));
+    guest.clear();
+
+    const opened = await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint });
+    const slug = opened.ok ? opened.conversation.slug : '';
+    await gw.handleDmJoin(asSocket(mine), { slug });
+    yours.clear();
+
+    await gw.handleChatMessage(asSocket(mine), { text: 'секрет' });
+    settle();
+
+    // Обычный сокет собеседника — получил; гостевой — нет.
+    expect((yours.last('dm-activity') as { preview: string }).preview).toBe('секрет');
+    expect(guest.got('dm-activity')).toBe(false);
+  });
 });
 
 describe('отметки чтения', () => {
@@ -278,6 +331,22 @@ describe('чего в беседе нет', () => {
     const res = await gw.handleChatSearch(asSocket(owner), { query: 'привет', scope: 'server' });
     expect(res.ok && res.hits.some((h) => h.slug === dmSlug)).toBe(false);
     expect(res.ok && res.hits).toHaveLength(1);
+  });
+
+  it('устаревший вопрос о закреплённом получает отказ, а не чужой слаг', async () => {
+    // Спросили про канал, из которого уже ушли в беседу. Ответ `ok` со слагом
+    // беседы — это ответ не про то, о чём спрашивали: клиент нарисовал бы
+    // пустой список закреплённого над той лентой, о которой не спрашивал.
+    const me = await personCookie('я');
+    const you = await personCookie('ты');
+    const mine = await connectAs(gw, server, me.cookie);
+    const opened = await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint });
+    const slug = opened.ok ? opened.conversation.slug : '';
+    await gw.handleDmJoin(asSocket(mine), { slug });
+
+    expect(await gw.handleChatPins(asSocket(mine), { slug: 'obshchii' })).toEqual({ ok: false });
+    // А вопрос про саму беседу по-прежнему получает честный пустой список.
+    expect(await gw.handleChatPins(asSocket(mine), { slug })).toEqual({ ok: true, slug, pins: [] });
   });
 
   it('список закреплённого в беседе всегда пуст', async () => {

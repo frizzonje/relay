@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { DataSource } from 'typeorm';
 import { randomUUID } from 'node:crypto';
-import { IdentityRow, MessageRow, RoleRow } from '../db/entities';
+import { ChannelRow, IdentityRow, MessageRow, RoleRow } from '../db/entities';
 import { resetDatabase, testDatabase } from '../db/testing';
 import { DmService, isDmSlug } from './dm.service';
 
@@ -83,6 +83,42 @@ describe('открытие', () => {
     const me = await person('я');
     const res = await dm.open(me.id, 'fp-никого');
     expect(res).toEqual({ ok: false, reason: 'unknown' });
+  });
+
+  it('адрес занят публичным каналом — беседу не открываем вовсе', async () => {
+    // Уникальность в `channels` — по паре (type, slug), поэтому строка
+    // ('dm', адрес) спокойно ложится рядом с ('text', тот же адрес), и
+    // `orIgnore` этого не замечает. Дальше ChatService ищет канал ПО СЛАГУ и
+    // первым отвечает реестром — личная реплика уехала бы в публичный канал.
+    // Сегодняшний сервер такого канала не создаёт (метка сервера ломает форму
+    // адреса), но `importLegacy` переносит слаги 0.x дословно.
+    const me = await person('я');
+    const you = await person('ты');
+    const slug = DmService.address(me.id, you.id);
+    await db.getRepository(ChannelRow).insert({
+      id: randomUUID(),
+      serverId: null,
+      type: 'text',
+      name: 'старый',
+      slug,
+      removable: true,
+      mode: null,
+      creatorId: null,
+      creatorIdentityId: null,
+      position: 0,
+    });
+
+    const res = await dm.open(me.id, you.fingerprint);
+
+    // Худший исход — «беседу не открыть», а не «переписка в общем канале».
+    expect(res.ok).toBe(false);
+    expect(dm.isDm(slug)).toBe(false);
+    // И беседы в базе не осталось: транзакция откатилась целиком.
+    const rows: Array<{ n: string }> = await db.query(
+      'SELECT count(*)::text AS n FROM conversations WHERE channel_id = $1',
+      [slug],
+    );
+    expect(rows[0].n).toBe('0');
   });
 
   it('не даёт открыть переписку с самим собой', async () => {

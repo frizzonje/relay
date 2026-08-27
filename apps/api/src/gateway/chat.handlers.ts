@@ -366,6 +366,11 @@ export class ChatHandlers {
       const peer = this.dm.peerView(peerId);
       if (!peer) continue;
       for (const sock of this.perimeter.socketsOf(identityId)) {
+        // Гостевой сокет — того же человека, но урезанный контур: страница
+        // инвайта, часто чужое устройство или расшаренный экран. Реестр туда не
+        // уходит (см. queueChatActivity), упоминания тоже — а здесь ехал бы
+        // текст личной переписки, самое чувствительное, что есть в ветке.
+        if (this.perimeter.isGuest(sock)) continue;
         sock.emit('dm-activity', {
           slug,
           ts: msg.ts,
@@ -506,14 +511,17 @@ export class ChatHandlers {
     const room = this.chats.roomOf(client);
     if (!room) return { ok: false };
     const slug = this.chat.slug(room);
+    // Спросили про другой канал — значит спрашивавший уже не здесь: отвечаем
+    // отказом, а не списком того канала, где сокет оказался. Проверка стоит
+    // ПЕРЕД веткой беседы: иначе устаревший вопрос из канала, заданный уже из
+    // беседы, получал бы бодрое `ok` с чужим слагом в ответе — то есть ответ
+    // не про то, о чём спрашивали.
+    const asked = trimmed(payload?.slug, LIMIT.slug);
+    if (asked && asked !== slug) return { ok: false };
     // В беседе закреплять нечего (см. `pin`) — список пуст всегда, и это
     // честный ответ, а не отказ: сказать «здесь ничего не закреплено» можно, не
     // спрашивая прав, в отличие от самой попытки закрепить.
     if (this.dm.isDm(slug)) return { ok: true, slug, pins: [] };
-    // Спросили про другой канал — значит спрашивавший уже не здесь: отвечаем
-    // отказом, а не списком того канала, где сокет оказался.
-    const asked = trimmed(payload?.slug, LIMIT.slug);
-    if (asked && asked !== slug) return { ok: false };
     return { ok: true, slug, pins: await this.chat.pinned(slug) };
   }
 
