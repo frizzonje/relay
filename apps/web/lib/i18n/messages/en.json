@@ -210,6 +210,7 @@
   "dm.person.never": "never seen",
   "dm.person.seen": "seen {when}",
   "dm.search.empty": "No one matches.",
+  "dm.search.limited": "Showing the first {limit} — narrow your search if you don't see who you're looking for.",
   "dm.search.placeholder": "Search by nick or fingerprint",
   "dm.soon": "Coming soon",
   "dm.title": "Direct",

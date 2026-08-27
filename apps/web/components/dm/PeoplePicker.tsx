@@ -2,7 +2,12 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import type { DmOpenResult, DmPeopleResult, DmPerson } from '@relay/shared';
+import {
+  DM_PEOPLE_LIMIT,
+  type DmOpenResult,
+  type DmPeopleResult,
+  type DmPerson,
+} from '@relay/shared';
 import { Icon } from '@/components/ui/icon';
 import { Identicon } from '@/components/ui/Identicon';
 import { ask } from '@/lib/channels';
@@ -79,6 +84,13 @@ export function PeoplePicker({
   const [people, setPeople] = useState<DmPerson[]>([]);
   const [asked, setAsked] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  /**
+   * Номер последнего отправленного запроса. Человек печатает быстрее, чем
+   * отвечает сервер, и ответы возвращаются не в том порядке, в каком уходили:
+   * без этого счётчика на экране оседал бы список по половине слова (см.
+   * тот же приём в stores/search.ts).
+   */
+  const seqRef = useRef(0);
 
   // Открыли — курсор сразу в поле поиска, список стерт: прошлый выбор больше
   // ни при чём. Закрыли — сбрасываем всё, чтобы следующее открытие не мигнуло
@@ -99,9 +111,14 @@ export function PeoplePicker({
   useEffect(() => {
     if (!open) return;
     const delay = query.trim() ? TYPING_PAUSE_MS : 0;
+    const mine = (seqRef.current += 1);
     const timer = setTimeout(() => {
       void ask<DmPeopleResult>('dm-people', query.trim() ? { query: query.trim() } : {}).then(
         (res) => {
+          // Ответ мог прийти позже более свежего запроса (следующая буква,
+          // очередной сброс паузой) — тогда он уже не про то, что набрано
+          // сейчас, и подменять список или флаг «спрашивали» им нельзя.
+          if (mine !== seqRef.current) return;
           setAsked(true);
           setPeople(res?.ok ? res.people : []);
         },
@@ -194,6 +211,16 @@ export function PeoplePicker({
                 ))
               )}
             </div>
+
+            {/* Сервер режет список на DM_PEOPLE_LIMIT молча (см. dm.service.ts),
+                и ровно тридцать человек не отличить от трёхсот по одному ответу.
+                Подсказка не утверждает, что скрытые есть, — только что список не
+                весь и стоит сузить поиск, если нужного человека не видно. */}
+            {people.length === DM_PEOPLE_LIMIT && (
+              <p className="shrink-0 border-t border-line px-3 py-2 text-[12px] text-text-faint">
+                {t('dm.search.limited', { limit: DM_PEOPLE_LIMIT })}
+              </p>
+            )}
           </motion.div>
         </>
       )}

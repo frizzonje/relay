@@ -226,6 +226,7 @@
   "dm.person.never": "не видели ни разу",
   "dm.person.seen": "видели {when}",
   "dm.search.empty": "Никого не нашлось.",
+  "dm.search.limited": "Показаны первые {limit} — сузьте запрос, если нужного человека не видно.",
   "dm.search.placeholder": "Поиск по нику или отпечатку",
   "dm.soon": "Скоро",
   "dm.title": "ЛС",
