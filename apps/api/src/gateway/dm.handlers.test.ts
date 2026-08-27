@@ -4,8 +4,11 @@ import {
   connect,
   connectAs,
   makeGateway,
+  ownServer,
   personCookie,
+  say,
   settle,
+  slugOf,
   until,
   useGatewayStand,
 } from './gateway.testkit';
@@ -221,5 +224,79 @@ describe('отметки чтения', () => {
     await until(() => second.got('mentions'), 'снимок личного для второго устройства');
     const reads = second.last('reads') as { marks: Record<string, number> };
     expect(reads.marks[slug]).toBe(msg.ts);
+  });
+});
+
+/**
+ * Беседа с уже сказанным «привет»: заводит двоих, открывает переписку, вводит
+ * обе стороны в ленту и говорит. С этого начинается каждый тест о том, чего в
+ * беседе нет, — закрепления, чужого поиска и счётчика упоминаний.
+ */
+async function conversationWithMessage() {
+  const me = await personCookie('я');
+  const you = await personCookie('ты');
+  const mine = await connectAs(gw, server, me.cookie);
+  const yours = await connectAs(gw, server, you.cookie);
+  const opened = await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint });
+  const slug = opened.ok ? opened.conversation.slug : '';
+  await gw.handleDmJoin(asSocket(mine), { slug });
+  await gw.handleDmJoin(asSocket(yours), { slug });
+  await gw.handleChatMessage(asSocket(mine), { text: 'привет' });
+  const id = (mine.last('chat') as { id: string }).id;
+  return { slug, mine, yours, id, peerFingerprint: you.fingerprint };
+}
+
+describe('чего в беседе нет', () => {
+  it('закрепить нельзя', async () => {
+    const { id, mine } = await conversationWithMessage();
+    const res = await gw.handleChatPin(asSocket(mine), { id, on: true });
+    expect(res).toEqual({ ok: false, error: 'forbidden' });
+  });
+
+  it('поиск не выходит за пределы переписки и находит своё', async () => {
+    const { slug, mine } = await conversationWithMessage();
+    // На сервере есть канал с тем же словом — он не должен попасть в выдачу.
+    const owner = connect(gw, server, { id: 'поиск-владелец' });
+    await ownServer(gw, owner);
+    await say(gw, owner, slugOf('болталка'), 'привет');
+
+    const res = await gw.handleChatSearch(asSocket(mine), { query: 'привет', scope: 'server' });
+    expect(res.ok && res.hits.every((h) => h.slug === slug)).toBe(true);
+    // Не вакуумная проверка на пустом множестве: своя реплика беседы и правда
+    // находится, и слаг у находки — адрес беседы. Ровно здесь id канала беседы
+    // переводится в её адрес через `ChatService.slugOf`.
+    expect(res.ok && res.hits).toHaveLength(1);
+    expect(res.ok && res.hits[0]?.slug).toBe(slug);
+  });
+
+  it('поиск из канала не достаёт беседу', async () => {
+    const { slug: dmSlug } = await conversationWithMessage();
+    const owner = connect(gw, server, { id: 'канал-владелец' });
+    await ownServer(gw, owner);
+    await say(gw, owner, slugOf('болталка'), 'привет');
+
+    const res = await gw.handleChatSearch(asSocket(owner), { query: 'привет', scope: 'server' });
+    expect(res.ok && res.hits.some((h) => h.slug === dmSlug)).toBe(false);
+    expect(res.ok && res.hits).toHaveLength(1);
+  });
+
+  it('список закреплённого в беседе всегда пуст', async () => {
+    const { mine, slug } = await conversationWithMessage();
+    const res = await gw.handleChatPins(asSocket(mine), {});
+    expect(res).toEqual({ ok: true, slug, pins: [] });
+  });
+
+  it('упоминание в беседе не растит счётчик', async () => {
+    const { mine, yours, peerFingerprint } = await conversationWithMessage();
+    yours.clear();
+    // Отпечаток пришлось назвать явно (как называет его настоящий клиент,
+    // выбравший имя в подсказке): без него `resolve` вернул бы пустой список
+    // ещё до всякой проверки на беседу, и тест не отличил бы «упоминание
+    // погашено» от «упоминания и не было».
+    await gw.handleChatMessage(asSocket(mine), {
+      text: 'эй @ты',
+      mentions: [peerFingerprint],
+    });
+    expect(yours.got('mention')).toBe(false);
   });
 });

@@ -218,6 +218,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.registry,
     this.chat,
     this.perimeter,
+    this.dm,
     () => this.server,
   );
 

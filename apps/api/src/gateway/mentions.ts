@@ -1,5 +1,6 @@
 import type { AppServer, AppSocket } from './socket-data';
 import type { ChatService } from './chat.service';
+import type { DmService } from './dm.service';
 import type { Perimeter } from './perimeter';
 import type { RegistryService } from './registry.service';
 import { mentionedIn } from './chat.service';
@@ -20,6 +21,7 @@ export class Mentions {
     private readonly registry: RegistryService,
     private readonly chat: ChatService,
     private readonly perimeter: Perimeter,
+    private readonly dm: DmService,
     private readonly serverOf: () => AppServer,
   ) {}
 
@@ -55,6 +57,9 @@ export class Mentions {
    */
   ping(from: AppSocket, mentions: MentionRef[], slug: string, ts: number): void {
     if (!mentions.length) return;
+    // В переписке двоих упоминание не адресует: адресат и так один, и счётчик
+    // «тебя звали» дублировал бы непрочитанное.
+    if (this.dm.isDm(slug)) return;
     const channel = this.registry.channels.find((c) => c.type === 'text' && c.slug === slug);
     if (!channel) return;
     const author = this.perimeter.speaker(from)?.fingerprint;

@@ -170,16 +170,40 @@ export class ChatHandlers {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
     const room = this.chats.roomOf(client);
     if (!room) return empty;
-    const here = this.registry.channels.find(
-      (c) => c.type === 'text' && c.slug === this.chat.slug(room),
-    );
-    if (!here || !this.perimeter.canSee(client, here)) return empty;
 
     const query = trimmed(payload?.query, LIMIT.search);
     const terms = searchTerms(query);
     if (!terms.length) return empty;
 
-    const scope = payload?.scope === 'server' ? 'server' : 'channel';
+    const slug = this.chat.slug(room);
+    // В беседе «по серверу» означать нечего: сервера у неё нет, а расширять
+    // поиск на каналы значило бы отдавать по запросу из ЛС то, что к ЛС
+    // отношения не имеет.
+    const channelIds = this.dm.isDm(slug) ? [slug] : this.searchScope(client, room, payload?.scope);
+    if (!channelIds) return empty;
+
+    const beforeTs = typeof payload?.beforeTs === 'number' ? payload.beforeTs : 0;
+    const beforeId = str(payload?.beforeId);
+    const cursor = beforeTs && beforeId ? { ts: beforeTs, id: beforeId } : undefined;
+
+    const { hits, more } = await this.chat.search(channelIds, query, cursor);
+    return { ok: true, hits, more, terms };
+  }
+
+  /**
+   * Набор каналов для обычного, не-беседного поиска: «по каналу» — id того, в
+   * котором сокет сидит, «по серверу» — все текстовые каналы того же сервера,
+   * какие этому сокету видно. Текущий канал не в реестре или не виден —
+   * не ошибка, а пустой результат: искать в закрытом сервере, пароль от
+   * которого не введён, не запрещено, там просто нечего найти.
+   */
+  private searchScope(client: AppSocket, room: string, scopeRaw: unknown): string[] | undefined {
+    const here = this.registry.channels.find(
+      (c) => c.type === 'text' && c.slug === this.chat.slug(room),
+    );
+    if (!here || !this.perimeter.canSee(client, here)) return undefined;
+
+    const scope = scopeRaw === 'server' ? 'server' : 'channel';
     const channels =
       scope === 'server'
         ? this.registry.channels.filter(
@@ -187,17 +211,7 @@ export class ChatHandlers {
               c.type === 'text' && c.serverId === here.serverId && this.perimeter.canSee(client, c),
           )
         : [here];
-
-    const beforeTs = typeof payload?.beforeTs === 'number' ? payload.beforeTs : 0;
-    const beforeId = str(payload?.beforeId);
-    const cursor = beforeTs && beforeId ? { ts: beforeTs, id: beforeId } : undefined;
-
-    const { hits, more } = await this.chat.search(
-      channels.map((c) => c.id),
-      query,
-      cursor,
-    );
-    return { ok: true, hits, more, terms };
+    return channels.map((c) => c.id);
   }
 
   /**
@@ -456,6 +470,9 @@ export class ChatHandlers {
       return { ok: false, error: 'forbidden' };
     const room = this.chats.roomOf(client);
     if (!room) return { ok: false, error: 'forbidden' };
+    // Закрепление — право модератора сервера. У беседы двоих сервера нет, а
+    // значит нет и того, кто был бы вправе закрепить в ней чужую реплику.
+    if (this.dm.isDm(this.chat.slug(room))) return { ok: false, error: 'forbidden' };
     const id = str(payload?.id);
     if (!id) return { ok: false, error: 'not-found' };
     if (!this.moderation.moderatesRoom(client, room)) return { ok: false, error: 'forbidden' };
@@ -489,6 +506,10 @@ export class ChatHandlers {
     const room = this.chats.roomOf(client);
     if (!room) return { ok: false };
     const slug = this.chat.slug(room);
+    // В беседе закреплять нечего (см. `pin`) — список пуст всегда, и это
+    // честный ответ, а не отказ: сказать «здесь ничего не закреплено» можно, не
+    // спрашивая прав, в отличие от самой попытки закрепить.
+    if (this.dm.isDm(slug)) return { ok: true, slug, pins: [] };
     // Спросили про другой канал — значит спрашивавший уже не здесь: отвечаем
     // отказом, а не списком того канала, где сокет оказался.
     const asked = trimmed(payload?.slug, LIMIT.slug);
