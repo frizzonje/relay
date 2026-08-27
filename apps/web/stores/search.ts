@@ -5,7 +5,8 @@ import { ask } from '@/lib/channels';
 import { tx } from '@/lib/i18n';
 import { useChannelsStore } from '@/stores/channels';
 import { useChatStore } from '@/stores/chat';
-import { targetRoom, useUiStore } from '@/stores/ui';
+import { useDmStore } from '@/stores/dm';
+import { sceneTarget, useUiStore } from '@/stores/ui';
 
 /**
  * Поиск по истории: что спросили, что нашлось и куда после этого попадают.
@@ -47,6 +48,16 @@ interface SearchState {
  * без этого счётчика на экране оседал бы результат по половине слова.
  */
 let seq = 0;
+
+/**
+ * Адрес открытой ленты — канала или беседы. Одно понятие на два адресных
+ * пространства: `ChatPanel` пришёл к тому же `textRoom ?? dmRoom` (задача 11),
+ * и переход к находке обязан считать «где я сейчас» так же, иначе он сравнивает
+ * адрес беседы с пустым `textRoom` и всегда решает, что человек ушёл.
+ */
+function openLedger(s: { textRoom: string | null; dmRoom: string | null }): string | null {
+  return s.textRoom ?? s.dmRoom;
+}
 
 /** Панель на мобиле занимает весь экран — после перехода её надо убрать. */
 function narrow(): boolean {
@@ -116,23 +127,36 @@ export const useSearchStore = create<SearchState>((set, get) => ({
 
   openHit: async (hit) => {
     const id = hit.message.id;
+    if (!id) return;
+
+    // Находка приходит и из канала, и из беседы: сервер ищет по той ленте, в
+    // которой сокет сидит (см. задачу 7 плана ЛС), и в переписке это адрес
+    // беседы. В реестре каналов его нет и не будет — по замыслу, а не по
+    // недосмотру, — так что искать место находки надо в обоих списках.
+    const conversation = useDmStore.getState().conversations.find((c) => c.slug === hit.slug);
     const channel = useChannelsStore
       .getState()
       .channels.find((c) => c.type === 'text' && c.slug === hit.slug);
-    if (!id || !channel) return;
+    if (!channel && !conversation) return;
 
-    // В свой канал заходим сперва: окно спрашивают у того канала, в котором
-    // сокет сидит, а сам вход заодно проверяет права. Вход отложен на время,
-    // пока уходит прежняя лента (см. pendingScene), — дожидаемся его, иначе
-    // окно спросим у канала, из которого человек уже ушёл.
-    if (targetRoom(useUiStore.getState()) !== hit.slug) {
-      useUiStore.getState().openText(hit.slug, channel.name);
+    // В своё место заходим сперва: окно спрашивают у той ленты, в которой сокет
+    // сидит, а сам вход заодно проверяет права. Вход отложен на время, пока
+    // уходит прежняя лента (см. pendingScene), — дожидаемся его, иначе окно
+    // спросим у ленты, из которой человек уже ушёл.
+    if (openLedger(sceneTarget(useUiStore.getState())) !== hit.slug) {
+      if (conversation) {
+        const { slug, peer } = conversation;
+        useUiStore.getState().openDm(slug, peer.fingerprint, peer.nick);
+      } else if (channel) {
+        useUiStore.getState().openText(hit.slug, channel.name);
+      }
     }
     await useUiStore.getState().sceneSettled();
 
     const win = await ask<ChatWindowResult>('chat-around', { id });
-    // Пока ждали ответ, человек ушёл в другой канал — чужое окно ему не надо.
-    if (useUiStore.getState().textRoom !== hit.slug) return;
+    // Пока ждали ответ, человек ушёл в другой канал или в другую беседу — чужое
+    // окно ему не надо.
+    if (openLedger(useUiStore.getState()) !== hit.slug) return;
     if (!win || !win.messages.length) {
       // Реплику удалили, пока читали результаты. Молча показать конец канала
       // было бы хуже всего: человек решил бы, что промахнулся сам.

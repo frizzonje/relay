@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import type { SearchHit, SearchScope } from '@relay/shared';
+import { isDmSlug, type SearchHit, type SearchScope } from '@relay/shared';
 import { cn } from '@/lib/utils';
 import { Icon } from '@/components/ui/icon';
 import { Identicon } from '@/components/ui/Identicon';
@@ -10,6 +10,7 @@ import { fmtDayTime } from '@/lib/format';
 import { excerpt, highlight } from '@/lib/search';
 import { useT } from '@/lib/i18n';
 import { useChannelsStore } from '@/stores/channels';
+import { useDmStore } from '@/stores/dm';
 import { useSearchStore } from '@/stores/search';
 import { useUiStore } from '@/stores/ui';
 
@@ -54,6 +55,13 @@ function Hit({ hit, terms, onOpen }: { hit: SearchHit; terms: string[]; onOpen: 
   // адресной строкой. Канала уже нет — остаётся слаг: он всё равно честнее,
   // чем пустое место.
   const channel = useChannelsStore((s) => s.channels.find((c) => c.slug === hit.slug));
+  // У находки из беседы места в реестре каналов нет по замыслу, и решётка ей
+  // не идёт: `#dm-0123456789abcdef…` — это адрес, показанный человеку вместо
+  // имени. Беседу называем тем же, чем её называет список переписок, — ником.
+  const conversation = useDmStore((s) => s.conversations.find((c) => c.slug === hit.slug));
+  const place = isDmSlug(hit.slug)
+    ? (conversation?.peer.nick ?? t('dm.title'))
+    : `#${channel?.name ?? hit.slug}`;
   return (
     <button
       type="button"
@@ -61,7 +69,7 @@ function Hit({ hit, terms, onOpen }: { hit: SearchHit; terms: string[]; onOpen: 
       className="w-full rounded-[10px] border border-transparent px-3 py-2.5 text-left transition-colors hover:border-line hover:bg-bg-hover"
     >
       <div className="flex items-center gap-2 text-[11px] text-text-muted">
-        <span className="truncate font-medium text-text">#{channel?.name ?? hit.slug}</span>
+        <span className="truncate font-medium text-text">{place}</span>
         <span className="shrink-0">{fmtDayTime(msg.ts)}</span>
       </div>
       <div className="mt-1.5 flex items-start gap-2">
@@ -93,6 +101,7 @@ export function SearchPanel() {
   const asked = useSearchStore((s) => s.asked);
   const failed = useSearchStore((s) => s.failed);
   const textLabel = useUiStore((s) => s.textLabel);
+  const inDm = useUiStore((s) => s.view === 'dm');
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Открыли — курсор сразу в поле: поиск открывают, чтобы печатать, а не чтобы
@@ -110,10 +119,16 @@ export function SearchPanel() {
     return () => clearTimeout(timer);
   }, [open, query, scope]);
 
-  const scopes: { id: SearchScope; label: string }[] = [
-    { id: 'channel', label: t('search.scope.channel', { channel: textLabel }) },
-    { id: 'server', label: t('search.scope.server') },
-  ];
+  // В беседе выбора охвата нет: сервер ищет по одной ленте и `scope`
+  // игнорирует (задача 7 плана ЛС), так что кнопка «весь сервер» вернула бы ту
+  // же самую беседу — предложение, которое ничего не меняет, врёт дважды: и
+  // про то, что можно шире, и про то, что показанное узко.
+  const scopes: { id: SearchScope; label: string }[] = inDm
+    ? []
+    : [
+        { id: 'channel', label: t('search.scope.channel', { channel: textLabel }) },
+        { id: 'server', label: t('search.scope.server') },
+      ];
 
   return (
     <AnimatePresence>
@@ -153,24 +168,26 @@ export function SearchPanel() {
             </button>
           </div>
 
-          <div className="flex shrink-0 gap-1 border-b border-line px-3 py-2">
-            {scopes.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => useSearchStore.getState().setScope(s.id)}
-                aria-pressed={scope === s.id}
-                className={cn(
-                  'truncate rounded-full px-2.5 py-1 text-[12px] transition-colors',
-                  scope === s.id
-                    ? 'bg-accent-strong/20 text-text-header'
-                    : 'text-text-muted hover:bg-bg-hover hover:text-text',
-                )}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
+          {scopes.length > 0 && (
+            <div className="flex shrink-0 gap-1 border-b border-line px-3 py-2">
+              {scopes.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => useSearchStore.getState().setScope(s.id)}
+                  aria-pressed={scope === s.id}
+                  className={cn(
+                    'truncate rounded-full px-2.5 py-1 text-[12px] transition-colors',
+                    scope === s.id
+                      ? 'bg-accent-strong/20 text-text-header'
+                      : 'text-text-muted hover:bg-bg-hover hover:text-text',
+                  )}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
             {/* Пять состояний, и они разные: ещё не спрашивали, ищем, не

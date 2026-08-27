@@ -19,6 +19,7 @@ const toasts = vi.hoisted(() => ({ shown: [] as string[] }));
 vi.mock('sonner', () => ({ toast: (text: string) => toasts.shown.push(text) }));
 
 import { useChannelsStore } from './channels';
+import { useDmStore } from './dm';
 import { useChatStore } from './chat';
 import { useSearchStore } from './search';
 import { useUiStore } from './ui';
@@ -46,6 +47,7 @@ beforeEach(() => {
     failed: false,
   });
   useChatStore.getState().reset();
+  useDmStore.setState({ conversations: [] });
   useChannelsStore.setState({
     channels: [
       { id: 'c0', serverId: 's', type: 'text', name: 'общий', slug: 'obshchii', removable: false },
@@ -139,6 +141,38 @@ describe('переход к найденному', () => {
 
     expect(useChatStore.getState().messages).toEqual([]);
     expect(toasts.shown).toHaveLength(1);
+  });
+
+  it('находка из беседы ведёт в беседу, а не молчит', async () => {
+    // Адреса беседы в реестре каналов нет и не будет — это критерий приёмки
+    // плана ЛС, а не случайность. Пока переход искал место находки только там,
+    // клик по находке в переписке не делал ровно ничего.
+    const slug = 'dm-0123456789abcdef01234567';
+    useDmStore.setState({
+      conversations: [
+        {
+          slug,
+          peer: { fingerprint: '6668-7aad-f862-bd77', nick: 'Марта' },
+          lastTs: 1,
+          preview: 'дача',
+          previewMine: false,
+        },
+      ],
+    });
+    answers.queue = [window_(['до', 'оно', 'после'])];
+
+    await useSearchStore.getState().openHit(hit('оно', slug));
+
+    const ui = useUiStore.getState();
+    expect([ui.view, ui.dmRoom, ui.textRoom]).toEqual(['dm', slug, null]);
+    expect(useChatStore.getState().messages.map((m) => m.id)).toEqual(['до', 'оно', 'после']);
+    expect(useChatStore.getState().jump).toBe('оно');
+  });
+
+  it('беседы уже нет в списке — никуда не идём', async () => {
+    useDmStore.setState({ conversations: [] });
+    await useSearchStore.getState().openHit(hit('1', 'dm-0123456789abcdef01234567'));
+    expect(useUiStore.getState().textRoom).toBe('obshchii');
   });
 
   it('канала уже нет — никуда не идём', async () => {
