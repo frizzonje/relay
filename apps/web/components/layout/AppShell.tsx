@@ -13,6 +13,7 @@ import { OwnerClaimDialog } from '@/components/layout/OwnerClaimDialog';
 import { BannedGate } from '@/components/layout/BannedGate';
 import { OutdatedGate } from '@/components/layout/OutdatedGate';
 import { ServerRail } from '@/components/layout/ServerRail';
+import { Toolbar } from '@/components/layout/Toolbar';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Topbar } from '@/components/layout/Topbar';
 import { Controls } from '@/components/layout/Controls';
@@ -108,13 +109,20 @@ export function AppShell() {
 
       {/* Обёртка панелей: ряд на мобиле (одна видимая панель), contents на десктопе */}
       <div className="flex min-h-0 flex-1 md:contents">
-        {/* Навигация: рейка + сайдбар */}
+        {/* Навигация: рейка серверов + тулбар ЛС/звонков + сайдбар */}
         <Panel
           className={cn('shrink-0 max-md:w-full', effective !== 'nav' && 'max-md:hidden')}
           state={shown('nav')}
         >
           <ServerRail />
-          <Sidebar />
+          {/* Обёртка нужна только на мобиле: там тулбар — горизонтальная полоса
+              НАД списком каналов, а не третья узкая колонка рядом с рейкой
+              серверов. На десктопе `flex-row` ничего не меняет — тулбар и
+              сайдбар и так шли бы друг за другом. */}
+          <div className="flex min-w-0 flex-1 flex-col md:flex-row">
+            <Toolbar />
+            <Sidebar />
+          </div>
         </Panel>
 
         {/* Сцена. Топбар — только на десктопе: на мобиле имя канала в шапке */}

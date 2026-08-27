@@ -8,22 +8,26 @@ import { tx } from '@/lib/i18n';
  * наоборот. Сокет-эффекты (chat-join/leave) навешаны на изменения `textRoom`
  * в SocketProvider — стор остаётся «чистым».
  */
-export type ShellView = 'lobby' | 'voice' | 'text';
+export type ShellView = 'lobby' | 'voice' | 'text' | 'dm';
 
 /**
  * Сцена — то, что показано в середине экрана: вид и, для текста, какой именно
  * канал. Два текстовых канала — две РАЗНЫЕ сцены: смена одного на другой такая
  * же смена картинки, как выход из лобби в канал, и выглядеть должна так же.
+ * Ровно та же логика для переписок: `dmRoom` — тот же по духу идентификатор,
+ * что `textRoom`, только для ЛС.
  */
 export interface Scene {
   view: ShellView;
   textRoom: string | null;
   textLabel: string;
+  dmRoom: string | null;
+  dmPeer: string | null;
 }
 
 /** Та же сцена? Подпись не в счёт: это надпись на сцене, а не сама сцена. */
 function sameScene(a: Scene, b: Scene): boolean {
-  return a.view === b.view && a.textRoom === b.textRoom;
+  return a.view === b.view && a.textRoom === b.textRoom && a.dmRoom === b.dmRoom;
 }
 
 /** Кто ждёт, пока отложенный переход доедет до экрана (см. `sceneSettled`). */
@@ -102,12 +106,28 @@ interface UiState {
   /** Вышли из эфира: показываем открытый текстовый канал или лобби. */
   clearVoice: () => void;
   goLobby: () => void;
+  /** Открытая беседа: отпечаток собеседника. null — раздел открыт без переписки. */
+  dmPeer: string | null;
+  /** Адрес открытой беседы; null — переписка ещё не выбрана. */
+  dmRoom: string | null;
+  /**
+   * Раздел ЛС открыт: сайдбар подменён списком переписок. Отдельно от сцены —
+   * список остаётся на месте, пока человек ходит по перепискам, и не гаснет
+   * вместе с ними.
+   */
+  dmSection: boolean;
+  openDmSection: () => void;
+  openDm: (slug: string, peer: string, label: string) => void;
+  leaveDm: () => void;
 }
 
 export const useUiStore = create<UiState>((set, get) => ({
   view: 'lobby',
   textRoom: null,
   textLabel: '',
+  dmRoom: null,
+  dmPeer: null,
+  dmSection: false,
   pendingScene: null,
   stageLive: false,
   setStageLive: (live) => set({ stageLive: live }),
@@ -151,23 +171,51 @@ export const useUiStore = create<UiState>((set, get) => ({
   // не дожидаясь сцены: она и есть ответ на тап, ждать его человек не должен.
   openText: (slug, label) => {
     set({ mobilePanel: 'stage' });
-    get().goScene({ view: 'text', textRoom: slug, textLabel: label });
+    get().goScene({ view: 'text', textRoom: slug, textLabel: label, dmRoom: null, dmPeer: null });
   },
   leaveText: () =>
-    get().goScene({ view: get().voiceRoom ? 'voice' : 'lobby', textRoom: null, textLabel: '' }),
+    get().goScene({
+      view: get().voiceRoom ? 'voice' : 'lobby',
+      textRoom: null,
+      textLabel: '',
+      dmRoom: null,
+      dmPeer: null,
+    }),
   openVoice: (room, label) => {
     set({ voiceRoom: room, voiceLabel: label, mobilePanel: 'stage' });
     const { textRoom, textLabel } = sceneTarget(get());
-    get().goScene({ view: 'voice', textRoom, textLabel });
+    get().goScene({ view: 'voice', textRoom, textLabel, dmRoom: null, dmPeer: null });
   },
   clearVoice: () => {
     set({ voiceRoom: null, voiceLabel: '' });
     const { textRoom, textLabel } = sceneTarget(get());
-    get().goScene({ view: textRoom ? 'text' : 'lobby', textRoom, textLabel });
+    get().goScene({
+      view: textRoom ? 'text' : 'lobby',
+      textRoom,
+      textLabel,
+      dmRoom: null,
+      dmPeer: null,
+    });
   },
   goLobby: () => {
     const { textRoom, textLabel } = sceneTarget(get());
-    get().goScene({ view: 'lobby', textRoom, textLabel });
+    get().goScene({ view: 'lobby', textRoom, textLabel, dmRoom: null, dmPeer: null });
+  },
+  openDmSection: () => set({ dmSection: true, mobilePanel: 'nav' }),
+  openDm: (slug, peer, label) => {
+    set({ dmSection: true, mobilePanel: 'stage' });
+    get().goScene({ view: 'dm', textRoom: null, textLabel: label, dmRoom: slug, dmPeer: peer });
+  },
+  leaveDm: () => {
+    set({ dmSection: false });
+    const { textRoom, textLabel } = sceneTarget(get());
+    get().goScene({
+      view: get().voiceRoom ? 'voice' : textRoom ? 'text' : 'lobby',
+      textRoom,
+      textLabel,
+      dmRoom: null,
+      dmPeer: null,
+    });
   },
 }));
 
@@ -177,7 +225,15 @@ export const useUiStore = create<UiState>((set, get) => ({
  * строки в списке каналов должна отзываться на клик, а не на анимацию.
  */
 export function sceneTarget(s: UiState): Scene {
-  return s.pendingScene ?? { view: s.view, textRoom: s.textRoom, textLabel: s.textLabel };
+  return (
+    s.pendingScene ?? {
+      view: s.view,
+      textRoom: s.textRoom,
+      textLabel: s.textLabel,
+      dmRoom: s.dmRoom,
+      dmPeer: s.dmPeer,
+    }
+  );
 }
 
 /** Вид, к которому мы идём. Селектор отдаёт примитив — так его любит zustand. */

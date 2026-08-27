@@ -473,7 +473,13 @@ describe('переходы между сценами', () => {
     ui().openText('obshchii', 'общий');
     // Сцена ещё прежняя — гаснуть должно лобби, а не пустой канал.
     expect([ui().view, ui().textRoom]).toEqual(['lobby', null]);
-    expect(ui().pendingScene).toEqual({ view: 'text', textRoom: 'obshchii', textLabel: 'общий' });
+    expect(ui().pendingScene).toEqual({
+      view: 'text',
+      textRoom: 'obshchii',
+      textLabel: 'общий',
+      dmRoom: null,
+      dmPeer: null,
+    });
     // А панель на мобиле переключилась сразу: она и есть ответ на тап.
     expect(ui().mobilePanel).toBe('stage');
 
@@ -506,7 +512,13 @@ describe('переходы между сценами', () => {
     useUiStore.setState({ view: 'text', textRoom: 'obshchii', textLabel: 'общий' });
     useUiStore.setState({ voiceRoom: 'kuhnya', voiceLabel: 'кухня' });
     ui().leaveText();
-    expect(ui().pendingScene).toEqual({ view: 'voice', textRoom: null, textLabel: '' });
+    expect(ui().pendingScene).toEqual({
+      view: 'voice',
+      textRoom: null,
+      textLabel: '',
+      dmRoom: null,
+      dmPeer: null,
+    });
     ui().commitScene();
     expect([ui().view, ui().textRoom]).toEqual(['voice', null]);
   });
