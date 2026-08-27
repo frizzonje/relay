@@ -36,15 +36,17 @@ export function showDmToast(relay: DmActivityRelay) {
         }}
         // Кнопка, а не div с onClick: облачко — обычная цель для клавиатуры,
         // и таб должен на неё попадать, пока она на экране.
-        // Сдвиг на ширину рейки тулбара: она стоит у правого края, и облачко
-        // без него ложится прямо на неё (замерено: налезало на 13px). Именно
-        // сдвиг, а не отступ: sonner держит тост в своей позиционированной
-        // строке, и margin ему только ширину раздувает, не двигая с места.
+        // На десктопе облачко занимает ровно колонку состава: 232px в ширину
+        // и правым краем вплотную к рейке тулбара. sonner держит тост в 32px
+        // от края экрана, рейка — 64px, отсюда сдвиг ровно на разницу; margin
+        // на его месте раздувал бы ширину, не двигая карточку. В итоге левая
+        // граница облачка совпадает с левой границей колонки состава — оно
+        // встроено в ту же сетку, а не висит в углу само по себе.
         // На узком экране рейки справа нет — там тулбар полосой сверху.
-        className="group flex w-[336px] max-w-[86vw] items-start gap-3 rounded-[14px] border border-line bg-bg-elev px-3 py-2.5 text-left shadow-[0_20px_60px_rgba(0,0,0,0.5)] outline-none transition-[transform,border-color] duration-150 hover:-translate-y-0.5 hover:border-line-strong focus-visible:ring-2 focus-visible:ring-line-strong md:-translate-x-16"
+        className="group flex w-[336px] max-w-[86vw] items-start gap-2.5 rounded-[14px] border border-line bg-bg-elev px-3 py-2.5 text-left shadow-[0_20px_60px_rgba(0,0,0,0.5)] outline-none transition-[transform,border-color] duration-150 hover:-translate-y-0.5 hover:border-line-strong focus-visible:ring-2 focus-visible:ring-line-strong md:w-[232px] md:-translate-x-8"
       >
         <span className="mt-0.5 shrink-0">
-          <Identicon fingerprint={relay.peer.fingerprint} size={34} />
+          <Identicon fingerprint={relay.peer.fingerprint} size={30} />
         </span>
 
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -72,6 +74,13 @@ export function showDmToast(relay: DmActivityRelay) {
       // ней вылезал бы прямоугольником сбоку — тем заметнее, что карточка ещё
       // и сдвинута от края. Гасим ровно то, что рисует контейнер.
       className: 'border-0 bg-transparent shadow-none',
+      // Прижать к ПРАВОМУ краю строки sonner. Своей ширины (356px) она не
+      // отдаёт, а карточку кладёт absolute-left: узкое облачко висело бы у
+      // левого края строки, то есть в 156 точках от края экрана, и никакой
+      // сдвиг этого бы не исправил — он считается от того же левого края.
+      // Так привязка остаётся к одному числу sonner (отступ 32px), а не к
+      // двум, и ширину карточки можно менять, ничего больше не пересчитывая.
+      style: { left: 'auto', right: 0 },
     },
   );
 }
