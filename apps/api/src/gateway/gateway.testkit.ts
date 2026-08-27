@@ -187,6 +187,7 @@ export async function makeGateway(saved: PersistedRegistry = {}) {
     roles,
     reads,
     prefs,
+    dmService,
   );
   gw.server = server.asServer();
   // Узнавание личности вешается миддлварой — заводим её и здесь, иначе тест

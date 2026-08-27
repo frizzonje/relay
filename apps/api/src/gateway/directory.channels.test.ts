@@ -67,6 +67,17 @@ describe('channel-create', () => {
     expect((gw as AnyGw).registry.channels.some((c) => c.serverId === 'srv')).toBe(false);
   });
 
+  it('имя, дающее адрес беседы, канал не заводит — префикс занят под ЛС', async () => {
+    const { gw, owner } = await withOwnServer();
+    const res = await gw.handleChannelCreate(asSocket(owner), {
+      serverId: 'srv',
+      type: 'text',
+      name: 'dm-0123456789abcdef01234567',
+    });
+    expect(res).toEqual({ ok: false, error: 'bad-name' });
+    expect((gw as AnyGw).registry.channels.some((c) => c.serverId === 'srv')).toBe(false);
+  });
+
   it('в главный сервер каналы не добавляют — набор там фиксирован', async () => {
     const { gw, owner } = await withOwnServer();
     await gw.handleChannelCreate(asSocket(owner), { serverId: MAIN, type: 'text', name: 'лишний' });

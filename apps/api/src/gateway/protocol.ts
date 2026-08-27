@@ -481,6 +481,27 @@ export type SfuTokenResult =
   | { ok: true; token: string; exp: number; url: string }
   | { ok: false; error: 'forbidden' | 'unavailable' | 'not-in-room' | 'not-sfu' };
 
+/**
+ * Итог открытия беседы. `unknown` — такой личности инсталляция не знает,
+ * `self` — попытка открыть беседу с собой, `forbidden` — ЛС не для тебя
+ * (гость по инвайту, отсутствие личности).
+ */
+export type DmOpenResult =
+  | { ok: true; conversation: DmConversation }
+  | { ok: false; error: 'unknown' | 'self' | 'forbidden' };
+
+/**
+ * Итог входа в ленту беседы. `unknown` — такого адреса нет вовсе,
+ * `forbidden` — адрес существует, но сокет не одна из двух сторон.
+ */
+export type DmJoinResult = { ok: true } | { ok: false; error: 'unknown' | 'forbidden' };
+
+export type DmListResult =
+  | { ok: true; conversations: DmConversation[] }
+  | { ok: false; error: 'forbidden' };
+
+export type DmPeopleResult = { ok: true; people: DmPerson[] } | { ok: false; error: 'forbidden' };
+
 // ── Что живёт в состоянии ───────────────────────────────────────────────────
 
 /** Кто поставил реакцию: отпечаток ключа и ник на тот момент (audit S1). */
@@ -520,6 +541,26 @@ export interface MentionRef {
 export interface RosterPerson {
   nick: string;
   fingerprint?: string;
+}
+
+/** Собеседник в ЛС: лицо рисуется по отпечатку, подпись — ником. */
+export interface DmPeer {
+  fingerprint: string;
+  nick: string;
+}
+
+/** Человек в списке выбора собеседника: тот же собеседник и когда его видели. */
+export interface DmPerson extends DmPeer {
+  lastSeenTs: number;
+}
+
+/** Строка раздела ЛС — беседа со своим адресом и превью последней реплики. */
+export interface DmConversation {
+  slug: string;
+  peer: DmPeer;
+  lastTs: number;
+  preview: string;
+  previewMine: boolean;
 }
 
 export interface ChatMessage {

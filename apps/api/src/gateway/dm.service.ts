@@ -12,6 +12,9 @@ const ADDRESS_LEN = 24;
 /** Докуда обрезается превью последней реплики в списке переписок. */
 export const DM_PREVIEW_LIMIT = 120;
 
+/** Сколько людей отдаётся на один запрос `dm-people`. */
+export const DM_PEOPLE_LIMIT = 30;
+
 export interface DmPeerView {
   fingerprint: string;
   nick: string;

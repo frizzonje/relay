@@ -15,6 +15,7 @@ import { Directory } from './directory';
 import { Mentions } from './mentions';
 import { Moderation } from './moderation';
 import { ChatHandlers } from './chat.handlers';
+import { DmHandlers } from './dm.handlers';
 import { GuestHandlers } from './guests.handlers';
 import { ModerationHandlers } from './moderation.handlers';
 import { PersonalHandlers } from './personal.handlers';
@@ -30,6 +31,7 @@ import { ReadsService } from '../identity/reads.service';
 import { RolesService } from '../identity/roles.service';
 import { UploadsService } from '../uploads';
 import { ChatService } from './chat.service';
+import { DmService } from './dm.service';
 import { RegistryService } from './registry.service';
 import {
   PROTOCOL_VERSION,
@@ -57,6 +59,13 @@ import {
   type ChatSearchPayload,
   type ChatSearchResult,
   type ChatWindowResult,
+  type DmJoinPayload,
+  type DmJoinResult,
+  type DmListResult,
+  type DmOpenPayload,
+  type DmOpenResult,
+  type DmPeoplePayload,
+  type DmPeopleResult,
   type GuestKickPayload,
   type GuestKickResult,
   type InviteCreatePayload,
@@ -150,6 +159,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     private readonly roles: RolesService,
     private readonly reads: ReadsService,
     private readonly prefs: PrefsService,
+    private readonly dm: DmService,
   ) {}
 
   private readonly logger = new Logger(SignalingGateway.name);
@@ -236,6 +246,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.mentions,
     () => this.server,
   );
+
+  /** Дверь в личную переписку: открыть, войти, список, выбор собеседника. */
+  private readonly dmHandlers = new DmHandlers(this.dm, this.chat, this.chats, this.perimeter);
 
   /** Обработчики реестра: серверы и каналы. */
   private readonly registryHandlers = new RegistryHandlers(
@@ -703,6 +716,37 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   @SubscribeMessage('chat-react')
   handleChatReact(@ConnectedSocket() client: AppSocket, @MessageBody() payload: ChatReactPayload) {
     return this.chatHandlers.react(client, payload);
+  }
+
+  // ===== Личные сообщения =====
+
+  @SubscribeMessage('dm-open')
+  handleDmOpen(
+    @ConnectedSocket() client: AppSocket,
+    @MessageBody() payload: DmOpenPayload,
+  ): Promise<DmOpenResult> {
+    return this.dmHandlers.open(client, payload);
+  }
+
+  @SubscribeMessage('dm-list')
+  handleDmList(@ConnectedSocket() client: AppSocket): Promise<DmListResult> {
+    return this.dmHandlers.list(client);
+  }
+
+  @SubscribeMessage('dm-join')
+  handleDmJoin(
+    @ConnectedSocket() client: AppSocket,
+    @MessageBody() payload: DmJoinPayload,
+  ): Promise<DmJoinResult> {
+    return this.dmHandlers.join(client, payload);
+  }
+
+  @SubscribeMessage('dm-people')
+  handleDmPeople(
+    @ConnectedSocket() client: AppSocket,
+    @MessageBody() payload: DmPeoplePayload,
+  ): Promise<DmPeopleResult> {
+    return this.dmHandlers.people(client, payload);
   }
 
   handleDisconnect(client: AppSocket) {
