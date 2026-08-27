@@ -9,6 +9,7 @@ import { initDesktopBridge } from '@/lib/desktop';
 import { useUiStore, myName } from '@/stores/ui';
 import { useChatStore } from '@/stores/chat';
 import { useUnreadStore, LAST_READ_KEY } from '@/stores/unread';
+import { useDmStore } from '@/stores/dm';
 import { useChannelsStore } from '@/stores/channels';
 import { useIdentityStore } from '@/stores/identity';
 import { useContractStore } from '@/stores/contract';
@@ -43,6 +44,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     const ui = useUiStore.getState;
     const unread = useUnreadStore.getState;
     const pins = usePinsStore.getState;
+    const dm = useDmStore.getState;
 
     // «Печатает…»: держим по тегу таймер угасания. Каждый пинг chat-typing его
     // продлевает; истёк — убираем имя из списка. Отдельная функция сброса нужна
@@ -78,6 +80,20 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     }
     /** Слаг открытого сейчас текстового канала (для отметок «прочитано»). */
     const openSlug = () => ui().textRoom;
+
+    /**
+     * Список переписок с сервера. Дёргаем при открытии раздела ЛС и заново на
+     * каждом connect, пока раздел открыт, — так же, как текстовый канал
+     * переподписывается после обрыва: у сокета новый id, и без переспроса
+     * список остался бы тем, что помнит эта вкладка, а не тем, что на сервере.
+     */
+    function requestDmList() {
+      dm().setLoading(true);
+      socket.emit('dm-list', (res) => {
+        dm().setLoading(false);
+        if (res.ok) dm().setConversations(res.conversations);
+      });
+    }
 
     // Смотрим ли мы прямо сейчас в открытый канал. Только тогда входящие
     // считаются прочитанными: свёрнутое окно, соседняя вкладка, сетка голоса
@@ -194,6 +210,15 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // твои устройства сразу.
     socket.on('mentions', ({ counts }) => {
       if (counts && typeof counts === 'object') unread().seedMentions(counts);
+    });
+
+    // В беседе написали. Летит обоим участникам (см. DmActivityRelay), поэтому
+    // своя же реплика — не повод звенеть самому себе.
+    socket.on('dm-activity', (relay) => {
+      dm().applyActivity(relay);
+      // Звук и вспышка — тем же путём, что и упоминание в канале: личная
+      // реплика ничем не тише той, где тебя назвали (см. notify.ts).
+      if (!relay.previewMine) notifyMention(relay.slug);
     });
 
     // Канал закрылся под нами: его удалили (или он не пережил наш реконнект).
@@ -366,6 +391,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         chat().reset();
         socket.emit('chat-join', { room, name: myName() });
       }
+      // Раздел ЛС открыт — список переписок тоже пережил обрыв только на этой
+      // вкладке, сервер о нём знать не обязан.
+      if (ui().dmSection) requestDmList();
     });
 
     // Смена открытого текстового канала: подписка/отписка на сервере. Плюс
@@ -392,6 +420,23 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           chat().reset();
           pins().reset();
           watched = false;
+        }
+      }
+      // Раздел ЛС открыли — подтягиваем список переписок; закрыли и снова
+      // открыли — тоже: за это время могла прийти беседа с другого устройства.
+      if (state.dmSection && !prev.dmSection) requestDmList();
+      // Смена открытой беседы — тот же ход, что у textRoom выше, только вход
+      // отдан отдельному `dm-join` (проверка «ты одна из сторон» ему дороже
+      // видимости в реестре), а выход — общему `chat-leave`: беседа и канал
+      // делят одну и ту же комнату сокета.
+      if (state.dmRoom !== prev.dmRoom) {
+        if (state.dmRoom) {
+          socket.emit('dm-join', { slug: state.dmRoom }, () => {});
+        } else if (!state.textRoom) {
+          // Без общего перехода в текстовый канал: тот уже сделал свой
+          // `chat-join` блоком выше, и `chat-leave` здесь выгнал бы сокет
+          // из комнаты, в которую он только что вошёл этим же переходом.
+          socket.emit('chat-leave');
         }
       }
       syncWatch();
@@ -460,6 +505,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('chat-closed');
       socket.off('mention');
       socket.off('mentions');
+      socket.off('dm-activity');
       socket.off('reads');
       socket.off('prefs');
       socket.off('renamed');
