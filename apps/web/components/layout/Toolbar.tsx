@@ -56,17 +56,24 @@ export function Toolbar() {
 
 /**
  * Кнопка-цель. Выключенные цели не получают HTML `disabled`: этот атрибут
- * заодно глушит наведение мышью, а тултип «скоро» — единственное, что
- * объясняет пустую с виду кнопку, — на нём просто не показался бы.
+ * заодно глушит наведение мышью и фокус с клавиатуры, а тултип и «скоро» в
+ * названии — единственное, что объясняет пустую с виду кнопку, — тогда были
+ * бы недоступны ни мышью, ни клавиатурой.
+ *
+ * Отсюда два разных места для одного и того же «скоро»: `title` — для наведения
+ * мышью (человек видит текст рядом с курсором), `aria-label` — для скринридера
+ * (у него нет курсора, и всплывающая подсказка мимо него проходит).
  */
 function TargetButton({
   target,
   tooltip,
+  accessibleLabel,
   className,
   showLabel,
 }: {
   target: Target;
   tooltip: string;
+  accessibleLabel: string;
   className: string;
   showLabel?: boolean;
 }) {
@@ -75,7 +82,7 @@ function TargetButton({
       type="button"
       data-testid={target.testId}
       title={tooltip}
-      aria-label={target.label}
+      aria-label={accessibleLabel}
       aria-disabled={target.disabled || undefined}
       onClick={target.disabled ? undefined : target.onClick}
       className={className}
@@ -86,8 +93,14 @@ function TargetButton({
   );
 }
 
+/** Название, которое озвучит скринридер: у выключенных целей — с пометкой «скоро». */
+function accessibleLabel(target: Target, soon: string): string {
+  return target.disabled ? `${target.label} — ${soon}` : target.label;
+}
+
 function ToolbarRail({ targets }: { targets: Target[] }) {
   const t = useT();
+  const soon = t('dm.soon');
   return (
     <nav
       aria-label={t('toolbar.label')}
@@ -97,14 +110,19 @@ function ToolbarRail({ targets }: { targets: Target[] }) {
         <TargetButton
           key={target.key}
           target={target}
-          tooltip={target.disabled ? t('dm.soon') : target.label}
+          tooltip={target.disabled ? soon : target.label}
+          accessibleLabel={accessibleLabel(target, soon)}
           className={cn(
-            'grid h-11 w-11 shrink-0 place-items-center rounded-[14px] outline-none transition-colors',
+            // focus-visible живёт в базовой строке, а не в одной из веток: цель
+            // остаётся фокусируемой (не получает HTML `disabled`, см. комментарий
+            // TargetButton) во всех трёх состояниях, и кольцо обязано следовать за
+            // ней везде — иначе таб останавливается на невидимой точке экрана.
+            'grid h-11 w-11 shrink-0 place-items-center rounded-[14px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong',
             target.disabled
               ? 'cursor-not-allowed text-text-faint'
               : target.active
                 ? 'bg-bg-active text-text-header'
-                : 'text-text-muted hover:bg-bg-hover hover:text-text-header focus-visible:ring-2 focus-visible:ring-line-strong',
+                : 'text-text-muted hover:bg-bg-hover hover:text-text-header',
           )}
         />
       ))}
@@ -116,6 +134,7 @@ function ToolbarRail({ targets }: { targets: Target[] }) {
 
 function ToolbarStrip({ targets }: { targets: Target[] }) {
   const t = useT();
+  const soon = t('dm.soon');
   return (
     <nav
       aria-label={t('toolbar.label')}
@@ -125,10 +144,12 @@ function ToolbarStrip({ targets }: { targets: Target[] }) {
         <TargetButton
           key={target.key}
           target={target}
-          tooltip={target.disabled ? t('dm.soon') : target.label}
+          tooltip={target.disabled ? soon : target.label}
+          accessibleLabel={accessibleLabel(target, soon)}
           showLabel
           className={cn(
-            'flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 rounded-[10px] outline-none transition-colors',
+            // Та же логика, что и в рейке: кольцо — в базовой строке, вне веток.
+            'flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 rounded-[10px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong',
             target.disabled
               ? 'cursor-not-allowed text-text-faint'
               : target.active

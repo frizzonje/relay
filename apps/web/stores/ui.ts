@@ -169,8 +169,12 @@ export const useUiStore = create<UiState>((set, get) => ({
   // значит, и переключать панель было некому), и с экрана каналов было не
   // вернуться в ленту. На десктопе поле игнорируется. Панель переключаем сразу,
   // не дожидаясь сцены: она и есть ответ на тап, ждать его человек не должен.
+  // dmSection: false — здесь и в остальных переходах ниже, потому что раздел
+  // ЛС не входит в сцену (см. комментарий у поля): сцена гаснет и подменяется
+  // вместе с dmRoom/dmPeer, а вот список переписок в сайдбаре остался бы висеть
+  // сам по себе, и тулбар продолжал бы подсвечивать Direct как открытый.
   openText: (slug, label) => {
-    set({ mobilePanel: 'stage' });
+    set({ mobilePanel: 'stage', dmSection: false });
     get().goScene({ view: 'text', textRoom: slug, textLabel: label, dmRoom: null, dmPeer: null });
   },
   leaveText: () =>
@@ -182,12 +186,12 @@ export const useUiStore = create<UiState>((set, get) => ({
       dmPeer: null,
     }),
   openVoice: (room, label) => {
-    set({ voiceRoom: room, voiceLabel: label, mobilePanel: 'stage' });
+    set({ voiceRoom: room, voiceLabel: label, mobilePanel: 'stage', dmSection: false });
     const { textRoom, textLabel } = sceneTarget(get());
     get().goScene({ view: 'voice', textRoom, textLabel, dmRoom: null, dmPeer: null });
   },
   clearVoice: () => {
-    set({ voiceRoom: null, voiceLabel: '' });
+    set({ voiceRoom: null, voiceLabel: '', dmSection: false });
     const { textRoom, textLabel } = sceneTarget(get());
     get().goScene({
       view: textRoom ? 'text' : 'lobby',
@@ -198,6 +202,7 @@ export const useUiStore = create<UiState>((set, get) => ({
     });
   },
   goLobby: () => {
+    set({ dmSection: false });
     const { textRoom, textLabel } = sceneTarget(get());
     get().goScene({ view: 'lobby', textRoom, textLabel, dmRoom: null, dmPeer: null });
   },

@@ -41,4 +41,13 @@ describe('раздел ЛС', () => {
     expect(s.dmRoom).toBe(null);
     expect(s.view).toBe('lobby');
   });
+
+  it('открытие канала из раздела ЛС гасит подсветку Direct', () => {
+    // Раздел открыт (сайдбар подменён списком переписок), но тут же открыли
+    // обычный текстовый канал — сайдбар вернулся к каналам, и тулбару больше
+    // нечего подсвечивать: он рисует не сцену, а именно `dmSection`.
+    useUiStore.getState().openDmSection();
+    useUiStore.getState().openText('obshchii', 'общий');
+    expect(useUiStore.getState().dmSection).toBe(false);
+  });
 });

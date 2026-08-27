@@ -639,7 +639,7 @@
   "tile.volume.voice": "Голос собеседника",
   "toolbar.admin": "Админ",
   "toolbar.call": "Звонок",
-  "toolbar.direct": "Личные",
+  "toolbar.direct": "ЛС",
   "toolbar.label": "Панель",
   "topbar.noChannel": "Выберите канал",
   "unlockServer.description": "Закрытый сервер. Введите пароль для входа.",
