@@ -6,6 +6,7 @@ import { getSocket } from '@/lib/socket';
 import { initVoice, relabelSelf } from '@/lib/voice';
 import { initHotkeys } from '@/lib/hotkeys';
 import { initDesktopBridge } from '@/lib/desktop';
+import { isNarrowNow } from '@/lib/use-mobile';
 import { useUiStore, myName } from '@/stores/ui';
 import { useChatStore } from '@/stores/chat';
 import { useUnreadStore, LAST_READ_KEY } from '@/stores/unread';
@@ -110,6 +111,12 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // сообщения копятся в непрочитанные, как в Discord.
     function watching(): boolean {
       if (!openSlug() || (ui().view !== 'text' && ui().view !== 'dm')) return false;
+      // На узком экране вид не отвечает на вопрос «что перед глазами»: панели
+      // показываются по одной, и шаг назад к списку меняет только `mobilePanel`
+      // — `view` остаётся прежним. Без этой строки реплика, пришедшая человеку,
+      // который смотрит на список, считалась бы прочитанной: ни звука, ни
+      // облачка, ни точки — то есть незаметно вовсе.
+      if (isNarrowNow() && ui().mobilePanel !== 'stage') return false;
       if (typeof document !== 'undefined') {
         if (document.visibilityState !== 'visible' || !document.hasFocus()) return false;
       }

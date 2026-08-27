@@ -5,6 +5,7 @@ import { ask } from '@/lib/channels';
 import { tx } from '@/lib/i18n';
 import { useChannelsStore } from '@/stores/channels';
 import { useChatStore } from '@/stores/chat';
+import { isNarrowNow } from '@/lib/use-mobile';
 import { useDmStore } from '@/stores/dm';
 import { sceneTarget, useUiStore } from '@/stores/ui';
 
@@ -57,14 +58,6 @@ let seq = 0;
  */
 function openLedger(s: { textRoom: string | null; dmRoom: string | null }): string | null {
   return s.textRoom ?? s.dmRoom;
-}
-
-/** Панель на мобиле занимает весь экран — после перехода её надо убрать. */
-function narrow(): boolean {
-  // Проверка на саму функцию, а не только на `window`: сервер рендера и тесты
-  // живут без неё, и падать на ширине экрана посреди перехода — плохой размен.
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
-  return window.matchMedia('(max-width: 767px)').matches;
 }
 
 export const useSearchStore = create<SearchState>((set, get) => ({
@@ -165,6 +158,7 @@ export const useSearchStore = create<SearchState>((set, get) => ({
     }
     useChatStore.getState().setWindow(win.messages, win.more, win.moreAfter);
     useChatStore.getState().setJump(id);
-    if (narrow()) set({ open: false });
+    // Панель на мобиле занимает весь экран — после перехода её надо убрать.
+    if (isNarrowNow()) set({ open: false });
   },
 }));

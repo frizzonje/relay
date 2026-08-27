@@ -26,3 +26,16 @@ export function useIsMobile(): boolean {
 
   return mobile;
 }
+
+/**
+ * Тот же вопрос, но вне рендера: узок ли экран прямо сейчас. Нужен там, где
+ * ответ спрашивают в обработчике события — в сторе или на приходе сокета, куда
+ * хук не поставить.
+ *
+ * Проверяем саму функцию, а не только `window`: серверный рендер и тесты живут
+ * без `matchMedia`, и падать на ширине экрана посреди перехода — плохой размен.
+ */
+export function isNarrowNow(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+  return window.matchMedia(NARROW).matches;
+}

@@ -72,3 +72,30 @@ describe('раздел ЛС', () => {
     expect(s.dmRoom).toBe('dm-0123456789abcdef01234567');
   });
 });
+
+describe('беседа и звонок', () => {
+  const slug = 'dm-0123456789abcdef01234567';
+
+  it('звонок не закрывает переписку, а отбой к ней возвращает', () => {
+    // С текстовым каналом так было всегда; беседа же обнулялась, и человек,
+    // сходивший в голосовой канал из переписки, терял её дважды: сразу — со
+    // сцены, и после отбоя — оказываясь в лобби вместо собеседника.
+    useUiStore.getState().openDm(slug, '6668-7aad-f862-bd77', 'Марта');
+    useUiStore.getState().openVoice('kuhnya', 'кухня');
+
+    let s = useUiStore.getState();
+    expect(s.view).toBe('voice');
+    expect(s.dmRoom).toBe(slug);
+
+    useUiStore.getState().clearVoice();
+    s = useUiStore.getState();
+    expect([s.view, s.dmRoom, s.textRoom]).toEqual(['dm', slug, null]);
+  });
+
+  it('без открытой ленты отбой по-прежнему ведёт в лобби', () => {
+    useUiStore.getState().openVoice('kuhnya', 'кухня');
+    useUiStore.getState().clearVoice();
+    const s = useUiStore.getState();
+    expect([s.view, s.dmRoom, s.textRoom]).toEqual(['lobby', null, null]);
+  });
+});

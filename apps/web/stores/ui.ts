@@ -186,20 +186,25 @@ export const useUiStore = create<UiState>((set, get) => ({
       dmRoom: null,
       dmPeer: null,
     }),
+  // Голос не отменяет открытую ленту, а накрывает её: канал переживал звонок с
+  // самого начала, а беседа — нет, и уйти в звонок из переписки значило её
+  // потерять (положил трубку — оказался в лобби). Здесь переносится ВСЯ лента,
+  // какой бы из двух она ни была; инвариант «текст и беседа не бывают открыты
+  // разом» это не нарушает — непустое поле всё равно одно.
   openVoice: (room, label) => {
     set({ voiceRoom: room, voiceLabel: label, mobilePanel: 'stage', dmSection: false });
-    const { textRoom, textLabel } = sceneTarget(get());
-    get().goScene({ view: 'voice', textRoom, textLabel, dmRoom: null, dmPeer: null });
+    const { textRoom, textLabel, dmRoom, dmPeer } = sceneTarget(get());
+    get().goScene({ view: 'voice', textRoom, textLabel, dmRoom, dmPeer });
   },
   clearVoice: () => {
     set({ voiceRoom: null, voiceLabel: '', dmSection: false });
-    const { textRoom, textLabel } = sceneTarget(get());
+    const { textRoom, textLabel, dmRoom, dmPeer } = sceneTarget(get());
     get().goScene({
-      view: textRoom ? 'text' : 'lobby',
+      view: dmRoom ? 'dm' : textRoom ? 'text' : 'lobby',
       textRoom,
       textLabel,
-      dmRoom: null,
-      dmPeer: null,
+      dmRoom,
+      dmPeer,
     });
   },
   goLobby: () => {

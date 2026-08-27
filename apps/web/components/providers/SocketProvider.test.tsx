@@ -86,7 +86,13 @@ beforeEach(() => {
     voiceLabel: '',
   });
   useDmStore.getState().reset();
-  useUnreadStore.setState({ activity: {}, lastRead: {}, divider: {}, mentions: {}, atBottom: true });
+  useUnreadStore.setState({
+    activity: {},
+    lastRead: {},
+    divider: {},
+    mentions: {},
+    atBottom: true,
+  });
   usePinsStore.getState().reset();
   useChatStore.getState().reset();
 
@@ -111,9 +117,11 @@ describe('openSlug()/watching() понимают беседу', () => {
   it('вход в беседу шлёт dm-join и честно отмечает прежнюю активность прочитанной', () => {
     // Активность уже известна dm-стору (пришла со списком переписок) — прежде
     // чем беседу открыли ни разу за этот сеанс.
-    useDmStore.getState().setConversations([
-      { slug: slugA, peer: peerA, lastTs: 500, preview: 'привет', previewMine: false },
-    ]);
+    useDmStore
+      .getState()
+      .setConversations([
+        { slug: slugA, peer: peerA, lastTs: 500, preview: 'привет', previewMine: false },
+      ]);
 
     act(() => {
       useUiStore.getState().openDm(slugA, peerA.fingerprint, peerA.nick);
@@ -147,7 +155,9 @@ describe('openSlug()/watching() понимают беседу', () => {
 describe('переход между беседами не путает ленты (регрессия)', () => {
   it('открытие соседней беседы сбрасывает чат сразу, а не по приезду chat-history', () => {
     act(() => useUiStore.getState().openDm(slugA, peerA.fingerprint, peerA.nick));
-    useChatStore.getState().setHistory([{ id: 'm1', name: peerA.nick, text: 'привет', ts: 1 }], false);
+    useChatStore
+      .getState()
+      .setHistory([{ id: 'm1', name: peerA.nick, text: 'привет', ts: 1 }], false);
     expect(useChatStore.getState().messages).toHaveLength(1);
 
     // До фикса: `openDm` держит `textRoom: null` до и после (меняется только
@@ -210,6 +220,65 @@ describe('уведомление о реплике в беседе', () => {
     act(() => socket._fire('dm-activity', relay));
 
     expect(notifyMention).not.toHaveBeenCalled();
+  });
+});
+
+describe('телефон: шаг назад из беседы', () => {
+  /** Узкий экран целиком в руках теста: jsdom своего `matchMedia` не имеет. */
+  function narrowScreen() {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (media: string) => ({
+        matches: true,
+        media,
+        addEventListener() {},
+        removeEventListener() {},
+      }),
+    });
+  }
+
+  afterEach(() => {
+    delete (window as { matchMedia?: unknown }).matchMedia;
+  });
+
+  it('реплика в свёрнутую беседу звенит, а не считается прочитанной', () => {
+    narrowScreen();
+    act(() => useUiStore.getState().openDm(slugA, peerA.fingerprint, peerA.nick));
+    // Ровно то, что делает шеврон «назад» в MobileNav: панель — список, вид
+    // остаётся `dm`, беседа остаётся открытой на сокете.
+    act(() => useUiStore.getState().toggleDmSection());
+    expect(useUiStore.getState().mobilePanel).toBe('nav');
+
+    const relay: DmActivityRelay = {
+      slug: slugA,
+      ts: 999,
+      preview: 'ты тут?',
+      previewMine: false,
+      peer: peerA,
+    };
+    act(() => socket._fire('dm-activity', relay));
+
+    expect(notifyMention).toHaveBeenCalledWith(slugA);
+    expect(useUnreadStore.getState().lastRead[slugA]).not.toBe(999);
+  });
+
+  it('на широком экране панель ни при чём — открытая беседа читается сразу', () => {
+    act(() => useUiStore.getState().openDm(slugA, peerA.fingerprint, peerA.nick));
+    act(() => useUiStore.getState().setMobilePanel('nav'));
+
+    act(() =>
+      socket._fire('dm-activity', {
+        slug: slugA,
+        ts: 999,
+        preview: 'ты тут?',
+        previewMine: false,
+        peer: peerA,
+      } as DmActivityRelay),
+    );
+
+    expect(notifyMention).not.toHaveBeenCalled();
+    expect(useUnreadStore.getState().lastRead[slugA]).toBe(999);
   });
 });
 
