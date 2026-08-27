@@ -25,6 +25,39 @@ export function fmtDayTime(ts?: number): string {
   }).format(new Date(ts || Date.now()));
 }
 
+/**
+ * «Когда» для строки списка переписок. Сегодня — часами (их человек сверяет с
+ * «только что»), вчера — словом, дальше — короткой датой без часов.
+ *
+ * Голые часы на каждой строке делали список нечитаемым в самом простом месте:
+ * переписка трёхдневной давности подписана «20:41» ровно так же, как утренняя,
+ * и порядок строк оставался единственным намёком на возраст.
+ */
+export function fmtListWhen(ts?: number): string {
+  if (!ts) return '';
+  const then = new Date(ts);
+  const now = new Date();
+  const sameDay = (a: Date, b: Date) =>
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
+
+  if (sameDay(then, now)) return fmtClock(ts);
+
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  // Именно -1 день, а не `fmtSince`: тот считает разницу в часах и на «вчера в
+  // 23:50» сказал бы «час назад», хотя день уже другой.
+  if (sameDay(then, yesterday)) {
+    return new Intl.RelativeTimeFormat(getClientLocale(), { numeric: 'auto' }).format(-1, 'day');
+  }
+
+  return new Intl.DateTimeFormat(getClientLocale(), {
+    day: 'numeric',
+    month: 'short',
+  }).format(then);
+}
+
 /** Сколько времени в единице — от секунды к году. Порядок важен: ищем первую подходящую. */
 const SINCE: [Intl.RelativeTimeFormatUnit, number][] = [
   ['second', 1000],

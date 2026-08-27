@@ -7,7 +7,7 @@ import { Icon } from '@/components/ui/icon';
 import { Identicon } from '@/components/ui/Identicon';
 import { PeoplePicker } from '@/components/dm/PeoplePicker';
 import { cn } from '@/lib/utils';
-import { fmtClock, shortFingerprint } from '@/lib/format';
+import { fmtListWhen, shortFingerprint } from '@/lib/format';
 import { listItem, springLayout } from '@/lib/motion';
 import { useT } from '@/lib/i18n';
 import { useDmStore, useUnreadIn } from '@/stores/dm';
@@ -70,7 +70,7 @@ function DmRow({
       </div>
       <div className="ml-auto flex shrink-0 flex-col items-end gap-1.5">
         {conversation.lastTs > 0 && (
-          <span className="text-[11px] text-text-faint">{fmtClock(conversation.lastTs)}</span>
+          <span className="text-[11px] text-text-faint">{fmtListWhen(conversation.lastTs)}</span>
         )}
         {unread && (
           <span
@@ -93,6 +93,12 @@ function DmRow({
 export function DmList() {
   const t = useT();
   const conversations = useDmStore((s) => s.conversations);
+  // Три разных ответа на «почему тут пусто»: ещё спрашиваем, спросили и не
+  // получили, получили и переписок правда нет. Раньше все три выглядели
+  // одинаково — уверенным «переписок пока нет», то есть утверждением о чужих
+  // данных, которого стор в двух случаях из трёх не знает.
+  const loading = useDmStore((s) => s.loading);
+  const failed = useDmStore((s) => s.failed);
   // По `sceneTarget`, а не по голому `dmRoom`: подсветка обязана прыгнуть на
   // строку сразу по клику, не дожидаясь, пока прежняя сцена догаснет (та же
   // причина, по которой Sidebar подсвечивает текстовый канал через `targetRoom`).
@@ -106,8 +112,21 @@ export function DmList() {
     // по ширине. Без явной ширины список остаётся 238px посреди 375, и справа
     // от него висит мёртвая полоса. Ровно то же и у Sidebar.
     <aside className="panel panel-sidebar relative flex w-[238px] shrink-0 flex-col border-r border-line max-md:w-full max-md:grow">
-      <div className="flex h-[52px] shrink-0 items-center justify-between border-b border-line px-4 shadow-[0_1px_2px_rgba(0,0,0,0.2)]">
-        <span className="truncate font-bold text-text-header">{t('dm.title')}</span>
+      <div className="flex h-[52px] shrink-0 items-center justify-between gap-1 border-b border-line px-4 shadow-[0_1px_2px_rgba(0,0,0,0.2)] max-md:pl-1.5">
+        {/* Шеврон назад — только на телефоне и только здесь: полоса тулбара, из
+            которой сюда пришли, живёт внутри сайдбара (см. Sidebar) и на этом
+            экране её нет вовсе. Без него выйти из раздела было бы нечем.
+            `md:hidden` вместо useIsMobile: до гидрации хук отвечает «широкий»,
+            и кнопка мигала бы появлением на первом кадре. */}
+        <button
+          type="button"
+          onClick={() => useUiStore.getState().toggleDmSection()}
+          aria-label={t('mobile.back')}
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-text-muted outline-none transition-colors active:bg-bg-hover active:text-text-header md:hidden"
+        >
+          <Icon name="chevron-left" className="text-[22px]" />
+        </button>
+        <span className="mr-auto truncate font-bold text-text-header">{t('dm.title')}</span>
         <button
           type="button"
           onClick={() => setPickerOpen(true)}
@@ -123,7 +142,22 @@ export function DmList() {
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 py-3">
-        {conversations.length === 0 ? (
+        {conversations.length === 0 && loading ? (
+          <p className="px-3 py-6 text-center text-[12.5px] text-text-muted">
+            {t('dm.list.loading')}
+          </p>
+        ) : conversations.length === 0 && failed ? (
+          <div className="mx-1 mt-2 rounded-[10px] border border-dashed border-line px-3 py-5 text-center">
+            <p className="text-[12.5px] leading-snug text-text-muted">{t('dm.list.failed')}</p>
+            <button
+              type="button"
+              onClick={() => useDmStore.getState().reload()}
+              className="mt-2 rounded-full border border-line px-3 py-1 text-[12.5px] text-text outline-none transition-colors hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              {t('dm.list.retry')}
+            </button>
+          </div>
+        ) : conversations.length === 0 ? (
           <div className="mx-1 mt-2 rounded-[10px] border border-dashed border-line px-3 py-6 text-center">
             <p className="text-[13px] font-semibold text-text-header">{t('dm.empty.title')}</p>
             <p className="mt-1 text-[12.5px] leading-snug text-text-muted">{t('dm.empty.body')}</p>

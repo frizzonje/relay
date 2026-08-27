@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fmtSince } from './format';
+import { fmtClock, fmtListWhen, fmtSince } from './format';
 
 /**
  * «Был в сети…» в списке устройств. Проверяется выбор единицы: час, показанный
@@ -37,5 +37,37 @@ describe('сколько времени прошло', () => {
     expect(fmtSince(null)).toBe('');
     expect(fmtSince(undefined)).toBe('');
     expect(fmtSince('позавчера')).toBe('');
+  });
+});
+
+describe('когда это было — в строке списка', () => {
+  const HOUR = 60 * 60 * 1000;
+
+  it('сегодняшнее — часами', () => {
+    const now = new Date();
+    // Полдень сегодняшнего дня: не «сейчас», но тот же календарный день.
+    const noon = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 5).getTime();
+    expect(fmtListWhen(noon)).toMatch(/12/);
+    expect(fmtListWhen(noon)).toBe(fmtClock(noon));
+  });
+
+  it('вчерашнее — словом, а не часами', () => {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(23, 50, 0, 0);
+    const when = fmtListWhen(yesterday.getTime());
+    expect(when).not.toBe(fmtClock(yesterday.getTime()));
+    expect(when).toMatch(/вчера|yesterday/i);
+  });
+
+  it('позавчерашнее и старше — датой, и это уже не «сегодня»', () => {
+    const older = Date.now() - 72 * HOUR;
+    const when = fmtListWhen(older);
+    expect(when).not.toBe(fmtClock(older));
+    expect(when).not.toMatch(/вчера|yesterday/i);
+  });
+
+  it('времени нет вовсе — пусто, а не «сейчас»', () => {
+    expect(fmtListWhen(0)).toBe('');
   });
 });

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { getSocket } from '@/lib/socket';
 import type { DmActivityRelay, DmConversation } from '@relay/shared';
 import { useUnreadStore } from './unread';
 
@@ -19,23 +20,61 @@ interface DmState {
   /** Непрочитанное по беседам: адрес → время последней реплики. */
   activity: Record<string, number>;
   loading: boolean;
+  /** Список спросили и не получили: это НЕ то же самое, что «переписок нет». */
+  failed: boolean;
   setConversations: (list: DmConversation[]) => void;
+  /**
+   * Спросить список у сервера. Живёт в сторе, а не в проводке сокета: список
+   * держит он, и переспросить должен уметь не только `connect`, но и сам экран
+   * — иначе человеку, у которого список не доехал, нечем повторить.
+   */
+  reload: () => void;
   /** Пришла реплика: поднять беседу наверх, обновить превью и активность. */
   applyActivity: (relay: DmActivityRelay) => void;
   /** Переписку открыли — добавить, если её ещё нет в списке. */
   remember: (conversation: DmConversation) => void;
-  setLoading: (value: boolean) => void;
   reset: () => void;
 }
 
-const initial: Pick<DmState, 'conversations' | 'activity' | 'loading'> = {
+const initial: Pick<DmState, 'conversations' | 'activity' | 'loading' | 'failed'> = {
   conversations: [],
   activity: {},
   loading: false,
+  failed: false,
 };
 
-export const useDmStore = create<DmState>((set) => ({
+/**
+ * Номер последнего запроса списка и срок, после которого ответа уже не ждём.
+ * У `socket.emit` с подтверждением своего срока нет вовсе: молчащий сервер
+ * оставлял бы экран в «загружаем» навсегда, и это ровно то состояние, в котором
+ * список раньше уверенно писал «переписок пока нет».
+ */
+let listSeq = 0;
+const LIST_TIMEOUT_MS = 6000;
+
+export const useDmStore = create<DmState>((set, get) => ({
   ...initial,
+
+  reload: () => {
+    const mine = (listSeq += 1);
+    set({ loading: true, failed: false });
+    const giveUp = setTimeout(() => {
+      if (mine !== listSeq) return;
+      set({ loading: false, failed: true });
+    }, LIST_TIMEOUT_MS);
+    getSocket().emit('dm-list', (res) => {
+      // Ответ на обогнанный запрос (переподключились, пока ждали) не трогает
+      // ничего: свежий уже в пути, и его снимок новее этого.
+      if (mine !== listSeq) return;
+      clearTimeout(giveUp);
+      if (!res.ok) {
+        set({ loading: false, failed: true });
+        return;
+      }
+      set({ loading: false, failed: false });
+      get().setConversations(res.conversations);
+    });
+  },
 
   // Снимок с сервера (`dm-list`) — заменяем список целиком и следом за ним
   // карту активности: без этого свежий снимок с уже прочитанными беседами
@@ -84,8 +123,6 @@ export const useDmStore = create<DmState>((set) => ({
       return { conversations, activity };
     }),
 
-  setLoading: (value) => set({ loading: value }),
-
   reset: () => set(initial),
 }));
 
@@ -104,6 +141,23 @@ export function useUnreadIn(slug: string, active = false): boolean {
 }
 
 /** Есть ли непрочитанное в этой беседе (сверяется с отметками чтения). */
+/**
+ * Сколько бесед ждут ответа. Тем же сравнением, что `useUnreadIn`, и намеренно
+ * без исключения открытой: пока в неё смотрят, отметка чтения едет следом, и
+ * непрочитанной она не считается сама собой. Одно понятие о непрочитанном на
+ * все четыре места, где оно нарисовано (список, рейка, полоса, бейдж), — иначе
+ * они разъезжаются, и человек видит точку там, где счётчик её не считает.
+ */
+export function useUnreadCount(): number {
+  const conversations = useDmStore((s) => s.conversations);
+  const activity = useDmStore((s) => s.activity);
+  const lastRead = useUnreadStore((s) => s.lastRead);
+  return conversations.reduce(
+    (n, c) => n + ((activity[c.slug] ?? 0) > (lastRead[c.slug] ?? 0) ? 1 : 0),
+    0,
+  );
+}
+
 export function unreadIn(slug: string): boolean {
   const ts = useDmStore.getState().activity[slug] ?? 0;
   const lastRead = useUnreadStore.getState().lastRead[slug] ?? 0;

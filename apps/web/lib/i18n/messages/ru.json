@@ -224,6 +224,9 @@
   "dm.empty.title": "Переписок пока нет",
   "dm.header.status.unknown": "Присутствие неизвестно",
   "dm.join.forbidden": "Эта переписка вам больше недоступна.",
+  "dm.list.failed": "Не удалось получить список переписок.",
+  "dm.list.loading": "Получаем список переписок…",
+  "dm.list.retry": "Ещё раз",
   "dm.new": "Новая переписка",
   "dm.person.never": "не видели ни разу",
   "dm.person.seen": "видели {when}",
@@ -655,6 +658,12 @@
   "toolbar.admin": "Админ",
   "toolbar.call": "Звонок",
   "toolbar.direct": "ЛС",
+  "toolbar.direct.unread": {
+    "one": "{count} непрочитанная переписка",
+    "few": "{count} непрочитанные переписки",
+    "many": "{count} непрочитанных переписок",
+    "other": "{count} непрочитанной переписки"
+  },
   "toolbar.label": "Панель",
   "topbar.noChannel": "Выберите канал",
   "unlockServer.description": "Закрытый сервер. Введите пароль для входа.",

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 're
 import { sanitizeNick, type Channel, type VoiceMode } from '@relay/shared';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Icon } from '@/components/ui/icon';
+import { Toolbar } from '@/components/layout/Toolbar';
 import { Logo } from '@/components/ui/Logo';
 import { cn } from '@/lib/utils';
 import { listItem, springLayout } from '@/lib/motion';
@@ -17,6 +18,7 @@ import { useRichT, useT } from '@/lib/i18n';
 import { Identicon } from '@/components/ui/Identicon';
 import { serverGradient, serverInitials } from '@/lib/server-visual';
 import { useIdentityStore } from '@/stores/identity';
+import { useIsMobile } from '@/lib/use-mobile';
 import {
   joinVoice,
   leaveVoice,
@@ -377,6 +379,10 @@ export function Sidebar() {
   const callsign = useUiStore((s) => s.callsign);
   const setCallsign = useUiStore((s) => s.setCallsign);
   const fingerprint = useIdentityStore((s) => s.me?.fingerprint ?? '');
+  // Полоса тулбара рисуется только на телефоне: на десктопе тулбар — рейка у
+  // правого края экрана, и вторая его копия внутри сайдбара была бы вторым
+  // тулбаром на одном экране (см. AppShell).
+  const mobile = useIsMobile();
 
   const servers = useServersStore((s) => s.servers);
   const activeServerId = useServersStore((s) => s.activeServerId);
@@ -550,6 +556,14 @@ export function Sidebar() {
           </button>
         )}
       </div>
+
+      {/* Полоса тулбара — здесь, а не выше сайдбара: референс (кадр `2a`) ставит
+          её СРАЗУ ПОД именем сервера, и это не вкус. Выше шапки она отодвигала
+          имя сервера от верхнего края, а на экране переписок оказывалась над
+          чужим списком, к которому три её цели отношения не имеют. Внутри
+          сайдбара она живёт ровно там, где нужна, — над каналами, — и на экране
+          Direct её нет вовсе (там сайдбара нет: его подменяет DmList). */}
+      {mobile && <Toolbar />}
 
       {/* Каналы */}
       <div className="flex-1 overflow-y-auto px-2 py-3">

@@ -208,6 +208,9 @@
   "dm.empty.title": "No conversations yet",
   "dm.header.status.unknown": "Presence unknown",
   "dm.join.forbidden": "This conversation isn't open to you anymore.",
+  "dm.list.failed": "Could not load the conversations.",
+  "dm.list.loading": "Loading the conversations…",
+  "dm.list.retry": "Try again",
   "dm.new": "New conversation",
   "dm.person.never": "never seen",
   "dm.person.seen": "seen {when}",
@@ -621,6 +624,10 @@
   "toolbar.admin": "Admin",
   "toolbar.call": "Call",
   "toolbar.direct": "Direct",
+  "toolbar.direct.unread": {
+    "one": "{count} unread conversation",
+    "other": "{count} unread conversations"
+  },
   "toolbar.label": "Toolbar",
   "topbar.noChannel": "Pick a channel",
   "unlockServer.description": "A closed server. Enter the password to get in.",

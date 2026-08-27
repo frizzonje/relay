@@ -120,3 +120,91 @@ describe('полоса тулбара на телефоне', () => {
     expect(dot!.className).not.toMatch(/-right-/);
   });
 });
+
+describe('цели тулбара', () => {
+  /** Широкий экран: без подмены `matchMedia` jsdom и так отвечает «нет». */
+  function wide(): void {
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+  }
+
+  const target = (label: RegExp) =>
+    [...host.querySelectorAll('button')].find((b) =>
+      label.test(b.getAttribute('aria-label') ?? ''),
+    ) as HTMLButtonElement;
+
+  beforeEach(() => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    wide();
+    useUiStore.setState({
+      view: 'lobby',
+      textRoom: null,
+      dmRoom: null,
+      dmPeer: null,
+      dmSection: false,
+      pendingScene: null,
+      stageLive: false,
+    });
+    useDmStore.getState().reset();
+    useUnreadStore.setState({ lastRead: {} });
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('выключенные цели остаются доступны мышью и с клавиатуры', () => {
+    // Это конвенция проекта, а не вкус: HTML `disabled` выбрасывает кнопку из
+    // обхода табом и глушит наведение, а тултип и `aria-label` со «скоро» —
+    // единственное, что объясняет нарисованную, но мёртвую кнопку. Регрессия
+    // такого рода в ветке уже случалась (карточка собеседника, f0e4711), и
+    // ревью ветки показало, что здесь, в самом компоненте, где конвенция и
+    // заведена, её не стерёг никто: `disabled` возвращался — 555 тестов
+    // оставались зелёными.
+    render();
+    for (const label of [/Звонок|Call/, /Админ|Admin/]) {
+      const button = target(label);
+      expect(button.disabled).toBe(false);
+      expect(button.tabIndex).toBe(0);
+      expect(button.getAttribute('aria-disabled')).toBe('true');
+      expect(button.getAttribute('aria-label')).toMatch(/скоро|soon/i);
+    }
+  });
+
+  it('бейдж на «ЛС» считает беседы с непрочитанным', () => {
+    useDmStore.getState().setConversations(conversations);
+    useUnreadStore.setState({ lastRead: { [conversations[0].slug]: 5000 } });
+    render();
+
+    const direct = host.querySelector('[data-testid="toolbar-direct"]') as HTMLButtonElement;
+    const badge = direct.querySelector('span[aria-hidden]');
+    // Прочитана одна из двух — на бейдже единица, а не «две беседы вообще».
+    expect(badge?.textContent).toBe('1');
+    // Цифра спрятана от диктора: без названия «1» ему ничего не говорит.
+    expect(direct.getAttribute('aria-label')).toMatch(/1 .*(переписк|conversation)/i);
+  });
+
+  it('всё прочитано — бейджа нет вовсе', () => {
+    useDmStore.getState().setConversations(conversations);
+    useUnreadStore.setState({
+      lastRead: { [conversations[0].slug]: 5000, [conversations[1].slug]: 5000 },
+    });
+    render();
+
+    const direct = host.querySelector('[data-testid="toolbar-direct"]') as HTMLButtonElement;
+    expect(direct.querySelector('span[aria-hidden]')).toBeNull();
+    expect(direct.getAttribute('aria-label')).not.toMatch(/\d/);
+  });
+});

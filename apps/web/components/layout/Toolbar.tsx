@@ -6,7 +6,7 @@ import { Identicon } from '@/components/ui/Identicon';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/lib/use-mobile';
 import { useUiStore } from '@/stores/ui';
-import { useDmStore, useUnreadIn } from '@/stores/dm';
+import { useDmStore, useUnreadCount, useUnreadIn } from '@/stores/dm';
 import { useT } from '@/lib/i18n';
 
 /** Одна цель тулбара — общее описание для рейки и полосы. */
@@ -18,6 +18,8 @@ interface Target {
   disabled?: boolean;
   onClick?: () => void;
   testId?: string;
+  /** Непрочитанное на цели. 0 — бейджа нет вовсе (см. `TargetButton`). */
+  badge?: number;
 }
 
 /**
@@ -32,9 +34,11 @@ interface Target {
  * распахнутся в следующих этапах (B и C), а подвинуть тулбар второй раз дороже,
  * чем нарисовать под них место заранее неактивным.
  *
- * Бейдж непрочитанного на `Direct` и стек «кто в сети» внизу рейки сюда пока не
- * входят: обоим нечем наполниться до стора ЛС и presence-стора (этапы 9 и B) —
- * рисовать их раньше значило бы угадывать состав.
+ * На `Direct` висит бейдж непрочитанного, под целями — лица тех, с кем говорили
+ * последними (`RecentPeers`). Бейдж нужен ровно там, где лиц не хватает: их
+ * шесть, а бесед может быть больше, и без него непрочитанное в седьмой не видно
+ * НИГДЕ, пока раздел свёрнут. Присутствие («кто в сети») по-прежнему ждёт
+ * своего стора — этап B.
  */
 export function Toolbar() {
   const t = useT();
@@ -42,6 +46,7 @@ export function Toolbar() {
   const dmSection = useUiStore((s) => s.dmSection);
   const inDm = useUiStore((s) => s.view === 'dm');
   const toggleDmSection = useUiStore((s) => s.toggleDmSection);
+  const unread = useUnreadCount();
 
   const targets: Target[] = [
     {
@@ -53,6 +58,7 @@ export function Toolbar() {
       active: dmSection || inDm,
       onClick: toggleDmSection,
       testId: 'toolbar-direct',
+      badge: unread,
     },
     { key: 'call', icon: 'phone', label: t('toolbar.call'), disabled: true },
     { key: 'admin', icon: 'shield', label: t('toolbar.admin'), disabled: true },
@@ -77,12 +83,15 @@ function TargetButton({
   accessibleLabel,
   className,
   showLabel,
+  badgeRing,
 }: {
   target: Target;
   tooltip: string;
   accessibleLabel: string;
   className: string;
   showLabel?: boolean;
+  /** Чем обвести бейдж — цветом той панели, на которой он лежит. */
+  badgeRing: string;
 }) {
   return (
     <button
@@ -96,13 +105,34 @@ function TargetButton({
     >
       <Icon name={target.icon} className="text-[20px]" strokeWidth={1.8} />
       {showLabel && <span className="text-[11px] font-medium leading-none">{target.label}</span>}
+      {/* Число, а не точка: цель одна на все беседы, и «где-то одно» с «везде
+          понемногу» человек решает по-разному. Больше девяти не пишем — на
+          16 точках это уже не число, а пятно; `aria-label` кнопки при этом
+          несёт точный счёт (см. accessibleLabel). */}
+      {!!target.badge && (
+        <span
+          aria-hidden
+          className={cn(
+            'absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-danger px-1 text-[10px] font-bold leading-none text-white ring-2',
+            badgeRing,
+          )}
+        >
+          {target.badge > 9 ? '9+' : target.badge}
+        </span>
+      )}
     </button>
   );
 }
 
-/** Название, которое озвучит скринридер: у выключенных целей — с пометкой «скоро». */
-function accessibleLabel(target: Target, soon: string): string {
-  return target.disabled ? `${target.label} — ${soon}` : target.label;
+/**
+ * Название, которое озвучит скринридер: у выключенных целей — с пометкой
+ * «скоро», у цели с бейджем — со счётом. Бейдж нарисован `aria-hidden`: цифра
+ * без своего названия («3») диктору ничего не говорит, а вот «ЛС, 3
+ * непрочитанные переписки» — говорит.
+ */
+function accessibleLabel(target: Target, soon: string, unread: string): string {
+  if (target.disabled) return `${target.label} — ${soon}`;
+  return target.badge ? `${target.label} — ${unread}` : target.label;
 }
 
 function ToolbarRail({ targets }: { targets: Target[] }) {
@@ -118,13 +148,18 @@ function ToolbarRail({ targets }: { targets: Target[] }) {
           key={target.key}
           target={target}
           tooltip={target.disabled ? soon : target.label}
-          accessibleLabel={accessibleLabel(target, soon)}
+          accessibleLabel={accessibleLabel(
+            target,
+            soon,
+            t('toolbar.direct.unread', { count: target.badge ?? 0 }),
+          )}
+          badgeRing="ring-bg-rail"
           className={cn(
             // focus-visible живёт в базовой строке, а не в одной из веток: цель
             // остаётся фокусируемой (не получает HTML `disabled`, см. комментарий
             // TargetButton) во всех трёх состояниях, и кольцо обязано следовать за
             // ней везде — иначе таб останавливается на невидимой точке экрана.
-            'grid h-11 w-11 shrink-0 place-items-center rounded-[14px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong',
+            'relative grid h-11 w-11 shrink-0 place-items-center rounded-[14px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong',
             target.disabled
               ? 'cursor-not-allowed text-text-faint'
               : target.active
@@ -252,7 +287,11 @@ function PeerFace({ conversation, strip }: { conversation: DmConversation; strip
           <span
             aria-hidden
             className={cn(
-              'pointer-events-none absolute -right-2 top-1/2 w-1 -translate-y-1/2 rounded-l bg-white transition-all duration-200',
+              // Токен, а не `bg-white`: в светлой теме рейка сама почти белая
+              // (--color-bg-rail: #e8eaee), и белая метка на ней исчезала —
+              // контраст 1.13:1. `accent-strong` инвертируется вместе с темой и
+              // красит те же три остальных места, где нарисовано непрочитанное.
+              'pointer-events-none absolute -right-2 top-1/2 w-1 -translate-y-1/2 rounded-l bg-accent-strong transition-all duration-200',
               active ? 'h-8' : 'h-0 opacity-0 group-hover/face:h-4 group-hover/face:opacity-100',
               unread && !active && 'h-2 opacity-100',
             )}
@@ -289,11 +328,16 @@ function ToolbarStrip({ targets }: { targets: Target[] }) {
             key={target.key}
             target={target}
             tooltip={target.disabled ? soon : target.label}
-            accessibleLabel={accessibleLabel(target, soon)}
+            accessibleLabel={accessibleLabel(
+              target,
+              soon,
+              t('toolbar.direct.unread', { count: target.badge ?? 0 }),
+            )}
+            badgeRing="ring-bg-sidebar"
             showLabel
             className={cn(
               // Та же логика, что и в рейке: кольцо — в базовой строке, вне веток.
-              'flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 rounded-[10px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong',
+              'relative flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 rounded-[10px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong',
               target.disabled
                 ? 'cursor-not-allowed text-text-faint'
                 : target.active
