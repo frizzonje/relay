@@ -69,7 +69,19 @@ export const useDmStore = create<DmState>((set) => ({
   remember: (conversation) =>
     set((s) => {
       if (s.conversations.some((c) => c.slug === conversation.slug)) return s;
-      return { conversations: [conversation, ...s.conversations] };
+      // Открытая беседа не всегда пуста — за ней может стоять история с уже
+      // ненулевым `lastTs` (переоткрыли со свежего устройства, список
+      // подчистили). Не сидируя activity тем же способом, что и
+      // setConversations, unreadIn молчал бы про непрочитанное до первой живой
+      // реплики — тот самый лживый бейдж, ради которого стор и завели.
+      const activity = conversation.lastTs
+        ? { ...s.activity, [conversation.slug]: conversation.lastTs }
+        : s.activity;
+      // Сортируем по месту, а не кладём наверх: список уже упорядочен по
+      // lastTs (setConversations/applyActivity держат это), и переписка без
+      // свежей активности не должна перепрыгивать более новые беседы.
+      const conversations = [...s.conversations, conversation].sort((a, b) => b.lastTs - a.lastTs);
+      return { conversations, activity };
     }),
 
   setLoading: (value) => set({ loading: value }),

@@ -203,6 +203,7 @@
   "devices.revoke.body": "“{name}” is signed out at once, and its key is not let back in. To use it again you would have to link it anew.",
   "devices.revoked": "revoked",
   "devices.revokedAt": "revoked {when}",
+  "dm.join.forbidden": "This conversation isn't open to you anymore.",
   "dm.soon": "Coming soon",
   "grid.alone": "you are alone in the channel — invite the others",
   "grid.reconnecting": "reconnecting · {count} of {total} unreachable",

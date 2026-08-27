@@ -431,7 +431,16 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       // делят одну и ту же комнату сокета.
       if (state.dmRoom !== prev.dmRoom) {
         if (state.dmRoom) {
-          socket.emit('dm-join', { slug: state.dmRoom }, () => {});
+          const slug = state.dmRoom;
+          socket.emit('dm-join', { slug }, (res) => {
+            // Отказали (не сторона беседы) или адрес не существует — а сцена
+            // уже могла уехать дальше, пока шёл ответ: тогда закрывать нечего.
+            if (res.ok || ui().dmRoom !== slug) return;
+            // Та же фигура, что у `chat-closed` ниже: беседа не откроется
+            // никогда, значит держать на ней экран — значит держать пустоту.
+            ui().leaveDm();
+            toast(tx('dm.join.forbidden'));
+          });
         } else if (!state.textRoom) {
           // Без общего перехода в текстовый канал: тот уже сделал свой
           // `chat-join` блоком выше, и `chat-leave` здесь выгнал бы сокет
