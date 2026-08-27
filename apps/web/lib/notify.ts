@@ -30,7 +30,18 @@ export function notifyMessage(slug: string) {
   const now = Date.now();
   if (now - lastAt < COOLDOWN_MS) return;
   lastAt = now;
-  getSfx().play('message');
+  getSfx().play('receive');
+}
+
+/**
+ * Своя реплика ушла. Не уведомление, а отклик на действие: мимо настроек
+ * канала (заглушить чужой разговор — не то же самое, что заглушить себе
+ * подтверждение) и мимо паузы (пауза склеивает поток чужих реплик, а свои
+ * человек отправляет по одной, нажимая на Enter). Общий мут и наушники в
+ * панели голоса главнее по-прежнему — их держит lib/sfx.
+ */
+export function notifySent() {
+  getSfx().play('send');
 }
 
 /**
@@ -58,5 +69,5 @@ export function notifyMention(slug: string) {
  * система на ноль, — плохая сделка. Мимо канала и паузы: это не уведомление.
  */
 export function previewMessageSound() {
-  getSfx().play('message');
+  getSfx().play('receive');
 }

@@ -16,7 +16,7 @@ beforeEach(() => {
 
 describe('раздел ЛС', () => {
   it('открывается без выбранной переписки', () => {
-    useUiStore.getState().openDmSection();
+    useUiStore.getState().toggleDmSection();
     expect(useUiStore.getState().dmSection).toBe(true);
     expect(useUiStore.getState().dmRoom).toBe(null);
     // Сцена пока прежняя: раздел открыт, переписка не выбрана.
@@ -46,8 +46,29 @@ describe('раздел ЛС', () => {
     // Раздел открыт (сайдбар подменён списком переписок), но тут же открыли
     // обычный текстовый канал — сайдбар вернулся к каналам, и тулбару больше
     // нечего подсвечивать: он рисует не сцену, а именно `dmSection`.
-    useUiStore.getState().openDmSection();
+    useUiStore.getState().toggleDmSection();
     useUiStore.getState().openText('obshchii', 'общий');
     expect(useUiStore.getState().dmSection).toBe(false);
+  });
+
+  it('повторное нажатие сворачивает раздел обратно к каналам', () => {
+    // Одна и та же кнопка ведёт в обе стороны. Без этого раздел ЛС был бы
+    // ловушкой: список переписок подменяет собой каналы, и не будь обратного
+    // хода, вернуться к ним из ЛС было бы нечем.
+    useUiStore.getState().toggleDmSection();
+    expect(useUiStore.getState().dmSection).toBe(true);
+    useUiStore.getState().toggleDmSection();
+    expect(useUiStore.getState().dmSection).toBe(false);
+  });
+
+  it('выбранная переписка сворачивает список — каналы возвращаются', () => {
+    // Беседа уезжает на сцену, а сайдбар отдаётся обратно каналам: иначе
+    // человек, открывший переписку, остаётся без единого канала на экране.
+    useUiStore.getState().toggleDmSection();
+    useUiStore.getState().openDm('dm-0123456789abcdef01234567', 'fp-ты', 'ты');
+    const s = useUiStore.getState();
+    expect(s.dmSection).toBe(false);
+    expect(s.view).toBe('dm');
+    expect(s.dmRoom).toBe('dm-0123456789abcdef01234567');
   });
 });

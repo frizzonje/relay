@@ -116,7 +116,8 @@ interface UiState {
    * вместе с ними.
    */
   dmSection: boolean;
-  openDmSection: () => void;
+  /** Раздел ЛС: раскрыть список переписок или свернуть его обратно к каналам. */
+  toggleDmSection: () => void;
   openDm: (slug: string, peer: string, label: string) => void;
   leaveDm: () => void;
 }
@@ -206,9 +207,16 @@ export const useUiStore = create<UiState>((set, get) => ({
     const { textRoom, textLabel } = sceneTarget(get());
     get().goScene({ view: 'lobby', textRoom, textLabel, dmRoom: null, dmPeer: null });
   },
-  openDmSection: () => set({ dmSection: true, mobilePanel: 'nav' }),
+  // Кнопка «Направления» — выключатель, а не рубильник в одну сторону: список
+  // переписок подменяет собой каналы, и раскрыть его без обратного хода значило
+  // бы запереть человека в ЛС.
+  toggleDmSection: () =>
+    set((s) => (s.dmSection ? { dmSection: false } : { dmSection: true, mobilePanel: 'nav' })),
   openDm: (slug, peer, label) => {
-    set({ dmSection: true, mobilePanel: 'stage' });
+    // Беседу выбрали — список сворачивается сам, и каналы возвращаются на своё
+    // место. Соседние переписки при этом не теряются: они рядом, лицами в
+    // рейке тулбара, в один клик (см. Toolbar).
+    set({ dmSection: false, mobilePanel: 'stage' });
     get().goScene({ view: 'dm', textRoom: null, textLabel: label, dmRoom: slug, dmPeer: peer });
   },
   leaveDm: () => {

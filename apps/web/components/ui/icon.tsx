@@ -45,6 +45,7 @@ const GLYPHS = {
   ),
   'chevron-down': <path d="m6 9 6 6 6-6" />,
   'chevron-left': <path d="m15 19-7-7 7-7" />,
+  'chevron-right': <path d="m9 5 7 7-7 7" />,
   'chevron-up': <path d="m18 15-6-6-6 6" />,
   copy: (
     <>

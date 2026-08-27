@@ -24,6 +24,7 @@ import {
   unlockTokenIds,
 } from '@/lib/unlock-tokens';
 import { notifyMention, notifyMessage } from '@/lib/notify';
+import { showDmToast } from '@/components/dm/DmToast';
 import { useNotifyStore } from '@/stores/notify';
 import { adoptPrefs, onPref } from '@/lib/prefs';
 import { tx } from '@/lib/i18n';
@@ -238,8 +239,13 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         return;
       }
       // Звук и вспышка — тем же путём, что и упоминание в канале: личная
-      // реплика ничем не тише той, где тебя назвали (см. notify.ts).
-      if (!relay.previewMine) notifyMention(relay.slug);
+      // реплика ничем не тише той, где тебя назвали (см. notify.ts). Следом —
+      // облачко в углу: точка в списке говорит только «где-то непрочитано», а
+      // кто написал и о чём, до сих пор приходилось выяснять руками.
+      if (!relay.previewMine) {
+        notifyMention(relay.slug);
+        showDmToast(relay);
+      }
     });
 
     // Канал закрылся под нами: его удалили (или он не пережил наш реконнект).
@@ -427,7 +433,11 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       }
       // Раздел ЛС открыт — список переписок тоже пережил обрыв только на этой
       // вкладке, сервер о нём знать не обязан.
-      if (ui().dmSection) requestDmList();
+      // Список переписок спрашиваем всегда, а не только при раскрытом разделе:
+      // из него же берутся лица в рейке тулбара, а они видны с первого кадра —
+      // при раскрытом разделе список приходил бы вовремя, а на каналах рейка
+      // стояла бы пустой до первого захода в ЛС.
+      requestDmList();
     });
 
     // Смена открытого текстового канала: подписка/отписка на сервере. Плюс

@@ -89,6 +89,20 @@ export const useDmStore = create<DmState>((set) => ({
   reset: () => set(initial),
 }));
 
+/**
+ * То же, что `unreadIn`, но подпиской на оба стора — для разметки.
+ *
+ * Разовое чтение `getState()` не перерисовало бы ни строку списка, ни лицо в
+ * рейке ни на входящую реплику, ни на отметку чтения. Открытая беседа
+ * непрочитанной не считается: точка гаснет сразу, не дожидаясь, пока сервер
+ * подтвердит отметку.
+ */
+export function useUnreadIn(slug: string, active = false): boolean {
+  const activityTs = useDmStore((s) => s.activity[slug] ?? 0);
+  const lastRead = useUnreadStore((s) => s.lastRead[slug] ?? 0);
+  return !active && activityTs > lastRead;
+}
+
 /** Есть ли непрочитанное в этой беседе (сверяется с отметками чтения). */
 export function unreadIn(slug: string): boolean {
   const ts = useDmStore.getState().activity[slug] ?? 0;

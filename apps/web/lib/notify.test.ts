@@ -19,8 +19,9 @@ vi.mock('@/lib/sfx', () => ({ getSfx: () => ({ play }) }));
 async function boot() {
   vi.resetModules();
   const { useNotifyStore } = await import('@/stores/notify');
-  const { notifyMessage, previewMessageSound } = await import('./notify');
-  return { useNotifyStore, notifyMessage, previewMessageSound };
+  const { notifyMessage, notifyMention, notifySent, previewMessageSound } =
+    await import('./notify');
+  return { useNotifyStore, notifyMessage, notifyMention, notifySent, previewMessageSound };
 }
 
 beforeEach(() => {
@@ -42,7 +43,7 @@ describe('звук входящего сообщения', () => {
 
     useNotifyStore.getState().toggleChannel('obshchii');
     notifyMessage('obshchii');
-    expect(play).toHaveBeenCalledWith('message');
+    expect(play).toHaveBeenCalledWith('receive');
   });
 
   it('чужой канал не звенит за компанию', async () => {
@@ -107,5 +108,34 @@ describe('вспышка в сайдбаре', () => {
     const { useNotifyStore, previewMessageSound } = await boot();
     previewMessageSound();
     expect(useNotifyStore.getState().pings).toEqual({});
+  });
+});
+
+/**
+ * Три чатовых сигнала — разные файлы, и это не косметика: они различаются
+ * громкостью (см. заголовок lib/sfx.ts). Перепутать их местами значит либо
+ * оглушать человека его же нажатием на Enter, либо утопить обращение по имени
+ * в общем шуме. Тест держит именно распределение, а не сам факт звука.
+ */
+describe('какой из трёх сигналов звучит', () => {
+  it('своя отправка — самый тихий, мимо настроек канала', async () => {
+    const { notifySent } = await boot();
+    // Канал никто не включал: подтверждение своему действию его не спрашивает.
+    notifySent();
+    expect(play).toHaveBeenCalledWith('send');
+  });
+
+  it('обращение по имени звучит громче обычной реплики', async () => {
+    const { notifyMention } = await boot();
+    notifyMention('obshchii');
+    expect(play).toHaveBeenCalledWith('message');
+    expect(play).not.toHaveBeenCalledWith('receive');
+  });
+
+  it('проба звука канала играет ровно то, что канал и играет', async () => {
+    // Иначе настройку проверяли бы одним звуком, а слышали потом другой.
+    const { previewMessageSound } = await boot();
+    previewMessageSound();
+    expect(play).toHaveBeenCalledWith('receive');
   });
 });

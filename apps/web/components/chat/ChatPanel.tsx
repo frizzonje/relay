@@ -17,6 +17,7 @@ import { Icon } from '@/components/ui/icon';
 import { fmtBytes } from '@/lib/format';
 import { getSocket } from '@/lib/socket';
 import { ask } from '@/lib/channels';
+import { notifySent } from '@/lib/notify';
 import { useRetention } from '@/lib/use-sfu';
 import { useUiStore } from '@/stores/ui';
 import { useChannelsStore } from '@/stores/channels';
@@ -470,6 +471,10 @@ export function ChatPanel() {
     if (!room) return;
     const t = text.trim();
     if (!t && pending.length === 0) return;
+    // Отклик на Enter — сразу, а не после загрузки вложений: подтверждать
+    // действие через две секунды поздно, человек к тому времени уже сомневается,
+    // ушло ли оно.
+    notifySent();
     const files = pending;
     const replyId = reply?.id;
     // Из выбранного в подсказке уезжает только то, чьё имя осталось в тексте.

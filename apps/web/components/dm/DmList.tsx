@@ -10,23 +10,8 @@ import { cn } from '@/lib/utils';
 import { fmtClock, shortFingerprint } from '@/lib/format';
 import { listItem, springLayout } from '@/lib/motion';
 import { useT } from '@/lib/i18n';
-import { useDmStore } from '@/stores/dm';
-import { useUnreadStore } from '@/stores/unread';
+import { useDmStore, useUnreadIn } from '@/stores/dm';
 import { sceneTarget, useUiStore } from '@/stores/ui';
-
-/**
- * Непрочитанное строки: сверяем `activity` беседы (useDmStore) с отметкой
- * чтения (useUnreadStore) — тем же способом, что `unreadIn` из stores/dm.ts,
- * только через подписку на оба стора, а не через разовое чтение `getState()`
- * — иначе строка не перерисовалась бы ни на входящую реплику, ни на отметку
- * чтения. Открытая беседа не считается непрочитанной: точка гаснет сразу, не
- * дожидаясь, пока `DmThread` (задача 11) отметит её прочитанной на сервере.
- */
-function useRowUnread(slug: string, active: boolean): boolean {
-  const activityTs = useDmStore((s) => s.activity[slug] ?? 0);
-  const lastRead = useUnreadStore((s) => s.lastRead[slug] ?? 0);
-  return !active && activityTs > lastRead;
-}
 
 function DmRow({
   conversation,
@@ -38,7 +23,7 @@ function DmRow({
   onOpen: () => void;
 }) {
   const t = useT();
-  const unread = useRowUnread(conversation.slug, active);
+  const unread = useUnreadIn(conversation.slug, active);
   const { peer } = conversation;
   return (
     <div
