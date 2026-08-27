@@ -18,11 +18,12 @@ interface Target {
 }
 
 /**
- * Вторая, узкая рейка рядом с рейкой серверов — вариант размещения `1b` из
- * референса (`reference/direct-messages/direct-messages-reference.html`):
+ * Узкая рейка у правого края экрана, за колонкой состава — вариант размещения
+ * `1a` из референса (`reference/direct-messages/direct-messages-reference.html`):
  * раздел ЛС равноправен серверам, а не спрятан внутри одного из них (см.
  * `docs/plans/relay-2.0.md`). На десктопе — вертикальная рейка 64px, на узком
- * экране — горизонтальная полоса тех же целей.
+ * экране — горизонтальная полоса тех же целей НАД списком каналов (правого края
+ * на телефоне нет: там колонки показываются по одной).
  *
  * `Call` и `Admin` нарисованы, но выключены: экран 1:1-звонка и админка
  * распахнутся в следующих этапах (B и C), а подвинуть тулбар второй раз дороже,
@@ -104,7 +105,7 @@ function ToolbarRail({ targets }: { targets: Target[] }) {
   return (
     <nav
       aria-label={t('toolbar.label')}
-      className="panel panel-rail flex w-16 shrink-0 flex-col items-center gap-2 border-r border-line py-3"
+      className="panel panel-rail flex w-16 shrink-0 flex-col items-center gap-2 border-l border-line py-3"
     >
       {targets.map((target) => (
         <TargetButton

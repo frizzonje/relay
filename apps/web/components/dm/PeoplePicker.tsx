@@ -169,7 +169,10 @@ export function PeoplePicker({
             aria-label={t('dm.new')}
             className={cn(
               'panel fixed z-40 flex flex-col border-line shadow-[-8px_0_24px_rgba(0,0,0,0.28)]',
-              'md:inset-y-0 md:right-0 md:w-[330px] md:border-l',
+              // Правый край занят рейкой тулбара (w-16) — панель встаёт
+              // ВПЛОТНУЮ к ней, а не поверх: иначе она накрыла бы собой ту самую
+              // кнопку «Направления», которой её и открыли.
+              'md:inset-y-0 md:right-16 md:w-[330px] md:border-l md:border-r',
               'max-md:inset-x-0 max-md:bottom-0 max-md:max-h-[75vh] max-md:rounded-t-[15px] max-md:border-t',
             )}
           >
