@@ -39,9 +39,9 @@ function person(over: Partial<DmPerson>): DmPerson {
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 
-function renderPicker() {
+function renderPicker(open = true) {
   act(() => {
-    root.render(<PeoplePicker open onOpenChange={() => {}} />);
+    root.render(<PeoplePicker open={open} onOpenChange={() => {}} />);
   });
 }
 
@@ -157,5 +157,28 @@ describe('выбор собеседника', () => {
 
     expect(host.textContent).toContain(freshP.nick);
     expect(host.textContent).not.toContain(staleP.nick);
+  });
+
+  it('ответ, догнавший закрытую панель, не всплывает при следующем открытии', async () => {
+    const pending = deferred<{ ok: true; people: DmPerson[] }>();
+    askMock
+      .mockImplementationOnce(() => pending.promise)
+      // Второй запрос (после повторного открытия) не отвечает вовсе: проверяем
+      // именно то, что видно ДО его ответа — окно, в котором и мигал призрак.
+      .mockImplementationOnce(() => new Promise(() => {}));
+
+    const ghost = person({ fingerprint: '1111-2222-3333-4444', nick: 'Игорь' });
+
+    renderPicker(true);
+    await advance(0); // запрос ушёл и завис
+
+    renderPicker(false); // панель закрыли, ответа так и не дождались
+    pending.resolve({ ok: true, people: [ghost] });
+    await flush();
+
+    renderPicker(true);
+    await advance(0);
+
+    expect(host.textContent).not.toContain(ghost.nick);
   });
 });
