@@ -6,6 +6,7 @@ import {
   AUTH_COOKIE,
   CHAT_PAGE_SIZE,
   CHAT_PREFIX,
+  DM_PEOPLE_LIMIT,
   DM_PREFIX,
   DM_PREVIEW_LIMIT,
   GUEST_TOKEN_TTL_MS,
@@ -94,6 +95,12 @@ describe('константы совпадают с копией в api', () => {
   it('обрезка превью последней реплики та же — иначе список переписок и dm-activity разойдутся', () => {
     expect(apiSource('gateway/dm.service.ts')).toContain(
       `export const DM_PREVIEW_LIMIT = ${DM_PREVIEW_LIMIT};`,
+    );
+  });
+
+  it('потолок списка собеседников тот же — иначе клиент ждёт страницу, которой не будет', () => {
+    expect(apiSource('gateway/dm.service.ts')).toContain(
+      `export const DM_PEOPLE_LIMIT = ${DM_PEOPLE_LIMIT};`,
     );
   });
 
