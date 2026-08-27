@@ -16,9 +16,11 @@ import { useUiStore } from '@/stores/ui';
  * вместе со звонком 1:1 (план B, docs/plans/relay-2.0-calls.md). До тех пор
  * карточка честно говорит «неизвестно», а не подставляет чужое (голосовое)
  * присутствие или молчит о нём. Кнопка звонка нарисована, но выключена — тем
- * же приёмом, что Call/Admin в Toolbar (задача 8): без HTML `disabled`
- * кнопка осталась бы фокусируемой, а тултип и `aria-label` — единственное,
- * что объясняет, почему она ничего не делает.
+ * же приёмом, что Call/Admin в Toolbar (задача 8): HTML `disabled` ей НЕ
+ * ставится. Этот атрибут заодно выбрасывает кнопку из обхода табом и глушит
+ * наведение мышью, а тултип и `aria-label` — единственное, что объясняет, почему
+ * она ничего не делает; с `disabled` объяснение стало бы недоступно ни мышью,
+ * ни с клавиатуры. Отсюда `aria-disabled` вместо него и кольцо фокуса на месте.
  */
 export function DmPeerCard() {
   const t = useT();
@@ -45,10 +47,9 @@ export function DmPeerCard() {
       <button
         type="button"
         aria-disabled
-        disabled
         title={soon}
         aria-label={`${call} — ${soon}`}
-        className="mt-2 flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-full border border-line px-3 py-2 text-[13px] font-medium text-text-faint"
+        className="mt-2 flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-full border border-line px-3 py-2 text-[13px] font-medium text-text-faint outline-none focus-visible:ring-2 focus-visible:ring-line-strong"
       >
         <Icon name="phone" className="text-[15px]" strokeWidth={1.8} />
         {call}
