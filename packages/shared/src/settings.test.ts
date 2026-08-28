@@ -128,8 +128,8 @@ describe('проверка значения', () => {
     expect(validateSetting('files.allowedKinds', [1])).toEqual({ ok: false, error: 'wrong-type' });
   });
 
-  it('знает все 98 параметров каталога', () => {
-    expect(SETTINGS.length).toBe(98);
+  it('знает все 97 параметров каталога', () => {
+    expect(SETTINGS.length).toBe(97);
     expect(settingSpec('maintenance.mode')?.danger).toBe(true);
   });
 });
@@ -142,7 +142,7 @@ describe('проверка значения', () => {
 
 describe('состав групп', () => {
   // Числа — из плана (раздел «Каталог параметров»). Тест ловит не опечатку в
-  // сумме, а потерянную или удвоенную строку: `SETTINGS.length === 98` сходится
+  // сумме, а потерянную или удвоенную строку: `SETTINGS.length === 97` сходится
   // и тогда, когда один параметр забыт, а другой написан дважды.
   const expected: Record<SettingGroup, number> = {
     access: 12,
@@ -155,7 +155,7 @@ describe('состав групп', () => {
     voice: 12,
     invites: 6,
     appearance: 7,
-    notifications: 5,
+    notifications: 4,
     maintenance: 3,
   };
 
@@ -187,13 +187,18 @@ describe('разметка каталога', () => {
   it('только чтение — у инфраструктуры, и оно совпадает с применением «env»', () => {
     const readOnly = SETTINGS.filter((s) => s.readOnly).map((s) => s.key);
     expect(readOnly.sort()).toEqual([
-      'notifications.pushGateway',
       'voice.sfuSecretSet',
       'voice.sfuUrl',
       'voice.turnSecretSet',
       'voice.turnUrls',
     ]);
     for (const spec of SETTINGS) expect(spec.applies === 'env').toBe(spec.readOnly === true);
+    // И у каждого — имя переменной, из которой значение приходит. Поле «только
+    // чтение» без источника — пустая строка, которую нечем заполнить: панель
+    // покажет её навсегда серой, а человек будет искать, где же она задаётся.
+    // Так в каталог и попал `notifications.pushGateway` — шлюз, которого в
+    // relay нет; вернётся он вместе с кодом, который его читает.
+    for (const spec of SETTINGS) if (spec.readOnly) expect(typeof spec.env).toBe('string');
   });
 
   it('опасное просит подтверждения', () => {
@@ -295,6 +300,19 @@ describe('умолчание равно сегодняшнему поведен�
     expect(spec?.fallback).toBe(25 * 1024 ** 2);
   });
 
+  it('виды вложений — те же, что различает сервер', () => {
+    // Каталог не выдумывает вид, которого нет: `detectKind` в uploads.ts знает
+    // картинку, mp3 и «прочее», а ролик приезжает как `file`. Строка «video»
+    // здесь была бы галочкой, которая не выключает ничего.
+    const spec = settingSpec('files.allowedKinds');
+    expect(spec?.options).toEqual(['image', 'audio', 'file']);
+    expect(defaults()['files.allowedKinds']).toEqual(['image', 'audio', 'file']);
+    expect(validateSetting('files.allowedKinds', ['video'])).toEqual({
+      ok: false,
+      error: 'not-an-option',
+    });
+  });
+
   it('текст про приватность бесед — тот же, что показывает веб', () => {
     // Ключ `dm.privacy` из apps/web/lib/i18n/messages/en.json, этап A.
     expect(defaults()['direct.privacyNotice']).toBe(
@@ -389,7 +407,7 @@ describe('проверка значения — прочие виды', () => {
   });
 
   it('читаемое из окружения не правится, даже когда значение верное', () => {
-    expect(validateSetting('notifications.pushGateway', 'https://push.example')).toEqual({
+    expect(validateSetting('voice.sfuUrl', 'https://sfu.example')).toEqual({
       ok: false,
       error: 'read-only',
     });

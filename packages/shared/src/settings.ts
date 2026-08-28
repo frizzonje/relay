@@ -23,6 +23,8 @@
  * загляни она хоть раз в окружение — три ответа разъехались бы на четвёртый.
  */
 
+import type { AttachmentKind } from './index';
+
 /**
  * Вид значения. От него зависит и контрол в панели, и правила проверки.
  *
@@ -30,6 +32,7 @@
  * панель не гадала по имени ключа. `secret` — значение, которое наружу не
  * уходит никогда: панель видит только признак «задано».
  */
+
 export type SettingKind =
   | 'boolean'
   | 'number'
@@ -114,6 +117,13 @@ const NOTICE_MAX = 2000;
 const RULES_MAX = 8000;
 const SECRET_MAX = 256;
 const URL_MAX = 500;
+/**
+ * Виды вложений, какие существуют. Импорт типа (стирается при сборке, цикла с
+ * `index.ts` не заводит) плюс `satisfies` — единственный способ не дать этому
+ * списку разойтись с тем, что раскладывает по видам сервер.
+ */
+const ATTACHMENT_KINDS = ['image', 'audio', 'file'] as const satisfies readonly AttachmentKind[];
+
 /** Столько слов помещается в фильтр и столько букв — в одно слово. */
 const LIST_MAX = 500;
 const LIST_ITEM_MAX = 100;
@@ -496,14 +506,19 @@ export const SETTINGS: readonly SettingSpec[] = [
     min: 1 * KIB,
     max: 1 * GIB,
   },
+  // Виды — ровно те, что различает detectKind (apps/api/src/uploads.ts): картинка,
+  // mp3 и всё остальное. Четвёртым тут стояло «video», которого в коде нет: ролик
+  // сегодня приезжает как `file`, и снятая галочка «видео» не сделала бы ничего,
+  // а снятая «файл» молча унесла бы с роликами и pdf. `satisfies` держит список
+  // на замке: расширится AttachmentKind — не соберётся каталог.
   {
     key: 'files.allowedKinds',
     group: 'files',
     kind: 'list',
-    fallback: ['image', 'audio', 'video', 'file'],
+    fallback: [...ATTACHMENT_KINDS],
     applies: 'now',
-    options: ['image', 'audio', 'video', 'file'],
-    max: 4,
+    options: ATTACHMENT_KINDS,
+    max: ATTACHMENT_KINDS.length,
   },
   { key: 'files.imagePreviews', group: 'files', kind: 'boolean', fallback: true, applies: 'now' },
   // Ноль — без квоты: сегодня никто ничего не считает.
@@ -926,17 +941,6 @@ export const SETTINGS: readonly SettingSpec[] = [
     kind: 'boolean',
     fallback: true,
     applies: 'now',
-  },
-  // Шлюза пуш-уведомлений в relay пока нет; поле показывает то, что подставит
-  // окружение, когда он появится, и не притворяется работающим тумблером.
-  {
-    key: 'notifications.pushGateway',
-    group: 'notifications',
-    kind: 'text',
-    fallback: '',
-    applies: 'env',
-    max: URL_MAX,
-    readOnly: true,
   },
 
   // ── maintenance — обслуживание ───────────────────────────────────────────

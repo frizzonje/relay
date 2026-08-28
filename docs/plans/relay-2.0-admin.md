@@ -132,7 +132,7 @@
 | `access.maxDevicesPerIdentity` | number 1…64 | 8 | now |
 | `access.deviceApprovalRequired` | boolean | true | now |
 | `access.sessionTtlDays` | number 1…365 | 30 | new |
-| `access.unlockAttempts` | number 1…50 | 5 | now |
+| `access.unlockAttempts` | number 1…50 | 8 | now |
 | `access.unlockLockoutMinutes` | number 1…1440 | 15 | now |
 | `access.loginRatePerMinute` | number 1…600 | 20 | now |
 | `access.newIdentityQuietMinutes` | number 0…1440 | 0 | now |
@@ -144,7 +144,7 @@
 | Ключ | Вид | Умолчание | Применение |
 |---|---|---|---|
 | `people.nickMinLength` | number 1…32 | 1 | now |
-| `people.nickMaxLength` | number 1…64 | 32 | now |
+| `people.nickMaxLength` | number 1…64 | 20 | now |
 | `people.nickChangeCooldownMinutes` | number 0…1440 | 0 | now |
 | `people.showFingerprints` | boolean | true | now |
 | `people.lastSeenVisible` | boolean | true | now |
@@ -162,7 +162,7 @@
 | `moderation.bannedWords` | list | пусто | now |
 | `moderation.bannedWordsAction` | select `block` / `flag` | block | now |
 | `moderation.linksAllowed` | boolean | true | now |
-| `moderation.maxMentionsPerMessage` | number 0…50 | 10 | now |
+| `moderation.maxMentionsPerMessage` | number 0…50 | 8 | now |
 | `moderation.readOnlyMode` | boolean (danger) | false | now |
 | `moderation.serverOwnersCanBan` | boolean | true | now |
 | `moderation.banNotice` | multiline | пусто | now |
@@ -173,7 +173,7 @@
 |---|---|---|---|
 | `messages.retentionMode` | select `days` / `forever` / `ephemeral` (danger) | из `RETENTION_DAYS`, иначе `days` | now |
 | `messages.retentionDays` | number 1…3650 | 14 | now |
-| `messages.maxLength` | number 1…8000 | 2000 | now |
+| `messages.maxLength` | number 1…8000 | 500 | now |
 | `messages.pageSize` | number 10…200 | 50 | new |
 | `messages.pinLimit` | number 0…500 | 50 | now |
 | `messages.searchEnabled` | boolean | true | now |
@@ -188,7 +188,7 @@
 |---|---|---|---|
 | `files.uploadsEnabled` | boolean | true | now |
 | `files.maxUploadBytes` | bytes 1 KiB…1 GiB | 25 MiB | now |
-| `files.allowedKinds` | list из `image`/`audio`/`video`/`file` | все четыре | now |
+| `files.allowedKinds` | list из `image`/`audio`/`file` | все три | now |
 | `files.imagePreviews` | boolean | true | now |
 | `files.perIdentityDailyBytes` | bytes (0 — без квоты) | 0 | now |
 | `files.installQuotaBytes` | bytes (0 — без квоты) | 0 | now |
@@ -216,7 +216,7 @@
 | `spaces.creationAllowed` | select `everyone` / `owner` | everyone | now |
 | `spaces.maxServersPerIdentity` | number 0…100 | 5 | now |
 | `spaces.maxServersInstall` | number 1…1000 | 50 | now |
-| `spaces.maxChannelsPerServer` | number 1…500 | 50 | now |
+| `spaces.maxChannelsPerServer` | number 1…500 | 25 | now |
 | `spaces.lockedServersAllowed` | boolean | true | now |
 | `spaces.defaultVoiceMode` | select `p2p` / `sfu` | p2p | new |
 | `spaces.maxVoiceOccupants` | number 2…100 | 20 | now |
@@ -228,8 +228,8 @@
 |---|---|---|---|
 | `voice.videoEnabled` | boolean | true | now |
 | `voice.screenShareEnabled` | boolean | true | now |
-| `voice.audioBitrateKbps` | number 8…256 | 64 | new |
-| `voice.videoBitrateKbps` | number 100…8000 | 1200 | new |
+| `voice.audioBitrateKbps` | number 8…256 | 128 | new |
+| `voice.videoBitrateKbps` | number 100…8000 | 2500 | new |
 | `voice.sfuThreshold` | number 2…50 | 4 | new |
 | `voice.noiseSuppressionDefault` | boolean | true | new |
 | `voice.pushToTalkDefault` | boolean | false | new |
@@ -248,7 +248,7 @@
 | `invites.whoCanInvite` | select `everyone` / `owner` | everyone | now |
 | `invites.maxGuestsPerChannel` | number 1…100 | 10 | now |
 | `invites.listenerByDefault` | boolean | false | now |
-| `invites.guestKickCooldownMinutes` | number 1…1440 | 10 | now |
+| `invites.guestKickCooldownMinutes` | number 1…1440 | 60 | now |
 
 ### Группа `appearance` — вид инсталляции
 
@@ -256,7 +256,7 @@
 |---|---|---|---|
 | `appearance.installName` | text ≤48 | `relay` | now |
 | `appearance.installEmoji` | text ≤8 | пусто | now |
-| `appearance.defaultTheme` | select `system` / `dark` / `light` | system | new |
+| `appearance.defaultTheme` | select `system` / `dark` / `light` | dark | new |
 | `appearance.defaultLocale` | select `en` / `ru` | en | new |
 | `appearance.loginNotice` | multiline ≤2000 | пусто | now |
 | `appearance.rulesText` | multiline ≤8000 | пусто | now |
@@ -270,7 +270,6 @@
 | `notifications.desktopEnabled` | boolean | true | now |
 | `notifications.mentionSound` | boolean | true | now |
 | `notifications.directSound` | boolean | true | now |
-| `notifications.pushGateway` | text (только чтение) | пусто | env |
 
 ### Группа `maintenance` — обслуживание
 
@@ -284,11 +283,11 @@
 владельца, прогнать ретенцию сейчас, подмести осиротевшие файлы, отозвать все сессии,
 выгрузить настройки в JSON, загрузить настройки из JSON, сбросить группу к умолчаниям.
 
-**Итого: 98 параметров в 12 группах + 7 действий + 4 таблицы** (люди, баны, журнал, сводка).
+**Итого: 97 параметров в 12 группах + 7 действий + 4 таблицы** (люди, баны, журнал, сводка).
 
-Проверка счётом (её же делает тест `SETTINGS.length === 98`): access 12, people 6,
+Проверка счётом (её же делает тест `SETTINGS.length === 97`): access 12, people 6,
 moderation 12, messages 10, files 9, direct 8, spaces 8, voice 12, invites 6, appearance 7,
-notifications 5, maintenance 3.
+notifications 4, maintenance 3.
 
 Этап B добавит тринадцатую группу `calls` (7 параметров) — тогда же в тесте станет 105.
 
@@ -528,8 +527,8 @@ describe('проверка значения', () => {
     expect(validateSetting('files.allowedKinds', [1])).toEqual({ ok: false, error: 'wrong-type' });
   });
 
-  it('знает все 98 параметров каталога', () => {
-    expect(SETTINGS.length).toBe(98);
+  it('знает все 97 параметров каталога', () => {
+    expect(SETTINGS.length).toBe(97);
     expect(settingSpec('maintenance.mode')?.danger).toBe(true);
   });
 });
@@ -544,7 +543,7 @@ docker run --rm -v "$PWD":/mono -w /mono node:20-alpine sh -c 'corepack enable &
 - [ ] **Шаг 3: Реализация каталога**
 
 `packages/shared/src/settings.ts` — типы из блока «Интерфейсы» выше, затем массив `SETTINGS`
-ровно по таблицам раздела «Каталог параметров» (98 строк), затем `settingSpec`, `defaults` и
+ровно по таблицам раздела «Каталог параметров» (97 строк), затем `settingSpec`, `defaults` и
 `validateSetting`. Шапка файла объясняет, почему это данные, а не экраны:
 
 ```ts
@@ -1061,7 +1060,7 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 
 - Владелец открывает панель из тулбара; никто другой её не открывает и не может позвать ни
   одно её событие.
-- Все 98 параметров каталога видны, правятся (кроме помеченных `env`) и переживают
+- Все 97 параметров каталога видны, правятся (кроме помеченных `env`) и переживают
   перезапуск.
 - Инсталляция, где панель не открывали, ведёт себя ровно как до этапа — тест на умолчания
   зелёный.
