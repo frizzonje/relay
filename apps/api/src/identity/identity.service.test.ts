@@ -379,24 +379,21 @@ describe('дверь для новых личностей', () => {
     expect(await db.getRepository(IdentityRow).count()).toBe(1);
   });
 
-  it('рубильник закрывает дверь, не трогая правило', async () => {
-    // Два ключа не дублируют друг друга, и вот чем: `identityCreation` —
-    // правило («у нас открыто»), `blockNewIdentities` — рубильник поверх него.
-    // Закрывшись рубильником на вечер, владелец не забывает, каким было
-    // правило, и возвращает прежнее одним щелчком.
-    await tune(settings, 'access.blockNewIdentities', true);
-    expect(settings.get<string>('access.identityCreation')).toBe('open');
+  it('закрытую дверь открывают обратно, и она снова пускает', async () => {
+    // Закрытие — не билет в один конец: владелец, переждавший наплыв, обязан
+    // вернуть всё как было одним щелчком, а не перезапуском.
+    await tune(settings, 'access.identityCreation', 'closed');
     expect(await login(await device())).toEqual({ ok: false, reason: 'closed' });
 
-    await tune(settings, 'access.blockNewIdentities', false);
+    await tune(settings, 'access.identityCreation', 'open');
     expect(await login(await device(), { nick: 'Боря' })).toMatchObject({
       ok: true,
       created: true,
     });
   });
 
-  it('умолчание рубильника никого не запирает', async () => {
-    expect(settings.get<boolean>('access.blockNewIdentities')).toBe(false);
+  it('умолчание никого не запирает', async () => {
+    expect(settings.get<string>('access.identityCreation')).toBe('open');
     expect(await login(await device())).toMatchObject({ ok: true, created: true });
   });
 });

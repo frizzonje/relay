@@ -130,8 +130,8 @@ describe('проверка значения', () => {
     expect(validateSetting('files.allowedKinds', [1])).toEqual({ ok: false, error: 'wrong-type' });
   });
 
-  it('знает все 96 параметров каталога', () => {
-    expect(SETTINGS.length).toBe(96);
+  it('знает все 95 параметров каталога', () => {
+    expect(SETTINGS.length).toBe(95);
     expect(settingSpec('maintenance.mode')?.danger).toBe(true);
   });
 });
@@ -144,10 +144,10 @@ describe('проверка значения', () => {
 
 describe('состав групп', () => {
   // Числа — из плана (раздел «Каталог параметров»). Тест ловит не опечатку в
-  // сумме, а потерянную или удвоенную строку: `SETTINGS.length === 96` сходится
+  // сумме, а потерянную или удвоенную строку: `SETTINGS.length === 95` сходится
   // и тогда, когда один параметр забыт, а другой написан дважды.
   const expected: Record<SettingGroup, number> = {
-    access: 11,
+    access: 10,
     people: 6,
     moderation: 12,
     messages: 10,
@@ -271,7 +271,6 @@ describe('умолчание равно сегодняшнему поведен�
     // установку сразу после обновления.
     expect(d['maintenance.mode']).toBe(false);
     expect(d['moderation.readOnlyMode']).toBe(false);
-    expect(d['access.blockNewIdentities']).toBe(false);
     // Тема сегодня тёмная и никакой другой в вебе нет.
     expect(d['appearance.defaultTheme']).toBe('dark');
     expect(d['appearance.defaultLocale']).toBe('en');

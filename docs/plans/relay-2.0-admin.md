@@ -136,7 +136,6 @@
 | `access.loginRatePerMinute` | number 0…600 (0 — без предела) | 0 | now |
 | `access.newIdentityQuietMinutes` | number 0…1440 | 0 | now |
 | `access.guestsEnabled` | boolean | true | now |
-| `access.blockNewIdentities` | boolean | false | new |
 
 ### Группа `people` — люди
 
@@ -282,9 +281,9 @@
 владельца, прогнать ретенцию сейчас, подмести осиротевшие файлы, отозвать все сессии,
 выгрузить настройки в JSON, загрузить настройки из JSON, сбросить группу к умолчаниям.
 
-**Итого: 96 параметров в 12 группах + 7 действий + 4 таблицы** (люди, баны, журнал, сводка).
+**Итого: 95 параметров в 12 группах + 7 действий + 4 таблицы** (люди, баны, журнал, сводка).
 
-Проверка счётом (её же делает тест `SETTINGS.length === 96`): access 11, people 6,
+Проверка счётом (её же делает тест `SETTINGS.length === 95`): access 10, people 6,
 moderation 12, messages 10, files 9, direct 8, spaces 8, voice 12, invites 6, appearance 7,
 notifications 4, maintenance 3.
 
@@ -526,8 +525,8 @@ describe('проверка значения', () => {
     expect(validateSetting('files.allowedKinds', [1])).toEqual({ ok: false, error: 'wrong-type' });
   });
 
-  it('знает все 96 параметров каталога', () => {
-    expect(SETTINGS.length).toBe(96);
+  it('знает все 95 параметров каталога', () => {
+    expect(SETTINGS.length).toBe(95);
     expect(settingSpec('maintenance.mode')?.danger).toBe(true);
   });
 });
@@ -542,7 +541,7 @@ docker run --rm -v "$PWD":/mono -w /mono node:20-alpine sh -c 'corepack enable &
 - [ ] **Шаг 3: Реализация каталога**
 
 `packages/shared/src/settings.ts` — типы из блока «Интерфейсы» выше, затем массив `SETTINGS`
-ровно по таблицам раздела «Каталог параметров» (96 строк), затем `settingSpec`, `defaults` и
+ровно по таблицам раздела «Каталог параметров» (95 строк), затем `settingSpec`, `defaults` и
 `validateSetting`. Шапка файла объясняет, почему это данные, а не экраны:
 
 ```ts
@@ -783,7 +782,7 @@ git commit -m "feat(admin): perimeter, chat and direct messages obey the panel"
 `apps/api/src/gateway/moderation.handlers.ts`, `apps/api/src/gateway/chat.service.ts`
 (системные реплики) + их тесты.
 
-**Ключи (13):** `access.identityCreation`, `access.blockNewIdentities`,
+**Ключи (12):** `access.identityCreation`,
 `access.maxDevicesPerIdentity`, `access.sessionTtlDays`, `access.newIdentityQuietMinutes`,
 `access.loginRatePerMinute`, `people.nickMinLength`, `people.nickMaxLength`,
 `people.nickChangeCooldownMinutes`, `people.pruneInactiveDays`,
@@ -1155,9 +1154,9 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 
 - Владелец открывает панель из тулбара; никто другой её не открывает и не может позвать ни
   одно её событие.
-- Каждый из 96 параметров каталога ДЕЙСТВУЕТ: у него есть потребитель в коде, и это
+- Каждый из 95 параметров каталога ДЕЙСТВУЕТ: у него есть потребитель в коде, и это
   проверено тестом. Поле, которое ничего не делает, — брак этапа, а не мелочь.
-- Все 96 параметров каталога видны, правятся (кроме помеченных `env`) и переживают
+- Все 95 параметров каталога видны, правятся (кроме помеченных `env`) и переживают
   перезапуск.
 - Инсталляция, где панель не открывали, ведёт себя ровно как до этапа — тест на умолчания
   зелёный.

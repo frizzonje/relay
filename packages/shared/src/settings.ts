@@ -242,13 +242,6 @@ export const SETTINGS: readonly SettingSpec[] = [
     max: 1440,
   },
   { key: 'access.guestsEnabled', group: 'access', kind: 'boolean', fallback: true, applies: 'now' },
-  {
-    key: 'access.blockNewIdentities',
-    group: 'access',
-    kind: 'boolean',
-    fallback: false,
-    applies: 'new',
-  },
 
   // ── people — люди ────────────────────────────────────────────────────────
   {
