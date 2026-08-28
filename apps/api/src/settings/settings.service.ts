@@ -5,6 +5,7 @@ import { parseRetention } from '../db/retention.service';
 import {
   SETTINGS,
   defaults,
+  settingSpec,
   validateSetting,
   type SettingError,
   type SettingGroup,
@@ -33,9 +34,17 @@ import {
  * каталога в следующей версии молча не доехала бы до живых инсталляций.
  */
 
+/**
+ * Причина отказа. К шести причинам каталога добавлена седьмая, которой в нём
+ * нет и быть не должно: `validateSetting` зовёт и браузер — он обязан уметь
+ * проверить длину нового пароля, не отправляя его. А вот ЗАПИСАТЬ секрет общей
+ * дорогой нельзя, и это правило сервера, а не контракта.
+ */
+export type SetError = SettingError | 'secret-path';
+
 export type SetResult =
   | { ok: true; changed: boolean; before: SettingValue }
-  | { ok: false; error: SettingError };
+  | { ok: false; error: SetError };
 
 export type SettingsListener = (key: string, value: SettingValue) => void;
 
@@ -128,6 +137,14 @@ export class SettingsService implements OnModuleInit {
     const check = validateSetting(key, value);
     if (!check.ok) return { ok: false, error: check.error };
 
+    // Секрет общей дорогой не пишется. Здесь значение легло бы в `settings`
+    // как есть — то есть пароль инсталляции открытым текстом в jsonb и в
+    // каждом `pg_dump`, ровно то, чего мы не делаем даже при посеве из `.env`.
+    // У пароля своя дорога с scrypt и отзывом выданных пропусков (задача 8);
+    // до неё общий обработчик панели (задача 7) обязан получать отказ, а не
+    // «сохранено».
+    if (settingSpec(key)?.secret) return { ok: false, error: 'secret-path' };
+
     const before = this.get<SettingValue>(key);
     if (same(before, check.value)) return { ok: true, changed: false, before };
 
@@ -147,9 +164,14 @@ export class SettingsService implements OnModuleInit {
    * иначе следующая правка каталога обошла бы инсталляцию стороной.
    */
   async resetGroup(group: SettingGroup, by: string): Promise<string[]> {
+    // Секреты сброс не трогает по той же причине, по которой их не пишет
+    // `set`: «вернуть группу к умолчаниям» не должно означать «снять пароль со
+    // всей инсталляции» — умолчание у него пустая строка, то есть открытая
+    // дверь, и человек, сбрасывавший вид страницы входа, узнал бы об этом
+    // последним.
     const keys = SETTINGS.filter(
-      (spec) => spec.group === group && this.overrides.has(spec.key),
-    ).map((spec) => spec.key);
+      (item) => item.group === group && !item.secret && this.overrides.has(item.key),
+    ).map((item) => item.key);
     if (keys.length === 0) return [];
 
     const changed = keys.filter((key) => !same(this.overrides.get(key)!, this.base[key]));

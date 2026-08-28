@@ -210,6 +210,26 @@ describe('запись', () => {
     expect(await rows()).toBe(0);
   });
 
+  it('секрет общей дорогой не пишется вовсе', async () => {
+    // Здесь пароль лёг бы в jsonb как есть — то есть в каждую резервную копию.
+    // Своя дорога (scrypt и отзыв выданных пропусков) появится в задаче 8, а
+    // общий обработчик панели обязан получить отказ, а не «сохранено».
+    const settings = await started();
+    const res = await settings.set('access.sitePasswordSet', 'тайна', owner);
+    expect(res).toEqual({ ok: false, error: 'secret-path' });
+    expect(await rows()).toBe(0);
+  });
+
+  it('отказ по секрету не зависит от того, какой ключ секретный', async () => {
+    // Правило держится за пометку каталога, а не за имя `access.sitePasswordSet`:
+    // заведут второй секрет — он закроется тем же отказом, без правки кода.
+    const settings = await started();
+    for (const spec of SETTINGS.filter((item) => item.secret)) {
+      expect(await settings.set(spec.key, 'x', owner)).toMatchObject({ ok: false });
+    }
+    expect(await rows()).toBe(0);
+  });
+
   it('повторная запись того же значения — не изменение', async () => {
     const settings = await started();
     await settings.set('direct.enabled', false, owner);
@@ -246,8 +266,8 @@ describe('запись', () => {
 
 describe('наружу', () => {
   it('секрет уходит признаком, а не значением', async () => {
+    vi.stubEnv('SITE_PASSWORD', 'тайна');
     const settings = await started();
-    await settings.set('access.sitePasswordSet', 'тайна', owner);
     expect(settings.public()['access.sitePasswordSet']).toBe(true);
     expect(JSON.stringify(settings.public())).not.toContain('тайна');
   });
@@ -348,6 +368,22 @@ describe('сброс группы', () => {
 
     expect(await restarted.resetGroup('files', owner)).toEqual([]);
     expect(await rows()).toBe(0);
+  });
+
+  it('не снимает пароль вместе с видом страницы входа', async () => {
+    // Сброс группы `access` вернул бы секрету умолчание — пустую строку, то
+    // есть открытую дверь на всю инсталляцию. Человек, сбрасывавший соседние
+    // поля, узнал бы об этом последним.
+    // Строку кладём мимо сервиса — своей дорогой её положит задача 8.
+    await db
+      .getRepository(SettingRow)
+      .save({ key: 'access.sitePasswordSet', value: 'хэш', updatedBy: owner });
+    const settings = await started();
+
+    await settings.set('access.maxDevicesPerIdentity', 3, owner);
+    expect(await settings.resetGroup('access', owner)).toEqual(['access.maxDevicesPerIdentity']);
+    expect(await row('access.sitePasswordSet')).not.toBeNull();
+    expect(settings.public()['access.sitePasswordSet']).toBe(true);
   });
 
   it('нетронутая группа не ходит в базу впустую', async () => {
