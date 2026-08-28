@@ -15,6 +15,8 @@ import {
 } from './chat.service';
 import { DmService } from './dm.service';
 import { RegistryService } from './registry.service';
+import type { SettingsService } from '../settings/settings.service';
+import { freshSettings, tune } from '../settings/settings.testkit';
 
 /**
  * История чата — то, ради чего в 1.0 вообще появилась база. Проверяем не «есть
@@ -29,6 +31,7 @@ let db: DataSource;
 let registry: RegistryService;
 let dm: DmService;
 let chat: ChatService;
+let settings: SettingsService;
 
 beforeAll(async () => {
   db = await testDatabase();
@@ -44,7 +47,8 @@ beforeEach(async () => {
   await registry.onModuleInit();
   dm = new DmService(db);
   await dm.onModuleInit();
-  chat = new ChatService(db, registry, dm);
+  settings = await freshSettings(db);
+  chat = new ChatService(db, registry, dm, settings);
   await chat.onModuleInit();
 });
 
@@ -54,7 +58,7 @@ async function restart(): Promise<ChatService> {
   await again.onModuleInit();
   const dmAgain = new DmService(db);
   await dmAgain.onModuleInit();
-  const service = new ChatService(db, again, dmAgain);
+  const service = new ChatService(db, again, dmAgain, await freshSettings(db));
   await service.onModuleInit();
   return service;
 }
@@ -820,5 +824,40 @@ describe('мусор от клиента', () => {
     await expect(chat.add('нет-такого', { name: 'А', text: 'ау' })).resolves.toBeUndefined();
     await expect(chat.history('нет-такого')).resolves.toEqual({ messages: [], more: false });
     await expect(chat.count('нет-такого')).resolves.toBe(0);
+  });
+});
+
+describe('системная строка ленты', () => {
+  it('умолчание — не писать: до панели таких строк в relay не возникало', async () => {
+    // Включённые по умолчанию, они дописали бы в чужие каналы то, чего там не
+    // было, а ограничение этапа C требует равенства, а не близости.
+    expect(await chat.addSystem('obshchii', 'кого-то забанили')).toBeUndefined();
+    expect((await chat.history('obshchii')).messages).toHaveLength(0);
+  });
+
+  it('включённая — пишется от лица канала, без личности и без лица', async () => {
+    await tune(settings, 'messages.systemMessages', true);
+    const line = await chat.addSystem('obshchii', 'кого-то забанили');
+    expect(line).toMatchObject({ text: 'кого-то забанили', system: true });
+    // Лица у неё нет: отпечатка нет, потому что нет и личности.
+    expect(line?.fingerprint).toBeUndefined();
+
+    const page = await chat.history('obshchii');
+    expect(page.messages).toHaveLength(1);
+    expect(page.messages[0]).toMatchObject({ system: true });
+  });
+
+  it('в несуществующий канал не пишется даже включённая', async () => {
+    await tune(settings, 'messages.systemMessages', true);
+    expect(await chat.addSystem('нет-такого', 'кого-то забанили')).toBeUndefined();
+  });
+
+  it('системную строку нельзя ни найти для правки, ни удалить', async () => {
+    // `find` ищет только несистемное: правка и удаление — про сказанное
+    // человеком, а системная строка никому не принадлежит.
+    await tune(settings, 'messages.systemMessages', true);
+    const line = await chat.addSystem('obshchii', 'кого-то забанили');
+    expect(await chat.find('obshchii', line!.id!)).toBeUndefined();
+    expect(await chat.findAny('obshchii', line!.id!)).toMatchObject({ system: true });
   });
 });

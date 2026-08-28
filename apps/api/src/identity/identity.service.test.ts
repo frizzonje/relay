@@ -4,8 +4,11 @@ import type { DataSource } from 'typeorm';
 import { webcrypto } from 'node:crypto';
 import { DeviceRow, IdentityRow } from '../db/entities';
 import { resetDatabase, testDatabase } from '../db/testing';
+import type { SettingsService } from '../settings/settings.service';
+import { freshSettings, tune } from '../settings/settings.testkit';
 import { SIGN_ALGORITHM, authMessage, fingerprint } from './crypto';
 import { IdentityService } from './identity.service';
+import { IDENTITY_COOKIE, issueSession } from './session';
 
 /**
  * Вход без регистрации проверяется настоящей криптографией и настоящей базой:
@@ -19,6 +22,7 @@ import { IdentityService } from './identity.service';
 
 let db: DataSource;
 let identity: IdentityService;
+let settings: SettingsService;
 let clock: number;
 
 beforeAll(async () => {
@@ -32,7 +36,8 @@ afterAll(async () => {
 beforeEach(async () => {
   await resetDatabase(db);
   clock = Date.parse('2026-08-12T12:00:00Z');
-  identity = new IdentityService(db, () => clock);
+  settings = await freshSettings(db);
+  identity = new IdentityService(db, settings, () => clock);
   vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {});
   vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
   vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
@@ -307,7 +312,10 @@ describe('смена ника', () => {
     const first = await login(await device(), { nick: 'Аня' });
     if (!first.ok) throw new Error(first.reason);
 
-    expect(await identity.rename(first.identity.id, ' @Аня  Б ')).toBe('Аня-Б');
+    expect(await identity.rename(first.identity.id, ' @Аня  Б ')).toEqual({
+      ok: true,
+      nick: 'Аня-Б',
+    });
     expect(
       (await db.getRepository(IdentityRow).findOneByOrFail({ id: first.identity.id })).nick,
     ).toBe('Аня-Б');
@@ -316,11 +324,180 @@ describe('смена ника', () => {
   it('пустой ник — отказ: безымянных в ленте не бывает', async () => {
     const first = await login(await device(), { nick: 'Аня' });
     if (!first.ok) throw new Error(first.reason);
-    expect(await identity.rename(first.identity.id, '   ')).toBeNull();
-    expect(await identity.rename(first.identity.id, '@@@')).toBeNull();
+    // Отказ теперь называет причину: «так нельзя назваться» человек чинит
+    // иначе, чем «слишком часто», и пустота вместо причины отправила бы
+    // половину из них подбирать буквы там, где надо подождать.
+    expect(await identity.rename(first.identity.id, '   ')).toEqual({
+      ok: false,
+      reason: 'bad-nick',
+    });
+    expect(await identity.rename(first.identity.id, '@@@')).toEqual({
+      ok: false,
+      reason: 'bad-nick',
+    });
   });
 
   it('несуществующей личности не переименовать', async () => {
-    expect(await identity.rename('00000000-0000-0000-0000-000000000000', 'Аня')).toBeNull();
+    expect(await identity.rename('00000000-0000-0000-0000-000000000000', 'Аня')).toEqual({
+      ok: false,
+      reason: 'unknown',
+    });
+  });
+});
+
+// ── Настройки инсталляции ─────────────────────────────────────────────────
+//
+// Здесь и ниже проверяется главное обещание этапа C: у каждой настройки есть
+// потребитель, а у каждого умолчания — сегодняшнее поведение. Второе важнее
+// первого, поэтому у каждого ключа свой тест «панель не открывали».
+
+describe('дверь для новых личностей', () => {
+  it('умолчание — дверь открыта: незнакомый ключ заводит личность', async () => {
+    expect(await login(await device(), { nick: 'Аня' })).toMatchObject({
+      ok: true,
+      created: true,
+    });
+  });
+
+  it('закрытая регистрация не заводит личность, но пускает заведённую', async () => {
+    const d = await device();
+    const first = await login(d, { nick: 'Аня' });
+    if (!first.ok) throw new Error(first.reason);
+
+    await tune(settings, 'access.identityCreation', 'closed');
+
+    // Тот же ключ входит как ни в чём не бывало: закрыта дверь для НОВЫХ, а не
+    // для тех, кто уже внутри.
+    expect(await login(d)).toMatchObject({ ok: true, created: false });
+
+    // Незнакомому — свой отказ, а не общий «подпись не сошлась»: «нас закрыли»
+    // чинят просьбой впустить, а не починкой связи.
+    expect(await login(await device(), { nick: 'Боря' })).toEqual({
+      ok: false,
+      reason: 'closed',
+    });
+    expect(await db.getRepository(IdentityRow).count()).toBe(1);
+  });
+
+  it('рубильник закрывает дверь, не трогая правило', async () => {
+    // Два ключа не дублируют друг друга, и вот чем: `identityCreation` —
+    // правило («у нас открыто»), `blockNewIdentities` — рубильник поверх него.
+    // Закрывшись рубильником на вечер, владелец не забывает, каким было
+    // правило, и возвращает прежнее одним щелчком.
+    await tune(settings, 'access.blockNewIdentities', true);
+    expect(settings.get<string>('access.identityCreation')).toBe('open');
+    expect(await login(await device())).toEqual({ ok: false, reason: 'closed' });
+
+    await tune(settings, 'access.blockNewIdentities', false);
+    expect(await login(await device(), { nick: 'Боря' })).toMatchObject({
+      ok: true,
+      created: true,
+    });
+  });
+
+  it('умолчание рубильника никого не запирает', async () => {
+    expect(settings.get<boolean>('access.blockNewIdentities')).toBe(false);
+    expect(await login(await device())).toMatchObject({ ok: true, created: true });
+  });
+});
+
+describe('длина и частота смены имени', () => {
+  /** Личность, которой можно менять имя. */
+  async function person(nick = 'Аня'): Promise<string> {
+    const first = await login(await device(), { nick });
+    if (!first.ok) throw new Error(first.reason);
+    return first.identity.id;
+  }
+
+  const LONG = 'абвгдеёжзийклмнопрстуфхцчшщ';
+
+  it('умолчания режут ник там же, где всегда, — на двадцатой букве', async () => {
+    // NICK_MAX — то самое число, с которым relay жил до панели.
+    expect(await identity.rename(await person(), LONG)).toEqual({
+      ok: true,
+      nick: LONG.slice(0, 20),
+    });
+  });
+
+  it('ник длиннее максимума укорачивается до настроенного', async () => {
+    await tune(settings, 'people.nickMaxLength', 5);
+    expect(await identity.rename(await person(), LONG)).toEqual({
+      ok: true,
+      nick: LONG.slice(0, 5),
+    });
+  });
+
+  it('ник короче минимума отвергается с причиной', async () => {
+    await tune(settings, 'people.nickMinLength', 4);
+    expect(await identity.rename(await person(), 'Ая')).toEqual({
+      ok: false,
+      reason: 'too-short',
+    });
+    // Ровно минимум — уже можно: граница включающая.
+    expect(await identity.rename(await person('Боря'), 'Аняя')).toEqual({
+      ok: true,
+      nick: 'Аняя',
+    });
+  });
+
+  it('умолчание минимума пропускает одну букву — как и вчера', async () => {
+    expect(settings.get<number>('people.nickMinLength')).toBe(1);
+    expect(await identity.rename(await person(), 'Я')).toEqual({ ok: true, nick: 'Я' });
+  });
+
+  it('короткое имя на входе — не отказ, а отпечаток', async () => {
+    // Вход не место для препирательств о буквах: клиент бывает не наш, и
+    // остаться без личности из-за имени человек не должен.
+    await tune(settings, 'people.nickMinLength', 6);
+    const d = await device();
+    const result = await login(d, { nick: 'Ая' });
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.identity.nick).toBe(fingerprint(d.publicKey).slice(0, 6));
+  });
+
+  it('переименование чаще кулдауна отвергается и говорит, сколько ждать', async () => {
+    await tune(settings, 'people.nickChangeCooldownMinutes', 10);
+    const id = await person();
+
+    expect(await identity.rename(id, 'Аня')).toEqual({ ok: true, nick: 'Аня' });
+    expect(await identity.rename(id, 'Боря')).toEqual({
+      ok: false,
+      reason: 'cooldown',
+      retryInMs: 10 * 60_000,
+    });
+    // Имя в базе от отказа не поменялось — иначе «нельзя» означало бы «можно».
+    expect((await db.getRepository(IdentityRow).findOneByOrFail({ id })).nick).toBe('Аня');
+
+    clock += 10 * 60_000;
+    expect(await identity.rename(id, 'Боря')).toEqual({ ok: true, nick: 'Боря' });
+  });
+
+  it('пауза у каждого своя — сосед переименовывается свободно', async () => {
+    await tune(settings, 'people.nickChangeCooldownMinutes', 10);
+    const mine = await person();
+    const neighbour = await person('Боря');
+    await identity.rename(mine, 'Аня');
+    expect(await identity.rename(neighbour, 'Боря-Б')).toEqual({ ok: true, nick: 'Боря-Б' });
+  });
+
+  it('умолчание паузы — ноль: переименований подряд сколько угодно', async () => {
+    expect(settings.get<number>('people.nickChangeCooldownMinutes')).toBe(0);
+    const id = await person();
+    for (const nick of ['Аня', 'Боря', 'Веня']) {
+      expect(await identity.rename(id, nick)).toEqual({ ok: true, nick });
+    }
+  });
+});
+
+describe('возраст личности уезжает на сокет', () => {
+  it('говорящий несёт время рождения — по нему считают тихий час', async () => {
+    // Держать возраст на сокете дешевле, чем спрашивать базу на каждую реплику,
+    // и измениться он не может. Здесь проверяется, что он вообще доезжает.
+    const d = await device();
+    const first = await login(d, { nick: 'Аня' });
+    if (!first.ok) throw new Error(first.reason);
+    const cookie = `${IDENTITY_COOKIE}=${issueSession({ identityId: first.identity.id, deviceId: first.device.id }).value}`;
+    const speaker = await identity.fromCookie(cookie);
+    expect(speaker?.createdAt).toBe(first.identity.createdAt.getTime());
   });
 });

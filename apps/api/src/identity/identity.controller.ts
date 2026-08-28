@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { parseCookies } from '../auth/auth';
+import { SettingsService } from '../settings/settings.service';
 import { IdentityService, type VerifyResult } from './identity.service';
 import { IDENTITY_COOKIE, issueSession, readSession } from './session';
 
@@ -20,7 +21,10 @@ import { IDENTITY_COOKIE, issueSession, readSession } from './session';
  */
 @Controller('api/identity')
 export class IdentityController {
-  constructor(private readonly identity: IdentityService) {}
+  constructor(
+    private readonly identity: IdentityService,
+    private readonly settings: SettingsService,
+  ) {}
 
   @Post('challenge')
   challenge(@Res() res: Response, @Body() body: { publicKey?: unknown }) {
@@ -43,18 +47,23 @@ export class IdentityController {
     });
 
     if (!result.ok) {
-      // 401 на всё, кроме отзыва: отозванному устройству надо сказать прямо,
+      // 401 на всё, кроме отзыва и закрытой двери: обоим надо сказать прямо,
       // иначе человек будет чинить сеть и пароль вместо того, чтобы связать
-      // устройство заново.
-      const status = result.reason === 'revoked' ? 403 : 401;
+      // устройство заново или попроситься внутрь.
+      const status = result.reason === 'revoked' || result.reason === 'closed' ? 403 : 401;
       res.status(status).json({ error: result.reason });
       return;
     }
 
-    const session = issueSession({
-      identityId: result.identity.id,
-      deviceId: result.device.id,
-    });
+    const session = issueSession(
+      {
+        identityId: result.identity.id,
+        deviceId: result.device.id,
+      },
+      // Срок задаёт владелец. Умолчание каталога равно тому, чем он был всегда
+      // (`SESSION_TTL_MS`), поэтому инсталляция без панели ничего не заметит.
+      this.settings.get<number>('access.sessionTtlDays') * 24 * 60 * 60 * 1000,
+    );
     res.cookie(IDENTITY_COOKIE, session.value, {
       httpOnly: true,
       sameSite: 'lax',
@@ -90,12 +99,18 @@ export class IdentityController {
       res.status(401).json({ error: 'no session' });
       return;
     }
-    const nick = await this.identity.rename(session.identityId, body?.nick);
-    if (!nick) {
-      res.status(400).json({ error: 'bad nick' });
+    const done = await this.identity.rename(session.identityId, body?.nick);
+    if (!done.ok) {
+      // Пауза между сменами имени — это «подождите», а не «вы ошиблись», и
+      // клиент обязан различать их, не читая тело: 429 против 400.
+      if (done.reason === 'cooldown') {
+        res.status(429).json({ error: done.reason, retryInMs: done.retryInMs });
+        return;
+      }
+      res.status(400).json({ error: done.reason === 'too-short' ? 'too-short' : 'bad nick' });
       return;
     }
-    res.json({ nick });
+    res.json({ nick: done.nick });
   }
 }
 

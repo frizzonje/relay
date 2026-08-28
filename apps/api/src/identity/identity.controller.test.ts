@@ -5,6 +5,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { DataSource } from 'typeorm';
 import { DeviceRow } from '../db/entities';
 import { resetDatabase, testDatabase } from '../db/testing';
+import type { SettingsService } from '../settings/settings.service';
+import { freshSettings, tune } from '../settings/settings.testkit';
 import { SIGN_ALGORITHM, authMessage } from './crypto';
 import { IdentityController } from './identity.controller';
 import { IdentityService } from './identity.service';
@@ -56,6 +58,7 @@ const req = (cookie?: string, secure = true) =>
 let db: DataSource;
 let controller: IdentityController;
 let service: IdentityService;
+let settings: SettingsService;
 
 beforeAll(async () => {
   db = await testDatabase();
@@ -67,8 +70,9 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetDatabase(db);
-  service = new IdentityService(db);
-  controller = new IdentityController(service);
+  settings = await freshSettings(db);
+  service = new IdentityService(db, settings);
+  controller = new IdentityController(service, settings);
   vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {});
   vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
 });
@@ -259,5 +263,60 @@ describe('смена ника', () => {
     const out = res();
     await controller.nick(req(cookie), out, { nick: '   ' });
     expect(out.code).toBe(400);
+  });
+});
+
+describe('настройки двери', () => {
+  it('умолчание: пропуск живёт тридцать дней — ровно столько, сколько всегда', async () => {
+    const { res: out } = await signIn(await device());
+    expect(out.cookies[IDENTITY_COOKIE].opts.maxAge).toBe(30 * 24 * 60 * 60 * 1000);
+  });
+
+  it('пропуск живёт столько, сколько сказано в настройке', async () => {
+    await tune(settings, 'access.sessionTtlDays', 2);
+    const { res: out } = await signIn(await device());
+    expect(out.cookies[IDENTITY_COOKIE].opts.maxAge).toBe(2 * 24 * 60 * 60 * 1000);
+    // Срок уезжает не только в куку, но и внутрь самого пропуска: иначе
+    // браузер забыл бы её вовремя, а сервер принимал бы старую ещё месяц.
+    const value = out.cookies[IDENTITY_COOKIE].value;
+    expect(Number(value.split('.')[2]) - Date.now()).toBeLessThanOrEqual(2 * 24 * 60 * 60 * 1000);
+  });
+
+  it('закрытая дверь — 403 с причиной, а не 401', async () => {
+    // 401 отправил бы человека чинить связь и подпись. Ему надо не чинить, а
+    // попроситься внутрь, и об этом говорит отдельный код с причиной.
+    await tune(settings, 'access.identityCreation', 'closed');
+    const { res: out } = await signIn(await device());
+    expect(out.code).toBe(403);
+    expect(out.body).toEqual({ error: 'closed' });
+    expect(out.cookies[IDENTITY_COOKIE]).toBeUndefined();
+  });
+
+  it('умолчание двери никого не разворачивает', async () => {
+    const { res: out } = await signIn(await device());
+    expect(out.code).toBe(200);
+  });
+
+  it('слишком короткий ник — 400 с причиной, слишком частый — 429', async () => {
+    await tune(settings, 'people.nickMinLength', 4);
+    await tune(settings, 'people.nickChangeCooldownMinutes', 30);
+    const { cookie } = await signIn(await device());
+
+    const short = res();
+    await controller.nick(req(cookie), short, { nick: 'Ая' });
+    expect(short.code).toBe(400);
+    expect(short.body).toEqual({ error: 'too-short' });
+
+    const ok = res();
+    await controller.nick(req(cookie), ok, { nick: 'Аняя' });
+    expect(ok.body).toEqual({ nick: 'Аняя' });
+
+    // Пауза — это «подождите», а не «вы ошиблись», и клиент обязан различать
+    // их, не читая тело.
+    const soon = res();
+    await controller.nick(req(cookie), soon, { nick: 'Боряя' });
+    expect(soon.code).toBe(429);
+    expect(soon.body).toMatchObject({ error: 'cooldown' });
+    expect((soon.body as { retryInMs: number }).retryInMs).toBeGreaterThan(0);
   });
 });

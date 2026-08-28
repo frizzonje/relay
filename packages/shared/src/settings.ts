@@ -163,29 +163,30 @@ export const SETTINGS: readonly SettingSpec[] = [
     fallback: true,
     applies: 'now',
   },
+  // Дверей ровно две, потому что третьей в relay нет: приглашение здесь —
+  // гостевая ссылка в один голосовой канал, личности она не заводит и завести
+  // не может. Строка «по приглашению» отличалась бы от «закрыто» только словом,
+  // а закрывала бы ровно то же самое — то же враньё, что вид вложения «видео».
+  // Вернётся вместе с приглашениями, которые заводят личность.
   {
     key: 'access.identityCreation',
     group: 'access',
     kind: 'select',
     fallback: 'open',
     applies: 'new',
-    options: ['open', 'invite', 'closed'],
+    options: ['open', 'closed'],
   },
+  // Ноль — без предела, и это сегодняшнее поведение: связать с личностью можно
+  // сколько угодно устройств. Восемь выглядели бы недостижимыми, но у человека
+  // с девятью ключами девятый перестал бы связываться в день обновления.
   {
     key: 'access.maxDevicesPerIdentity',
     group: 'access',
     kind: 'number',
-    fallback: 8,
+    fallback: 0,
     applies: 'now',
-    min: 1,
+    min: 0,
     max: 64,
-  },
-  {
-    key: 'access.deviceApprovalRequired',
-    group: 'access',
-    kind: 'boolean',
-    fallback: true,
-    applies: 'now',
   },
   // Ровно TOKEN_TTL_MS (30 дней) — срок жизни пропуска сегодня.
   {
@@ -218,13 +219,17 @@ export const SETTINGS: readonly SettingSpec[] = [
     min: 1,
     max: 1440,
   },
+  // Ноль — без предела. Дверь сегодня считает НЕУДАЧИ за окно
+  // (`access.unlockAttempts`), а попыток в минуту не считает вовсе: поставь
+  // сюда двадцать — и общий выход в интернет, за которым сидит десяток людей,
+  // упёрся бы в предел, которого вчера не было.
   {
     key: 'access.loginRatePerMinute',
     group: 'access',
     kind: 'number',
-    fallback: 20,
+    fallback: 0,
     applies: 'now',
-    min: 1,
+    min: 0,
     max: 600,
   },
   {
@@ -482,11 +487,15 @@ export const SETTINGS: readonly SettingSpec[] = [
     fallback: true,
     applies: 'now',
   },
+  // Выключены, потому что сегодня системных строк в ленте нет вовсе: колонка
+  // `system` есть, лента её рисует, а писать в неё некому. Включённые по
+  // умолчанию, они добавили бы в чужие каналы строку, которой там не было, —
+  // это и есть «умолчание, близкое к прежнему поведению», а требуется равное.
   {
     key: 'messages.systemMessages',
     group: 'messages',
     kind: 'boolean',
-    fallback: true,
+    fallback: false,
     applies: 'now',
   },
   {

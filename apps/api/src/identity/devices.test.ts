@@ -6,6 +6,8 @@ import type { DataSource } from 'typeorm';
 import { ChannelRow, DeviceRow, MessageRow, ServerRow } from '../db/entities';
 import type { SignalingGateway } from '../gateway/signaling.gateway';
 import { resetDatabase, testDatabase } from '../db/testing';
+import type { SettingsService } from '../settings/settings.service';
+import { freshSettings, tune } from '../settings/settings.testkit';
 import { SIGN_ALGORITHM, authMessage, certificateMessage } from './crypto';
 import { DevicesController } from './devices.controller';
 import { IdentityController } from './identity.controller';
@@ -63,6 +65,7 @@ let identity: IdentityService;
 let pairing: PairingService;
 let login: IdentityController;
 let devices: DevicesController;
+let settings: SettingsService;
 let dropDevice: ReturnType<typeof vi.fn>;
 let clock: number;
 
@@ -77,9 +80,10 @@ afterAll(async () => {
 beforeEach(async () => {
   await resetDatabase(db);
   clock = Date.parse('2026-08-13T12:00:00Z');
-  identity = new IdentityService(db);
-  pairing = new PairingService(db, () => clock);
-  login = new IdentityController(identity);
+  settings = await freshSettings(db);
+  identity = new IdentityService(db, settings);
+  pairing = new PairingService(db, settings, () => clock);
+  login = new IdentityController(identity, settings);
   dropDevice = vi.fn();
   devices = new DevicesController(identity, pairing, {
     dropDevice,
@@ -515,5 +519,66 @@ describe('отзыв', () => {
 
     const alive = await identity.whoIs(stranger.identityId, stranger.deviceId);
     expect(alive.ok).toBe(true);
+  });
+});
+
+describe('сколько устройств держать — дело владельца инсталляции', () => {
+  /** Ещё одно устройство в личность донора. Возвращает ответ двери. */
+  async function attach(donor: Signed): Promise<{ out: Response & FakeRes; key: Device }> {
+    const guest = await signIn(await device());
+    return { out: await confirm(donor, await ask(guest)), key: guest.key };
+  }
+
+  it('умолчание предела не ставит: связок столько, сколько ключей', async () => {
+    // До настройки число устройств не ограничивал никто, и ноль в каталоге
+    // значит ровно это. Инсталляция, где панель не открывали, ничего не
+    // замечает — в том числе человек с девятью ключами.
+    expect(settings.get<number>('access.maxDevicesPerIdentity')).toBe(0);
+    const donor = await signIn(await device(), 'Аня');
+    for (let i = 0; i < 3; i += 1) expect((await attach(donor)).out.code).toBe(200);
+    expect(await listOf(donor)).toHaveLength(4);
+  });
+
+  it('сверх предела связка отвечает 409 — и это не «подождите»', async () => {
+    const donor = await signIn(await device(), 'Аня');
+    await tune(settings, 'access.maxDevicesPerIdentity', 2);
+
+    expect((await attach(donor)).out.code).toBe(200);
+
+    const over = await attach(donor);
+    // 409, а не 429 и не 400: код верен, подпись верна, но впустить некуда, и
+    // ждать бесполезно — надо отозвать лишнее.
+    expect(over.out.code).toBe(409);
+    expect(over.out.body).toEqual({ error: 'too-many-devices' });
+    expect(await listOf(donor)).toHaveLength(2);
+  });
+
+  it('отозванное устройство места не занимает', async () => {
+    // Иначе связка ломалась бы тем чаще, чем аккуратнее человек отзывает
+    // потерянные ключи, — то есть наказывала бы за осторожность.
+    const donor = await signIn(await device(), 'Аня');
+    await tune(settings, 'access.maxDevicesPerIdentity', 2);
+
+    const second = await attach(donor);
+    expect(second.out.code).toBe(200);
+    const back = await signIn(second.key);
+    expect((await attach(donor)).out.code).toBe(409);
+
+    await devices.revoke(req(donor.cookie), res(), { deviceId: back.deviceId });
+    expect((await attach(donor)).out.code).toBe(200);
+    // Отозванное при этом из списка не пропало: человек должен видеть, что
+    // отзыв случился.
+    expect(await listOf(donor)).toHaveLength(3);
+  });
+
+  it('предел принадлежит той личности, в которую впускают, а не новичку', async () => {
+    // Код показывает НОВИЧОК, а места считаются у донора: посчитай мы у
+    // просящего, предел не значил бы ничего — у него всегда одно устройство.
+    const anya = await signIn(await device(), 'Аня');
+    const borya = await signIn(await device(), 'Боря');
+    await tune(settings, 'access.maxDevicesPerIdentity', 1);
+
+    expect((await attach(anya)).out.code).toBe(409);
+    expect((await attach(borya)).out.code).toBe(409);
   });
 });

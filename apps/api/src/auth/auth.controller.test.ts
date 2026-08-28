@@ -1,7 +1,9 @@
 import type { Request, Response } from 'express';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { DataSource } from 'typeorm';
+import { resetDatabase, testDatabase } from '../db/testing';
 import { SettingsService } from '../settings/settings.service';
+import { freshSettings, tune } from '../settings/settings.testkit';
 import { AUTH_COOKIE, verifyToken } from './auth';
 import { AuthController } from './auth.controller';
 
@@ -10,6 +12,11 @@ import { AuthController } from './auth.controller';
  * счётчик неудач вяжется к адресу (а не к чему-то, что чистится реконнектом), и
  * успешный вход его сбрасывает — иначе человек, ошибившийся семь раз и на
  * восьмой вспомнивший пароль, запирался бы вместе с подбирающим.
+ *
+ * Счётчиков у двери с этапа C два, и они про разное: неудачи за десять минут
+ * ловят подбор, а попытки за минуту (`access.loginRatePerMinute`) ужимают поток
+ * запросов независимо от исхода. Второй по умолчанию выключен — сегодня попытки
+ * не считает никто.
  */
 
 interface FakeRes {
@@ -49,17 +56,39 @@ function req(ip = '10.0.0.1', secure = false): Request {
   return { ip, secure } as unknown as Request;
 }
 
+let db: DataSource;
+
+beforeAll(async () => {
+  db = await testDatabase();
+});
+
+afterAll(async () => {
+  await db?.destroy();
+});
+
 /**
  * Контроллер со своим счётчиком попыток. Настройки настоящие, но не
  * загруженные: без переопределений `get` отвечает умолчаниями каталога, то есть
- * ровно тем порогом, с которым relay жил всегда. База здесь не нужна и не
- * поднимается — этот файл проверяет счётчик, а не хранение.
+ * ровно тем порогом, с которым relay жил всегда. База такому сервису не нужна —
+ * он ни разу в неё не ходит.
  */
 function controller(): AuthController {
   return new AuthController(new SettingsService(undefined as unknown as DataSource));
 }
 
-beforeEach(() => {
+/**
+ * Контроллер с открытой панелью. Здесь база уже нужна: правку настройки
+ * записывает и перечитывает настоящий `SettingsService` — подделка ответила бы
+ * заданным числом на ключ, которого в каталоге может и не быть.
+ */
+async function tunedController(key: string, value: unknown): Promise<AuthController> {
+  const settings = await freshSettings(db);
+  await tune(settings, key, value);
+  return new AuthController(settings);
+}
+
+beforeEach(async () => {
+  await resetDatabase(db);
   process.env.SITE_PASSWORD = 'верный-пароль';
 });
 afterEach(() => {
@@ -140,6 +169,58 @@ describe('POST /api/login', () => {
       c.login(req('7.7.7.7'), r, { password: 'мимо' });
       expect(r.code).toBe(401);
     }
+  });
+});
+
+describe('поток запросов к двери', () => {
+  it('умолчание попыток не считает — сегодняшнее поведение', async () => {
+    // Ноль в каталоге значит «без предела», и это единственный честный
+    // вариант: настройка, включённая сама собой, заперла бы общий выход в
+    // интернет, за которым сидит десяток людей.
+    const c = controller();
+    for (let i = 0; i < 30; i++) {
+      const r = res();
+      c.login(req('5.5.5.5'), r, { password: 'верный-пароль' });
+      expect(r.body).toEqual({ ok: true });
+    }
+  });
+
+  it('сверх настроенной скорости дверь отвечает 429, не проверяя пароль', async () => {
+    const c = await tunedController('access.loginRatePerMinute', 2);
+    for (let i = 0; i < 2; i++) {
+      const r = res();
+      c.login(req('5.5.5.5'), r, { password: 'верный-пароль' });
+      expect(r.body).toEqual({ ok: true });
+    }
+    const blocked = res();
+    c.login(req('5.5.5.5'), blocked, { password: 'верный-пароль' });
+    expect(blocked.code).toBe(429);
+    // Тело своё: снаружи оба отказа 429, но «подождите минуту» и «вы перебрали
+    // пароль» чинятся по-разному, и различать их надо не по логам.
+    expect(blocked.body).toEqual({ error: 'too fast' });
+    expect(blocked.cookies[AUTH_COOKIE]).toBeUndefined();
+  });
+
+  it('считаются попытки, а не неудачи — верный пароль тоже стучит', async () => {
+    // В этом вся разница с соседним счётчиком: верный пароль, повторённый
+    // триста раз в минуту, — тоже не человек, и первый счётчик его не видит.
+    const c = await tunedController('access.loginRatePerMinute', 3);
+    for (let i = 0; i < 3; i++) c.login(req('6.6.6.6'), res(), { password: 'верный-пароль' });
+    const blocked = res();
+    c.login(req('6.6.6.6'), blocked, { password: 'мимо' });
+    expect(blocked.body).toEqual({ error: 'too fast' });
+  });
+
+  it('скорость считается по адресу — сосед стучит свободно', async () => {
+    const c = await tunedController('access.loginRatePerMinute', 1);
+    c.login(req('6.6.6.6'), res(), { password: 'верный-пароль' });
+    const mine = res();
+    c.login(req('6.6.6.6'), mine, { password: 'верный-пароль' });
+    expect(mine.code).toBe(429);
+
+    const neighbour = res();
+    c.login(req('7.7.7.7'), neighbour, { password: 'верный-пароль' });
+    expect(neighbour.body).toEqual({ ok: true });
   });
 });
 

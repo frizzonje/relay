@@ -1,6 +1,7 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, IsNull } from 'typeorm';
 import { DeviceRow, IdentityRow, MessageRow, RoleRow } from '../db/entities';
+import type { SettingsService } from '../settings/settings.service';
 import {
   certificateMessage,
   fingerprint,
@@ -53,7 +54,13 @@ export type PairFailure =
   /** Сертификат не сошёлся с ключом донора. */
   | 'bad-signature'
   /** Код введён на том же устройстве, которое его показало. */
-  | 'self';
+  | 'self'
+  /**
+   * У личности уже столько устройств, сколько разрешил владелец
+   * (`access.maxDevicesPerIdentity`). Отказ свой, а не общий: чинится он
+   * отзывом лишнего устройства, а не новым кодом.
+   */
+  | 'too-many-devices';
 
 export type PairResult<T> = ({ ok: true } & T) | { ok: false; reason: PairFailure };
 
@@ -87,6 +94,7 @@ export class PairingService {
 
   constructor(
     private readonly db: DataSource,
+    private readonly settings: SettingsService,
     @Optional() private readonly now: () => number = Date.now,
   ) {}
 
@@ -166,6 +174,12 @@ export class PairingService {
     if (!(await this.stillborn(waiting.identityId, waiting.deviceId)))
       return { ok: false, reason: 'has-history' };
 
+    // Сколько устройств держать — дело владельца инсталляции. Спрашиваем здесь,
+    // а не при показе кода: код показывает НОВИЧОК, а предел принадлежит той
+    // личности, в которую его впускают, и до подтверждения она неизвестна.
+    if (!(await this.roomForDevice(donor.identityId)))
+      return { ok: false, reason: 'too-many-devices' };
+
     const guest = waiting.identityId;
     await this.db.transaction(async (m) => {
       // Порядок один и не переставляется: устройство уходит из личности до
@@ -224,6 +238,24 @@ export class PairingService {
     if (await this.db.getRepository(MessageRow).countBy({ authorIdentityId: identityId }))
       return false;
     return !(await this.db.getRepository(RoleRow).countBy({ identityId }));
+  }
+
+  /**
+   * Влезет ли в личность ещё одно устройство. Ноль — предела нет, и это
+   * сегодняшнее поведение: до настройки число устройств не ограничивал никто.
+   *
+   * Считаем только действующие: отозванное устройство остаётся строкой в
+   * списке навсегда (это факт, и человек должен его видеть), но занимать место
+   * живого оно не должно — иначе связка ломалась бы тем чаще, чем аккуратнее
+   * человек отзывает потерянные ключи.
+   */
+  private async roomForDevice(identityId: string): Promise<boolean> {
+    const limit = this.settings.get<number>('access.maxDevicesPerIdentity');
+    if (limit <= 0) return true;
+    const live = await this.db
+      .getRepository(DeviceRow)
+      .countBy({ identityId, revokedAt: IsNull() });
+    return live < limit;
   }
 
   private freeCode(): string {

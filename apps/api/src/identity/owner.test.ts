@@ -6,6 +6,7 @@ import type { DataSource } from 'typeorm';
 import { OwnerClaimRow, RoleRow } from '../db/entities';
 import type { SignalingGateway } from '../gateway/signaling.gateway';
 import { resetDatabase, testDatabase } from '../db/testing';
+import { freshSettings } from '../settings/settings.testkit';
 import { SIGN_ALGORITHM, authMessage, hashOwnerToken, isOwnerToken } from './crypto';
 import { IdentityController } from './identity.controller';
 import { IdentityService } from './identity.service';
@@ -85,9 +86,10 @@ afterAll(async () => {
 beforeEach(async () => {
   await resetDatabase(db);
   clock = Date.parse('2026-08-14T09:00:00Z');
-  identity = new IdentityService(db);
+  const settings = await freshSettings(db);
+  identity = new IdentityService(db, settings);
   owner = new OwnerService(db, () => clock);
-  login = new IdentityController(identity);
+  login = new IdentityController(identity, settings);
   controller = new OwnerController(identity, owner, gateway);
   synced = 0;
   vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {});

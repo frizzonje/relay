@@ -1,4 +1,4 @@
-import type { AppSocket } from './socket-data';
+import type { AppServer, AppSocket } from './socket-data';
 import type { ChatSessions } from './chat-sessions';
 import type { ChatService } from './chat.service';
 import type { Moderation } from './moderation';
@@ -27,6 +27,7 @@ export class ModerationHandlers {
     private readonly roles: RolesService,
     private readonly perimeter: Perimeter,
     private readonly moderation: Moderation,
+    private readonly serverOf: () => AppServer,
   ) {}
 
   /**
@@ -55,20 +56,46 @@ export class ModerationHandlers {
     if (!channel || !this.moderation.mayModerate(client, channel))
       return { ok: false, error: 'forbidden' };
 
+    // Владелец инсталляции мог забрать это право у создателей серверов
+    // (`moderation.serverOwnersCanBan`). Проверка здесь, а не в `mayModerate`:
+    // удаление чужой реплики и бан — разная власть, и выключать их одним
+    // флажком значило бы оставить сервер без хозяина вовсе.
+    if (!this.moderation.mayBan(client)) return { ok: false, error: 'forbidden' };
+
     const everywhere = payload?.everywhere === true;
     // Бан на всю инсталляцию — только владельцу: у создателя сервера власти
     // ровно на свой сервер, и расширять её нечем.
     if (everywhere && !this.perimeter.isOwner(client)) return { ok: false, error: 'forbidden' };
 
     const id = str(payload?.id);
-    const authorId = id ? await this.chat.authorOf(this.chat.slug(room), id) : null;
+    const slug = this.chat.slug(room);
+    const authorId = id ? await this.chat.authorOf(slug, id) : null;
     if (!authorId) return { ok: false, error: 'not-found' };
+    // Имя берём ДО бана: строку в ленту пишем от лица канала, а к этому моменту
+    // сообщение ещё на месте и его подпись — то самое имя, которое видели все.
+    const target = await this.chat.findAny(slug, id);
 
     const scope = everywhere ? null : channel.serverId;
     const done = await this.roles.ban(authorId, scope, me.id);
     if (!done.ok) return { ok: false, error: done.reason === 'unknown' ? 'unknown' : 'forbidden' };
     this.moderation.applyBan(authorId, scope);
+    await this.announceBan(room, slug, target?.name);
     return { ok: true };
+  }
+
+  /**
+   * Строка в ленте о том, что здесь кого-то забанили. Пишется, только если
+   * владелец включил системные реплики (`messages.systemMessages`) — решает это
+   * `ChatService.addSystem`, а не этот код: гейт должен быть один на все будущие
+   * системные строки.
+   *
+   * Забаненный узнаёт о бане в любом случае — событием `banned` или
+   * `chat-closed`. Настройка решает только то, останется ли след в канале.
+   */
+  private async announceBan(room: string, slug: string, name: string | undefined): Promise<void> {
+    if (!name) return;
+    const line = await this.chat.addSystem(slug, `${name} was banned`);
+    if (line) this.serverOf().to(room).emit('chat', line);
   }
 
   /** Разбанить по отпечатку — той же ручкой, которой забаненный показан. */

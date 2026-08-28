@@ -117,8 +117,16 @@ export function hashOwnerToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
-/** Ник к показываемому виду: свободный и не уникальный, но не любой. */
-export function sanitizeNick(raw: unknown): string {
+/**
+ * Ник к показываемому виду: свободный и не уникальный, но не любой.
+ *
+ * Длину принимаем параметром, а не читаем здесь настройку: модуль чистый —
+ * его зовут и вход, и переименование, и тест, — а `NICK_MAX` остаётся
+ * умолчанием, то есть тем, чем длина была всегда. Владелец ужимает её ключом
+ * `people.nickMaxLength`, и передать его обязан тот, кто знает настройки
+ * (`identity.service.ts`).
+ */
+export function sanitizeNick(raw: unknown, max: number = NICK_MAX): string {
   if (typeof raw !== 'string') return '';
   return raw
     .replace(/^@+/, '')
@@ -127,7 +135,7 @@ export function sanitizeNick(raw: unknown): string {
     .replace(/[^\p{L}\p{N}_-]/gu, '')
     .replace(/-{2,}/g, '-')
     .replace(/^-+/, '')
-    .slice(0, NICK_MAX);
+    .slice(0, max);
 }
 
 /** Имя устройства длиннее этого в списке не помещается. */

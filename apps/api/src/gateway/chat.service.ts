@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { AttachmentRow, IdentityRow, MessageRow, PinRow } from '../db/entities';
 import type { Attachment } from '../uploads';
+import type { SettingsService } from '../settings/settings.service';
 import {
   LIMIT,
   type ChatMessage,
@@ -175,6 +176,15 @@ export interface NewMessage {
   mentions?: MentionRef[];
 }
 
+/**
+ * Имя автора у системной строки. Константа, а не пустое поле: колонка
+ * `author_name` не терпит пустоты, а главное — узнавать системную строку по
+ * ИМЕНИ нельзя ни клиенту, ни серверу. Признак один — колонка `system`;
+ * положись экран на имя, и человек, назвавшийся так же, подделал бы системное
+ * сообщение.
+ */
+export const SYSTEM_AUTHOR = 'system';
+
 /** Страница ленты: реплики по возрастанию времени и есть ли что-то выше. */
 export interface Page {
   messages: ChatMessage[];
@@ -269,6 +279,7 @@ export class ChatService implements OnModuleInit {
     private readonly db: DataSource,
     private readonly registry: RegistryService,
     private readonly dm: DmService,
+    private readonly settings: SettingsService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -480,6 +491,55 @@ export class ChatService implements OnModuleInit {
     // Читаем записанное обратно, а не собираем ответ из того, что отправили:
     // время ставила база, вложение лежит отдельной строкой, и второй сборкой
     // тех же данных руками мы бы завели второе место, где они могут разойтись.
+    const saved = await this.one(slug, id, true);
+    if (saved) this.lastActivity.set(channelId, saved.ts);
+    return saved;
+  }
+
+  /**
+   * Системная строка ленты — та, что рисуется по центру курсивом и никому не
+   * принадлежит.
+   *
+   * Пишется ТОЛЬКО когда владелец этого захотел (`messages.systemMessages`), и
+   * умолчание — «не писать»: до появления настройки таких строк в relay не
+   * возникало вовсе, и включённые по умолчанию они дописали бы в чужие каналы
+   * то, чего там не было. Возвращает `undefined`, когда писать не велено, —
+   * зовущий на это и смотрит.
+   *
+   * Само событие настройка не отменяет: выгнанный узнаёт о бане в любом случае
+   * (`banned`, `chat-closed`), просто в ленте не остаётся строки.
+   *
+   * Имя автора — константа `SYSTEM_AUTHOR`, и узнавать системную строку по ней
+   * НЕЛЬЗЯ: человек с таким ником подделал бы системное сообщение. Признак —
+   * колонка `system`, она же уезжает клиенту (см. `toMessage`).
+   */
+  async addSystem(slug: string, text: string): Promise<ChatMessage | undefined> {
+    if (!this.settings.get<boolean>('messages.systemMessages')) return undefined;
+    const channelId = this.channelId(slug);
+    if (!channelId) return undefined;
+
+    const id = randomUUID();
+    await this.db
+      .getRepository(MessageRow)
+      .createQueryBuilder()
+      .insert()
+      .values({
+        id,
+        channelId,
+        authorName: SYSTEM_AUTHOR,
+        text,
+        system: true,
+        spoiler: false,
+        reactions: {},
+        attachmentId: null,
+        replyTo: null,
+        mentions: [],
+        editedAt: null,
+        // Личности у системной строки нет — и лица рядом с ней тоже.
+        authorIdentityId: null,
+      })
+      .execute();
+
     const saved = await this.one(slug, id, true);
     if (saved) this.lastActivity.set(channelId, saved.ts);
     return saved;

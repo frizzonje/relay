@@ -8,6 +8,7 @@ import { OwnerController } from './identity/owner.controller';
 import { OwnerService } from './identity/owner.service';
 import { PairingService } from './identity/pairing.service';
 import { PrefsService } from './identity/prefs.service';
+import { PruneService } from './identity/prune.service';
 import { ReadsService } from './identity/reads.service';
 import { RolesService } from './identity/roles.service';
 import { ConfigController } from './config.controller';
@@ -60,6 +61,7 @@ export class AppModule {
         RegistryService,
         MetricsService,
         RetentionService,
+        PruneService,
         SettingsService,
         UploadsService,
       ],

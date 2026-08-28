@@ -163,6 +163,27 @@ describe('переписка после входа', () => {
 
     expect((yours.last('chat') as { text: string }).text).toBe('привет');
   });
+
+  it('тихий час новичка беседы не трогает', async () => {
+    // Ответить тому, кто сам тебе написал, — не тот поток, от которого этот час
+    // защищает; дверь в переписку сторожит своё правило (`direct.whoCanStart`).
+    await tune(settings, 'access.newIdentityQuietMinutes', 30);
+    const me = await personCookie('я');
+    const you = await personCookie('ты');
+    const mine = await connectAs(gw, server, me.cookie);
+    const yours = await connectAs(gw, server, you.cookie);
+    const opened = await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint });
+    const slug = opened.ok ? opened.conversation.slug : '';
+    await gw.handleDmJoin(asSocket(mine), { slug });
+    await gw.handleDmJoin(asSocket(yours), { slug });
+    yours.clear();
+    mine.clear();
+
+    await gw.handleChatMessage(asSocket(mine), { text: 'привет' });
+
+    expect((yours.last('chat') as { text: string }).text).toBe('привет');
+    expect(mine.got('chat-refused')).toBe(false);
+  });
 });
 
 describe('список и люди', () => {

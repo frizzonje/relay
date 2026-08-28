@@ -1,4 +1,4 @@
-import { Body, Controller, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, Logger, Post, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { SettingsService } from '../settings/settings.service';
 import { AUTH_COOKIE, authEnabled, issueToken, passwordMatches } from './auth';
@@ -9,6 +9,20 @@ import { AUTH_COOKIE, authEnabled, issueToken, passwordMatches } from './auth';
 // ошибиться паролем» — один вопрос, и два разных ответа на него в одной
 // инсталляции означали бы, что одна из двух дверей настройке не подчиняется.
 const ATTEMPT_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * Окно второго счётчика — того, что считает ПОПЫТКИ, а не неудачи
+ * (`access.loginRatePerMinute`). Минута, потому что настройка названа «в
+ * минуту»: считай мы за десять, поле обещало бы одно, а делало другое.
+ *
+ * Счётчиков два, и это не дублирование. Первый спрашивает «сколько раз здесь
+ * ошиблись паролем» и молчит, пока пароль верен, — им ловят подбор. Второй
+ * спрашивает «сколько раз отсюда вообще стучали» и не смотрит на исход — им
+ * ужимают поток запросов к двери. Умолчание второго — ноль, то есть его нет:
+ * сегодня попытки в минуту не считает никто, и настройка, включённая сама
+ * собой, заперла бы общий выход в интернет, за которым сидит десяток людей.
+ */
+const RATE_WINDOW_MS = 60 * 1000;
 
 interface AttemptEntry {
   count: number;
@@ -21,6 +35,9 @@ interface AttemptEntry {
 @Controller()
 export class AuthController {
   private readonly attempts = new Map<string, AttemptEntry>();
+  /** Попытки за минуту — отдельная карта: у неё своё окно и свой смысл. */
+  private readonly rate = new Map<string, AttemptEntry>();
+  private readonly logger = new Logger(AuthController.name);
 
   constructor(private readonly settings: SettingsService) {}
 
@@ -34,6 +51,15 @@ export class AuthController {
     const ip = req.ip ?? 'unknown';
     if (this.isRateLimited(ip)) {
       res.status(429).json({ error: 'too many attempts' });
+      return;
+    }
+    // Поток запросов к двери. Считается ДО проверки пароля и независимо от неё:
+    // верный пароль, повторённый триста раз в минуту, — это тоже не человек.
+    // Тело отказа своё: снаружи оба ответа 429, но в логе и в тесте их надо
+    // различать, иначе «подождите минуту» не отличить от «вы перебрали пароль».
+    if (this.tooFast(ip)) {
+      this.logger.warn(`вход: с ${ip} стучат чаще, чем разрешено настройкой`);
+      res.status(429).json({ error: 'too fast' });
       return;
     }
 
@@ -62,6 +88,29 @@ export class AuthController {
   logout(@Res() res: Response) {
     res.clearCookie(AUTH_COOKIE, { path: '/' });
     res.json({ ok: true });
+  }
+
+  /**
+   * Столько ли попыток в минуту, сколько разрешено. Ноль — без предела, и это
+   * умолчание: счётчик попыток появился здесь вместе с настройкой, а пока
+   * настройка не тронута, он не считает ничего.
+   */
+  private tooFast(ip: string): boolean {
+    const perMinute = this.settings.get<number>('access.loginRatePerMinute');
+    if (perMinute <= 0) return false;
+    const now = Date.now();
+    const entry = this.rate.get(ip);
+    if (!entry || now > entry.resetAt) {
+      this.rate.set(ip, { count: 1, resetAt: now + RATE_WINDOW_MS });
+      // Карта чистится здесь же: своего таймера у неё нет, а без уборки она
+      // росла бы на каждый новый адрес до конца жизни процесса.
+      if (this.rate.size > 10000) {
+        for (const [key, e] of this.rate) if (now > e.resetAt) this.rate.delete(key);
+      }
+      return false;
+    }
+    entry.count += 1;
+    return entry.count > perMinute;
   }
 
   private isRateLimited(ip: string): boolean {

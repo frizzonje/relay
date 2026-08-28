@@ -134,6 +134,7 @@ describe('константы совпадают с копией в api', () => {
       'delete-off',
       'reactions-off',
       'search-off',
+      'too-new',
     ];
     expect(reasons.map((r) => r.slice(1, -1))).toEqual(mine);
   });

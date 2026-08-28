@@ -128,13 +128,12 @@
 |---|---|---|---|
 | `access.sitePasswordSet` | secret | из `SITE_PASSWORD` | now |
 | `access.sitePasswordEnabled` | boolean | true | now |
-| `access.identityCreation` | select `open` / `invite` / `closed` | open | new |
-| `access.maxDevicesPerIdentity` | number 1…64 | 8 | now |
-| `access.deviceApprovalRequired` | boolean | true | now |
+| `access.identityCreation` | select `open` / `closed` | open | new |
+| `access.maxDevicesPerIdentity` | number 0…64 (0 — без предела) | 0 | now |
 | `access.sessionTtlDays` | number 1…365 | 30 | new |
 | `access.unlockAttempts` | number 1…50 | 8 | now |
 | `access.unlockLockoutMinutes` | number 1…1440 | 5 | now |
-| `access.loginRatePerMinute` | number 1…600 | 20 | now |
+| `access.loginRatePerMinute` | number 0…600 (0 — без предела) | 0 | now |
 | `access.newIdentityQuietMinutes` | number 0…1440 | 0 | now |
 | `access.guestsEnabled` | boolean | true | now |
 | `access.blockNewIdentities` | boolean | false | new |
@@ -179,7 +178,7 @@
 | `messages.searchEnabled` | boolean | true | now |
 | `messages.reactionsEnabled` | boolean | true | now |
 | `messages.typingIndicator` | boolean | true | now |
-| `messages.systemMessages` | boolean | true | now |
+| `messages.systemMessages` | boolean | false | now |
 | `messages.replyPreviewLength` | number 20…500 | 120 | now |
 
 ### Группа `files` — файлы
@@ -283,9 +282,9 @@
 владельца, прогнать ретенцию сейчас, подмести осиротевшие файлы, отозвать все сессии,
 выгрузить настройки в JSON, загрузить настройки из JSON, сбросить группу к умолчаниям.
 
-**Итого: 97 параметров в 12 группах + 7 действий + 4 таблицы** (люди, баны, журнал, сводка).
+**Итого: 96 параметров в 12 группах + 7 действий + 4 таблицы** (люди, баны, журнал, сводка).
 
-Проверка счётом (её же делает тест `SETTINGS.length === 97`): access 12, people 6,
+Проверка счётом (её же делает тест `SETTINGS.length === 96`): access 11, people 6,
 moderation 12, messages 10, files 9, direct 8, spaces 8, voice 12, invites 6, appearance 7,
 notifications 4, maintenance 3.
 
@@ -527,8 +526,8 @@ describe('проверка значения', () => {
     expect(validateSetting('files.allowedKinds', [1])).toEqual({ ok: false, error: 'wrong-type' });
   });
 
-  it('знает все 97 параметров каталога', () => {
-    expect(SETTINGS.length).toBe(97);
+  it('знает все 96 параметров каталога', () => {
+    expect(SETTINGS.length).toBe(96);
     expect(settingSpec('maintenance.mode')?.danger).toBe(true);
   });
 });
@@ -543,7 +542,7 @@ docker run --rm -v "$PWD":/mono -w /mono node:20-alpine sh -c 'corepack enable &
 - [ ] **Шаг 3: Реализация каталога**
 
 `packages/shared/src/settings.ts` — типы из блока «Интерфейсы» выше, затем массив `SETTINGS`
-ровно по таблицам раздела «Каталог параметров» (97 строк), затем `settingSpec`, `defaults` и
+ровно по таблицам раздела «Каталог параметров» (96 строк), затем `settingSpec`, `defaults` и
 `validateSetting`. Шапка файла объясняет, почему это данные, а не экраны:
 
 ```ts
@@ -785,10 +784,15 @@ git commit -m "feat(admin): perimeter, chat and direct messages obey the panel"
 (системные реплики) + их тесты.
 
 **Ключи (13):** `access.identityCreation`, `access.blockNewIdentities`,
-`access.deviceApprovalRequired`, `access.maxDevicesPerIdentity`, `access.sessionTtlDays`,
-`access.newIdentityQuietMinutes`, `access.loginRatePerMinute`, `people.nickMinLength`,
-`people.nickMaxLength`, `people.nickChangeCooldownMinutes`, `people.pruneInactiveDays`,
+`access.maxDevicesPerIdentity`, `access.sessionTtlDays`, `access.newIdentityQuietMinutes`,
+`access.loginRatePerMinute`, `people.nickMinLength`, `people.nickMaxLength`,
+`people.nickChangeCooldownMinutes`, `people.pruneInactiveDays`,
 `moderation.serverOwnersCanBan`, `moderation.banNotice`, `messages.systemMessages`.
+
+Четырнадцатым здесь стоял `access.deviceApprovalRequired` — он удалён из каталога вместе со
+строкой в таблице группы `access`. Подтверждение устройства в relay — это подпись донора
+своим закрытым ключом, и без неё связки не существует вовсе: «не требовать подтверждения»
+не может значить ничего. То же враньё, что вид вложения «видео» и гигабайт загрузки.
 
 - [ ] **Шаг 1: Тесты.** «Закрытая регистрация не заводит личность, но пускает заведённую»;
       «личность моложе тихого часа не пишет в общий канал, но читает»; «ник короче минимума
@@ -1151,9 +1155,9 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 
 - Владелец открывает панель из тулбара; никто другой её не открывает и не может позвать ни
   одно её событие.
-- Каждый из 97 параметров каталога ДЕЙСТВУЕТ: у него есть потребитель в коде, и это
+- Каждый из 96 параметров каталога ДЕЙСТВУЕТ: у него есть потребитель в коде, и это
   проверено тестом. Поле, которое ничего не делает, — брак этапа, а не мелочь.
-- Все 97 параметров каталога видны, правятся (кроме помеченных `env`) и переживают
+- Все 96 параметров каталога видны, правятся (кроме помеченных `env`) и переживают
   перезапуск.
 - Инсталляция, где панель не открывали, ведёт себя ровно как до этапа — тест на умолчания
   зелёный.

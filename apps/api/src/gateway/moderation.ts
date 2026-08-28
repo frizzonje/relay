@@ -4,6 +4,7 @@ import type { ChatService } from './chat.service';
 import type { Directory } from './directory';
 import type { Perimeter } from './perimeter';
 import type { RegistryService } from './registry.service';
+import type { SettingsService } from '../settings/settings.service';
 import type { VoiceSessions } from './voice-sessions';
 import { Channel, ServerEntry } from './registry';
 import { moderatedBy } from './ownership';
@@ -36,7 +37,29 @@ export class Moderation {
     private readonly voice: VoiceSessions,
     private readonly perimeter: Perimeter,
     private readonly directory: Directory,
+    private readonly settings: SettingsService,
   ) {}
+
+  /**
+   * Что владелец сказал забаненным (`moderation.banNotice`). Пустая настройка
+   * — это молчание, а не пустая строка: событие тогда уезжает ровно таким,
+   * каким уезжало до появления панели.
+   */
+  private notice(): { notice: string } | undefined {
+    const text = this.settings.get<string>('moderation.banNotice').trim();
+    return text ? { notice: text } : undefined;
+  }
+
+  /**
+   * Разрешено ли создателю сервера банить у себя
+   * (`moderation.serverOwnersCanBan`). Владельца инсталляции это не касается:
+   * настройкой, которой он разоружает сам себя, нельзя пользоваться — сняв её,
+   * он остался бы без единого способа выгнать кого угодно откуда угодно.
+   */
+  mayBan(client: AppSocket): boolean {
+    if (this.perimeter.isOwner(client)) return true;
+    return this.settings.get<boolean>('moderation.serverOwnersCanBan');
+  }
 
   /**
    * Охват, которым этому сокету позволено распоряжаться: названный сервер (если
@@ -80,14 +103,18 @@ export class Moderation {
    * реестр: остальная инсталляция для человека продолжается.
    */
   applyBan(identityId: string, serverId: string | null): void {
+    const notice = this.notice();
     for (const sock of this.perimeter.socketsOf(identityId)) {
       if (serverId === null) {
-        sock.emit('banned');
+        // Объяснение уезжает вместе с событием, а не следом за ним: сокет
+        // закрывается в этой же строке, и второго шанса что-то сказать нет.
+        if (notice) sock.emit('banned', notice);
+        else sock.emit('banned');
         sock.disconnect(true);
         continue;
       }
       this.perimeter.noteBannedFrom(sock, serverId);
-      this.evictFrom(sock, serverId);
+      this.evictFrom(sock, serverId, notice?.notice);
       sock.emit('servers', this.directory.serversFor(sock));
       sock.emit('channels', this.directory.channelsFor(sock));
     }
@@ -104,7 +131,7 @@ export class Moderation {
   }
 
   /** Выписать сокет из эфира и ленты этого сервера — там ему больше нельзя. */
-  private evictFrom(client: AppSocket, serverId: string): void {
+  private evictFrom(client: AppSocket, serverId: string, notice?: string): void {
     const voice = this.voice.roomOf(client);
     const chat = this.chats.roomOf(client);
     for (const channel of this.registry.channels) {
@@ -114,7 +141,11 @@ export class Moderation {
         this.chats.leave(client);
         // С причиной: канал на месте, ушёл человек. Без неё клиент сказал бы
         // ему «канал удалён» — и он пошёл бы искать пропажу, которой нет.
-        client.emit('chat-closed', { slug: channel.slug, reason: 'banned' });
+        client.emit('chat-closed', {
+          slug: channel.slug,
+          reason: 'banned',
+          ...(notice ? { notice } : {}),
+        });
       }
     }
   }

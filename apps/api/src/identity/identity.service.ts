@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { parseCookies } from '../auth/auth';
 import { DeviceRow, IdentityRow } from '../db/entities';
+import type { SettingsService } from '../settings/settings.service';
 import { IDENTITY_COOKIE, readSession } from './session';
 import {
   authMessage,
@@ -46,7 +47,15 @@ export type VerifyFailure =
   /** Подпись не сошлась: ключ не тот, за который себя выдают. */
   | 'bad-signature'
   /** Устройство отозвано владельцем личности. */
-  | 'revoked';
+  | 'revoked'
+  /**
+   * Новых личностей инсталляция не заводит: владелец закрыл дверь
+   * (`access.identityCreation` = `closed` или `access.blockNewIdentities`).
+   * Отказ отдельный, а не общий 401: уже заведённая личность с этим ключом
+   * входит как ни в чём не бывало, и путать эти два ответа значит послать
+   * человека чинить связь вместо того, чтобы попросить его впустить.
+   */
+  | 'closed';
 
 export type VerifyResult =
   | { ok: true; identity: IdentityRow; device: DeviceRow; created: boolean }
@@ -63,6 +72,13 @@ export interface Speaker {
   nick: string;
   fingerprint: string;
   deviceId: string;
+  /**
+   * Когда личность завелась, миллисекундами. Нужен ровно одному: тихому часу
+   * новичка (`access.newIdentityQuietMinutes`) — тому месту, где сокет решает,
+   * можно ли уже говорить. Держать возраст на сокете дешевле, чем спрашивать
+   * базу на каждую реплику, а измениться он не может.
+   */
+  createdAt: number;
 }
 
 /**
@@ -83,6 +99,15 @@ export interface DeviceView {
   root: boolean;
 }
 
+/**
+ * Чем кончилась смена имени. Причина уезжает человеку ответом контроллера:
+ * молчаливый отказ здесь означал бы поле ввода, которое «просто не работает».
+ */
+export type RenameResult =
+  | { ok: true; nick: string }
+  | { ok: false; reason: 'bad-nick' | 'too-short' | 'unknown' }
+  | { ok: false; reason: 'cooldown'; retryInMs: number };
+
 export interface VerifyInput {
   publicKey: unknown;
   nonce: unknown;
@@ -101,8 +126,18 @@ export class IdentityService {
   private readonly logger = new Logger('identity');
   private readonly pending = new Map<string, Pending>();
 
+  /**
+   * Когда личность переименовалась в последний раз. В памяти, а не в базе, по
+   * той же причине, что и нонсы: пауза между сменами имени ценна ровно до
+   * своего конца, а колонку под неё пришлось бы заводить миграцией ради
+   * значения, которое рестарт api может и простить. Заполняется только при
+   * ненулевой настройке — см. `rename`.
+   */
+  private readonly renamedAt = new Map<string, number>();
+
   constructor(
     private readonly db: DataSource,
+    private readonly settings: SettingsService,
     @Optional() private readonly now: () => number = Date.now,
   ) {}
 
@@ -155,7 +190,31 @@ export class IdentityService {
       return { ok: true, identity: known.identity, device: known, created: false };
     }
 
+    // Ключ незнакомый — значит сейчас родится личность, а её могли и запретить.
+    // Спрашиваем здесь, а не в контроллере: тот же путь проходят все клиенты, а
+    // проверка у двери, которую можно обойти вторым входом, — не проверка.
+    if (!this.creationAllowed()) {
+      this.logger.warn(`новая личность отклонена: заведение личностей закрыто владельцем`);
+      return { ok: false, reason: 'closed' };
+    }
+
     return this.create(input.publicKey, input.nick, input.deviceName);
+  }
+
+  /**
+   * Заводить ли новые личности. Два ключа, и они не дублируют друг друга:
+   * `identityCreation` — правило («у нас открыто / у нас закрыто»), а
+   * `blockNewIdentities` — рубильник поверх него, которым закрываются на время,
+   * не трогая правило и не забывая потом, каким оно было.
+   *
+   * Цена закрытой двери названа здесь, потому что она неочевидна: новое
+   * устройство своего же человека тоже приходит незнакомым ключом и до связки
+   * живёт отдельной личностью (см. `pairing.service.ts`). Пока дверь закрыта,
+   * второе устройство не добавить никому.
+   */
+  private creationAllowed(): boolean {
+    if (this.settings.get<boolean>('access.blockNewIdentities')) return false;
+    return this.settings.get<string>('access.identityCreation') !== 'closed';
   }
 
   /** Личность по сессии. `null` — сессия есть, а личности за ней уже нет. */
@@ -191,6 +250,7 @@ export class IdentityService {
       nick: result.identity.nick,
       fingerprint: result.identity.fingerprint,
       deviceId: result.device.id,
+      createdAt: result.identity.createdAt.getTime(),
     };
   }
 
@@ -253,14 +313,45 @@ export class IdentityService {
     return res.affected ? 'ok' : 'unknown';
   }
 
-  /** Сменить ник. Он свободный и не уникальный — сверять не с чем. */
-  async rename(identityId: string, nick: unknown): Promise<string | null> {
-    const clean = sanitizeNick(nick);
-    if (!clean) return null;
+  /**
+   * Сменить ник. Он свободный и не уникальный — сверять не с чем, но длина и
+   * частота смены теперь чужие: их задаёт владелец инсталляции.
+   *
+   * Отказ называет причину, а не отдаёт пустоту: «так нельзя назваться» и
+   * «слишком часто» человек чинит по-разному, и один общий отказ отправил бы
+   * половину из них подбирать буквы там, где надо просто подождать.
+   */
+  async rename(identityId: string, nick: unknown): Promise<RenameResult> {
+    const clean = sanitizeNick(nick, this.nickMax());
+    if (!clean) return { ok: false, reason: 'bad-nick' };
+    if (clean.length < this.settings.get<number>('people.nickMinLength'))
+      return { ok: false, reason: 'too-short' };
+
+    // Пауза между переименованиями. Умолчание — ноль, то есть её нет и не было.
+    const cooldownMs = this.settings.get<number>('people.nickChangeCooldownMinutes') * 60_000;
+    if (cooldownMs > 0) {
+      const since = this.renamedAt.get(identityId);
+      if (since !== undefined && this.now() - since < cooldownMs)
+        return { ok: false, reason: 'cooldown', retryInMs: cooldownMs - (this.now() - since) };
+    }
+
     const res = await this.db
       .getRepository(IdentityRow)
       .update({ id: identityId }, { nick: clean });
-    return res.affected ? clean : null;
+    if (!res.affected) return { ok: false, reason: 'unknown' };
+    // Помним только тогда, когда пауза кому-то нужна: при нулевой настройке
+    // карта осталась бы записной книжкой всех переименований инсталляции.
+    if (cooldownMs > 0) this.renamedAt.set(identityId, this.now());
+    return { ok: true, nick: clean };
+  }
+
+  /**
+   * Докуда режется ник. Читают его двое — вход, где имя приходит впервые, и
+   * переименование, — и обоим нужно одно число: разойдись они, человек не смог
+   * бы переименоваться в то имя, под которым вошёл.
+   */
+  private nickMax(): number {
+    return this.settings.get<number>('people.nickMaxLength');
   }
 
   private async create(
@@ -276,7 +367,7 @@ export class IdentityService {
       // Ник спрашивает первый экран, но обойтись без него сервер обязан:
       // клиент бывает не наш, а личность без имени — это пустое место в ленте.
       // Отпечаток в этой роли честнее выдумки: он и так показан рядом.
-      nick: sanitizeNick(nick) || print.slice(0, 4),
+      nick: this.nickFor(nick, print),
       createdAt: new Date(),
       lastSeenAt: null,
     };
@@ -305,6 +396,20 @@ export class IdentityService {
 
     this.logger.log(`новая личность ${print} («${identity.nick}»)`);
     return { ok: true, identity, device, created: true };
+  }
+
+  /**
+   * Имя новорождённой личности. Короткое имя не отвергаем, а заменяем
+   * отпечатком: вход не место для препирательств о буквах — клиент бывает не
+   * наш, и остаться без личности из-за имени человек не должен. Хвост
+   * отпечатка берём не короче минимума, иначе сервер сам нарушил бы правило,
+   * которое только что установил.
+   */
+  private nickFor(nick: unknown, print: string): string {
+    const min = this.settings.get<number>('people.nickMinLength');
+    const clean = sanitizeNick(nick, this.nickMax());
+    if (clean.length >= min) return clean;
+    return print.slice(0, Math.max(4, Math.min(min, this.nickMax())));
   }
 
   /**

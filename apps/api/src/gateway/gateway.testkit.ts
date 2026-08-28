@@ -172,19 +172,19 @@ export async function makeGateway(saved: PersistedRegistry = {}) {
   await registry.onModuleInit();
   const dmService = new DmService(db);
   await dmService.onModuleInit();
-  const chat = new ChatService(db, registry, dmService);
-  await chat.onModuleInit();
-  const identities = new IdentityService(db);
-  const owner = new OwnerService(db);
-  const roles = new RolesService(db);
-  const reads = new ReadsService(db);
-  const prefs = new PrefsService(db);
   // Настройки настоящие и на той же базе. Таблица после `resetDatabase` пуста,
   // то есть это «инсталляция, где панель не открывали ни разу»: каждый ответ —
   // умолчание каталога, равное поведению relay до этапа C. Тесту, который
   // ничего не настраивал, разницы не видно, и в этом весь смысл.
   const settings = new SettingsService(db);
   await settings.onModuleInit();
+  const chat = new ChatService(db, registry, dmService, settings);
+  await chat.onModuleInit();
+  const identities = new IdentityService(db, settings);
+  const owner = new OwnerService(db);
+  const roles = new RolesService(db);
+  const reads = new ReadsService(db);
+  const prefs = new PrefsService(db);
   const gw = new SignalingGateway(
     uploads as unknown as UploadsService,
     chat,
@@ -223,6 +223,10 @@ export async function makeGateway(saved: PersistedRegistry = {}) {
  */
 export async function personCookie(
   nick: string,
+  // Когда эта личность завелась. Нужно ровно тихому часу новичка: он считает
+  // возраст, и «давно здесь» иначе нечем изобразить — часы у стенда идут только
+  // вперёд, а таймеры у него фальшивые.
+  opts: { born?: Date } = {},
 ): Promise<{ cookie: string; fingerprint: string; identityId: string }> {
   const id = randomUUID();
   const deviceId = randomUUID();
@@ -233,7 +237,7 @@ export async function personCookie(
     publicKey: key,
     fingerprint,
     nick,
-    createdAt: new Date(),
+    createdAt: opts.born ?? new Date(),
     lastSeenAt: null,
   });
   await db.getRepository(DeviceRow).insert({
@@ -312,22 +316,9 @@ export function settle() {
 
 // ── Готовые ходы, которые повторяются во многих файлах ────────────────────
 
-/**
- * Кем тест подписывает правку настройки. В жизни это личность владельца; здесь
- * достаточно её вида — колонка хранит uuid и ничего о нём не спрашивает, а
- * проверяем мы действие параметра, а не авторство.
- */
-const PANEL_ACTOR = '00000000-0000-4000-8000-000000000001';
-
-/**
- * Открыть панель и поменять параметр. Отказ поднимается исключением НАРОЧНО:
- * опечатка в ключе иначе прошла бы тихо, тест остался бы зелёным и проверял бы
- * поведение с умолчанием — то есть ровно ничего.
- */
-export async function tune(settings: SettingsService, key: string, value: unknown): Promise<void> {
-  const res = await settings.set(key, value, PANEL_ACTOR);
-  if (!res.ok) throw new Error(`настройку ${key} не приняли: ${res.error}`);
-}
+// Правку настройки открывает общий стенд настроек: им же пользуются тесты
+// личностей и двери, а две одинаковые `tune` разошлись бы в первый же день.
+export { tune } from '../settings/settings.testkit';
 
 /** Сделать человека владельцем инсталляции — тем же путём, что и ссылка. */
 export async function makeOwner(owner: OwnerService, identityId: string): Promise<void> {

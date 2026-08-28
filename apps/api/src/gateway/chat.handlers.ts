@@ -109,6 +109,22 @@ export class ChatHandlers {
     return this.settings.get<boolean>('moderation.readOnlyMode');
   }
 
+  /**
+   * Тихий час новичка (`access.newIdentityQuietMinutes`): личность моложе его
+   * читает канал, но ещё не пишет. Умолчание — ноль, то есть никакого часа: до
+   * настройки первая реплика уходила через секунду после первого входа.
+   *
+   * Гость по инвайту сюда не доходит вовсе (его отсекают выше), а личности у
+   * него и нет — считать возраст было бы нечему.
+   */
+  private tooNew(client: AppSocket): boolean {
+    const minutes = this.settings.get<number>('access.newIdentityQuietMinutes');
+    if (minutes <= 0) return false;
+    const born = this.perimeter.speaker(client)?.createdAt;
+    if (born === undefined) return false;
+    return Date.now() - born < minutes * 60_000;
+  }
+
   /** Потолок реплики. Умолчание равно `LIMIT.message` — тому, что было всегда. */
   private textLimit(): number {
     return this.settings.get<number>('messages.maxLength');
@@ -356,6 +372,11 @@ export class ChatHandlers {
     // видит ленту и слышит эфир — просто сказанное не принимается, и он об
     // этом узнаёт.
     if (this.readOnly()) return void this.refuse(client, 'read-only');
+    // Тихий час — про общие каналы. Беседу он не трогает: ответить тому, кто
+    // сам тебе написал, — не тот поток, от которого этот час защищает, а дверь
+    // в переписку сторожит своё правило (`direct.whoCanStart`).
+    if (!this.dm.isDm(this.chat.slug(room)) && this.tooNew(client))
+      return void this.refuse(client, 'too-new');
     // Свой бакет реплик — тот, которым владелец ужимает разговор. Общий заслон
     // от флуда уже отработал строкой выше и, в отличие от этого, молчит:
     // человек, упёршийся в НАСТРОЕННЫЙ предел, обязан узнать, во что упёрся.

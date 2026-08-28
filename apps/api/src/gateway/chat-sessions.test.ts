@@ -665,3 +665,58 @@ describe('настройки ленты', () => {
     expect(pins).toMatchObject({ ok: true, pins: [expect.objectContaining({ text: 'первое' })] });
   });
 });
+
+describe('тихий час новичка', () => {
+  /** Новичок и старожил в общем канале. */
+  async function pair(minutes?: number) {
+    const { gw, server, settings } = await makeGateway();
+    if (minutes !== undefined) await tune(settings, 'access.newIdentityQuietMinutes', minutes);
+    const newbie = await personCookie('Новенький');
+    const old = await personCookie('Старожил', { born: new Date(Date.now() - 7 * 86_400_000) });
+    const n = await connectAs(gw, server, newbie.cookie, { id: 'n' });
+    const o = await connectAs(gw, server, old.cookie, { id: 'o' });
+    await gw.handleChatJoin(asSocket(n), { room: 'obshchii', name: 'Новенький' });
+    await gw.handleChatJoin(asSocket(o), { room: 'obshchii', name: 'Старожил' });
+    server.clearAll();
+    return { gw, server, settings, n, o, newbie, old };
+  }
+
+  it('умолчание — нуля минут: первая реплика уходит сразу, как и вчера', async () => {
+    const { gw, settings, n, o } = await pair();
+    expect(settings.get<number>('access.newIdentityQuietMinutes')).toBe(0);
+    await gw.handleChatMessage(asSocket(n), { text: 'здрасьте' });
+    expect(o.got('chat')).toBe(true);
+    expect(n.got('chat-refused')).toBe(false);
+  });
+
+  it('личность моложе тихого часа не пишет в общий канал, но читает', async () => {
+    const { gw, n, o } = await pair(30);
+
+    await gw.handleChatMessage(asSocket(n), { text: 'здрасьте' });
+    expect(o.got('chat')).toBe(false);
+    expect(n.last('chat-refused')).toEqual({ reason: 'too-new' });
+    // Молчание — не изгнание: сокет жив, комната та же, лента перед глазами.
+    expect(n.disconnected).toBe(false);
+    await gw.handleChatJoin(asSocket(n), { room: 'obshchii', name: 'Новенький' });
+    expect(n.last('chat-history')).toMatchObject({ slug: 'obshchii' });
+  });
+
+  it('старожила тихий час не касается', async () => {
+    const { gw, n, o } = await pair(30);
+    await gw.handleChatMessage(asSocket(o), { text: 'а я давно тут' });
+    expect(n.got('chat')).toBe(true);
+    expect(o.got('chat-refused')).toBe(false);
+  });
+
+  it('без личности считать нечего — час её не ловит', async () => {
+    // Гость по инвайту сюда не доходит вовсе (его отсекают выше), а у клиента
+    // без личности возраста нет: молчаливый отказ здесь был бы отказом всем.
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'access.newIdentityQuietMinutes', 30);
+    const anon = connect(gw, server, { id: 'x', clientId: 'устройство' });
+    await gw.handleChatJoin(asSocket(anon), { room: 'obshchii', name: 'Некто' });
+    await gw.handleChatMessage(asSocket(anon), { text: 'здрасьте' });
+    expect(anon.got('chat-refused')).toBe(false);
+    expect(anon.got('chat')).toBe(true);
+  });
+});

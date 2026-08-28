@@ -563,10 +563,23 @@ export type ChatRefusal =
   | 'edit-window'
   | 'delete-off'
   | 'reactions-off'
-  | 'search-off';
+  | 'search-off'
+  | 'too-new';
 
 export interface ChatRefusedRelay {
   reason: ChatRefusal;
+}
+
+/**
+ * Тебя забанили. Тело появилось у события, у которого его не было: владелец
+ * может объяснить причину словами (`moderation.banNotice`), и объяснение
+ * обязано доехать до того, кого выгнали, — иначе он узнаёт только факт.
+ *
+ * Поле необязательное, и пустой текст настройки НЕ уезжает пустой строкой:
+ * событие остаётся ровно таким, каким было, пока владелец ничего не написал.
+ */
+export interface BannedRelay {
+  notice?: string;
 }
 
 /**

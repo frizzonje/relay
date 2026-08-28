@@ -245,6 +245,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.voice,
     this.perimeter,
     this.directory,
+    this.settings,
   );
 
   /** Обработчики текстового канала: лента, история, поиск, реплики. */
@@ -308,6 +309,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.roles,
     this.perimeter,
     this.moderation,
+    () => this.server,
   );
 
   /** Инвайт-ссылки: выдать и выгнать по ней пришедшего. */

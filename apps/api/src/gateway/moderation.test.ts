@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { asSocket } from './testkit';
+import { asSocket, type FakeSocket } from './testkit';
+import type { SignalingGateway } from './signaling.gateway';
 import {
   MAIN,
   connect,
@@ -11,6 +12,7 @@ import {
   personCookie,
   say,
   slugOf,
+  tune,
   useGatewayStand,
 } from './gateway.testkit';
 
@@ -304,5 +306,129 @@ describe('бан', () => {
     expect(a.got('chat-deleted')).toBe(false);
     await gw.handleChatDelete(asSocket(a), { id: mine });
     expect(a.last('chat-deleted')).toEqual({ id: mine });
+  });
+});
+
+describe('настройки модерации', () => {
+  /** Сколько системных строк в ленте канала — так, как их увидит вошедший. */
+  async function systemLines(gw: SignalingGateway, sock: FakeSocket): Promise<number> {
+    await gw.handleChatJoin(asSocket(sock), { room: slugOf('болталка') });
+    const history = sock.last('chat-history') as { messages: { system?: boolean }[] };
+    return history.messages.filter((m) => m.system).length;
+  }
+
+  /** Свой сервер, чужая реплика в нём и хозяин, готовый банить. */
+  async function stand() {
+    const { gw, server, settings, owner, roles } = await makeGateway();
+    const host = await personCookie('Хозяйка');
+    const guest = await personCookie('Гость');
+    const h = await connectAs(gw, server, host.cookie, { id: 'h' });
+    await ownServer(gw, h);
+    const g = await connectAs(gw, server, guest.cookie, { id: 'g' });
+    const id = await say(gw, g, slugOf('болталка'), 'привет');
+    await gw.handleChatJoin(asSocket(h), { room: slugOf('болталка') });
+    server.clearAll();
+    return { gw, server, settings, owner, roles, h, g, id, host, guest };
+  }
+
+  it('умолчание оставляет право за создателем сервера', async () => {
+    const { gw, settings, h, id } = await stand();
+    expect(settings.get<boolean>('moderation.serverOwnersCanBan')).toBe(true);
+    expect(await gw.handleModerationBan(asSocket(h), { id })).toEqual({ ok: true });
+  });
+
+  it('владелец сервера банит, только когда это разрешено', async () => {
+    const { gw, settings, h, id, guest, roles } = await stand();
+    await tune(settings, 'moderation.serverOwnersCanBan', false);
+
+    expect(await gw.handleModerationBan(asSocket(h), { id })).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+    expect((await roles.rightsOf(guest.identityId)).banned).toBe(false);
+  });
+
+  it('владельца инсталляции этот запрет не разоружает', async () => {
+    // Настройкой, которой он остаётся без единого способа выгнать кого угодно
+    // откуда угодно, пользоваться нельзя.
+    const { gw, server, settings, owner, roles, guest } = await stand();
+    await tune(settings, 'moderation.serverOwnersCanBan', false);
+    const boss = await personCookie('Хозяин');
+    await makeOwner(owner, boss.identityId);
+    const b = await connectAs(gw, server, boss.cookie, { id: 'b' });
+    const id = await say(gw, b, 'obshchii', 'слово');
+    const said = await say(
+      gw,
+      await connectAs(gw, server, guest.cookie, { id: 'g2' }),
+      'obshchii',
+      'и я тут',
+    );
+    await gw.handleChatJoin(asSocket(b), { room: 'obshchii' });
+
+    expect(await gw.handleModerationBan(asSocket(b), { id: said, everywhere: true })).toEqual({
+      ok: true,
+    });
+    expect((await roles.rightsOf(guest.identityId)).banned).toBe(true);
+    expect(id).toBeTruthy();
+  });
+
+  it('умолчание объяснения — молчание: событие приходит таким же, как всегда', async () => {
+    const { gw, settings, h, g, id } = await stand();
+    expect(settings.get<string>('moderation.banNotice')).toBe('');
+    await gw.handleModerationBan(asSocket(h), { id });
+    // Пустая настройка НЕ уезжает пустой строкой: поля просто нет.
+    expect(g.last('chat-closed')).toEqual({ slug: slugOf('болталка'), reason: 'banned' });
+  });
+
+  it('текст владельца доходит до выгнанного с сервера', async () => {
+    const { gw, settings, h, g, id } = await stand();
+    await tune(settings, 'moderation.banNotice', 'правила висят в закрепе');
+    await gw.handleModerationBan(asSocket(h), { id });
+    expect(g.last('chat-closed')).toEqual({
+      slug: slugOf('болталка'),
+      reason: 'banned',
+      notice: 'правила висят в закрепе',
+    });
+  });
+
+  it('текст владельца доходит и до забаненного на всю инсталляцию', async () => {
+    const { gw, server, settings, owner, guest } = await stand();
+    await tune(settings, 'moderation.banNotice', 'правила висят в закрепе');
+    const boss = await personCookie('Хозяин');
+    await makeOwner(owner, boss.identityId);
+    const b = await connectAs(gw, server, boss.cookie, { id: 'b' });
+    const g2 = await connectAs(gw, server, guest.cookie, { id: 'g2' });
+    const said = await say(gw, g2, 'obshchii', 'и я тут');
+    await gw.handleChatJoin(asSocket(b), { room: 'obshchii' });
+
+    expect(await gw.handleModerationBan(asSocket(b), { id: said, everywhere: true })).toEqual({
+      ok: true,
+    });
+    // Объяснение уезжает вместе с событием, а не следом: сокет закрывается в
+    // той же строке, и второго шанса что-то сказать нет.
+    expect(g2.last('banned')).toEqual({ notice: 'правила висят в закрепе' });
+    expect(g2.disconnected).toBe(true);
+  });
+
+  it('умолчание системных реплик: в ленте следа нет, а событие доходит', async () => {
+    const { gw, settings, h, g, id } = await stand();
+    expect(settings.get<boolean>('messages.systemMessages')).toBe(false);
+    expect(await gw.handleModerationBan(asSocket(h), { id })).toEqual({ ok: true });
+
+    // Выгнанный узнал; в канале при этом ничего не дописалось.
+    expect(g.last('chat-closed')).toMatchObject({ reason: 'banned' });
+    expect(h.got('chat')).toBe(false);
+    expect(await systemLines(gw, h)).toBe(0);
+  });
+
+  it('включённые системные реплики оставляют в ленте строку о бане', async () => {
+    const { gw, settings, h, id } = await stand();
+    await tune(settings, 'messages.systemMessages', true);
+    expect(await gw.handleModerationBan(asSocket(h), { id })).toEqual({ ok: true });
+
+    // Строка от лица канала: имя автора взято ДО бана, пока подпись реплики ещё
+    // на месте, а признак системности — колонка, а не имя.
+    expect(h.last('chat')).toMatchObject({ text: 'Гость was banned', system: true });
+    expect(await systemLines(gw, h)).toBe(1);
   });
 });

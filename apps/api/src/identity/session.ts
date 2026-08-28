@@ -27,7 +27,12 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
  * громко: сессия, выданная соседом, просто не сойдётся.
  */
 
-const TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * Сколько живёт сессия по умолчанию. Ровно столько же, сколько жил пропуск на
+ * инсталляцию (`auth.ts`), и столько же обещает каталог настроек: срок
+ * задаётся `access.sessionTtlDays`, а это число — то, чем он был всегда.
+ */
+export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export const IDENTITY_COOKIE = 'relay_id';
 
@@ -42,9 +47,17 @@ function sign(payload: string): string {
   return createHmac('sha256', secret).update(payload).digest('base64url');
 }
 
-export function issueSession(s: Session): { value: string; maxAgeMs: number } {
-  const payload = `${s.identityId}.${s.deviceId}.${Date.now() + TTL_MS}`;
-  return { value: `${payload}.${sign(payload)}`, maxAgeMs: TTL_MS };
+/**
+ * Выдать сессию. Срок приходит снаружи: настройки знает контроллер, а этот
+ * модуль обязан оставаться чистым — его зовут и тест, и разбор куки, у
+ * которого настроек нет и быть не должно.
+ */
+export function issueSession(
+  s: Session,
+  ttlMs: number = SESSION_TTL_MS,
+): { value: string; maxAgeMs: number } {
+  const payload = `${s.identityId}.${s.deviceId}.${Date.now() + ttlMs}`;
+  return { value: `${payload}.${sign(payload)}`, maxAgeMs: ttlMs };
 }
 
 /** Личность из куки — или `null`. Ни исключений, ни подробностей наружу. */
