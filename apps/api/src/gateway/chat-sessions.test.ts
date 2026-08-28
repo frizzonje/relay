@@ -633,6 +633,31 @@ describe('настройки ленты', () => {
     expect(a.last('chat-refused')).toEqual({ reason: 'search-off' });
   });
 
+  it('панель не открывали: спойлер ставится, как и вчера', async () => {
+    const { gw, settings, a, b } = await said();
+    expect(settings.get<boolean>('files.spoilerAllowed')).toBe(true);
+    await putUpload('файл-1');
+    await gw.handleChatMessage(asSocket(a), { uploadId: 'файл-1', spoiler: true });
+    expect((b.last('chat') as { attachment: Attachment }).attachment.spoiler).toBe(true);
+  });
+
+  it('выключённый спойлер отвергает реплику, а не показывает спрятанное', async () => {
+    const { gw, settings, a, b } = await said();
+    await tune(settings, 'files.spoilerAllowed', false);
+    await putUpload('файл-1');
+
+    await gw.handleChatMessage(asSocket(a), { uploadId: 'файл-1', spoiler: true });
+    // Отправить открыто то, что просили спрятать, — худший из двух исходов, и
+    // человек о нём даже не узнал бы.
+    expect(b.got('chat')).toBe(false);
+    expect(a.last('chat-refused')).toEqual({ reason: 'spoiler-off' });
+
+    // То же вложение без спойлера проезжает: выключена метка, а не файл.
+    a.clear();
+    await gw.handleChatMessage(asSocket(a), { uploadId: 'файл-1' });
+    expect(b.got('chat')).toBe(true);
+  });
+
   it('длина реплики берётся из настройки, а не из константы протокола', async () => {
     const { gw, settings, a, b } = await said();
     await tune(settings, 'messages.maxLength', 5);

@@ -3,6 +3,7 @@ import type { AppServer, AppSocket } from './socket-data';
 import type { Directory } from './directory';
 import type { Perimeter } from './perimeter';
 import type { RegistryService } from './registry.service';
+import type { SettingsService } from '../settings/settings.service';
 import type { VoiceSessions } from './voice-sessions';
 import { sfuHealthy } from '../sfu/sfu-health';
 import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
@@ -16,6 +17,7 @@ import {
   type SfuTokenResult,
   type SignalPayload,
   type VoiceDiagPayload,
+  type VoiceRefusal,
 } from './protocol';
 
 // Строка для лога: без переводов строк (чтобы клиент не подделал чужие записи)
@@ -45,12 +47,22 @@ export class VoiceHandlers {
     private readonly voice: VoiceSessions,
     private readonly perimeter: Perimeter,
     private readonly directory: Directory,
+    private readonly settings: SettingsService,
     private readonly serverOf: () => AppServer,
     private readonly logger: Logger,
   ) {}
 
   private get server(): AppServer {
     return this.serverOf();
+  }
+
+  /**
+   * Сказать человеку, почему не вышло. Отдельным событием, потому что ни у
+   * `join`, ни у `media-update` ответа нет и завести его поздно, — тот же
+   * выбор, что у `chat-refused` и `voice-locked`.
+   */
+  private refuse(client: AppSocket, reason: VoiceRefusal): void {
+    client.emit('voice-refused', { reason });
   }
 
   // Пропуск на namespace /sfu: короткоживущий подписанный токен + адрес
@@ -181,6 +193,16 @@ export class VoiceHandlers {
     // разъехались бы с ним уже по-настоящему.
     const transport = this.voice.transportFor(client, payload?.transport, room);
 
+    // Пределы на канал спрашиваем ПЕРЕД входом: `enter` выводит из прошлой
+    // комнаты, и отказ после него выкинул бы человека оттуда, где он сидел, —
+    // ровно та ошибка, которую в `chat-join` уже разбирали.
+    const full = this.tooCrowded(client, room);
+    if (full) {
+      this.logger.warn(`voice: join to "${room}" refused for ${client.id} (${full})`);
+      this.refuse(client, full);
+      return;
+    }
+
     // Вход: выход из прошлой комнаты, выселение «призрака» своего же устройства
     // и сбор соседей — всё это один неделимый порядок, и живёт он в VoiceSessions.
     const peers = this.voice.enter(client, { room, name, transport, clientId });
@@ -215,6 +237,28 @@ export class VoiceHandlers {
       );
     }
   }
+  /**
+   * Не полон ли канал для этого сокета. `undefined` — можно заходить.
+   *
+   * Пределов два и они складываются: общий на канал и отдельный на гостей по
+   * ссылке. Гость упирается в оба, свой — только в общий: ограничение на
+   * гостей защищает канал от разошедшейся ссылки, а не от собственных людей.
+   *
+   * Ноль в любом из них — «без предела» (та же договорённость, что у квот на
+   * файлы), и это сегодняшнее поведение: до этапа C в голос пускали всех.
+   */
+  private tooCrowded(client: AppSocket, room: string): VoiceRefusal | undefined {
+    if (this.perimeter.isGuest(client)) {
+      const guests = this.settings.get<number>('invites.maxGuestsPerChannel');
+      if (guests > 0 && this.voice.occupants(room, client, 'guests') >= guests) {
+        return 'guests-full';
+      }
+    }
+    const limit = this.settings.get<number>('spaces.maxVoiceOccupants');
+    if (limit > 0 && this.voice.occupants(room, client) >= limit) return 'room-full';
+    return undefined;
+  }
+
   leave(client: AppSocket) {
     this.voice.leave(client);
   }
@@ -237,13 +281,27 @@ export class VoiceHandlers {
     if (!this.perimeter.allow(client)) return;
     const room = this.voice.roomOf(client);
     if (!room) return;
+    // Камера и демонстрация экрана могут быть выключены на всю инсталляцию.
+    // Дорожку останавливает клиент — сервер её не видит, — но помечать плитку
+    // «с камерой» и молчать было бы худшим из ответов: человек считал бы, что
+    // его видно. Поэтому состояние отвергаем и говорим об этом ему одному.
+    let camOn = payload?.camOn === true;
+    let screenOn = payload?.screenOn === true;
+    if (camOn && !this.settings.get<boolean>('voice.videoEnabled')) {
+      camOn = false;
+      this.refuse(client, 'video-off');
+    }
+    if (screenOn && !this.settings.get<boolean>('voice.screenShareEnabled')) {
+      screenOn = false;
+      this.refuse(client, 'screen-share-off');
+    }
     // Мут/глушилку запоминает голосовая сессия — их раздаёт voice-presence
     // (индикаторы в сайдбаре видят и те, кто сам не в эфире).
     const changed = this.voice.setMedia(client, payload?.micOn, payload?.deafened);
     client.to(room).emit('media-update', {
       from: client.id,
-      camOn: payload?.camOn === true,
-      screenOn: payload?.screenOn === true,
+      camOn,
+      screenOn,
       ...this.voice.mediaOf(client),
     });
     // Presence несёт только мут/глушилку — камеру/экран (или повтор того же

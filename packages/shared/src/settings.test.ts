@@ -221,6 +221,7 @@ describe('разметка каталога', () => {
       // RETENTION_DAYS=30 засеяла бы режим «дни» и 14 дней из умолчания.
       'messages.retentionMode': 'RETENTION_DAYS',
       'messages.retentionDays': 'RETENTION_DAYS',
+      'files.installQuotaBytes': 'UPLOAD_MAX_TOTAL_BYTES',
       'voice.turnUrls': 'TURN_URLS',
       'voice.turnSecretSet': 'TURN_SECRET',
       'voice.sfuUrl': 'SFU_URL',
@@ -288,9 +289,28 @@ describe('умолчание равно сегодняшнему поведен�
     }
     // Квоты не заведены: ноль — это «без квоты», а не «ничего нельзя».
     expect(d['files.perIdentityDailyBytes']).toBe(0);
-    expect(d['files.installQuotaBytes']).toBe(0);
     expect(d['moderation.editWindowMinutes']).toBe(0);
     expect(d['moderation.bannedWords']).toEqual([]);
+    // Пределов на голос и на гостей сегодня нет ни одного: в канал пускают
+    // всех, кто до него дошёл, а сколько человек придёт по ссылке — не считает
+    // никто. Число вместо нуля запретило бы в день обновления то, что вчера
+    // было можно.
+    expect(d['spaces.maxVoiceOccupants']).toBe(0);
+    expect(d['invites.maxGuestsPerChannel']).toBe(0);
+    // А вот у каталога загрузок потолок ЕСТЬ и сегодня: 2 ГиБ, за которыми
+    // вытесняются самые старые вложения (DEFAULT_MAX_TOTAL_BYTES в
+    // apps/api/src/uploads.policy.ts). Ноль здесь означал бы «без квоты» —
+    // то есть поведение, которого до панели не было.
+    expect(d['files.installQuotaBytes']).toBe(2 * 1024 ** 3);
+    // Сутки сироты — ORPHAN_TTL_MS, каким он был константой.
+    expect(d['files.orphanSweepHours']).toBe(24);
+    // Исполняемое сегодня проходит наравне с pdf: вид у него `file`, и другой
+    // проверки на пути нет. Включённая по умолчанию, эта запретила бы то, что
+    // вчера носили.
+    expect(d['files.blockExecutables']).toBe(false);
+    // Спойлер и общий срок хранения переписки — тоже как вчера.
+    expect(d['files.spoilerAllowed']).toBe(true);
+    expect(d['direct.retentionMode']).toBe('inherit');
   });
 
   it('размер загрузки задан байтами, а не «на глаз»', () => {

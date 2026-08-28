@@ -189,9 +189,9 @@
 | `files.allowedKinds` | list из `image`/`audio`/`file` | все три | now |
 | `files.imagePreviews` | boolean | true | now |
 | `files.perIdentityDailyBytes` | bytes (0 — без квоты) | 0 | now |
-| `files.installQuotaBytes` | bytes (0 — без квоты) | 0 | now |
+| `files.installQuotaBytes` | bytes (0 — без квоты) | 2 ГиБ (`DEFAULT_MAX_TOTAL_BYTES`), из `UPLOAD_MAX_TOTAL_BYTES` | now |
 | `files.orphanSweepHours` | number 1…720 | 24 | now |
-| `files.blockExecutables` | boolean | true | now |
+| `files.blockExecutables` | boolean | false | now |
 | `files.spoilerAllowed` | boolean | true | now |
 
 ### Группа `direct` — личные сообщения
@@ -217,7 +217,7 @@
 | `spaces.maxChannelsPerServer` | number 1…500 | 25 | now |
 | `spaces.lockedServersAllowed` | boolean | true | now |
 | `spaces.defaultVoiceMode` | select `p2p` / `sfu` | p2p | new |
-| `spaces.maxVoiceOccupants` | number 2…100 | 20 | now |
+| `spaces.maxVoiceOccupants` | number 0…100 (0 — без предела) | 0 | now |
 | `spaces.channelNameMaxLength` | number 1…64 | 32 | now |
 
 ### Группа `voice` — голос и медиа
@@ -244,7 +244,7 @@
 | `invites.enabled` | boolean | true | now |
 | `invites.ttlHours` | number 1…720 | 24 | now |
 | `invites.whoCanInvite` | select `everyone` / `owner` | everyone | now |
-| `invites.maxGuestsPerChannel` | number 1…100 | 10 | now |
+| `invites.maxGuestsPerChannel` | number 0…100 (0 — без предела) | 0 | now |
 | `invites.listenerByDefault` | boolean | false | now |
 | `invites.guestKickCooldownMinutes` | number 1…1440 | 60 | now |
 
@@ -815,23 +815,33 @@ git commit -m "feat(admin): perimeter, chat and direct messages obey the panel"
 `apps/api/src/gateway/voice-sessions.ts`, `voice.handlers.ts`, `guests.handlers.ts`,
 `apps/api/src/sfu/*` + их тесты.
 
-**Ключи (13):** `files.perIdentityDailyBytes`, `files.installQuotaBytes`,
+**Ключи (11 здесь):** `files.perIdentityDailyBytes`, `files.installQuotaBytes`,
 `files.orphanSweepHours`, `files.blockExecutables`, `files.spoilerAllowed`,
 `direct.retentionMode`, `direct.retentionDays`, `spaces.maxVoiceOccupants`,
-`invites.maxGuestsPerChannel`, `voice.videoEnabled`, `voice.screenShareEnabled`,
-`voice.sfuThreshold`, `voice.iceRestartSeconds`.
+`invites.maxGuestsPerChannel`, `voice.videoEnabled`, `voice.screenShareEnabled`.
 
-- [ ] **Шаг 1: Тесты.** «Квота личности на сутки отвергает следующий файл, но не рвёт чат»;
+`voice.sfuThreshold` и `voice.iceRestartSeconds` переехали в задачу 5в: их потребитель —
+браузер (`MESH_FALLBACK_MAX_PEERS` в `apps/web/lib/voice.ts` и `RECOVER_WINDOW_MS` в
+`apps/web/lib/voice/sfu/recovery.ts`), а на сервере механизма, который бы их читал, нет
+вовсе — режим канала выбирает владелец реестра, транспорт называет сам клиент. Отсюда и
+`applies: 'new'` у обоих. Порог, применённый на сервере, к тому же поменял бы поведение при
+умолчании: сегодня пропуск в медиасервер выдаётся sfu-каналу с любого числа участников.
+
+- [x] **Шаг 1: Тесты.** «Квота личности на сутки отвергает следующий файл, но не рвёт чат»;
       «квота инсталляции вытесняет старое, а не отказывает»; «переписка чистится своим сроком,
       отдельным от каналов»; «в голосовую комнату сверх предела не пускают»; «выключённое видео
-      не даёт включить камеру и говорит почему»; «порог SFU берётся из настройки».
-- [ ] **Шаг 2: Упасть.**
-- [ ] **Шаг 3: Реализация.** `files.installQuotaBytes` и `files.orphanSweepHours` заменяют
-      живые константы `MAX_TOTAL_UPLOAD_BYTES` и `ORPHAN_TTL_MS` — константы остаются
-      умолчанием каталога. `direct.retention*` — вторая политика в том же `RetentionService`:
-      беседы чистятся своим сроком, и умолчание равно сегодняшнему (тот же срок, что у каналов).
-- [ ] **Шаг 4: Весь api зелёный.**
-- [ ] **Шаг 5: Коммит** `feat(admin): files, direct retention, voice and guests obey the panel`
+      не даёт включить камеру и говорит почему». К каждому из одиннадцати ключей — тест
+      «панель не открывали, всё как вчера».
+- [x] **Шаг 2: Упасть.**
+- [x] **Шаг 3: Реализация.** `files.installQuotaBytes` и `files.orphanSweepHours` заменили
+      живые константы `MAX_TOTAL_UPLOAD_BYTES` и `ORPHAN_TTL_MS` — константы остались
+      умолчанием каталога, а `UPLOAD_MAX_TOTAL_BYTES` засевается в таблицу первым стартом,
+      как `RETENTION_DAYS`. `direct.retention*` — вторая политика в том же `RetentionService`:
+      беседы чистятся своим сроком, и умолчание `inherit` равно сегодняшнему (один DELETE по
+      всей таблице). Отказы голоса уезжают новым событием `voice-refused` — половина петли, как
+      у `chat-refused`; читает его задача 5в.
+- [x] **Шаг 4: Весь api зелёный.** 879 тестов, покрытие 98.05 / 92.38 / 98.23 / 98.05.
+- [x] **Шаг 5: Коммит** `feat(admin): files, direct retention, voice and guests obey the panel`
 
 ---
 
@@ -848,10 +858,14 @@ git commit -m "feat(admin): perimeter, chat and direct messages obey the panel"
 (тип снимка), `apps/web/stores/config.ts` (новый), `apps/web/components/providers/*`,
 места применения в вебе + тесты обеих сторон.
 
-**Ключи (18):** `appearance.*` (7), `notifications.*` (4), `people.showFingerprints`,
+**Ключи (20):** `appearance.*` (7), `notifications.*` (4), `people.showFingerprints`,
 `people.lastSeenVisible`, `direct.privacyNotice`, `voice.audioBitrateKbps`,
 `voice.videoBitrateKbps`, `voice.noiseSuppressionDefault`, `voice.pushToTalkDefault`,
-`maintenance.bannerText`.
+`maintenance.bannerText`, плюс приехавшие из 5б `voice.sfuThreshold` (порог, ниже которого
+звонок съезжает в mesh) и `voice.iceRestartSeconds` (окно ступени восстановления).
+
+Плюс чтение `voice-refused`: сервер шлёт его с задачи 5б, а веб ещё не читает — та же
+половина петли, что и у `chat-refused`.
 
 - [ ] **Шаг 1: Тесты.** «`/api/config` отдаёт снимок публичных настроек и ни одного секрета»;
       «смена имени инсталляции доезжает до открытой вкладки без перезагрузки»; «выключённые

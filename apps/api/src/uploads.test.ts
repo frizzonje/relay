@@ -8,6 +8,7 @@ import type { DataSource } from 'typeorm';
 import { AttachmentRow, ChannelRow, MessageRow, ServerRow } from './db/entities';
 import { resetDatabase, testDatabase } from './db/testing';
 import { SettingsService } from './settings/settings.service';
+import { tune } from './settings/settings.testkit';
 import { UploadByteBudget, UploadsEnabledGuard } from './upload.guard';
 import { UploadsService, parseBytes } from './uploads';
 
@@ -48,11 +49,18 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-// Каталог и потолок — параметры экземпляра: перезагружать ради них модуль
-// нельзя, иначе сущности станут другими классами, чем те, что знает открытое
-// соединение с базой.
+// Каталог — параметр экземпляра: перезагружать ради него модуль нельзя, иначе
+// сущности станут другими классами, чем те, что знает открытое соединение с
+// базой. А потолок каталога с этапа C — настройка, и ставится он ею же: тот же
+// путь, которым его двигает панель на живом сервисе.
 async function makeService(quota: string) {
-  return new UploadsService(db, settings, dir, Number(quota));
+  await tune(settings, 'files.installQuotaBytes', Number(quota));
+  return new UploadsService(db, settings, dir);
+}
+
+/** Сервис инсталляции, где панель не открывали ни разу. */
+function untouched() {
+  return new UploadsService(db, settings, dir);
 }
 
 /** Канал, которому можно приписать сообщение с вложением. */
@@ -404,5 +412,198 @@ describe('гард выключенных загрузок', () => {
     } catch (e) {
       expect((e as HttpException).getStatus()).toBe(HttpStatus.FORBIDDEN);
     }
+  });
+});
+
+/**
+ * Квота каталога переехала из константы в настройку. Проверяем главное: пока
+ * панель не открывали, потолок ровно тот же, что был константой, — и что ноль
+ * в нём значит «без квоты», а не «ничего не храним».
+ */
+describe('квота инсталляции — как было', () => {
+  it('панель не открывали: потолок — те же 2 ГиБ, что были константой', () => {
+    expect(settings.get<number>('files.installQuotaBytes')).toBe(2 * 1024 ** 3);
+  });
+
+  it('под ним ничего не вытесняется, сколько бы файлов ни принесли', async () => {
+    const svc = untouched();
+    await svc.register(put('a.bin', 1000, 300));
+    await svc.register(put('b.bin', 1000, 200));
+    await svc.sweep();
+    expect(existsSync(join(dir, 'a.bin'))).toBe(true);
+    expect(existsSync(join(dir, 'b.bin'))).toBe(true);
+    expect(warned).not.toHaveBeenCalled();
+  });
+
+  it('ноль — без квоты: не вытесняется ничего и никогда', async () => {
+    const svc = await makeService('0');
+    await svc.register(put('старое.bin', 900, 300));
+    await svc.register(put('новое.bin', 900, 10));
+    // При потолке в 1000 старое ушло бы (см. соседний describe) — здесь нет.
+    await svc.sweep();
+    expect(existsSync(join(dir, 'старое.bin'))).toBe(true);
+    expect(existsSync(join(dir, 'новое.bin'))).toBe(true);
+  });
+
+  it('новый потолок действует на том же сервисе, без перезапуска', async () => {
+    const svc = await makeService('0');
+    await svc.register(put('старое.bin', 900, 300));
+    await svc.register(put('новое.bin', 900, 10));
+
+    await tune(settings, 'files.installQuotaBytes', 1000);
+    await svc.sweep();
+    expect(existsSync(join(dir, 'старое.bin'))).toBe(false);
+    expect(existsSync(join(dir, 'новое.bin'))).toBe(true);
+  });
+});
+
+/**
+ * Суточная квота личности. Её сегодня нет вовсе, поэтому первый вопрос — что
+ * ненастроенная инсталляция по-прежнему не считает никого; второй — что
+ * настроенная ОТКАЗЫВАЕТ (а не вытесняет чужое) и что отказ остаётся отказом
+ * одной загрузки: ни чат, ни уже принятые файлы он не трогает.
+ */
+describe('квота личности на сутки', () => {
+  const кто = { identityId: 'ид-1' };
+
+  it('панель не открывали: столько файлов, сколько принесли', async () => {
+    const svc = untouched();
+    for (const name of ['1.bin', '2.bin', '3.bin']) {
+      await svc.register(put(name, 10 * 1024 ** 2, 0), кто);
+    }
+    expect(await db.getRepository(AttachmentRow).count()).toBe(3);
+  });
+
+  it('за квотой следующий файл отвергается, а принятое остаётся на месте', async () => {
+    const svc = untouched();
+    await tune(settings, 'files.perIdentityDailyBytes', 1000);
+    const channel = await makeChannel();
+
+    const first = await svc.register(put('первый.bin', 600, 0), кто);
+    await attachTo(channel, first.id);
+
+    expect(await refusalOf(svc.register(put('второй.bin', 600, 0), кто))).toBe(
+      HttpStatus.PAYLOAD_TOO_LARGE,
+    );
+    // Тела отвергнутого на диске не остаётся, а отправленное в чат живо: отказ
+    // одной загрузке не должен уносить с собой чужие вложения и разговор.
+    expect(existsSync(join(dir, 'второй.bin'))).toBe(false);
+    expect(await svc.exists('первый.bin')).toBe(true);
+    expect(await db.getRepository(MessageRow).count()).toBe(1);
+  });
+
+  it('ровно по квоте проходит, а следующий байт — уже нет', async () => {
+    const svc = untouched();
+    await tune(settings, 'files.perIdentityDailyBytes', 1000);
+    await svc.register(put('ровно.bin', 1000, 0), кто);
+    expect(await refusalOf(svc.register(put('лишку.bin', 1, 0), кто))).toBe(
+      HttpStatus.PAYLOAD_TOO_LARGE,
+    );
+  });
+
+  it('квота у каждого своя: сосед не расплачивается за чужие файлы', async () => {
+    const svc = untouched();
+    await tune(settings, 'files.perIdentityDailyBytes', 1000);
+    await svc.register(put('мой.bin', 900, 0), кто);
+    await svc.register(put('чужой.bin', 900, 0), { identityId: 'ид-2' });
+    expect(await db.getRepository(AttachmentRow).count()).toBe(2);
+  });
+
+  it('без личности считает по адресу — иначе квота снимается удалением куки', async () => {
+    const svc = untouched();
+    await tune(settings, 'files.perIdentityDailyBytes', 1000);
+    await svc.register(put('первый.bin', 900, 0), { ip: '10.0.0.1' });
+    expect(await refusalOf(svc.register(put('второй.bin', 900, 0), { ip: '10.0.0.1' }))).toBe(
+      HttpStatus.PAYLOAD_TOO_LARGE,
+    );
+    await svc.register(put('соседний.bin', 900, 0), { ip: '10.0.0.2' });
+    expect(await svc.exists('соседний.bin')).toBe(true);
+  });
+
+  it('сутки скользящие: вчерашнее не занимает сегодняшнюю квоту', async () => {
+    // Подменяем ТОЛЬКО часы: настоящие таймеры оставляем, иначе запрос в базу
+    // повис бы вместе со всем прогоном.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const svc = untouched();
+      await tune(settings, 'files.perIdentityDailyBytes', 1000);
+      await svc.register(put('вчерашний.bin', 900, 0), кто);
+      vi.setSystemTime(Date.now() + 25 * 60 * 60 * 1000);
+      await svc.register(put('сегодняшний.bin', 900, 0), кто);
+      expect(await svc.exists('сегодняшний.bin')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * Исполняемые файлы. Сегодня `.exe` проходит наравне с pdf — вид у него `file`,
+ * и другой проверки на пути нет; настройка её заводит, но не по умолчанию.
+ */
+describe('исполняемые файлы', () => {
+  it('панель не открывали: .exe принимается, как и вчера', async () => {
+    const svc = untouched();
+    const out = await svc.register(put('утилита.exe', 10, 0, 'application/x-msdownload'));
+    expect(out.kind).toBe('file');
+    expect(await svc.exists('утилита.exe')).toBe(true);
+  });
+
+  it('включённая проверка отвергает по расширению и не оставляет тела', async () => {
+    const svc = untouched();
+    await tune(settings, 'files.blockExecutables', true);
+    expect(await refusalOf(svc.register(put('вирус.exe', 10, 0)))).toBe(
+      HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+    );
+    expect(existsSync(join(dir, 'вирус.exe'))).toBe(false);
+  });
+
+  it('смотрит и на тип: имя пишет клиент', async () => {
+    const svc = untouched();
+    await tune(settings, 'files.blockExecutables', true);
+    expect(await refusalOf(svc.register(put('фото.dat', 10, 0, 'application/x-msdownload')))).toBe(
+      HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+    );
+  });
+
+  it('решает последнее расширение — так же, как система, которая это запустит', async () => {
+    const svc = untouched();
+    await tune(settings, 'files.blockExecutables', true);
+    // Открывается блокнотом — это текст.
+    await svc.register(put('отчёт.exe.txt', 10, 0, 'text/plain'));
+    expect(await refusalOf(svc.register(put('скрин.png.exe', 10, 0)))).toBe(
+      HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+    );
+  });
+
+  it('обычное не задевает: pdf и картинка проходят при включённой проверке', async () => {
+    const svc = untouched();
+    await tune(settings, 'files.blockExecutables', true);
+    await svc.register(put('договор.pdf', 10, 0, 'application/pdf'));
+    await svc.register(put('кот.png', 10, 0, 'image/png'));
+    expect(await db.getRepository(AttachmentRow).count()).toBe(2);
+  });
+});
+
+describe('срок жизни сироты — настройкой, а не константой', () => {
+  it('панель не открывали: сутки, как и было', async () => {
+    expect(settings.get<number>('files.orphanSweepHours')).toBe(24);
+    const svc = untouched();
+    await svc.register(put('вчерашний.bin', 10, 0));
+    await ageUpload('вчерашний.bin', 23);
+    await svc.sweep();
+    expect(existsSync(join(dir, 'вчерашний.bin'))).toBe(true);
+  });
+
+  it('короткий срок уносит то, что при суточном ещё жило бы', async () => {
+    const svc = untouched();
+    await tune(settings, 'files.orphanSweepHours', 1);
+    await svc.register(put('двухчасовой.bin', 10, 0));
+    await ageUpload('двухчасовой.bin', 2);
+    await svc.register(put('свежий.bin', 10, 0));
+
+    await svc.sweep();
+    expect(existsSync(join(dir, 'двухчасовой.bin'))).toBe(false);
+    expect(existsSync(join(dir, 'свежий.bin'))).toBe(true);
   });
 });

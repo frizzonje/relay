@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DataSource } from 'typeorm';
 import { SettingsService } from '../settings/settings.service';
+import { tune } from '../settings/settings.testkit';
 import { ChannelRow, MessageRow, PinRow, ServerRow } from './entities';
 import { parseRetention } from './retention.policy';
 import { RetentionService } from './retention.service';
@@ -311,5 +312,139 @@ describe('срок из настроек, а не из перезапуска', 
     sweep.mockClear();
     await settings.set('messages.retentionDays', 3, owner);
     expect(sweep).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Переписка живёт своим сроком — или общим, и второе сегодня по умолчанию.
+ *
+ * Различие тут не техническое: канал и беседа — два разных обещания людям, и
+ * «личное чистим быстрее» относится к тем настройкам, ради которых панель и
+ * заводилась. Но день обновления не должен ничего менять сам по себе, поэтому
+ * первым проверяется именно это.
+ */
+describe('срок личной переписки', () => {
+  /** Канал беседы: сервера у него нет, тип `dm` — по нему её и узнают. */
+  async function makeDm(): Promise<void> {
+    await db.getRepository(ChannelRow).insert({
+      id: 'dm-000000000000000000000000',
+      serverId: null,
+      type: 'dm',
+      name: 'беседа',
+      slug: 'dm-000000000000000000000000',
+      removable: true,
+      mode: null,
+      creatorId: null,
+      position: 0,
+    });
+  }
+
+  /** Реплика в беседе возрастом в `days` дней. */
+  async function whisper(text: string, days: number): Promise<void> {
+    const id = randomUUID();
+    await db.getRepository(MessageRow).insert({
+      id,
+      channelId: 'dm-000000000000000000000000',
+      authorName: 'А',
+      text,
+      system: false,
+      spoiler: false,
+      attachmentId: null,
+      replyTo: null,
+      reactions: {},
+      editedAt: null,
+      authorIdentityId: null,
+    });
+    await db.query(
+      "UPDATE messages SET created_at = date_trunc('milliseconds', now() - ($1 || ' days')::interval) WHERE id = $2",
+      [days, id],
+    );
+  }
+
+  it('панель не открывали: беседы чистятся общим сроком, как и вчера', async () => {
+    const settings = await settingsWith();
+    const service = new RetentionService(db, settings);
+    expect(service.directEffective()).toBeNull();
+    await makeDm();
+    await say('древнее в канале', 20);
+    await whisper('древнее в беседе', 20);
+    await whisper('вчерашнее в беседе', 1);
+
+    expect(await service.sweep()).toBe(2);
+    expect(await texts()).toEqual(['вчерашнее в беседе']);
+  });
+
+  it('свой срок короче общего: личное уходит, канальное остаётся', async () => {
+    const settings = await settingsWith();
+    const service = new RetentionService(db, settings);
+    await makeDm();
+    await say('трёхдневное в канале', 3);
+    await whisper('трёхдневное в беседе', 3);
+
+    await tune(settings, 'direct.retentionMode', 'days');
+    await tune(settings, 'direct.retentionDays', 2);
+    expect(await service.sweep()).toBe(1);
+    expect(await texts()).toEqual(['трёхдневное в канале']);
+  });
+
+  it('свой срок длиннее общего: переписка переживает ленту', async () => {
+    const settings = await settingsWith();
+    const service = new RetentionService(db, settings);
+    await makeDm();
+    await say('месячное в канале', 30);
+    await whisper('месячное в беседе', 30);
+
+    await tune(settings, 'direct.retentionMode', 'forever');
+    expect(await service.sweep()).toBe(1);
+    expect(await texts()).toEqual(['месячное в беседе']);
+  });
+
+  it('«не хранить» уносит переписку целиком, не трогая каналы', async () => {
+    const settings = await settingsWith();
+    const service = new RetentionService(db, settings);
+    await makeDm();
+    await say('только что в канале', 0);
+    await whisper('только что в беседе', 0);
+
+    await tune(settings, 'direct.retentionMode', 'ephemeral');
+    expect(await service.sweep()).toBe(1);
+    expect(await texts()).toEqual(['только что в канале']);
+  });
+
+  it('смена срока переписки будит проход сразу, а не с ближайшим таймером', async () => {
+    const settings = await settingsWith('forever');
+    const service = new RetentionService(db, settings);
+    service.onModuleInit();
+    await makeDm();
+    await whisper('только что', 0);
+    // «Хранить всегда» — таймера нет вовсе, и без подписки на СВОЙ ключ смена
+    // осталась бы обещанием до перезапуска.
+    expect(await texts()).toEqual(['только что']);
+
+    const sweep = vi.spyOn(service, 'sweep');
+    await tune(settings, 'direct.retentionMode', 'ephemeral');
+    expect(sweep).toHaveBeenCalledTimes(1);
+    await sweep.mock.results[0].value;
+
+    expect(await texts()).toEqual([]);
+    service.onModuleDestroy();
+  });
+
+  it('свой срок проговаривается в лог отдельной строкой, общий — нет', async () => {
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {});
+    const settings = await settingsWith();
+    const service = new RetentionService(db, settings);
+
+    service.onModuleInit();
+    expect(log.mock.calls.flat().join(' ')).not.toContain('ретенция бесед');
+    service.onModuleDestroy();
+
+    await tune(settings, 'direct.retentionMode', 'forever');
+    log.mockClear();
+    service.onModuleInit();
+    expect(log.mock.calls.flat().join(' ')).toContain(
+      'ретенция бесед: переписка хранится без срока',
+    );
+    service.onModuleDestroy();
   });
 });

@@ -143,6 +143,31 @@ describe('окружение', () => {
     expect((await started()).get<number>('messages.retentionDays')).toBe(7);
   });
 
+  it('размер каталога загрузок засевается той же переменной и в её же словах', async () => {
+    // «512M» человек пишет в `.env` охотнее, чем 536870912, и до этапа C
+    // строку разбирал сам uploads.ts. Разбор один и тот же — иначе панель
+    // показывала бы одно, а вытесняло бы по другому.
+    vi.stubEnv('UPLOAD_MAX_TOTAL_BYTES', '512M');
+    const settings = await started();
+    expect(settings.get<number>('files.installQuotaBytes')).toBe(512 * 1024 ** 2);
+    expect((await row('files.installQuotaBytes'))?.updatedBy).toBeNull();
+  });
+
+  it('не заданная переменная оставляет сегодняшние 2 ГиБ и ни строки в таблице', async () => {
+    const settings = await started();
+    expect(settings.get<number>('files.installQuotaBytes')).toBe(2 * 1024 ** 3);
+    expect(await rows()).toBe(0);
+  });
+
+  it('мусор в размере каталога не засевается и не остаётся молчаливым', async () => {
+    vi.stubEnv('UPLOAD_MAX_TOTAL_BYTES', 'побольше');
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+    const settings = await started();
+    expect(await rows()).toBe(0);
+    expect(settings.get<number>('files.installQuotaBytes')).toBe(2 * 1024 ** 3);
+    expect(warn.mock.calls.flat().join(' ')).toContain('побольше');
+  });
+
   it('секреты и инфраструктура в таблицу не засеваются', async () => {
     vi.stubEnv('SITE_PASSWORD', 'тайна');
     vi.stubEnv('TURN_URLS', 'turn:turn.example:3478');

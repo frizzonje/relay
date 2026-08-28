@@ -2,6 +2,7 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { SettingRow } from '../db/entities';
 import { parseRetention, retentionEnvComplaint } from '../db/retention.policy';
+import { parseBytes } from '../uploads.policy';
 import {
   SETTINGS,
   defaults,
@@ -60,6 +61,7 @@ export type SettingsListener = (key: string, value: SettingValue) => void;
 export const SEEDED_FROM_ENV: readonly string[] = [
   'messages.retentionMode',
   'messages.retentionDays',
+  'files.installQuotaBytes',
 ];
 
 @Injectable()
@@ -229,6 +231,15 @@ export class SettingsService implements OnModuleInit {
     if (raw !== undefined && parseRetention(raw) === null) {
       this.logger.warn(`настройки: ${retentionEnvComplaint(raw)} — беру умолчания каталога`);
     }
+    // То же самое про размер каталога загрузок: до этапа C жалобу писал сам
+    // `uploads.ts`, и раз переменную больше не читает никто, кроме посева,
+    // жалоба обязана переехать сюда — иначе опечатка в `.env` пропадёт молча.
+    const rawQuota = process.env.UPLOAD_MAX_TOTAL_BYTES;
+    if (rawQuota !== undefined && Number.isNaN(parseBytes(rawQuota, 0))) {
+      this.logger.warn(
+        `настройки: UPLOAD_MAX_TOTAL_BYTES="${rawQuota}" не похоже на размер — беру умолчание каталога`,
+      );
+    }
 
     for (const key of SEEDED_FROM_ENV) {
       if (this.overrides.has(key)) continue; // переопределение есть — окружение опоздало
@@ -305,9 +316,16 @@ export class SettingsService implements OnModuleInit {
  * Начальное значение из окружения. `RETENTION_DAYS` разбирает тот же
  * `parseRetention`, что и сегодняшняя ретенция: одна переменная задаёт и режим
  * хранения, и число дней, и второй разбор той же строки разошёлся бы с первым
- * на первом же `forever`.
+ * на первом же `forever`. `UPLOAD_MAX_TOTAL_BYTES` — тот же `parseBytes`, что
+ * читал её до появления панели: «2G» человек пишет охотнее, чем 2147483648.
  */
 function envValue(key: string): SettingValue | undefined {
+  if (key === 'files.installQuotaBytes') {
+    const parsed = parseBytes(process.env.UPLOAD_MAX_TOTAL_BYTES, NaN);
+    // Мусор в переменной — не повод засевать догадку: про него уже сказано
+    // вслух в `seed`, а в таблице она осталась бы навсегда.
+    return Number.isNaN(parsed) ? undefined : parsed;
+  }
   const policy = parseRetention();
   // `null` — в переменной мусор. Про него уже кричит RetentionService, а
   // засевать догадку в таблицу значило бы сделать её постоянной.

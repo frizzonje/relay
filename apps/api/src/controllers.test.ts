@@ -3,6 +3,7 @@ import type { ExecutionContext } from '@nestjs/common';
 import type { Request } from 'express';
 import { describe, expect, it, vi } from 'vitest';
 import { HealthController } from './health.controller';
+import { issueSession } from './identity/session';
 import { MetricsController } from './metrics.controller';
 import type { Metrics, MetricsService } from './metrics';
 import { UploadController } from './upload.controller';
@@ -50,36 +51,70 @@ describe('GET /api/metrics', () => {
 describe('POST /api/upload', () => {
   function service() {
     const registered: unknown[] = [];
+    // Кем подписана каждая загрузка: по этому же ключу считает суточную квоту
+    // `UploadsService`, и подставить его — работа контроллера.
+    const byWhom: unknown[] = [];
     const uploads = {
       registered,
-      async register(file: { filename: string; size: number }) {
+      byWhom,
+      async register(file: { filename: string; size: number }, by?: unknown) {
         registered.push(file);
+        byWhom.push(by);
         return { id: file.filename, url: `/uploads/${file.filename}` } as Attachment & {
           id: string;
         };
       },
     };
-    return uploads as unknown as UploadsService & { registered: unknown[] };
+    return uploads as unknown as UploadsService & { registered: unknown[]; byWhom: unknown[] };
   }
 
   const file = { filename: 'abc.png', originalname: 'кот.png', size: 1234, mimetype: 'image/png' };
 
   it('регистрирует файл и возвращает его id', async () => {
     const uploads = service();
-    const out = await new UploadController(uploads).upload({ ip: '10.0.0.1' } as Request, file);
+    const out = await new UploadController(uploads).upload(
+      { ip: '10.0.0.1', headers: {} } as unknown as Request,
+      file,
+    );
     expect(out.id).toBe('abc.png');
     expect(uploads.registered).toEqual([file]);
   });
 
   it('запрос без файла — 400, а не пустое вложение в чате', async () => {
     await expect(
-      new UploadController(service()).upload({ ip: '10.0.0.1' } as Request, undefined),
+      new UploadController(service()).upload(
+        { ip: '10.0.0.1', headers: {} } as unknown as Request,
+        undefined,
+      ),
     ).rejects.toThrow(BadRequestException);
+  });
+
+  it('подписывает загрузку личностью из куки — иначе суточную квоту не на кого вести', async () => {
+    const uploads = service();
+    const { value } = issueSession({ identityId: 'ид-1', deviceId: 'устройство-1' });
+    await new UploadController(uploads).upload(
+      { ip: '10.0.0.1', headers: { cookie: `relay_id=${value}` } } as unknown as Request,
+      file,
+    );
+    // Устройство не идёт: квота у человека одна на все его вкладки и телефоны.
+    expect(uploads.byWhom).toEqual([{ identityId: 'ид-1', ip: '10.0.0.1' }]);
+  });
+
+  it('без куки остаётся адрес: иначе квота снималась бы её удалением', async () => {
+    const uploads = service();
+    await new UploadController(uploads).upload(
+      { ip: '10.0.0.1', headers: {} } as unknown as Request,
+      file,
+    );
+    expect(uploads.byWhom).toEqual([{ identityId: undefined, ip: '10.0.0.1' }]);
   });
 
   it('списывает настоящий размер записанного файла, а не Content-Length', async () => {
     const charge = vi.spyOn(uploadBudget, 'charge');
-    await new UploadController(service()).upload({ ip: '10.0.0.1' } as Request, file);
+    await new UploadController(service()).upload(
+      { ip: '10.0.0.1', headers: {} } as unknown as Request,
+      file,
+    );
     expect(charge).toHaveBeenCalledWith('10.0.0.1', 1234);
     charge.mockRestore();
   });

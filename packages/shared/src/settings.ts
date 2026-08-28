@@ -543,14 +543,22 @@ export const SETTINGS: readonly SettingSpec[] = [
     min: 0,
     max: 1 * TIB,
   },
+  // 2 ГиБ — DEFAULT_MAX_TOTAL_BYTES (apps/api/src/uploads.ts): столько каталог
+  // загрузок держит СЕГОДНЯ, и за этим потолком уже сегодня вытесняются самые
+  // старые вложения. Ноль здесь пришлось бы читать как «без квоты», а это иное
+  // поведение, чем вчерашнее, — поэтому умолчание равно константе, а ноль
+  // остаётся тем, что владелец выбирает сам. Знающему свою машину по-прежнему
+  // отвечает UPLOAD_MAX_TOTAL_BYTES: она засевается в таблицу на первом старте
+  // (см. SEEDED_FROM_ENV) и больше нигде не читается.
   {
     key: 'files.installQuotaBytes',
     group: 'files',
     kind: 'bytes',
-    fallback: 0,
+    fallback: 2 * GIB,
     applies: 'now',
     min: 0,
     max: 1 * TIB,
+    env: 'UPLOAD_MAX_TOTAL_BYTES',
   },
   {
     key: 'files.orphanSweepHours',
@@ -561,11 +569,14 @@ export const SETTINGS: readonly SettingSpec[] = [
     min: 1,
     max: 720,
   },
+  // Выключен, и это не осторожность, а правда: сегодня .exe проходит наравне с
+  // pdf — вид у него `file`, и никакой другой проверки на пути нет. Включённый
+  // по умолчанию, он запретил бы в день обновления то, что вчера носили.
   {
     key: 'files.blockExecutables',
     group: 'files',
     kind: 'boolean',
-    fallback: true,
+    fallback: false,
     applies: 'now',
   },
   { key: 'files.spoilerAllowed', group: 'files', kind: 'boolean', fallback: true, applies: 'now' },
@@ -601,6 +612,10 @@ export const SETTINGS: readonly SettingSpec[] = [
     fallback: true,
     applies: 'now',
   },
+  // «Как у каналов» — это сегодняшнее поведение слово в слово: ретенция ходит
+  // по всей таблице реплик и о том, что часть из них лежит в беседах, не знает.
+  // Отдельный срок у переписки появляется ровно тогда, когда владелец его
+  // выберет, — и `direct.retentionDays` до этого момента ни на что не влияет.
   {
     key: 'direct.retentionMode',
     group: 'direct',
@@ -689,13 +704,16 @@ export const SETTINGS: readonly SettingSpec[] = [
     applies: 'new',
     options: ['p2p', 'sfu'],
   },
+  // Ноль — без предела, как у квот на файлы и у первых реплик в ЛС: сегодня в
+  // голосовой канал пускают всех, кто до него дошёл, и число здесь означало бы
+  // запрет там, где вчера запрета не было.
   {
     key: 'spaces.maxVoiceOccupants',
     group: 'spaces',
     kind: 'number',
-    fallback: 20,
+    fallback: 0,
     applies: 'now',
-    min: 2,
+    min: 0,
     max: 100,
   },
   // LIMIT.name = 32 — столько сервер принимает в имени сервера или канала.
@@ -841,13 +859,15 @@ export const SETTINGS: readonly SettingSpec[] = [
     applies: 'now',
     options: ['everyone', 'owner'],
   },
+  // Ноль — без предела: ссылка сегодня многоразовая, и сколько человек по ней
+  // придёт, никто не считает.
   {
     key: 'invites.maxGuestsPerChannel',
     group: 'invites',
     kind: 'number',
-    fallback: 10,
+    fallback: 0,
     applies: 'now',
-    min: 1,
+    min: 0,
     max: 100,
   },
   {

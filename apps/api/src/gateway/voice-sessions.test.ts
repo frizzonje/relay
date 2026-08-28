@@ -9,6 +9,7 @@ import {
   personCookie,
   settle,
   slugOf,
+  tune,
   useGatewayStand,
 } from './gateway.testkit';
 
@@ -501,5 +502,163 @@ describe('rename', () => {
     await gw.handleRename(asSocket(a), { name: '  ' });
     await gw.handleRename(asSocket(a), { name: 'A' });
     expect(b.got('peer-renamed')).toBe(false);
+  });
+});
+
+/**
+ * Настройки голоса. Проверяется ровно то, ради чего они заведены: пока панель
+ * не открывали, ничего не изменилось, — а когда владелец что-то запретил,
+ * человек узнаёт об этом словами, а не тишиной. Молчаливый отказ здесь дороже,
+ * чем где-либо: `join` клиент не отличает от удавшегося, и «я в канале, меня
+ * не слышат» разбирается потом только по серверному логу.
+ */
+describe('настройки голоса', () => {
+  it('панель не открывали: в канал пускают всех, кто до него дошёл', async () => {
+    const { gw, server } = await makeGateway();
+    for (const id of ['a', 'b', 'c', 'd', 'e']) {
+      const sock = connect(gw, server, { id });
+      gw.handleJoin(asSocket(sock), { room: 'voice-obshchii', name: id });
+      expect(sock.data.room).toBe('voice-obshchii');
+      expect(sock.got('voice-refused')).toBe(false);
+    }
+  });
+
+  it('сверх предела не пускают и говорят почему', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'spaces.maxVoiceOccupants', 2);
+    const a = connect(gw, server, { id: 'a' });
+    const b = connect(gw, server, { id: 'b' });
+    const c = connect(gw, server, { id: 'c' });
+    gw.handleJoin(asSocket(a), { room: 'voice-obshchii', name: 'A' });
+    gw.handleJoin(asSocket(b), { room: 'voice-obshchii', name: 'B' });
+    b.clear();
+    gw.handleJoin(asSocket(c), { room: 'voice-obshchii', name: 'C' });
+
+    expect(c.data.room).toBeUndefined();
+    expect(c.last('voice-refused')).toEqual({ reason: 'room-full' });
+    // Разговор двоих отказ третьему не задевает ничем.
+    expect(b.got('peer-joined')).toBe(false);
+    expect(a.data.room).toBe('voice-obshchii');
+  });
+
+  it('отказ не выкидывает из той комнаты, где человек уже сидел', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'spaces.maxVoiceOccupants', 1);
+    const a = connect(gw, server, { id: 'a' });
+    const b = connect(gw, server, { id: 'b' });
+    gw.handleJoin(asSocket(a), { room: 'voice-obshchii', name: 'A' });
+    gw.handleJoin(asSocket(b), { room: 'voice-obshchii-sfu', name: 'B' });
+
+    gw.handleJoin(asSocket(a), { room: 'voice-obshchii-sfu', name: 'A' });
+    expect(a.last('voice-refused')).toEqual({ reason: 'room-full' });
+    expect(a.data.room).toBe('voice-obshchii');
+  });
+
+  it('своего же призрака в счёт не берут: перезагрузка вкладки не запирает канал', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'spaces.maxVoiceOccupants', 1);
+    const first = connect(gw, server, { id: 'таб-1', clientId: 'устройство' });
+    gw.handleJoin(asSocket(first), { room: 'voice-obshchii', name: 'A' });
+    // Перезагрузка страницы: новый socket.id, то же устройство.
+    const second = connect(gw, server, { id: 'таб-2', clientId: 'устройство' });
+    gw.handleJoin(asSocket(second), { room: 'voice-obshchii', name: 'A' });
+
+    expect(second.got('voice-refused')).toBe(false);
+    expect(second.data.room).toBe('voice-obshchii');
+  });
+
+  it('панель не открывали: гостей по ссылке приходит сколько угодно', async () => {
+    const { gw, server } = await makeGateway();
+    for (const id of ['г-1', 'г-2', 'г-3']) {
+      const { token } = issueGuestToken('voice-obshchii');
+      const guest = connect(gw, server, { id, guest: token });
+      gw.handleJoin(asSocket(guest), { room: 'voice-obshchii', name: id });
+      expect(guest.data.room).toBe('voice-obshchii');
+    }
+  });
+
+  it('гостей больше предела не пускают, а своих это не касается', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'invites.maxGuestsPerChannel', 1);
+    const first = connect(gw, server, {
+      id: 'г-1',
+      guest: issueGuestToken('voice-obshchii').token,
+    });
+    gw.handleJoin(asSocket(first), { room: 'voice-obshchii', name: 'Г1' });
+
+    const second = connect(gw, server, {
+      id: 'г-2',
+      guest: issueGuestToken('voice-obshchii').token,
+    });
+    gw.handleJoin(asSocket(second), { room: 'voice-obshchii', name: 'Г2' });
+    expect(second.data.room).toBeUndefined();
+    // Причина своя: «канал полон» человек переждёт, а тут ждать нечего —
+    // ссылка своё отработала, и звать надо иначе.
+    expect(second.last('voice-refused')).toEqual({ reason: 'guests-full' });
+
+    // Предел на гостей защищает канал от разошедшейся ссылки, а не от своих.
+    const host = connect(gw, server, { id: 'свой' });
+    gw.handleJoin(asSocket(host), { room: 'voice-obshchii', name: 'Х' });
+    expect(host.data.room).toBe('voice-obshchii');
+  });
+
+  it('панель не открывали: камера и экран включаются как прежде', async () => {
+    const { gw, server } = await makeGateway();
+    const a = connect(gw, server, { id: 'a' });
+    const b = connect(gw, server, { id: 'b' });
+    gw.handleJoin(asSocket(a), { room: 'voice-obshchii', name: 'A' });
+    gw.handleJoin(asSocket(b), { room: 'voice-obshchii', name: 'B' });
+    b.clear();
+    gw.handleMediaUpdate(asSocket(a), { camOn: true, screenOn: true });
+
+    expect(b.last('media-update')).toMatchObject({ camOn: true, screenOn: true });
+    expect(a.got('voice-refused')).toBe(false);
+  });
+
+  it('выключённое видео не даёт включить камеру и говорит почему', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'voice.videoEnabled', false);
+    const a = connect(gw, server, { id: 'a' });
+    const b = connect(gw, server, { id: 'b' });
+    gw.handleJoin(asSocket(a), { room: 'voice-obshchii', name: 'A' });
+    gw.handleJoin(asSocket(b), { room: 'voice-obshchii', name: 'B' });
+    b.clear();
+    gw.handleMediaUpdate(asSocket(a), { camOn: true });
+
+    // Плитка «с камерой» при выключенном видео — худший из ответов: человек
+    // считал бы, что его видно.
+    expect(b.last('media-update')).toMatchObject({ camOn: false });
+    expect(a.last('voice-refused')).toEqual({ reason: 'video-off' });
+    // Экран при этом не задет: запреты разные и живут порознь.
+    a.clear();
+    b.clear();
+    gw.handleMediaUpdate(asSocket(a), { screenOn: true });
+    expect(b.last('media-update')).toMatchObject({ screenOn: true });
+    expect(a.got('voice-refused')).toBe(false);
+  });
+
+  it('выключённая демонстрация экрана отвечает своей причиной', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'voice.screenShareEnabled', false);
+    const a = connect(gw, server, { id: 'a' });
+    const b = connect(gw, server, { id: 'b' });
+    gw.handleJoin(asSocket(a), { room: 'voice-obshchii', name: 'A' });
+    gw.handleJoin(asSocket(b), { room: 'voice-obshchii', name: 'B' });
+    b.clear();
+    gw.handleMediaUpdate(asSocket(a), { camOn: true, screenOn: true });
+
+    expect(b.last('media-update')).toMatchObject({ camOn: true, screenOn: false });
+    expect(a.last('voice-refused')).toEqual({ reason: 'screen-share-off' });
+  });
+
+  it('выключённое не жалуется тому, кто его и не включал', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'voice.videoEnabled', false);
+    await tune(settings, 'voice.screenShareEnabled', false);
+    const a = connect(gw, server, { id: 'a' });
+    gw.handleJoin(asSocket(a), { room: 'voice-obshchii', name: 'A' });
+    a.clear();
+    gw.handleMediaUpdate(asSocket(a), { micOn: false });
+    expect(a.got('voice-refused')).toBe(false);
   });
 });

@@ -564,10 +564,29 @@ export type ChatRefusal =
   | 'delete-off'
   | 'reactions-off'
   | 'search-off'
-  | 'too-new';
+  | 'too-new'
+  | 'spoiler-off';
 
 export interface ChatRefusedRelay {
   reason: ChatRefusal;
+}
+
+/**
+ * Почему в голосе отказали.
+ *
+ * Событие отдельное по той же причине, что и `chat-refused`: ни `join`, ни
+ * `media-update` ответа не ждут, а `join` вдобавок неотличим для клиента от
+ * удавшегося — без этого выключенная камера выглядела бы сломанной кнопкой, а
+ * полный канал — тишиной. Урок этапа A прямым текстом.
+ *
+ * `room-full` и `guests-full` разделены намеренно: первое человек переждёт,
+ * второе значит, что ссылка своё отработала и звать надо иначе.
+ */
+export type VoiceRefusal = 'video-off' | 'screen-share-off' | 'room-full' | 'guests-full';
+
+/** Отказ в голосе — тому, кому отказали. */
+export interface VoiceRefusedRelay {
+  reason: VoiceRefusal;
 }
 
 /**

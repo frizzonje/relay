@@ -10,6 +10,8 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { randomBytes } from 'crypto';
 import type { Request } from 'express';
+import { parseCookies } from './auth/auth';
+import { IDENTITY_COOKIE, readSession } from './identity/session';
 import { UploadRateGuard, UploadsEnabledGuard, uploadBudget } from './upload.guard';
 import { Attachment, MAX_UPLOAD_BYTES, UPLOAD_DIR, UploadsService } from './uploads';
 
@@ -59,6 +61,11 @@ export class UploadController {
   ): Promise<Attachment & { id: string }> {
     if (!file) throw new BadRequestException('файл не получен');
     uploadBudget.charge(req.ip ?? 'unknown', file.size);
-    return this.uploads.register(file);
+    // Кто принёс — нужно суточной квоте (`files.perIdentityDailyBytes`).
+    // Личность берём из куки сессии и ничего у неё не спрашиваем: квоте нужен
+    // ключ, а не права — их уже проверил гейт. Устройство сюда не идёт
+    // намеренно: квота у человека одна на все его вкладки и телефоны.
+    const session = readSession(parseCookies(req.headers.cookie)[IDENTITY_COOKIE]);
+    return this.uploads.register(file, { identityId: session?.identityId, ip: req.ip });
   }
 }

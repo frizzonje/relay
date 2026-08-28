@@ -22,6 +22,7 @@ import {
   verifyGuestToken,
   verifyToken,
   type ChatRefusal,
+  type VoiceRefusal,
 } from './index';
 
 /**
@@ -135,7 +136,21 @@ describe('константы совпадают с копией в api', () => {
       'reactions-off',
       'search-off',
       'too-new',
+      'spoiler-off',
     ];
+    expect(reasons.map((r) => r.slice(1, -1))).toEqual(mine);
+  });
+
+  it('причины отказа в голосе — те же, что называет сервер', () => {
+    // Ровно та же беда, что и в ленте: `join` и `media-update` ответа не ждут,
+    // и незнакомая строка отказа означала бы для человека тишину — «камера не
+    // включилась, и почему-то никто ничего не сказал».
+    const protocol = apiSource('gateway/protocol.ts');
+    const reasons = protocol
+      .slice(protocol.indexOf('export type VoiceRefusal ='))
+      .split(';')[0]
+      .match(/'[a-z-]+'/g)!;
+    const mine: VoiceRefusal[] = ['video-off', 'screen-share-off', 'room-full', 'guests-full'];
     expect(reasons.map((r) => r.slice(1, -1))).toEqual(mine);
   });
 

@@ -122,6 +122,31 @@ export class VoiceSessions {
     return kinds;
   }
 
+  /**
+   * Сколько человек уже в комнате — так, как их считает предел на канал.
+   *
+   * Себя и своего же «призрака» не считаем. Призрак — прошлый сокет того же
+   * устройства (перезагрузка страницы, второй таб): он всё равно уйдёт из
+   * комнаты через мгновение (см. `evictGhost`), и посчитай мы его — человек,
+   * обновивший вкладку, упирался бы в предел, который сам же и занимает.
+   *
+   * `only` сужает счёт до гостей: у них свой предел, и общий его не заменяет.
+   */
+  occupants(room: string, client: AppSocket, only?: 'guests'): number {
+    const ghost = client.data.clientId ? this.members.get(client.data.clientId)?.id : undefined;
+    let count = 0;
+    for (const id of this.server.sockets.adapter.rooms.get(room) ?? []) {
+      if (id === client.id || id === ghost) continue;
+      // В adapter.rooms может висеть id уже отвалившегося сокета (окно
+      // connectionStateRecovery) — место он не занимает, как и в `peersIn`.
+      const sock = this.server.sockets.sockets.get(id);
+      if (!sock) continue;
+      if (only === 'guests' && !this.around.isGuest(sock)) continue;
+      count += 1;
+    }
+    return count;
+  }
+
   /** Соседи по комнате, какими их видит новичок: кому слать offer'ы. */
   peersIn(room: string): {
     id: string;

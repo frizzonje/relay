@@ -397,6 +397,11 @@ export class ChatHandlers {
       !this.settings.get<boolean>('direct.attachmentsAllowed')
     )
       return void this.refuse(client, 'attachments-off');
+    // Спойлер — просьба спрятать вложение до нажатия. Выключив его, реплику
+    // отвергаем целиком, а не отправляем открыто: «показал то, что просили
+    // спрятать» — худший из двух исходов, и человек о нём даже не узнал бы.
+    if (payload?.spoiler === true && !this.settings.get<boolean>('files.spoilerAllowed'))
+      return void this.refuse(client, 'spoiler-off');
     const bad = this.textRefusal(text);
     if (bad) return void this.refuse(client, bad);
 
