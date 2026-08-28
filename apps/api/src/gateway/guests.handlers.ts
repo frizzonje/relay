@@ -3,6 +3,7 @@ import type { AppServer, AppSocket } from './socket-data';
 import type { Directory } from './directory';
 import type { Perimeter } from './perimeter';
 import type { RegistryService } from './registry.service';
+import type { SettingsService } from '../settings/settings.service';
 import type { VoiceSessions } from './voice-sessions';
 import { issueGuestToken } from '../auth/auth';
 import {
@@ -31,6 +32,7 @@ export class GuestHandlers {
     private readonly voice: VoiceSessions,
     private readonly perimeter: Perimeter,
     private readonly directory: Directory,
+    private readonly settings: SettingsService,
     private readonly serverOf: () => AppServer,
     private readonly logger: Logger,
   ) {}
@@ -39,8 +41,9 @@ export class GuestHandlers {
     return this.serverOf();
   }
 
-  // Инвайт на войс-канал: подписанный токен без хранения на сервере (24 часа,
-  // многоразовый). Абсолютный URL строит клиент из window.location.origin.
+  // Инвайт на войс-канал: подписанный токен без хранения на сервере, срок жизни
+  // — `invites.ttlHours` (умолчание — прежние сутки), многоразовый. Абсолютный
+  // URL строит клиент из window.location.origin.
   // Возвращаемое значение = socket.io ack.
   //
   // Канал закрытого сервера зовёт гостя СЛУШАТЕЛЕМ. Приглашающий раздаёт по
@@ -51,6 +54,16 @@ export class GuestHandlers {
   createInvite(client: AppSocket, payload: InviteCreatePayload): InviteCreateResult {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
       return { ok: false, error: 'forbidden' };
+    // Приглашения могут быть выключены целиком или оставлены владельцу. Дверь
+    // для уже выданных ссылок закрывается отдельно и в другом месте
+    // (`access.guestsEnabled` в периметре): выданная ссылка живёт сутки, и
+    // перестать выдавать новые — не то же самое, что перестать пускать.
+    if (!this.settings.get<boolean>('invites.enabled')) return { ok: false, error: 'forbidden' };
+    if (
+      this.settings.get<string>('invites.whoCanInvite') === 'owner' &&
+      !this.perimeter.isOwner(client)
+    )
+      return { ok: false, error: 'forbidden' };
     const slug = trimmed(payload?.room, LIMIT.slug);
     // Канал должен существовать, быть голосовым и быть видимым этому сокету
     // (каналы закрытых серверов — только после ввода пароля).
@@ -58,8 +71,13 @@ export class GuestHandlers {
       .channelsFor(client)
       .find((c) => c.type === 'voice' && c.slug === slug);
     if (!channel) return { ok: false, error: 'not-found' };
-    const listen = this.isLockedChannel(slug);
-    const { token, exp } = issueGuestToken(slug, { listen });
+    // Слушателем гостя зовут либо потому, что канал под паролем (право говорить
+    // ссылка не раздаёт), либо потому, что так решил владелец для всех ссылок
+    // сразу (`invites.listenerByDefault`).
+    const listen =
+      this.isLockedChannel(slug) || this.settings.get<boolean>('invites.listenerByDefault');
+    const ttlMs = this.settings.get<number>('invites.ttlHours') * 60 * 60_000;
+    const { token, exp } = issueGuestToken(slug, { listen, ttlMs });
     return { ok: true, token, exp, listen };
   }
 

@@ -133,7 +133,7 @@
 | `access.deviceApprovalRequired` | boolean | true | now |
 | `access.sessionTtlDays` | number 1…365 | 30 | new |
 | `access.unlockAttempts` | number 1…50 | 8 | now |
-| `access.unlockLockoutMinutes` | number 1…1440 | 15 | now |
+| `access.unlockLockoutMinutes` | number 1…1440 | 5 | now |
 | `access.loginRatePerMinute` | number 1…600 | 20 | now |
 | `access.newIdentityQuietMinutes` | number 0…1440 | 0 | now |
 | `access.guestsEnabled` | boolean | true | now |
@@ -154,8 +154,8 @@
 
 | Ключ | Вид | Умолчание | Применение |
 |---|---|---|---|
-| `moderation.messageRatePerMinute` | number 1…600 | 60 | now |
-| `moderation.messageBurst` | number 1…60 | 10 | now |
+| `moderation.messageRatePerMinute` | number 1…1200 | 1200 | now |
+| `moderation.messageBurst` | number 1…40 | 40 | now |
 | `moderation.allowEdit` | boolean | true | now |
 | `moderation.editWindowMinutes` | number 0…10080 (0 — без предела) | 0 | now |
 | `moderation.allowDelete` | boolean | true | now |
@@ -202,7 +202,7 @@
 |---|---|---|---|
 | `direct.enabled` | boolean | true | now |
 | `direct.whoCanStart` | select `everyone` / `seen-together` / `nobody` | everyone | now |
-| `direct.firstMessagesPerHour` | number 0…100 | 5 | now |
+| `direct.firstMessagesPerHour` | number 0…100 | 100 | now |
 | `direct.attachmentsAllowed` | boolean | true | now |
 | `direct.retentionMode` | select `inherit` / `days` / `forever` / `ephemeral` | inherit | now |
 | `direct.retentionDays` | number 1…3650 | 14 | now |

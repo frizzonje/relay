@@ -21,6 +21,7 @@ import {
   parseCookies,
   verifyGuestToken,
   verifyToken,
+  type ChatRefusal,
 } from './index';
 
 /**
@@ -111,6 +112,30 @@ describe('константы совпадают с копией в api', () => {
     for (const emoji of REACTION_EMOJIS) expect(line, emoji).toContain(emoji);
     // И ничего сверх: лишний эмодзи на сервере клиент не нарисовал бы.
     expect(line.match(/'/g)!.length / 2).toBe(REACTION_EMOJIS.length);
+  });
+
+  it('причины отказа в ленте — те же, что называет сервер', () => {
+    // Отказ уезжает клиенту строкой, и незнакомую строку клиент не разберёт:
+    // вместо «правку выключили» человек увидит молчание — ровно то, ради
+    // избавления от чего событие и заведено.
+    const protocol = apiSource('gateway/protocol.ts');
+    const reasons = protocol
+      .slice(protocol.indexOf('export type ChatRefusal ='))
+      .split(';')[0]
+      .match(/'[a-z-]+'/g)!;
+    const mine: ChatRefusal[] = [
+      'read-only',
+      'rate',
+      'banned-word',
+      'links-off',
+      'attachments-off',
+      'edit-off',
+      'edit-window',
+      'delete-off',
+      'reactions-off',
+      'search-off',
+    ];
+    expect(reasons.map((r) => r.slice(1, -1))).toEqual(mine);
   });
 
   it('лимиты длин — те, на которых сервер режет', () => {

@@ -29,6 +29,7 @@ import { OwnerService } from '../identity/owner.service';
 import { PrefsService } from '../identity/prefs.service';
 import { ReadsService } from '../identity/reads.service';
 import { RolesService } from '../identity/roles.service';
+import { SettingsService } from '../settings/settings.service';
 import { UploadsService } from '../uploads';
 import { ChatService } from './chat.service';
 import { DmService } from './dm.service';
@@ -110,6 +111,14 @@ export const CLIENT_OUTDATED_ERROR = 'client-outdated';
 export const SERVER_OUTDATED_ERROR = 'server-outdated';
 
 /**
+ * Отказ во входе на время обслуживания. Тем же каналом и по той же причине, что
+ * и бан: у неподключённого сокета другого нет. Строка своя, а не общая с
+ * баном, — «сервер закрыт на час» и «вас забанили» человек переживает
+ * по-разному, и сказать одно вместо другого значит соврать.
+ */
+export const MAINTENANCE_ERROR = 'maintenance';
+
+/**
  * Версия контракта, названная клиентом. `undefined` — не назвал вовсе, то есть
  * клиент старше самого правила: до 1.0 поля не существовало.
  */
@@ -160,6 +169,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     private readonly reads: ReadsService,
     private readonly prefs: PrefsService,
     private readonly dm: DmService,
+    private readonly settings: SettingsService,
   ) {}
 
   private readonly logger = new Logger(SignalingGateway.name);
@@ -174,6 +184,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.identities,
     this.owner,
     this.roles,
+    this.settings,
     () => this.server,
     this.logger,
   );
@@ -219,6 +230,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.chat,
     this.perimeter,
     this.dm,
+    this.settings,
     () => this.server,
   );
 
@@ -246,11 +258,18 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.moderation,
     this.mentions,
     this.dm,
+    this.settings,
     () => this.server,
   );
 
   /** Дверь в личную переписку: открыть, войти, список, выбор собеседника. */
-  private readonly dmHandlers = new DmHandlers(this.dm, this.chat, this.chats, this.perimeter);
+  private readonly dmHandlers = new DmHandlers(
+    this.dm,
+    this.chat,
+    this.chats,
+    this.perimeter,
+    this.settings,
+  );
 
   /** Обработчики реестра: серверы и каналы. */
   private readonly registryHandlers = new RegistryHandlers(
@@ -262,6 +281,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.perimeter,
     this.directory,
     this.mentions,
+    this.settings,
     () => this.server,
     this.logger,
   );
@@ -296,6 +316,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.voice,
     this.perimeter,
     this.directory,
+    this.settings,
     () => this.server,
     this.logger,
   );
@@ -343,13 +364,14 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
         );
         return;
       }
-      void this.perimeter.recognize(socket).then((banned) => {
-        // Забаненного на всю инсталляцию не пускаем внутрь вовсе — отказом
-        // самой миддлвары, до `handleConnection`. Причина уезжает клиенту
-        // текстом ошибки: белый экран вместо объяснения — худший из ответов
-        // на «почему меня не пускает».
-        if (banned) {
-          next(new Error(BANNED_ERROR));
+      void this.perimeter.recognize(socket).then((refusal) => {
+        // Забаненного на всю инсталляцию — и всякого, кроме владельца, пока
+        // идёт обслуживание, — не пускаем внутрь вовсе: отказом самой
+        // миддлвары, до `handleConnection`. Причина уезжает клиенту текстом
+        // ошибки: белый экран вместо объяснения — худший из ответов на «почему
+        // меня не пускает».
+        if (refusal) {
+          next(new Error(refusal === 'banned' ? BANNED_ERROR : MAINTENANCE_ERROR));
           return;
         }
         next();
@@ -406,6 +428,15 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       (client.handshake.auth as { clientId?: unknown } | undefined)?.clientId,
     );
     if (guest) {
+      // Гостей может не быть вовсе. Проверяем здесь, а не при выдаче ссылки:
+      // выданные живут сутки, и выключение обязано закрыть дверь тем, у кого
+      // ссылка уже на руках. Отвечаем тем же событием, что и выгнанному, —
+      // клиент умеет показать «сюда нельзя», а молча оборванный сокет он
+      // переподключал бы вечно.
+      if (!this.perimeter.guestsAllowed()) {
+        client.emit('kicked', { room: guest.slug });
+        return;
+      }
       this.perimeter.admit(client, guest);
       // Выгнанному дверь не открывается заново: без этого «выгнать» значило бы
       // «подождать пять секунд» — гость возвращается по той же ссылке, она

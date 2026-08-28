@@ -2,7 +2,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueGuestToken, issueToken } from '../auth/auth';
 import { asSocket } from './testkit';
 import { PROTOCOL_VERSION } from './protocol';
-import { MAIN, connect, makeGateway, settle, slugOf, useGatewayStand } from './gateway.testkit';
+import { defaults } from '../settings/catalog';
+import { RL_CAPACITY, RL_REFILL_PER_SEC } from './perimeter';
+import {
+  MAIN,
+  connect,
+  connectAs,
+  knock,
+  makeGateway,
+  makeOwner,
+  personCookie,
+  settle,
+  slugOf,
+  tune,
+  useGatewayStand,
+} from './gateway.testkit';
 
 /**
  * Контур доступа: кто это, что ему здесь можно и куда его не пускают.
@@ -693,5 +707,148 @@ describe('ограничение частоты', () => {
       gw.handleIceCandidate(asSocket(a), { to: 'b', candidate: i });
     }
     expect(b.all('ice-candidate')).toHaveLength(200);
+  });
+});
+
+// ── Настройки инсталляции ─────────────────────────────────────────────────
+//
+// Всё, что ниже, проверяет одно и то же с разных сторон: параметр панели не
+// «записан», а ДЕЙСТВУЕТ, и до первой записи ведёт себя ровно как прежде.
+
+describe('режим обслуживания', () => {
+  it('пускает владельца и отвергает остальных', async () => {
+    const { gw, server, owner, settings } = await makeGateway();
+    const boss = await personCookie('Хозяйка');
+    const guest = await personCookie('Гостья');
+    await makeOwner(owner, boss.identityId);
+    await tune(settings, 'maintenance.mode', true);
+
+    // Владелец узнаётся той же проверкой владения, что и везде, — не тем, что
+    // ему показали кнопку.
+    expect((await knock(gw, server, boss.cookie, 'boss')).refused).toBeUndefined();
+    const outsider = await knock(gw, server, guest.cookie, 'guest');
+    expect(outsider.refused?.message).toBe('maintenance');
+    // Причина своя, а не общая с баном: «закрыто на час» и «вас забанили» —
+    // разные новости.
+    expect(outsider.refused?.message).not.toBe('banned');
+  });
+
+  it('без записи в панели дверь открыта всем — как было всегда', async () => {
+    const { gw, server } = await makeGateway();
+    const anon = await personCookie('Просто человек');
+    expect((await knock(gw, server, anon.cookie)).refused).toBeUndefined();
+  });
+});
+
+describe('гости и приглашения', () => {
+  it('ссылка, выданная вчера, сегодня не пускает — и говорит об этом', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'access.guestsEnabled', false);
+    const { token } = issueGuestToken('voice-obshchii');
+    const sock = server.connect({ id: 'guest', auth: { guest: token } });
+    gw.handleConnection(asSocket(sock));
+    // Не молча оборванный сокет: такой клиент переподключал бы вечно.
+    expect(sock.last('kicked')).toEqual({ room: 'voice-obshchii' });
+    expect(sock.got('voice-presence')).toBe(false);
+  });
+
+  it('приглашения выключены — ссылку больше не выдают', async () => {
+    const { gw, server, settings } = await makeGateway();
+    const a = connect(gw, server, { id: 'a' });
+    await tune(settings, 'invites.enabled', false);
+    expect(gw.handleInviteCreate(asSocket(a), { room: 'voice-obshchii' })).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+  });
+
+  it('приглашать может только владелец — если так решили', async () => {
+    const { gw, server, settings, owner } = await makeGateway();
+    const boss = await personCookie('Хозяйка');
+    await makeOwner(owner, boss.identityId);
+    await tune(settings, 'invites.whoCanInvite', 'owner');
+
+    const stranger = connect(gw, server, { id: 'a' });
+    expect(gw.handleInviteCreate(asSocket(stranger), { room: 'voice-obshchii' })).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+    const hers = await connectAs(gw, server, boss.cookie, { id: 'boss' });
+    expect(gw.handleInviteCreate(asSocket(hers), { room: 'voice-obshchii' })).toMatchObject({
+      ok: true,
+    });
+  });
+
+  it('срок жизни ссылки и право говорить по ней — из настроек', async () => {
+    const { gw, server, settings } = await makeGateway();
+    const a = connect(gw, server, { id: 'a' });
+    await tune(settings, 'invites.ttlHours', 1);
+    await tune(settings, 'invites.listenerByDefault', true);
+    const res = gw.handleInviteCreate(asSocket(a), { room: 'voice-obshchii' });
+    expect(res).toMatchObject({ ok: true, listen: true });
+    // Час, а не прежние сутки: срок считает сервер, и в токене он подписан.
+    expect(res.ok && res.exp - Date.now()).toBeLessThanOrEqual(60 * 60_000);
+    expect(res.ok && res.exp - Date.now()).toBeGreaterThan(59 * 60_000);
+  });
+
+  it('пауза выгнанному гостю берётся из настройки, а не из константы', async () => {
+    const { gw, server, settings } = await makeGateway();
+    const a = connect(gw, server, { id: 'a', clientId: 'dev-a' });
+    const { token } = issueGuestToken('voice-obshchii');
+    const guest = connect(gw, server, { id: 'guest', clientId: 'dev-guest', guest: token });
+    gw.handleJoin(asSocket(guest), { room: 'voice-obshchii', name: 'Гость' });
+    settle();
+    await tune(settings, 'invites.guestKickCooldownMinutes', 5);
+    gw.handleGuestKick(asSocket(a), { id: 'guest' });
+
+    // Через шесть минут дверь открыта, хотя прежний час ещё не вышел.
+    vi.advanceTimersByTime(6 * 60_000);
+    const again = server.connect({ id: 'guest-2', auth: { clientId: 'dev-guest', guest: token } });
+    gw.handleConnection(asSocket(again));
+    expect(again.got('kicked')).toBe(false);
+  });
+});
+
+describe('лимитер реплик', () => {
+  it('умолчания равны общему бакету — иначе разговор порезало бы в день обновления', () => {
+    const d = defaults();
+    expect(d['moderation.messageBurst']).toBe(RL_CAPACITY);
+    expect(d['moderation.messageRatePerMinute']).toBe(RL_REFILL_PER_SEC * 60);
+  });
+
+  it('берёт скорость и всплеск из настроек и говорит, во что упёрся', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'moderation.messageBurst', 2);
+    await tune(settings, 'moderation.messageRatePerMinute', 60);
+    const a = connect(gw, server, { id: 'a' });
+    await gw.handleChatJoin(asSocket(a), { room: 'obshchii', name: 'A' });
+    server.clearAll();
+
+    for (let i = 0; i < 4; i++) await gw.handleChatMessage(asSocket(a), { text: `${i}` });
+    // Всплеск в две реплики — две и доехали; про остальные человеку сказали.
+    expect(a.all('chat')).toHaveLength(2);
+    expect(a.last('chat-refused')).toEqual({ reason: 'rate' });
+
+    // Минута — шестьдесят реплик, то есть одна в секунду.
+    vi.advanceTimersByTime(1000);
+    a.clear();
+    await gw.handleChatMessage(asSocket(a), { text: 'после паузы' });
+    expect(a.got('chat')).toBe(true);
+  });
+
+  it('порог неудачных паролей берётся из настройки', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'access.unlockAttempts', 1);
+    const a = connect(gw, server, { id: 'a' });
+    await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'мой', password: 'пароль' });
+    const b = connect(gw, server, { id: 'b', ip: '10.9.9.9' });
+
+    // Первая неудача бесплатна, вторая назначает простой — а третья попытка,
+    // даже с верным паролем, до scrypt уже не доходит.
+    await gw.handleServerUnlock(asSocket(b), { id: 'srv', password: 'не то' });
+    await gw.handleServerUnlock(asSocket(b), { id: 'srv', password: 'не то' });
+    b.clear();
+    await gw.handleServerUnlock(asSocket(b), { id: 'srv', password: 'пароль' });
+    expect(b.last('server-unlock-result')).toEqual({ id: 'srv', ok: false });
   });
 });

@@ -8,9 +8,11 @@ import {
   makeOwner,
   ownServer,
   personCookie,
+  putUpload,
   say,
   settle,
   slugOf,
+  tune,
   until,
   useGatewayStand,
 } from './gateway.testkit';
@@ -23,9 +25,10 @@ let gw: SignalingGateway;
 let server: FakeServer;
 let roles: Awaited<ReturnType<typeof makeGateway>>['roles'];
 let owner: Awaited<ReturnType<typeof makeGateway>>['owner'];
+let settings: Awaited<ReturnType<typeof makeGateway>>['settings'];
 
 beforeEach(async () => {
-  ({ gw, server, roles, owner } = await makeGateway());
+  ({ gw, server, roles, owner, settings } = await makeGateway());
 });
 
 describe('открытие переписки', () => {
@@ -367,5 +370,101 @@ describe('чего в беседе нет', () => {
       mentions: [peerFingerprint],
     });
     expect(yours.got('mention')).toBe(false);
+  });
+});
+
+// ── Настройки инсталляции ─────────────────────────────────────────────────
+
+describe('настройки личной переписки', () => {
+  /** Двое с ключами: минимум, на котором ЛС вообще что-то значат. */
+  async function pair() {
+    const me = await personCookie('я');
+    const you = await personCookie('ты');
+    const mine = await connectAs(gw, server, me.cookie, { id: 'mine' });
+    const yours = await connectAs(gw, server, you.cookie, { id: 'yours' });
+    return { me, you, mine, yours };
+  }
+
+  it('выключенные ЛС отвечают forbidden на все четыре двери сразу', async () => {
+    const { you, mine } = await pair();
+    await tune(settings, 'direct.enabled', false);
+    const forbidden = { ok: false, error: 'forbidden' };
+    expect(await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint })).toEqual(
+      forbidden,
+    );
+    expect(await gw.handleDmList(asSocket(mine))).toEqual(forbidden);
+    expect(await gw.handleDmPeople(asSocket(mine), { query: '' })).toEqual(forbidden);
+    // Список без двери в него — это показать человеку то, чего он не откроет.
+    expect(await gw.handleDmJoin(asSocket(mine), { slug: 'dm-000000000000000000000000' })).toEqual(
+      forbidden,
+    );
+  });
+
+  it('«писать первым нельзя никому» не заводит новую переписку, но не мешает старой', async () => {
+    const { me, you, mine, yours } = await pair();
+    // Беседа заведена, пока правило ещё разрешало.
+    const opened = await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint });
+    expect(opened.ok).toBe(true);
+
+    await tune(settings, 'direct.whoCanStart', 'nobody');
+    // Уже заведённая открывается обеими сторонами как прежде: правило про
+    // «первым» не обрывает разговор, который уже идёт.
+    expect((await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint })).ok).toBe(true);
+    expect((await gw.handleDmOpen(asSocket(yours), { fingerprint: me.fingerprint })).ok).toBe(true);
+
+    // А новая — нет, и это отказ в праве, а не «такого человека нет».
+    const third = await personCookie('третий');
+    expect(await gw.handleDmOpen(asSocket(mine), { fingerprint: third.fingerprint })).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+  });
+
+  it('«только тем, с кем пересекался» считает по сказанному в общем канале', async () => {
+    const { you, mine, yours } = await pair();
+    await tune(settings, 'direct.whoCanStart', 'seen-together');
+    expect(await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint })).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+
+    // Оба сказали по слову в одном канале — этого и довольно.
+    await say(gw, mine, 'obshchii', 'привет всем');
+    await say(gw, yours, 'obshchii', 'и тебе');
+    expect((await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint })).ok).toBe(true);
+  });
+
+  it('счёт первых сообщений в час ограничивает только новые переписки', async () => {
+    const { you, mine } = await pair();
+    const third = await personCookie('третий');
+    await tune(settings, 'direct.firstMessagesPerHour', 1);
+
+    expect((await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint })).ok).toBe(true);
+    expect(await gw.handleDmOpen(asSocket(mine), { fingerprint: third.fingerprint })).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+    // Открыть уже заведённую квота не мешает: считаются незнакомцы, а не входы.
+    expect((await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint })).ok).toBe(true);
+  });
+
+  it('вложение в беседе выключается отдельно от вложений в каналах', async () => {
+    const { you, mine } = await pair();
+    const opened = await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint });
+    const slug = opened.ok ? opened.conversation.slug : '';
+    await gw.handleDmJoin(asSocket(mine), { slug });
+    await putUpload('файл-1');
+    await tune(settings, 'direct.attachmentsAllowed', false);
+    mine.clear();
+
+    await gw.handleChatMessage(asSocket(mine), { uploadId: 'файл-1' });
+    expect(mine.got('chat')).toBe(false);
+    expect(mine.last('chat-refused')).toEqual({ reason: 'attachments-off' });
+
+    // В обычном канале тот же файл проезжает: настройка про личное, а не про
+    // вложения вообще.
+    await gw.handleChatJoin(asSocket(mine), { room: 'obshchii', name: 'я' });
+    await gw.handleChatMessage(asSocket(mine), { uploadId: 'файл-1' });
+    expect(mine.got('chat')).toBe(true);
   });
 });

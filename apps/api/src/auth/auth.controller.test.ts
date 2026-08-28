@@ -1,5 +1,7 @@
 import type { Request, Response } from 'express';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { DataSource } from 'typeorm';
+import { SettingsService } from '../settings/settings.service';
 import { AUTH_COOKIE, verifyToken } from './auth';
 import { AuthController } from './auth.controller';
 
@@ -47,6 +49,16 @@ function req(ip = '10.0.0.1', secure = false): Request {
   return { ip, secure } as unknown as Request;
 }
 
+/**
+ * Контроллер со своим счётчиком попыток. Настройки настоящие, но не
+ * загруженные: без переопределений `get` отвечает умолчаниями каталога, то есть
+ * ровно тем порогом, с которым relay жил всегда. База здесь не нужна и не
+ * поднимается — этот файл проверяет счётчик, а не хранение.
+ */
+function controller(): AuthController {
+  return new AuthController(new SettingsService(undefined as unknown as DataSource));
+}
+
 beforeEach(() => {
   process.env.SITE_PASSWORD = 'верный-пароль';
 });
@@ -56,7 +68,7 @@ afterEach(() => {
 
 describe('POST /api/login', () => {
   it('верный пароль выдаёт куку-пропуск, которая потом проходит проверку', () => {
-    const c = new AuthController();
+    const c = controller();
     const r = res();
     c.login(req(), r, { password: 'верный-пароль' });
     expect(r.body).toEqual({ ok: true });
@@ -67,7 +79,7 @@ describe('POST /api/login', () => {
   });
 
   it('secure у куки повторяет протокол запроса — иначе её не примут по https', () => {
-    const c = new AuthController();
+    const c = controller();
     const plain = res();
     c.login(req('10.0.0.1', false), plain, { password: 'верный-пароль' });
     expect(plain.cookies[AUTH_COOKIE].opts.secure).toBe(false);
@@ -78,7 +90,7 @@ describe('POST /api/login', () => {
   });
 
   it('неверный и пустой пароль — 401 без куки', () => {
-    const c = new AuthController();
+    const c = controller();
     for (const password of ['мимо', '', 42, undefined]) {
       const r = res();
       c.login(req(), r, { password });
@@ -89,7 +101,7 @@ describe('POST /api/login', () => {
 
   it('без пароля сайта пускает всех и куку не выдаёт — её нечем подписывать', () => {
     delete process.env.SITE_PASSWORD;
-    const c = new AuthController();
+    const c = controller();
     const r = res();
     c.login(req(), r, {});
     expect(r.body).toEqual({ ok: true });
@@ -97,7 +109,7 @@ describe('POST /api/login', () => {
   });
 
   it('после восьми неудач адрес получает 429 вместо очередной проверки', () => {
-    const c = new AuthController();
+    const c = controller();
     for (let i = 0; i < 8; i++) {
       const r = res();
       c.login(req('9.9.9.9'), r, { password: `мимо-${i}` });
@@ -111,7 +123,7 @@ describe('POST /api/login', () => {
   });
 
   it('счётчик у каждого адреса свой — сосед не страдает', () => {
-    const c = new AuthController();
+    const c = controller();
     for (let i = 0; i < 8; i++) c.login(req('9.9.9.9'), res(), { password: 'мимо' });
     const neighbour = res();
     c.login(req('8.8.8.8'), neighbour, { password: 'верный-пароль' });
@@ -119,7 +131,7 @@ describe('POST /api/login', () => {
   });
 
   it('успешный вход сбрасывает накопленные неудачи', () => {
-    const c = new AuthController();
+    const c = controller();
     for (let i = 0; i < 7; i++) c.login(req('7.7.7.7'), res(), { password: 'мимо' });
     c.login(req('7.7.7.7'), res(), { password: 'верный-пароль' });
     // Счётчик обнулён: ещё семь ошибок снова не запирают.
@@ -133,7 +145,7 @@ describe('POST /api/login', () => {
 
 describe('POST /api/logout', () => {
   it('чистит куку и всегда отвечает успехом — выход идемпотентен', () => {
-    const c = new AuthController();
+    const c = controller();
     const r = res();
     c.logout(r);
     expect(r.cleared).toEqual([AUTH_COOKIE]);

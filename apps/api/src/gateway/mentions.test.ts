@@ -8,6 +8,7 @@ import {
   personCookie,
   settle,
   slugOf,
+  tune,
   until,
   useGatewayStand,
 } from './gateway.testkit';
@@ -244,5 +245,57 @@ describe('упоминания', () => {
         expect(await gw.handleMentionSuggest(asSocket(a), { prefix })).toMatchObject({ ok: true });
       }
     });
+  });
+});
+
+// ── Настройки инсталляции ─────────────────────────────────────────────────
+
+describe('сколько имён носит реплика', () => {
+  it('потолок упоминаний берётся из настройки — и разбором, и снимком сразу', async () => {
+    const { gw, server, settings } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const boris = await personCookie('Борис');
+    const vera = await personCookie('Вера');
+    const author = await connectAs(gw, server, anya.cookie, { id: 'author' });
+    const one = await connectAs(gw, server, boris.cookie, { id: 'one' });
+    const two = await connectAs(gw, server, vera.cookie, { id: 'two' });
+    for (const sock of [author, one, two]) {
+      await gw.handleChatJoin(asSocket(sock), { room: 'obshchii' });
+    }
+    server.clearAll();
+
+    await tune(settings, 'moderation.maxMentionsPerMessage', 1);
+    await gw.handleChatMessage(asSocket(author), {
+      text: '@Борис и @Вера, зайдите',
+      mentions: [boris.fingerprint, vera.fingerprint],
+    });
+
+    // Читают потолок двое — разбор и снимок реплики, — и читать они обязаны
+    // одно и то же: разойдись они, названный в снимке не получил бы вызова.
+    const message = one.last('chat') as { mentions?: { fingerprint: string }[] };
+    expect(message.mentions).toHaveLength(1);
+    expect(message.mentions?.[0].fingerprint).toBe(boris.fingerprint);
+    expect(one.got('mention')).toBe(true);
+    expect(two.got('mention')).toBe(false);
+  });
+
+  it('ноль имён — упоминаний нет вовсе, а реплика доезжает', async () => {
+    const { gw, server, settings } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const boris = await personCookie('Борис');
+    const author = await connectAs(gw, server, anya.cookie, { id: 'author' });
+    const one = await connectAs(gw, server, boris.cookie, { id: 'one' });
+    await gw.handleChatJoin(asSocket(author), { room: 'obshchii' });
+    await gw.handleChatJoin(asSocket(one), { room: 'obshchii' });
+    server.clearAll();
+
+    await tune(settings, 'moderation.maxMentionsPerMessage', 0);
+    await gw.handleChatMessage(asSocket(author), {
+      text: '@Борис, зайди',
+      mentions: [boris.fingerprint],
+    });
+    expect(one.last('chat')).toMatchObject({ text: '@Борис, зайди' });
+    expect(one.last('chat')).not.toHaveProperty('mentions');
+    expect(one.got('mention')).toBe(false);
   });
 });

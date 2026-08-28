@@ -1,10 +1,14 @@
 import { Body, Controller, Post, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { SettingsService } from '../settings/settings.service';
 import { AUTH_COOKIE, authEnabled, issueToken, passwordMatches } from './auth';
 
-// Защита от подбора: на IP — не больше MAX_ATTEMPTS неудач за окно
+// Защита от подбора: на IP — не больше `access.unlockAttempts` неудач за окно.
+// Число то же самое, что у пароля закрытого сервера (FREE_FAILS в
+// gateway/unlock.ts), и настройка у них одна на двоих: «сколько раз можно
+// ошибиться паролем» — один вопрос, и два разных ответа на него в одной
+// инсталляции означали бы, что одна из двух дверей настройке не подчиняется.
 const ATTEMPT_WINDOW_MS = 10 * 60 * 1000;
-const MAX_ATTEMPTS = 8;
 
 interface AttemptEntry {
   count: number;
@@ -17,6 +21,8 @@ interface AttemptEntry {
 @Controller()
 export class AuthController {
   private readonly attempts = new Map<string, AttemptEntry>();
+
+  constructor(private readonly settings: SettingsService) {}
 
   @Post('api/login')
   login(@Req() req: Request, @Res() res: Response, @Body() body: { password?: unknown }) {
@@ -65,7 +71,7 @@ export class AuthController {
       this.attempts.delete(ip);
       return false;
     }
-    return entry.count >= MAX_ATTEMPTS;
+    return entry.count >= this.settings.get<number>('access.unlockAttempts');
   }
 
   private recordFailure(ip: string) {

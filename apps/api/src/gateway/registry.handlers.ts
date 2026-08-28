@@ -8,17 +8,10 @@ import { isDmSlug } from './dm.service';
 import type { Mentions } from './mentions';
 import type { Perimeter } from './perimeter';
 import type { ReadsService } from '../identity/reads.service';
+import type { SettingsService } from '../settings/settings.service';
 import type { VoiceSessions } from './voice-sessions';
 import { Channel, VoiceMode } from './registry';
-import {
-  MAIN_SERVER_ID,
-  MAX_CHANNELS,
-  MAX_CHANNELS_PER_SERVER,
-  MAX_SERVERS,
-  MAX_SERVERS_PER_PERSON,
-  RegistryService,
-  channelSlug,
-} from './registry.service';
+import { MAIN_SERVER_ID, MAX_CHANNELS, RegistryService, channelSlug } from './registry.service';
 import { createdBy, ownedBy } from './ownership';
 import { clientIp, hashServerPassword, issueUnlockToken } from './unlock';
 import {
@@ -70,6 +63,7 @@ export class RegistryHandlers {
     private readonly perimeter: Perimeter,
     private readonly directory: Directory,
     private readonly mentions: Mentions,
+    private readonly settings: SettingsService,
     private readonly serverOf: () => AppServer,
     private readonly logger: Logger,
   ) {}
@@ -78,14 +72,32 @@ export class RegistryHandlers {
     return this.serverOf();
   }
 
+  /**
+   * Потолок имени сервера или канала. Умолчание равно `LIMIT.name` — тому, по
+   * чему сервер резал имена всегда; настройка его ужимает или отпускает, но
+   * читают её все три места сразу (заведение сервера, заведение канала,
+   * переименование), иначе имя, принятое при создании, не прошло бы правку.
+   */
+  private nameLimit(): number {
+    return this.settings.get<number>('spaces.channelNameMaxLength');
+  }
+
   // ===== Реестр серверов =====
   async createServer(client: AppSocket, payload: ServerCreatePayload): Promise<ServerCreateResult> {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
       return { ok: false, error: 'forbidden' };
+    // Заводить пространства может либо кто угодно, либо только владелец. Это
+    // проверка сервера, а не спрятанная кнопка: «+» в интерфейсе рисуется по
+    // той же настройке, но держится запрет здесь.
+    if (
+      this.settings.get<string>('spaces.creationAllowed') === 'owner' &&
+      !this.perimeter.isOwner(client)
+    )
+      return { ok: false, error: 'forbidden' };
     // id генерирует клиент — принимаем как есть (санитизируем длину), чтобы он мог
     // сразу открыть новый сервер и создавать в нём каналы, не дожидаясь ответа.
     const id = trimmed(payload?.id, LIMIT.id);
-    const name = trimmed(payload?.name, LIMIT.name);
+    const name = trimmed(payload?.name, this.nameLimit());
     if (!id || !name) return { ok: false, error: 'bad-name' };
     const full = this.serversFull(client);
     if (full) return full;
@@ -105,6 +117,11 @@ export class RegistryHandlers {
     // а цикла событий, — и цикл «создать закрытый сервер, удалить, повторить»
     // укладывал бы сигналинг с одного сокета.
     const password = str(payload?.password);
+    // Закрытые серверы могут быть выключены целиком. Отказываем, а не заводим
+    // открытый молча: человек, поставивший пароль, ушёл бы с уверенностью, что
+    // его сервер заперт, — и это худший исход из возможных здесь.
+    if (password && !this.settings.get<boolean>('spaces.lockedServersAllowed'))
+      return { ok: false, error: 'forbidden' };
     const passwordHash = password ? await hashServerPassword(password) : undefined;
     // Пока считался хэш, реестр мог измениться: тот же id мог занять другой
     // сокет, а свободное место — кончиться.
@@ -147,10 +164,12 @@ export class RegistryHandlers {
    * пятёрку значило бы изображать запрет там, где его нет.
    */
   private serversFull(client: AppSocket): ServerCreateResult | null {
-    if (this.registry.servers.length >= MAX_SERVERS)
-      return { ok: false, error: 'limit', scope: 'install', limit: MAX_SERVERS };
+    const install = this.settings.get<number>('spaces.maxServersInstall');
+    if (this.registry.servers.length >= install)
+      return { ok: false, error: 'limit', scope: 'install', limit: install };
     const who = this.perimeter.claimant(client);
     if (who.owner) return null;
+    const perPerson = this.settings.get<number>('spaces.maxServersPerIdentity');
     // Не назвавшийся вовсе (ни ключа, ни имени устройства) заводит записи
     // ничьи — и его счётом становятся они же. Иначе не назваться было бы
     // способом обойти личный потолок, то есть сам потолок держался бы на
@@ -160,8 +179,8 @@ export class RegistryHandlers {
     const mine = this.registry.servers.filter(
       (s) => createdBy(s, who) || (nameless && !s.creatorId && !s.creatorIdentityId),
     ).length;
-    return mine >= MAX_SERVERS_PER_PERSON
-      ? { ok: false, error: 'limit', scope: 'person', limit: MAX_SERVERS_PER_PERSON }
+    return mine >= perPerson
+      ? { ok: false, error: 'limit', scope: 'person', limit: perPerson }
       : null;
   }
 
@@ -343,7 +362,7 @@ export class RegistryHandlers {
     if (serverId === MAIN_SERVER_ID) return { ok: false, error: 'forbidden' };
     // В закрытый сервер канал создаёт только разблокировавший его сокет.
     if (!this.perimeter.isOpenTo(client, srv)) return { ok: false, error: 'forbidden' };
-    const rawName = trimmed(payload?.name, LIMIT.name);
+    const rawName = trimmed(payload?.name, this.nameLimit());
     // Адрес комнаты несёт метку своего сервера — см. `channelSlug`. Поэтому
     // столкнуться слаг может только со своим же каналом на этом же сервере.
     const slug = channelSlug(rawName, serverId);
@@ -360,11 +379,9 @@ export class RegistryHandlers {
       return { ok: false, error: 'limit', scope: 'install', limit: MAX_CHANNELS };
     // Потолок каналов — у сервера, а не у инсталляции: иначе полсотни каналов
     // в чужом сервере не давали бы завести первый в своём.
-    if (
-      this.registry.channels.filter((c) => c.serverId === serverId).length >=
-      MAX_CHANNELS_PER_SERVER
-    )
-      return { ok: false, error: 'limit', scope: 'server', limit: MAX_CHANNELS_PER_SERVER };
+    const perServer = this.settings.get<number>('spaces.maxChannelsPerServer');
+    if (this.registry.channels.filter((c) => c.serverId === serverId).length >= perServer)
+      return { ok: false, error: 'limit', scope: 'server', limit: perServer };
     // Проверка всё равно глобальная: слаг уникален по всей инсталляции (по нему
     // ключуются комнаты и лента), и уникальный индекс в базе устроен так же.
     // Метка сервера делает это столкновение своим — но полагаться на неё как на
@@ -384,12 +401,25 @@ export class RegistryHandlers {
       ...this.creatorOf(client),
       // Режим — только у голосовых; p2p по умолчанию не пишем, отсутствие поля
       // и есть p2p (реестр не распухает, старые записи читаются одинаково).
-      ...(type === 'voice' && payload?.mode === 'sfu' ? { mode: 'sfu' as const } : {}),
+      // Клиент называет режим сам; не назвал — берём тот, что задан для новых
+      // каналов инсталляции (`spaces.defaultVoiceMode`, умолчание p2p).
+      ...(type === 'voice' && this.newChannelMode(payload?.mode) === 'sfu'
+        ? { mode: 'sfu' as const }
+        : {}),
     };
     this.registry.channels.push(channel);
     this.directory.broadcastChannels();
     await this.registry.persist();
     return { ok: true, slug };
+  }
+
+  /**
+   * С каким транспортом рождается голосовой канал: с названным клиентом или, —
+   * если он промолчал, — с тем, что выбран для инсталляции.
+   */
+  private newChannelMode(raw: unknown): VoiceMode {
+    if (raw === 'sfu' || raw === 'p2p') return raw;
+    return this.settings.get<VoiceMode>('spaces.defaultVoiceMode');
   }
 
   // Смена транспорта голосового канала. Права те же, что у channel-delete:
@@ -485,7 +515,7 @@ export class RegistryHandlers {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
       return { ok: false, error: 'forbidden' };
     const id = str(payload?.id);
-    const name = trimmed(payload?.name, LIMIT.name);
+    const name = trimmed(payload?.name, this.nameLimit());
     if (!id) return { ok: false, error: 'not-found' };
     if (!name) return { ok: false, error: 'bad-name' };
     const found = this.editableChannel(client, id);

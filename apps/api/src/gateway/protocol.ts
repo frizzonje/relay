@@ -33,6 +33,13 @@ export const PROTOCOL_VERSION = 1;
  * Потолки полей, приходящих от клиента. Названы по смыслу, а не по месту: тег
  * участника — это двадцать символов в `join`, в `rename` и в `chat-join`, и
  * расходиться эти три числа не должны.
+ *
+ * Три из них с этапа C стали умолчаниями настроек — `name`
+ * (`spaces.channelNameMaxLength`), `message` (`messages.maxLength`) и
+ * `mentions` (`moderation.maxMentionsPerMessage`): действующее число
+ * спрашивает обработчик, а здесь остаётся то, с чем инсталляция живёт, пока
+ * панель не открывали. Оно же уезжает клиенту контрактом (`LIMITS` в
+ * `@relay/shared`), поэтому менять его тут нельзя в одиночку.
  */
 export const LIMIT = {
   /** id сервера — его придумывает клиент, чтобы не ждать ответа. */
@@ -530,6 +537,36 @@ export interface ReplyRef {
 export interface MentionRef {
   fingerprint: string;
   nick: string;
+}
+
+/**
+ * Почему реплика не принята.
+ *
+ * События ленты (`chat-message`, `chat-edit`, `chat-delete`, `chat-react`)
+ * ответа не ждут — ack'а у них нет и заводить его поздно, — поэтому отказ
+ * уезжает отдельным событием тому, кому отказали. Молчать здесь нельзя: до
+ * этапа C всякий отказ в ленте выглядел одинаково — «нажал, и ничего не
+ * произошло», — а теперь у него появились причины, которые человек может
+ * устранить сам (убрать ссылку, дождаться конца обслуживания, не повторять
+ * слово). Это тот же выбор, что у `voice-locked` и `chat-closed`.
+ *
+ * Причины разные намеренно: «правку выключили» и «правка протухла» человек
+ * чинит по-разному, а один общий отказ советовал бы невозможное.
+ */
+export type ChatRefusal =
+  | 'read-only'
+  | 'rate'
+  | 'banned-word'
+  | 'links-off'
+  | 'attachments-off'
+  | 'edit-off'
+  | 'edit-window'
+  | 'delete-off'
+  | 'reactions-off'
+  | 'search-off';
+
+export interface ChatRefusedRelay {
+  reason: ChatRefusal;
 }
 
 /**

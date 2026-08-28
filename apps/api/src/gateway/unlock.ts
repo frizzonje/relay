@@ -179,10 +179,13 @@ export function clientIp(handshake: {
 }
 
 // Порог тот же, что у входа на сайт (MAX_ATTEMPTS в auth.controller): ошибиться
-// восемь раз подряд живой человек ещё может, дальше это уже не опечатки.
-const FREE_FAILS = 8;
+// восемь раз подряд живой человек ещё может, дальше это уже не опечатки. Оба
+// числа с этапа C — умолчания настроек `access.unlockAttempts` и
+// `access.unlockLockoutMinutes`; здесь они остаются на случай, когда счётчик
+// заводят без них (тесты самого счётчика).
+export const FREE_FAILS = 8;
 const COOLDOWN_MS = 30_000;
-const COOLDOWN_MAX_MS = 5 * 60_000;
+export const COOLDOWN_MAX_MS = 5 * 60_000;
 // Тишина в течение часа = разговор окончен, запись можно забыть.
 const FORGET_MS = 60 * 60_000;
 const MAX_TRACKED = 10_000;
@@ -193,15 +196,27 @@ interface Attempt {
   ts: number;
 }
 
+/**
+ * Число, которое спрашивают в момент дела. Порог и потолок простоя приезжают из
+ * настроек, а те меняются под живым процессом: сняв их один раз в конструкторе,
+ * счётчик до перезапуска считал бы по прежнему порогу — то есть настройка была
+ * бы, а действовать начинала бы завтра.
+ */
+type Amount = number | (() => number);
+
 /** Неудачные попытки разблокировки, по паре «адрес + сервер». */
 export class UnlockAttempts {
   private readonly entries = new Map<string, Attempt>();
 
   constructor(
-    private readonly free = FREE_FAILS,
-    private readonly cooldownMs = COOLDOWN_MS,
-    private readonly maxCooldownMs = COOLDOWN_MAX_MS,
+    private readonly free: Amount = FREE_FAILS,
+    private readonly cooldownMs: Amount = COOLDOWN_MS,
+    private readonly maxCooldownMs: Amount = COOLDOWN_MAX_MS,
   ) {}
+
+  private static amount(value: Amount): number {
+    return typeof value === 'function' ? value() : value;
+  }
 
   private static key(ip: string, serverId: string): string {
     return ip + '\0' + serverId;
@@ -219,9 +234,15 @@ export class UnlockAttempts {
     const entry = this.entries.get(key) ?? { count: 0, until: 0, ts: now };
     entry.count += 1;
     entry.ts = now;
-    if (entry.count > this.free) {
-      const over = entry.count - this.free;
-      entry.until = now + Math.min(this.cooldownMs * 2 ** (over - 1), this.maxCooldownMs);
+    const free = UnlockAttempts.amount(this.free);
+    if (entry.count > free) {
+      const over = entry.count - free;
+      entry.until =
+        now +
+        Math.min(
+          UnlockAttempts.amount(this.cooldownMs) * 2 ** (over - 1),
+          UnlockAttempts.amount(this.maxCooldownMs),
+        );
     }
     this.entries.set(key, entry);
     if (this.entries.size > MAX_TRACKED) this.forgetStale(now);

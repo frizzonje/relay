@@ -3,9 +3,10 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { IdentityService, type Speaker } from '../identity/identity.service';
 import { OwnerService } from '../identity/owner.service';
 import { RolesService } from '../identity/roles.service';
+import type { SettingsService } from '../settings/settings.service';
 import type { AppServer, AppSocket, TokenBucket } from './socket-data';
 import { Channel, ServerEntry } from './registry';
-import { MAX_SERVERS, RegistryService } from './registry.service';
+import { RegistryService } from './registry.service';
 import { normalizeClientId, type Claimant } from './ownership';
 import { UnlockAttempts, clientIp, verifyServerPassword, verifyUnlockToken } from './unlock';
 
@@ -14,6 +15,33 @@ export interface GuestPass {
   slug: string;
   listen: boolean;
 }
+
+/**
+ * Почему дверь не открылась. `null` — открылась.
+ *
+ * Причина уезжает клиенту текстом ошибки подключения: другого канала у
+ * отвергнутого сокета нет, а «переподключаюсь» вместо объяснения — худший из
+ * ответов на «почему меня не пускает».
+ */
+export type DoorRefusal = 'banned' | 'maintenance';
+
+/**
+ * Общий лимитер действий сокета: всплеск и скорость пополнения.
+ *
+ * Гасим флуд событий, каждое из которых иначе вызывает рассылку на весь сервер
+ * (presence/чат/реестр) — O(n) обход+emit на всех. Живому человеку 20 действий/с
+ * с запасом хватает (join, мут, сообщения — единицы в минуту), бот на тысячах/с
+ * упрётся в пустой бакет. Заодно тормозит перебор пароля закрытого сервера
+ * (server-unlock). Негоциацию (offer/answer/ice) НЕ трогаем: она бывает
+ * легитимно бурстовой и релеится 1:1, дёшево.
+ *
+ * Объявлены снаружи класса, потому что смотрит на них не только он: это же
+ * умолчание носят `moderation.messageBurst` и `moderation.messageRatePerMinute`,
+ * и равенство проверяется тестом — разъедься они, инсталляция, где панель не
+ * открывали, начала бы резать разговор в день обновления.
+ */
+export const RL_CAPACITY = 40;
+export const RL_REFILL_PER_SEC = 20;
 
 /**
  * Контур доступа: кто это и что ему здесь можно.
@@ -31,20 +59,14 @@ export interface GuestPass {
  *    видит вовсе.
  * 3. **Замок** (`unlock*`, `canSee`, `mayEnter`): пароль закрытого сервера. Он
  *    же запирает и слаги его каналов — иначе пароль обходится одной строкой.
- * 4. **Лимитер** (`allow`, `allowDiag`): два раздельных ведра, чтобы
- *    телеметрия не съедала звонок.
+ * 4. **Лимитер** (`allow`, `allowDiag`, `allowMessage`): три раздельных ведра —
+ *    чтобы телеметрия не съедала звонок, а настроенный владельцем предел реплик
+ *    не трогал скорость остальных действий.
  */
 export class Perimeter {
   // ── Лимитер ───────────────────────────────────────────────────────────────
-  // Гасим флуд событий, каждое из которых иначе вызывает рассылку на весь
-  // сервер (presence/чат/реестр) — O(n) обход+emit на всех. Живому человеку
-  // 20 действий/с с запасом хватает (join, мут, сообщения — единицы в минуту),
-  // бот на тысячах/с упрётся в пустой бакет. Заодно тормозит перебор пароля
-  // закрытого сервера (server-unlock). Негоциацию (offer/answer/ice) НЕ трогаем:
-  // она бывает легитимно бурстовой и релеится 1:1, дёшево.
-  private static readonly RL_CAPACITY = 40;
-  private static readonly RL_REFILL_PER_SEC = 20;
-
+  // Общий бакет — снаружи (RL_CAPACITY / RL_REFILL_PER_SEC), там же и причина.
+  //
   // Диагностические вехи звонка считаем ОТДЕЛЬНО от действий человека, и это не
   // щедрость, а разделение: вехи шлёт сам клиент, пачкой и ровно в те секунды,
   // когда человек прыгает по каналам, — то есть телеметрия занимала место в том
@@ -60,7 +82,14 @@ export class Perimeter {
   // сокета, а сокетов можно открыть сколько угодно. Счётчик неудач живёт не на
   // сокете (реконнект обнулял бы его за один round-trip), а на паре «адрес +
   // сервер» — см. ./unlock, там же семафор на одновременные scrypt.
-  private readonly unlockAttempts = new UnlockAttempts();
+  // Порог неудач и потолок простоя приезжают из настроек (`access.unlockAttempts`,
+  // `access.unlockLockoutMinutes`) — функциями, а не числами: настройку меняют
+  // под живым процессом, и снятая один раз копия действовала бы до перезапуска.
+  private readonly unlockAttempts = new UnlockAttempts(
+    () => this.settings.get<number>('access.unlockAttempts'),
+    undefined,
+    () => this.settings.get<number>('access.unlockLockoutMinutes') * 60_000,
+  );
 
   // Уже проверенные пароли: ключ — HMAC от «хэш + пароль» на случайном ключе
   // процесса (голый sha256 пароля в памяти — плохая идея, а так дамп кучи не
@@ -73,18 +102,19 @@ export class Perimeter {
   // ── Выгнанные гости ───────────────────────────────────────────────────────
   // «комната + устройство» → до какого времени дверь закрыта. Ссылка
   // многоразовая и живёт сутки, поэтому без этой карты «выгнать» не значило бы
-  // ничего. Час — не наказание, а пауза: он переживает обиду и перезаход, но не
-  // превращает случайный клик в приговор до конца инвайта. Хранится в памяти
-  // процесса: рестарт api прощает всех, и это честно — серьёзный запрет живёт в
-  // пароле сервера, а не здесь.
+  // ничего. Пауза — не наказание: она переживает обиду и перезаход, но не
+  // превращает случайный клик в приговор до конца инвайта. Её длину задаёт
+  // `invites.guestKickCooldownMinutes` (умолчание — прежний час). Хранится в
+  // памяти процесса: рестарт api прощает всех, и это честно — серьёзный запрет
+  // живёт в пароле сервера, а не здесь.
   private readonly guestBans = new Map<string, number>();
-  private static readonly GUEST_BAN_MS = 60 * 60 * 1000;
 
   constructor(
     private readonly registry: RegistryService,
     private readonly identities: IdentityService,
     private readonly owner: OwnerService,
     private readonly roles: RolesService,
+    private readonly settings: SettingsService,
     private readonly serverOf: () => AppServer | undefined,
     private readonly logger: Logger,
   ) {}
@@ -92,7 +122,7 @@ export class Perimeter {
   // ── Личность ──────────────────────────────────────────────────────────────
 
   /**
-   * Узнать, кто пришёл. Возвращает `true`, если вход закрыт вовсе.
+   * Узнать, кто пришёл. Возвращает причину, по которой вход закрыт, или `null`.
    *
    * Зовётся из миддлвары, а не из `handleConnection`, и разница не
    * стилистическая: миддлвара отрабатывает ДО того, как сокет считается
@@ -105,7 +135,7 @@ export class Perimeter {
    * ещё не прошедший челлендж. Их имена остаются самоназванными, и это честно —
    * ручается за них не ключ, а токен приглашения.
    */
-  async recognize(socket: AppSocket): Promise<boolean> {
+  async recognize(socket: AppSocket): Promise<DoorRefusal | null> {
     try {
       const speaker = await this.identities.fromCookie(socket.handshake.headers.cookie);
       if (speaker) {
@@ -121,7 +151,19 @@ export class Perimeter {
     } catch (e) {
       this.logger.error(`не удалось узнать личность сокета: ${e}`);
     }
-    return socket.data.banned === true;
+    if (socket.data.banned === true) return 'banned';
+    // Обслуживание пускает владельца и отвергает остальных. Владельца называет
+    // та же проверка владения, что и везде (`OwnerService`), — она уже
+    // отработала строкой выше. Иначе «режим обслуживания» держался бы на том,
+    // что интерфейс не показал кнопку, и первым же запертым снаружи оказался бы
+    // тот, кто его включил.
+    if (this.maintenance() && !this.isOwner(socket)) return 'maintenance';
+    return null;
+  }
+
+  /** Инсталляция закрыта на обслуживание. */
+  maintenance(): boolean {
+    return this.settings.get<boolean>('maintenance.mode');
   }
 
   /**
@@ -239,6 +281,15 @@ export class Perimeter {
 
   // ── Гости ─────────────────────────────────────────────────────────────────
 
+  /**
+   * Пускают ли сюда по инвайт-ссылке вообще. Спрашивается в момент входа, а не
+   * при выдаче ссылки: выданные живут сутки, и выключение гостей обязано
+   * закрыть дверь тем, у кого ссылка уже на руках.
+   */
+  guestsAllowed(): boolean {
+    return this.settings.get<boolean>('access.guestsEnabled');
+  }
+
   /** Впустить гостя по инвайту: он пришит к одному каналу и на всю сессию. */
   admit(client: AppSocket, pass: GuestPass): void {
     client.data.guest = true;
@@ -283,16 +334,17 @@ export class Perimeter {
   }
 
   /**
-   * Выгнать гостя: дверь по той же ссылке закрыта на час. Заодно подметаем
-   * истёкшие — карта живёт всю жизнь процесса, а заводить таймер ради десятка
-   * записей незачем.
+   * Выгнать гостя: дверь по той же ссылке закрыта на срок из настроек. Заодно
+   * подметаем истёкшие — карта живёт всю жизнь процесса, а заводить таймер ради
+   * десятка записей незачем.
    */
   banGuest(client: AppSocket, room: string): void {
     const now = Date.now();
     for (const [key, until] of this.guestBans) {
       if (until <= now) this.guestBans.delete(key);
     }
-    this.guestBans.set(this.banKey(client, room), now + Perimeter.GUEST_BAN_MS);
+    const minutes = this.settings.get<number>('invites.guestKickCooldownMinutes');
+    this.guestBans.set(this.banKey(client, room), now + minutes * 60_000);
   }
 
   /** Закрыта ли дверь этому гостю прямо сейчас. */
@@ -344,8 +396,10 @@ export class Perimeter {
     const raw = (client.handshake.auth as { unlock?: unknown } | undefined)?.unlock;
     if (!Array.isArray(raw)) return;
     // Столько же, сколько серверов вообще может быть: больше валидных пропусков
-    // не бывает, а перебирать присланное без предела незачем.
-    for (const item of raw.slice(0, MAX_SERVERS)) {
+    // не бывает, а перебирать присланное без предела незачем. Число то же, что
+    // у потолка реестра, и берётся оттуда же — разойдись они, лишний пропуск
+    // молча не доехал бы до сервера, который в реестр как раз помещается.
+    for (const item of raw.slice(0, this.settings.get<number>('spaces.maxServersInstall'))) {
       if (typeof item !== 'string' || !item) continue;
       const id = verifyUnlockToken(item, (serverId) => {
         const srv = this.registry.servers.find((s) => s.id === serverId);
@@ -455,7 +509,7 @@ export class Perimeter {
 
   /** Списываем токен; `false` → бакет пуст (флуд), обработчик молча выходит. */
   allow(client: AppSocket): boolean {
-    return this.spend(client, 'rl', Perimeter.RL_CAPACITY, Perimeter.RL_REFILL_PER_SEC);
+    return this.spend(client, 'rl', RL_CAPACITY, RL_REFILL_PER_SEC);
   }
 
   /** Бакет диагностических вех — свой, чтобы телеметрия не съедала звонок. */
@@ -463,9 +517,26 @@ export class Perimeter {
     return this.spend(client, 'rlDiag', Perimeter.DIAG_CAPACITY, Perimeter.DIAG_REFILL_PER_SEC);
   }
 
+  /**
+   * Бакет реплик — тот, которым владелец ужимает разговор
+   * (`moderation.messageRatePerMinute` и `moderation.messageBurst`).
+   *
+   * Он ДОБАВЛЯЕТСЯ к общему, а не заменяет его, и это важно в обе стороны.
+   * Умолчания у него в точности равны общему (сорок и двадцать в секунду),
+   * поэтому на нетронутой инсталляции он не отказывает ни разу — сегодняшнее
+   * поведение сохраняется буквально. А заменяй он общий бакет, поток реплик
+   * перестал бы стоить места остальным действиям, и суммарный предел на сокет
+   * вырос бы вдвое — ровно то, от чего общий бакет и заведён.
+   */
+  allowMessage(client: AppSocket): boolean {
+    const burst = this.settings.get<number>('moderation.messageBurst');
+    const perMinute = this.settings.get<number>('moderation.messageRatePerMinute');
+    return this.spend(client, 'rlMsg', burst, perMinute / 60);
+  }
+
   private spend(
     client: AppSocket,
-    key: 'rl' | 'rlDiag',
+    key: 'rl' | 'rlDiag' | 'rlMsg',
     capacity: number,
     refillPerSec: number,
   ): boolean {

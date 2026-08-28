@@ -45,6 +45,11 @@ export const REGISTRY_CHANNEL_TYPES = ['text', 'voice'];
  * ключи здесь бесплатны by design, и заслон от такого — ворота инсталляции
  * (`SITE_PASSWORD`), а не число в реестре.
  */
+// Три из четырёх с этапа C — умолчания настроек (`spaces.maxServersInstall`,
+// `spaces.maxServersPerIdentity`, `spaces.maxChannelsPerServer`): действующие
+// числа спрашивает обработчик, а здесь остаются те, с которыми инсталляция
+// живёт, пока панель не открывали. Общий потолок каналов настройки не имеет —
+// он про размер реестра, а не про правила сообщества.
 export const MAX_SERVERS = 50;
 export const MAX_SERVERS_PER_PERSON = 5;
 export const MAX_CHANNELS = 300;

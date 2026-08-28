@@ -3,6 +3,7 @@ import type { ChatService } from './chat.service';
 import type { DmService } from './dm.service';
 import type { Perimeter } from './perimeter';
 import type { RegistryService } from './registry.service';
+import type { SettingsService } from '../settings/settings.service';
 import { mentionedIn } from './chat.service';
 import { LIMIT, trimmed, type MentionRef } from './protocol';
 
@@ -22,8 +23,22 @@ export class Mentions {
     private readonly chat: ChatService,
     private readonly perimeter: Perimeter,
     private readonly dm: DmService,
+    private readonly settings: SettingsService,
     private readonly serverOf: () => AppServer,
   ) {}
+
+  /**
+   * Сколько имён носит одна реплика. Спрашивается в момент разбора: число
+   * задаёт владелец, и снятая на старте копия действовала бы до перезапуска.
+   *
+   * Читают его двое — этот разбор и `mentionedIn` в хранилище, — и оба обязаны
+   * читать одно и то же. Разойдись они, клиент прислал бы десять отпечатков,
+   * разбор оставил бы десять, а в снимок реплики попало бы восемь: двое
+   * названных не узнали бы, что их звали, и найти это было бы негде.
+   */
+  private cap(): number {
+    return this.settings.get<number>('moderation.maxMentionsPerMessage');
+  }
 
   /**
    * Кого назвали в этом тексте: клиент присылает отпечатки выбранных им людей,
@@ -34,16 +49,18 @@ export class Mentions {
    */
   async resolve(text: string, claimed: unknown): Promise<MentionRef[]> {
     if (!text || !Array.isArray(claimed) || !claimed.length) return [];
+    const cap = this.cap();
+    if (cap <= 0) return [];
     const fingerprints = [
       ...new Set(
         claimed
-          .slice(0, LIMIT.mentions)
+          .slice(0, cap)
           .map((value) => trimmed(value, LIMIT.fingerprint))
           .filter(Boolean),
       ),
     ];
     if (!fingerprints.length) return [];
-    return mentionedIn(text, await this.chat.peopleByFingerprint(fingerprints));
+    return mentionedIn(text, await this.chat.peopleByFingerprint(fingerprints), cap);
   }
 
   /**

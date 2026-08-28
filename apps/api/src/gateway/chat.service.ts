@@ -102,6 +102,9 @@ function tsquery(terms: string[]): string {
  * хранит всё вечно. Полсотни — это уже не «важное», а вторая лента.
  */
 export const PIN_LIMIT = 50;
+// С этапа C это умолчание настройки `messages.pinLimit`: действующее число
+// приносит обработчик, а здесь остаётся то, с чем инсталляция живёт, пока
+// панель не открывали.
 
 /** Сколько имён показываем в подсказке после `@`. Список читают глазами. */
 export const MENTION_SUGGEST_LIMIT = 8;
@@ -118,8 +121,15 @@ export const MENTION_SUGGEST_LIMIT = 8;
  * что человек выбрал в подсказке.
  *
  * Регистр не важен: написавший «@аня» позвал Аню и знает об этом.
+ *
+ * Сколько имён носит одна реплика, решает вызывающий: с этапа C это настройка
+ * (`moderation.maxMentionsPerMessage`), а `LIMIT.mentions` — её умолчание.
  */
-export function mentionedIn(text: string, people: MentionRef[]): MentionRef[] {
+export function mentionedIn(
+  text: string,
+  people: MentionRef[],
+  limit: number = LIMIT.mentions,
+): MentionRef[] {
   const haystack = text.toLowerCase();
   const out: MentionRef[] = [];
   const seen = new Set<string>();
@@ -128,7 +138,7 @@ export function mentionedIn(text: string, people: MentionRef[]): MentionRef[] {
     if (!haystack.includes('@' + person.nick.toLowerCase())) continue;
     seen.add(person.fingerprint);
     out.push({ fingerprint: person.fingerprint, nick: person.nick });
-    if (out.length >= LIMIT.mentions) break;
+    if (out.length >= limit) break;
   }
   return out;
 }
@@ -562,13 +572,20 @@ export class ChatService implements OnModuleInit {
 
   /**
    * Закрепить реплику. `ok` — закреплена (или уже была: повтор безвреден),
-   * `limit` — в канале уже `PIN_LIMIT`, `gone` — такой реплики здесь нет.
+   * `limit` — в канале уже столько, сколько разрешено, `gone` — такой реплики
+   * здесь нет. Потолок приходит доводом, а не берётся из константы: его задаёт
+   * владелец (`messages.pinLimit`), и знать об этом хранилищу незачем.
    *
    * Системные строки не закрепляем: «история истекла» и «удалено владельцем» —
    * это следы событий, а закрепление обещает пережить ретенцию, то есть ровно
    * то событие, о котором такая строка и сообщает.
    */
-  async pin(slug: string, id: string, by: string | null): Promise<'ok' | 'limit' | 'gone'> {
+  async pin(
+    slug: string,
+    id: string,
+    by: string | null,
+    limit: number = PIN_LIMIT,
+  ): Promise<'ok' | 'limit' | 'gone'> {
     const channelId = this.channelId(slug);
     if (!channelId || !isUuid(id)) return 'gone';
     const exists = await this.db
@@ -582,10 +599,10 @@ export class ChatService implements OnModuleInit {
     const rows: { message_id: string }[] = await this.db.query(
       `INSERT INTO "pins" ("message_id", "channel_id", "pinned_by")
             SELECT $1, $2, $3
-             WHERE (SELECT count(*) FROM "pins" WHERE "channel_id" = $2) < ${PIN_LIMIT}
+             WHERE (SELECT count(*) FROM "pins" WHERE "channel_id" = $2) < $4
        ON CONFLICT ("message_id") DO NOTHING
          RETURNING "message_id"`,
-      [id, channelId, by],
+      [id, channelId, by, limit],
     );
     if (rows.length) return 'ok';
 
@@ -617,7 +634,7 @@ export class ChatService implements OnModuleInit {
    * самих реплик: закрепляют, чтобы не потерять, и последнее закреплённое почти
    * всегда и есть то, что ищут.
    */
-  async pinned(slug: string): Promise<ChatMessage[]> {
+  async pinned(slug: string, limit: number = PIN_LIMIT): Promise<ChatMessage[]> {
     const channelId = this.channelId(slug);
     if (!channelId) return [];
     const rows = await this.db
@@ -629,7 +646,7 @@ export class ChatService implements OnModuleInit {
       .where('m.channel_id = :channelId', { channelId })
       .orderBy('pin.pinned_at', 'DESC')
       .addOrderBy('m.id', 'DESC')
-      .limit(PIN_LIMIT)
+      .limit(limit)
       .getMany();
     return rows.map(toMessage);
   }
@@ -757,8 +774,7 @@ export class ChatService implements OnModuleInit {
    */
   private slugOf(channelId: string): string | undefined {
     return (
-      this.registry.channels.find((c) => c.id === channelId)?.slug ??
-      this.dm.channelIdOf(channelId)
+      this.registry.channels.find((c) => c.id === channelId)?.slug ?? this.dm.channelIdOf(channelId)
     );
   }
 

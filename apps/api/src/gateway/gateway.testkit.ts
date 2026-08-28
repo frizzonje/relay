@@ -11,6 +11,7 @@ import { PrefsService } from '../identity/prefs.service';
 import { ReadsService } from '../identity/reads.service';
 import { RolesService } from '../identity/roles.service';
 import { issueSession } from '../identity/session';
+import { SettingsService } from '../settings/settings.service';
 import type { Attachment, UploadsService } from '../uploads';
 import type { Channel, PersistedRegistry, ServerEntry } from './registry';
 import { ChatService } from './chat.service';
@@ -178,6 +179,12 @@ export async function makeGateway(saved: PersistedRegistry = {}) {
   const roles = new RolesService(db);
   const reads = new ReadsService(db);
   const prefs = new PrefsService(db);
+  // Настройки настоящие и на той же базе. Таблица после `resetDatabase` пуста,
+  // то есть это «инсталляция, где панель не открывали ни разу»: каждый ответ —
+  // умолчание каталога, равное поведению relay до этапа C. Тесту, который
+  // ничего не настраивал, разницы не видно, и в этом весь смысл.
+  const settings = new SettingsService(db);
+  await settings.onModuleInit();
   const gw = new SignalingGateway(
     uploads as unknown as UploadsService,
     chat,
@@ -188,12 +195,25 @@ export async function makeGateway(saved: PersistedRegistry = {}) {
     reads,
     prefs,
     dmService,
+    settings,
   );
   gw.server = server.asServer();
   // Узнавание личности вешается миддлварой — заводим её и здесь, иначе тест
   // проверял бы гейтвей, у которого этой двери нет вовсе.
   gw.afterInit(server.asServer());
-  return { gw, server, registry, chat, dm: dmService, identities, owner, roles, reads, prefs };
+  return {
+    gw,
+    server,
+    registry,
+    chat,
+    dm: dmService,
+    identities,
+    owner,
+    roles,
+    reads,
+    prefs,
+    settings,
+  };
 }
 
 /**
@@ -291,6 +311,23 @@ export function settle() {
 }
 
 // ── Готовые ходы, которые повторяются во многих файлах ────────────────────
+
+/**
+ * Кем тест подписывает правку настройки. В жизни это личность владельца; здесь
+ * достаточно её вида — колонка хранит uuid и ничего о нём не спрашивает, а
+ * проверяем мы действие параметра, а не авторство.
+ */
+const PANEL_ACTOR = '00000000-0000-4000-8000-000000000001';
+
+/**
+ * Открыть панель и поменять параметр. Отказ поднимается исключением НАРОЧНО:
+ * опечатка в ключе иначе прошла бы тихо, тест остался бы зелёным и проверял бы
+ * поведение с умолчанием — то есть ровно ничего.
+ */
+export async function tune(settings: SettingsService, key: string, value: unknown): Promise<void> {
+  const res = await settings.set(key, value, PANEL_ACTOR);
+  if (!res.ok) throw new Error(`настройку ${key} не приняли: ${res.error}`);
+}
 
 /** Сделать человека владельцем инсталляции — тем же путём, что и ссылка. */
 export async function makeOwner(owner: OwnerService, identityId: string): Promise<void> {

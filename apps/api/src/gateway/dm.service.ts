@@ -9,7 +9,12 @@ export const DM_PREFIX = 'dm-';
 /** Сколько знаков хэша в адресе. 24 знака шестнадцатеричных — 96 бит. */
 const ADDRESS_LEN = 24;
 
-/** Докуда обрезается превью последней реплики в списке переписок. */
+/**
+ * Докуда обрезается превью последней реплики в списке переписок. С этапа C это
+ * умолчание настройки `messages.replyPreviewLength`: действующее число приносит
+ * обработчик, а здесь остаётся то, с чем инсталляция живёт, пока панель не
+ * открывали, — и то же число, которое ждёт клиент (см. `packages/shared`).
+ */
 export const DM_PREVIEW_LIMIT = 120;
 
 /** Сколько людей отдаётся на один запрос `dm-people`. */
@@ -42,7 +47,13 @@ export interface DmConversationView {
   previewMine: boolean;
 }
 
-export type DmOpenFailure = 'unknown' | 'self';
+/**
+ * Почему беседу не открыли. `not-allowed` — открывать НОВУЮ этому человеку
+ * сейчас нельзя (правила инсталляции о том, кто может писать первым); уже
+ * заведённая этим ответом не отзывается никогда, иначе выключение «писать
+ * первым» обрывало бы разговоры, которые уже идут.
+ */
+export type DmOpenFailure = 'unknown' | 'self' | 'not-allowed';
 
 /** Беседа так, как её держит память: без похода в базу на каждую реплику. */
 interface Known {
@@ -121,7 +132,20 @@ export class DmService implements OnModuleInit {
   async open(
     meId: string,
     peerFingerprint: string,
-  ): Promise<{ ok: true; view: DmConversationView } | { ok: false; reason: DmOpenFailure }> {
+    opts: {
+      blockBanned?: boolean;
+      previewLimit?: number;
+      /**
+       * Спрашивается ТОЛЬКО перед заведением новой беседы и только тогда: кто
+       * кому вправе писать первым — правило инсталляции, и живёт оно у
+       * обработчика. Здесь остаётся единственный вопрос, на который может
+       * ответить хранилище: «эта беседа уже есть?».
+       */
+      mayStart?: (peerId: string) => boolean | Promise<boolean>;
+    } = {},
+  ): Promise<
+    { ok: true; view: DmConversationView; created: boolean } | { ok: false; reason: DmOpenFailure }
+  > {
     // Обе стороны одним запросом: собеседник — по отпечатку, я — по id.
     // `nicks` обязана расти по обеим половинам беседы (см. комментарий у поля
     // `nicks`): открыл я — и в чужом процессе, где я окажусь чьим-то `peer`,
@@ -145,18 +169,26 @@ export class DmService implements OnModuleInit {
     // доставить в неё нечего (сокет забаненного рвётся), а строка в списке
     // висела бы как живой человек. Отвечаем тем же, чем и на незнакомый
     // отпечаток: кто забанен, из чужого интерфейса видно быть не должно.
-    if (peer.banned) return { ok: false, reason: 'unknown' };
+    if (peer.banned && opts.blockBanned !== false) return { ok: false, reason: 'unknown' };
 
     const slug = DmService.address(meId, peer.id);
-    if (!this.known.has(slug) && !(await this.create(slug, meId, peer.id))) {
+    const known = this.known.has(slug);
+    if (!known && opts.mayStart && !(await opts.mayStart(peer.id))) {
+      return { ok: false, reason: 'not-allowed' };
+    }
+    if (!known && !(await this.create(slug, meId, peer.id))) {
       return { ok: false, reason: 'unknown' };
     }
     for (const row of rows)
       this.nicks.set(row.id, { fingerprint: row.fingerprint, nick: row.nick });
 
-    const [last] = await this.previews([slug], meId);
+    const [last] = await this.previews([slug], meId, opts.previewLimit);
     return {
       ok: true,
+      // Завели ли беседу прямо сейчас. По этому отличают «пишу первым» от
+      // «продолжаю разговор» — и без ответа отсюда узнать это наверху нельзя:
+      // адрес беседы считается из двух id, а спрашивающий знает только отпечаток.
+      created: !known,
       view: {
         slug,
         peer: { fingerprint: peer.fingerprint, nick: peer.nick },
@@ -190,7 +222,7 @@ export class DmService implements OnModuleInit {
    * списке: закрытая переписка не должна исчезать из раздела оттого, что в ней
    * пока нечего показать.
    */
-  async list(meId: string): Promise<DmConversationView[]> {
+  async list(meId: string, previewLimit?: number): Promise<DmConversationView[]> {
     const rows: Array<{ channel_id: string; peer_fingerprint: string; peer_nick: string }> =
       await this.db.query(
         `SELECT c.channel_id,
@@ -208,6 +240,7 @@ export class DmService implements OnModuleInit {
         await this.previews(
           rows.map((r) => r.channel_id),
           meId,
+          previewLimit,
         )
       ).map((p) => [p.slug, p]),
     );
@@ -254,6 +287,28 @@ export class DmService implements OnModuleInit {
       nick: r.nick,
       lastSeenTs: r.last_seen_at ? r.last_seen_at.getTime() : 0,
     }));
+  }
+
+  /**
+   * Виделись ли эти двое: писал ли каждый из них хоть раз в один и тот же
+   * канал. Ответ на «кто может писать первым: только тем, с кем пересекался».
+   *
+   * Считается по сказанному, а не по членству: членства в relay нет вовсе —
+   * канал видят все, кому он виден, — и «пересеклись» может значить только
+   * «оба говорили в одном месте». Беседы в счёт не идут: иначе первое же
+   * личное сообщение само себе выдавало бы право его написать.
+   */
+  async seenTogether(aId: string, bId: string): Promise<boolean> {
+    const rows: unknown[] = await this.db.query(
+      `SELECT 1
+         FROM messages ma
+         JOIN messages mb ON mb.channel_id = ma.channel_id
+         JOIN channels c ON c.id = ma.channel_id AND c.type <> 'dm'
+        WHERE ma.author_identity_id = $1 AND mb.author_identity_id = $2
+        LIMIT 1`,
+      [aId, bId],
+    );
+    return rows.length > 0;
   }
 
   /** Адреса моих бесед — по памяти, без базы (нужно отметкам чтения). */
@@ -356,6 +411,7 @@ export class DmService implements OnModuleInit {
   private async previews(
     slugs: string[],
     meId: string,
+    limit: number = DM_PREVIEW_LIMIT,
   ): Promise<Array<{ slug: string; lastTs: number; preview: string; previewMine: boolean }>> {
     if (!slugs.length) return [];
     const rows: Array<{
@@ -374,7 +430,7 @@ export class DmService implements OnModuleInit {
     return rows.map((r) => ({
       slug: r.channel_id,
       lastTs: r.created_at.getTime(),
-      preview: r.text.slice(0, DM_PREVIEW_LIMIT),
+      preview: r.text.slice(0, limit),
       previewMine: r.author_identity_id === meId,
     }));
   }

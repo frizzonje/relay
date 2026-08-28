@@ -13,6 +13,7 @@ import {
   personCookie,
   settle,
   slugOf,
+  tune,
   useGatewayStand,
   type AnyGw,
 } from './gateway.testkit';
@@ -519,5 +520,114 @@ describe('права на сервер: личность и владелец и�
 
     const sameDevice = connect(gw, server, { id: 'b', clientId: 'dev-old' });
     expect(await gw.handleServerDelete(asSocket(sameDevice), { id: 'old' })).toEqual({ ok: true });
+  });
+});
+
+// ── Настройки инсталляции ─────────────────────────────────────────────────
+
+describe('настройки пространств', () => {
+  it('квота серверов на личность считается по настройке, и число едет в отказе', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'spaces.maxServersPerIdentity', 2);
+    const a = connect(gw, server, { clientId: 'dev-a' });
+    const answers = [];
+    for (let i = 0; i < 3; i++) {
+      answers.push(await gw.handleServerCreate(asSocket(a), { id: `srv-${i}`, name: `s${i}` }));
+      vi.advanceTimersByTime(1000);
+    }
+    expect(answers.filter((r) => r.ok)).toHaveLength(2);
+    // Число в отказе — то же, что в настройке: клиент рисует им подпись, и
+    // разъехавшись, оно посоветовало бы человеку невозможное.
+    expect(answers[2]).toEqual({ ok: false, error: 'limit', scope: 'person', limit: 2 });
+  });
+
+  it('квота серверов на инсталляцию — тоже из настройки', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'spaces.maxServersInstall', 1);
+    const a = connect(gw, server, { clientId: 'dev-a' });
+    // Главный сервер уже стоит — место кончилось на нём же.
+    expect(await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'мой' })).toEqual({
+      ok: false,
+      error: 'limit',
+      scope: 'install',
+      limit: 1,
+    });
+  });
+
+  it('квота каналов на сервер — из настройки', async () => {
+    const { gw, server, settings } = await makeGateway();
+    const a = connect(gw, server, { clientId: 'dev-a' });
+    await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'мой' });
+    await tune(settings, 'spaces.maxChannelsPerServer', 1);
+    expect(
+      await gw.handleChannelCreate(asSocket(a), { serverId: 'srv', type: 'text', name: 'раз' }),
+    ).toMatchObject({ ok: true });
+    expect(
+      await gw.handleChannelCreate(asSocket(a), { serverId: 'srv', type: 'text', name: 'два' }),
+    ).toEqual({ ok: false, error: 'limit', scope: 'server', limit: 1 });
+  });
+
+  it('«заводить пространства может только владелец» — проверка на сервере, а не кнопкой', async () => {
+    const { gw, server, settings, owner } = await makeGateway();
+    const boss = await personCookie('Хозяйка');
+    await makeOwner(owner, boss.identityId);
+    await tune(settings, 'spaces.creationAllowed', 'owner');
+
+    const stranger = connect(gw, server, { clientId: 'dev-a' });
+    expect(await gw.handleServerCreate(asSocket(stranger), { id: 'srv', name: 'мой' })).toEqual({
+      ok: false,
+      error: 'forbidden',
+    });
+    const hers = await connectAs(gw, server, boss.cookie, { id: 'boss' });
+    expect(await gw.handleServerCreate(asSocket(hers), { id: 'srv', name: 'её' })).toEqual({
+      ok: true,
+    });
+  });
+
+  it('закрытые серверы выключены — пароль не принимают вместо того, чтобы его забыть', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'spaces.lockedServersAllowed', false);
+    const a = connect(gw, server, { clientId: 'dev-a' });
+    // Отказ, а не «завели открытый»: иначе человек ушёл бы с уверенностью, что
+    // его сервер заперт.
+    expect(
+      await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'мой', password: 'секрет' }),
+    ).toEqual({ ok: false, error: 'forbidden' });
+    expect((gw as AnyGw).registry.servers.some((s) => s.id === 'srv')).toBe(false);
+  });
+
+  it('потолок имени берут все три места сразу — иначе принятое имя не пережило бы правку', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'spaces.channelNameMaxLength', 4);
+    const a = connect(gw, server, { clientId: 'dev-a' });
+    await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'длинное имя' });
+    expect((gw as AnyGw).registry.servers.find((s) => s.id === 'srv')?.name).toBe('длин');
+
+    await gw.handleChannelCreate(asSocket(a), { serverId: 'srv', type: 'text', name: 'болталка' });
+    const channel = (gw as AnyGw).registry.channels.find((c) => c.serverId === 'srv')!;
+    expect(channel.name).toBe('болт');
+
+    await gw.handleChannelRename(asSocket(a), { id: channel.id, name: 'переименование' });
+    expect((gw as AnyGw).registry.channels.find((c) => c.id === channel.id)?.name).toBe('пере');
+  });
+
+  it('режим новых голосовых каналов берётся из настройки, если клиент промолчал', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'spaces.defaultVoiceMode', 'sfu');
+    const a = connect(gw, server, { clientId: 'dev-a' });
+    await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'мой' });
+    await gw.handleChannelCreate(asSocket(a), { serverId: 'srv', type: 'voice', name: 'эфир' });
+    expect((gw as AnyGw).registry.channels.find((c) => c.serverId === 'srv')?.mode).toBe('sfu');
+
+    // Названный клиентом режим сильнее умолчания: настройка про то, каким
+    // канал рождается, а не про то, каким ему быть.
+    await gw.handleChannelCreate(asSocket(a), {
+      serverId: 'srv',
+      type: 'voice',
+      name: 'второй',
+      mode: 'p2p',
+    });
+    const second = (gw as AnyGw).registry.channels.find((c) => c.name === 'второй');
+    expect(second?.mode).toBeUndefined();
   });
 });

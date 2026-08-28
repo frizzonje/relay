@@ -6,10 +6,12 @@ import {
   connect,
   connectAs,
   makeGateway,
+  ownServer,
   personCookie,
   putUpload,
   settle,
   slugOf,
+  tune,
   useGatewayStand,
 } from './gateway.testkit';
 
@@ -458,5 +460,208 @@ describe('chat-edit / chat-delete / chat-react / chat-typing', () => {
     await gw.handleChatDelete(asSocket(loner), { id: 'x' });
     await gw.handleChatReact(asSocket(loner), { id: 'x', emoji: '👍' });
     expect(loner.emitted).toHaveLength(0);
+  });
+});
+
+// ── Настройки инсталляции ─────────────────────────────────────────────────
+//
+// Каждый параметр здесь проверяется одинаково: он ДЕЙСТВУЕТ, и отказ по нему
+// ГРОМКИЙ. Молчаливое «нажал, и ничего не произошло» — то самое, чего в ленте
+// быть не должно: человек уходит чинить не то, а искать причину потом негде.
+
+describe('настройки ленты', () => {
+  /** Двое в общем канале и одна сказанная реплика. */
+  async function said() {
+    const { gw, server, settings } = await makeGateway();
+    const a = connect(gw, server, { id: 'a' });
+    const b = connect(gw, server, { id: 'b' });
+    await gw.handleChatJoin(asSocket(a), { room: 'obshchii', name: 'A' });
+    await gw.handleChatJoin(asSocket(b), { room: 'obshchii', name: 'B' });
+    await gw.handleChatMessage(asSocket(a), { text: 'исходное' });
+    const id = (a.last('chat') as { id: string }).id;
+    server.clearAll();
+    return { gw, server, settings, a, b, id };
+  }
+
+  it('«только чтение» не принимает реплику, но не рвёт сокет', async () => {
+    const { gw, settings, a, b } = await said();
+    await tune(settings, 'moderation.readOnlyMode', true);
+
+    await gw.handleChatMessage(asSocket(a), { text: 'а можно?' });
+    expect(b.got('chat')).toBe(false);
+    expect(a.last('chat-refused')).toEqual({ reason: 'read-only' });
+    // Человек остаётся там же, где был: сокет жив, комната та же — лента перед
+    // глазами, эфир в ушах. Запрет на слово не выгоняет из комнаты.
+    expect(a.disconnected).toBe(false);
+    expect(a.rooms.has('chat:obshchii')).toBe(true);
+    // И читать по-прежнему можно: история отдаётся как всегда.
+    await gw.handleChatJoin(asSocket(a), { room: 'obshchii', name: 'A' });
+    expect(a.last('chat-history')).toMatchObject({ slug: 'obshchii' });
+  });
+
+  it('«только чтение» гасит и правку с реакцией — каждую со своей причиной', async () => {
+    const { gw, settings, a, b, id } = await said();
+    await tune(settings, 'moderation.readOnlyMode', true);
+    await gw.handleChatEdit(asSocket(a), { id, text: 'иначе' });
+    expect(b.got('chat-edited')).toBe(false);
+    expect(a.last('chat-refused')).toEqual({ reason: 'read-only' });
+    a.clear();
+    await gw.handleChatReact(asSocket(a), { id, emoji: '🔥' });
+    expect(b.got('chat-reaction')).toBe(false);
+    expect(a.last('chat-refused')).toEqual({ reason: 'read-only' });
+  });
+
+  it('стоп-слово блокирует сообщение и говорит об этом автору', async () => {
+    const { gw, settings, a, b } = await said();
+    await tune(settings, 'moderation.bannedWords', ['редиска']);
+
+    await gw.handleChatMessage(asSocket(a), { text: 'ты РЕДИСКА' });
+    expect(b.got('chat')).toBe(false);
+    expect(a.last('chat-refused')).toEqual({ reason: 'banned-word' });
+
+    // Соседнее слово проходит: сравнение по вхождению, а не по «похоже».
+    a.clear();
+    await gw.handleChatMessage(asSocket(a), { text: 'ты редис' });
+    expect(b.got('chat')).toBe(true);
+  });
+
+  it('стоп-слово ловится и в правке — иначе оно въезжало бы вторым действием', async () => {
+    const { gw, settings, a, b, id } = await said();
+    await tune(settings, 'moderation.bannedWords', ['редиска']);
+    await gw.handleChatEdit(asSocket(a), { id, text: 'редиска' });
+    expect(b.got('chat-edited')).toBe(false);
+    expect(a.last('chat-refused')).toEqual({ reason: 'banned-word' });
+  });
+
+  it('режим «пометить» пропускает реплику — но не молча', async () => {
+    const { gw, settings, a, b } = await said();
+    await tune(settings, 'moderation.bannedWords', ['редиска']);
+    await tune(settings, 'moderation.bannedWordsAction', 'flag');
+    await gw.handleChatMessage(asSocket(a), { text: 'ты редиска' });
+    expect(b.got('chat')).toBe(true);
+    expect(a.got('chat-refused')).toBe(false);
+  });
+
+  it('ссылки выключены — адрес не проезжает, обычный текст проезжает', async () => {
+    const { gw, settings, a, b } = await said();
+    await tune(settings, 'moderation.linksAllowed', false);
+    await gw.handleChatMessage(asSocket(a), { text: 'смотри https://example.com' });
+    expect(b.got('chat')).toBe(false);
+    expect(a.last('chat-refused')).toEqual({ reason: 'links-off' });
+
+    // Точка в середине слова ссылкой не считается: под такой шаблон попадает
+    // половина обычной речи.
+    a.clear();
+    await gw.handleChatMessage(asSocket(a), { text: 'у меня Node.js и файл кот.png' });
+    expect(b.got('chat')).toBe(true);
+  });
+
+  it('правка выключена — автору так и отвечают', async () => {
+    const { gw, settings, a, b, id } = await said();
+    await tune(settings, 'moderation.allowEdit', false);
+    await gw.handleChatEdit(asSocket(a), { id, text: 'иначе' });
+    expect(b.got('chat-edited')).toBe(false);
+    expect(a.last('chat-refused')).toEqual({ reason: 'edit-off' });
+  });
+
+  it('окно правки истекает, и это другая причина, чем «правка выключена»', async () => {
+    const { gw, settings, a, b, id } = await said();
+    await tune(settings, 'moderation.editWindowMinutes', 5);
+    // В окне — правится.
+    await gw.handleChatEdit(asSocket(a), { id, text: 'вовремя' });
+    expect(b.last('chat-edited')).toMatchObject({ text: 'вовремя' });
+
+    b.clear();
+    a.clear();
+    vi.advanceTimersByTime(6 * 60_000);
+    await gw.handleChatEdit(asSocket(a), { id, text: 'поздно' });
+    expect(b.got('chat-edited')).toBe(false);
+    expect(a.last('chat-refused')).toEqual({ reason: 'edit-window' });
+  });
+
+  it('удаление выключено для автора, но модератору остаётся', async () => {
+    const { gw, server, settings } = await makeGateway();
+    // Модерация — право личности, а не устройства (см. `moderatedBy`), поэтому
+    // хозяин канала приходит с ключом.
+    const boss = await personCookie('Хозяин');
+    const host = await connectAs(gw, server, boss.cookie, { id: 'host', clientId: 'dev-host' });
+    await ownServer(gw, host, 'srv');
+    const slug = slugOf('болталка');
+    const guest = connect(gw, server, { id: 'guest', clientId: 'dev-guest' });
+    await gw.handleChatJoin(asSocket(host), { room: slug, name: 'Хозяин' });
+    await gw.handleChatJoin(asSocket(guest), { room: slug, name: 'Гость' });
+    await gw.handleChatMessage(asSocket(guest), { text: 'моя реплика' });
+    const id = (guest.last('chat') as { id: string }).id;
+    server.clearAll();
+
+    await tune(settings, 'moderation.allowDelete', false);
+    await gw.handleChatDelete(asSocket(guest), { id });
+    expect(host.got('chat-deleted')).toBe(false);
+    expect(guest.last('chat-refused')).toEqual({ reason: 'delete-off' });
+
+    // А владелец канала стирает: «удаление выключено» — правило для авторов, и
+    // отнимать у модерации её единственный инструмент оно не должно.
+    await gw.handleChatDelete(asSocket(host), { id });
+    expect(guest.last('chat-deleted')).toEqual({ id });
+  });
+
+  it('реакции выключены', async () => {
+    const { gw, settings, a, b, id } = await said();
+    await tune(settings, 'messages.reactionsEnabled', false);
+    await gw.handleChatReact(asSocket(a), { id, emoji: '🔥' });
+    expect(b.got('chat-reaction')).toBe(false);
+    expect(a.last('chat-refused')).toEqual({ reason: 'reactions-off' });
+  });
+
+  it('«печатает…» выключено — и это единственный отказ, который молчит', async () => {
+    const { gw, settings, a, b } = await said();
+    await tune(settings, 'messages.typingIndicator', false);
+    gw.handleChatTyping(asSocket(a));
+    expect(b.got('chat-typing')).toBe(false);
+    // Человек ничего не делал не так: индикатор выключил владелец, и говорить
+    // об этом на каждое нажатие клавиши было бы шумом.
+    expect(a.got('chat-refused')).toBe(false);
+  });
+
+  it('поиск выключен — пустой ответ, но с названной причиной', async () => {
+    const { gw, settings, a } = await said();
+    await tune(settings, 'messages.searchEnabled', false);
+    const res = await gw.handleChatSearch(asSocket(a), { query: 'исходное' });
+    expect(res).toEqual({ ok: true, hits: [], more: false, terms: [] });
+    // Иначе выключенный поиск выглядел бы как «ничего не найдено» — то есть
+    // враньём про собственный канал.
+    expect(a.last('chat-refused')).toEqual({ reason: 'search-off' });
+  });
+
+  it('длина реплики берётся из настройки, а не из константы протокола', async () => {
+    const { gw, settings, a, b } = await said();
+    await tune(settings, 'messages.maxLength', 5);
+    await gw.handleChatMessage(asSocket(a), { text: 'абвгдежзи' });
+    expect(b.last('chat')).toMatchObject({ text: 'абвгд' });
+  });
+
+  it('потолок закреплённого берётся из настройки — и его же видит список', async () => {
+    const { gw, server, settings } = await makeGateway();
+    // Закрепление — то же право модератора: без ключа его нет ни у кого.
+    const boss = await personCookie('Хозяин');
+    const host = await connectAs(gw, server, boss.cookie, { id: 'host', clientId: 'dev-host' });
+    await ownServer(gw, host, 'srv');
+    const slug = slugOf('болталка');
+    await gw.handleChatJoin(asSocket(host), { room: slug, name: 'Хозяин' });
+    await gw.handleChatMessage(asSocket(host), { text: 'первое' });
+    const first = (host.last('chat') as { id: string }).id;
+    await gw.handleChatMessage(asSocket(host), { text: 'второе' });
+    const second = (host.last('chat') as { id: string }).id;
+
+    await tune(settings, 'messages.pinLimit', 1);
+    expect(await gw.handleChatPin(asSocket(host), { id: first, on: true })).toMatchObject({
+      ok: true,
+    });
+    expect(await gw.handleChatPin(asSocket(host), { id: second, on: true })).toEqual({
+      ok: false,
+      error: 'limit',
+    });
+    const pins = await gw.handleChatPins(asSocket(host), { slug });
+    expect(pins).toMatchObject({ ok: true, pins: [expect.objectContaining({ text: 'первое' })] });
   });
 });

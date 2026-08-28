@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import type { AppServer, AppSocket } from './socket-data';
 import type { ChatSessions } from './chat-sessions';
 import type { Directory } from './directory';
@@ -6,14 +7,15 @@ import type { Mentions } from './mentions';
 import type { Moderation } from './moderation';
 import type { Perimeter } from './perimeter';
 import type { RegistryService } from './registry.service';
+import type { SettingsService } from '../settings/settings.service';
 import type { UploadsService } from '../uploads';
 import { BROADCAST_DEBOUNCE_MS } from './directory';
 import { ChatService, MENTION_SUGGEST_LIMIT, searchTerms } from './chat.service';
-import { DM_PREVIEW_LIMIT } from './dm.service';
 import {
   LIMIT,
   str,
   trimmed,
+  type ChatRefusal,
   type ChatAroundPayload,
   type ChatDeletePayload,
   type ChatEditPayload,
@@ -45,6 +47,8 @@ import {
  * неё.
  */
 export class ChatHandlers {
+  private readonly logger = new Logger('chat');
+
   // slug -> время последней реплики и сервер, под паролем которого канал лежит
   // (null — открытый или неизвестный). Видимость решаем в момент отправки
   // сообщения, а не при сбросе: канал за эти 80 мс могут удалить, и тогда его
@@ -62,11 +66,75 @@ export class ChatHandlers {
     private readonly moderation: Moderation,
     private readonly mentions: Mentions,
     private readonly dm: DmService,
+    private readonly settings: SettingsService,
     private readonly serverOf: () => AppServer,
   ) {}
 
   private get server(): AppServer {
     return this.serverOf();
+  }
+
+  /**
+   * Отказать вслух. Событий ленты ack не ждёт, поэтому причина уезжает отдельным
+   * событием — и уезжает ВСЕГДА, а не только когда её удобно объяснить.
+   *
+   * Возвращает `false`, чтобы обработчик писался одной строкой
+   * (`if (…) return this.refuse(client, '…')`): молчаливый `return` — ровно тот
+   * отказ, который потом ищут по всему коду, кроме того места, где он стоит.
+   */
+  private refuse(client: AppSocket, reason: ChatRefusal): false {
+    client.emit('chat-refused', { reason });
+    return false;
+  }
+
+  /**
+   * Сколько реплик можно закрепить. Читают его двое — сама попытка закрепить и
+   * выдача списка, — и обоим нужно одно число: разойдись они, полсотни первых
+   * закреплённых показывались бы, а сто первое молча не находилось бы.
+   */
+  private pinLimit(): number {
+    return this.settings.get<number>('messages.pinLimit');
+  }
+
+  /**
+   * Докуда режется превью последней реплики. `DM_PREVIEW_LIMIT` остаётся его
+   * умолчанием и контрактом с клиентом (см. `packages/shared`).
+   */
+  private previewLimit(): number {
+    return this.settings.get<number>('messages.replyPreviewLength');
+  }
+
+  /** Инсталляция в режиме «только чтение»: ленту видно, писать в неё нельзя. */
+  private readOnly(): boolean {
+    return this.settings.get<boolean>('moderation.readOnlyMode');
+  }
+
+  /** Потолок реплики. Умолчание равно `LIMIT.message` — тому, что было всегда. */
+  private textLimit(): number {
+    return this.settings.get<number>('messages.maxLength');
+  }
+
+  /**
+   * Что не так с этим текстом — или `null`, если всё так.
+   *
+   * Одна проверка на отправку и на правку сразу: разъедься они, запрещённое
+   * слово въезжало бы в канал вторым действием — написать «привет» и тут же
+   * поправить на что угодно.
+   */
+  private textRefusal(text: string): ChatRefusal | null {
+    if (!this.settings.get<boolean>('moderation.linksAllowed') && hasLink(text)) return 'links-off';
+    const words = this.settings.get<string[]>('moderation.bannedWords');
+    const hit = words.find((word) => word && text.toLowerCase().includes(word.toLowerCase()));
+    if (!hit) return null;
+    // «Пометить» — не «пропустить молча»: реплика уезжает в канал, но след
+    // остаётся, иначе владелец, выбравший этот режим вместо запрета, не узнал
+    // бы о сработке вовсе. Само слово в лог не пишем — там оно и в чужих
+    // глазах, и в ротации.
+    if (this.settings.get<string>('moderation.bannedWordsAction') === 'flag') {
+      this.logger.warn(`модерация: реплика содержит слово из списка (${words.indexOf(hit) + 1}-е)`);
+      return null;
+    }
+    return 'banned-word';
   }
 
   // ===== Текстовый канал =====
@@ -170,6 +238,14 @@ export class ChatHandlers {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
     const room = this.chats.roomOf(client);
     if (!room) return empty;
+
+    if (!this.settings.get<boolean>('messages.searchEnabled')) {
+      // Ответ остаётся пустым результатом — форма ack'а поиска отказа не знает,
+      // — но человек узнаёт причину отдельным событием. Иначе выключенный поиск
+      // выглядел бы как «ничего не найдено», то есть враньём про его канал.
+      this.refuse(client, 'search-off');
+      return empty;
+    }
 
     const query = trimmed(payload?.query, LIMIT.search);
     const terms = searchTerms(query);
@@ -276,13 +352,32 @@ export class ChatHandlers {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const room = this.chats.roomOf(client);
     if (!room) return;
-    const text = trimmed(payload?.text, LIMIT.message);
+    // «Только чтение» не выгоняет и не рвёт сокет: человек остаётся в канале,
+    // видит ленту и слышит эфир — просто сказанное не принимается, и он об
+    // этом узнаёт.
+    if (this.readOnly()) return void this.refuse(client, 'read-only');
+    // Свой бакет реплик — тот, которым владелец ужимает разговор. Общий заслон
+    // от флуда уже отработал строкой выше и, в отличие от этого, молчит:
+    // человек, упёршийся в НАСТРОЕННЫЙ предел, обязан узнать, во что упёрся.
+    if (!this.perimeter.allowMessage(client)) return void this.refuse(client, 'rate');
+    const text = trimmed(payload?.text, this.textLimit());
 
     // Вложение называется id'ом загрузки, а не url'ом и не mime: подставить
     // себе чужой файл или соврать про его тип клиент не может — метаданные
     // берутся из таблицы вложений (см. chat.service).
     const uploadId = str(payload?.uploadId);
-    if (!text && !(await this.uploads.exists(uploadId))) return;
+    const withFile = !!uploadId && (await this.uploads.exists(uploadId));
+    if (!text && !withFile) return;
+    // Вложение в беседе двоих — отдельное разрешение: файл, ушедший в личное,
+    // из ленты канала не выудить и модератору не увидеть.
+    if (
+      withFile &&
+      this.dm.isDm(this.chat.slug(room)) &&
+      !this.settings.get<boolean>('direct.attachmentsAllowed')
+    )
+      return void this.refuse(client, 'attachments-off');
+    const bad = this.textRefusal(text);
+    if (bad) return void this.refuse(client, bad);
 
     const mentions = await this.mentions.resolve(text, payload?.mentions);
 
@@ -360,7 +455,7 @@ export class ChatHandlers {
   ): void {
     const members = this.dm.membersOf(slug);
     if (!members) return;
-    const preview = msg.text.slice(0, DM_PREVIEW_LIMIT);
+    const preview = msg.text.slice(0, this.previewLimit());
     for (const identityId of members) {
       const peerId = members.find((id) => id !== identityId) ?? identityId;
       const peer = this.dm.peerView(peerId);
@@ -402,13 +497,24 @@ export class ChatHandlers {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const room = this.chats.roomOf(client);
     if (!room) return;
+    if (this.readOnly()) return void this.refuse(client, 'read-only');
+    if (!this.settings.get<boolean>('moderation.allowEdit'))
+      return void this.refuse(client, 'edit-off');
     const id = str(payload?.id);
-    const text = trimmed(payload?.text, LIMIT.message);
+    const text = trimmed(payload?.text, this.textLimit());
     if (!id || !text) return;
 
     const msg = await this.chat.find(this.chat.slug(room), id);
     if (!msg) return;
     if (!this.ownsMessage(client, msg)) return;
+    // Окно правки считается от времени самой реплики, а не от прошлой правки:
+    // иначе сказанное можно было бы держать «свежим» вечно, правя его по разу
+    // в час, — и обещание «что сказано, то сказано» ничего бы не значило.
+    const window = this.settings.get<number>('moderation.editWindowMinutes');
+    if (window > 0 && Date.now() - msg.ts > window * 60_000)
+      return void this.refuse(client, 'edit-window');
+    const bad = this.textRefusal(text);
+    if (bad) return void this.refuse(client, bad);
 
     const mentions = await this.mentions.resolve(text, payload?.mentions);
     const editedTs = await this.chat.edit(id, text, mentions);
@@ -444,7 +550,13 @@ export class ChatHandlers {
     const slug = this.chat.slug(room);
     const msg = await this.chat.find(slug, id);
     if (!msg) return;
-    if (!this.ownsMessage(client, msg) && !this.moderation.moderatesRoom(client, room)) return;
+    const moderates = this.moderation.moderatesRoom(client, room);
+    if (!this.ownsMessage(client, msg) && !moderates) return;
+    // «Удаление выключено» — про автора, а не про модерацию. Иначе владелец,
+    // запретивший людям стирать сказанное, отнял бы это право и у себя, и
+    // единственный способ убрать чужую грубость был бы через базу.
+    if (!moderates && !this.settings.get<boolean>('moderation.allowDelete'))
+      return void this.refuse(client, 'delete-off');
 
     if (!(await this.chat.remove(id))) return;
     this.server.to(room).emit('chat-deleted', { id });
@@ -489,7 +601,12 @@ export class ChatHandlers {
     const on = payload?.on === true;
 
     if (on) {
-      const res = await this.chat.pin(slug, id, this.perimeter.speaker(client)?.id ?? null);
+      const res = await this.chat.pin(
+        slug,
+        id,
+        this.perimeter.speaker(client)?.id ?? null,
+        this.pinLimit(),
+      );
       if (res === 'gone') return { ok: false, error: 'not-found' };
       if (res === 'limit') return { ok: false, error: 'limit' };
     } else if (!(await this.chat.unpin(slug, id))) {
@@ -522,7 +639,7 @@ export class ChatHandlers {
     // честный ответ, а не отказ: сказать «здесь ничего не закреплено» можно, не
     // спрашивая прав, в отличие от самой попытки закрепить.
     if (this.dm.isDm(slug)) return { ok: true, slug, pins: [] };
-    return { ok: true, slug, pins: await this.chat.pinned(slug) };
+    return { ok: true, slug, pins: await this.chat.pinned(slug, this.pinLimit()) };
   }
 
   // «Печатает…»: клиент шлёт с троттлингом, релеим остальным в канале (себе — нет).
@@ -531,6 +648,11 @@ export class ChatHandlers {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const room = this.chats.roomOf(client);
     if (!room) return;
+    // Единственный отказ в этом файле, который молчит, — и по делу: индикатор
+    // выключил владелец, а не человек что-то сделал не так. Говорить ему «твой
+    // «печатает…» не показали» было бы шумом о том, чего он не просил.
+    if (!this.settings.get<boolean>('messages.typingIndicator')) return;
+    if (this.readOnly()) return;
     const name = this.chats.nameOf(client);
     client.to(room).emit('chat-typing', { name });
   }
@@ -541,6 +663,9 @@ export class ChatHandlers {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const room = this.chats.roomOf(client);
     if (!room) return;
+    if (this.readOnly()) return void this.refuse(client, 'read-only');
+    if (!this.settings.get<boolean>('messages.reactionsEnabled'))
+      return void this.refuse(client, 'reactions-off');
     const id = str(payload?.id);
     const emoji = str(payload?.emoji);
     if (!id || !this.chat.knownReaction(emoji)) return;
@@ -559,4 +684,18 @@ export class ChatHandlers {
 
     this.server.to(room).emit('chat-reaction', { id, reactions });
   }
+}
+
+/**
+ * Похоже ли на ссылку. Узко и нарочно: `http://`, `https://` и `www.` — три
+ * формы, по которым ссылку узнаёт и человек, и почтовый клиент, куда её
+ * скопируют.
+ *
+ * Голый «example.com» сюда не входит, и это не недосмотр: под такой шаблон
+ * попадают «Node.js», «file.png» и половина сокращений, а «ссылки выключены» —
+ * просьба владельца не превращать канал в доску объявлений, а не заслон от
+ * злоумышленника (обойти его всё равно можно пробелом в середине адреса).
+ */
+function hasLink(text: string): boolean {
+  return /(https?:\/\/|\bwww\.)/i.test(text);
 }

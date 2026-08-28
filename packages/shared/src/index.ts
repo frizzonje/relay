@@ -1277,6 +1277,12 @@ export interface ServerToClientEvents {
    * из комнаты — клиенту остаётся закрыть ленту, чтобы не осталось канала-призрака.
    */
   'chat-closed': (payload: ChatClosedRelay) => void;
+  /**
+   * Сказанное не принято, и вот почему. Летит только отказанному: события ленты
+   * ответа не ждут, и без этого «нажал, и ничего не произошло» было бы всем,
+   * что человек узнаёт о выключенной правке или о слове из чёрного списка.
+   */
+  'chat-refused': (payload: ChatRefusedRelay) => void;
   'media-update': (payload: MediaUpdateRelay) => void;
   /** Участник голосовой комнаты сменил тег (обновить подпись плитки). */
   'peer-renamed': (payload: PeerRenamedRelay) => void;
@@ -1404,6 +1410,30 @@ export interface ChatTypingRelay {
 export interface ChatActivityRelay {
   slug: string;
   ts: number;
+}
+
+/**
+ * Почему реплика не принята. Копия перечисления из `apps/api/src/gateway/protocol.ts`:
+ * api намеренно не зависит от этого пакета, и контракт держится совпадением.
+ *
+ * Причины разные намеренно: «правку выключили» и «правка протухла» человек
+ * чинит по-разному, а один общий отказ советовал бы невозможное.
+ */
+export type ChatRefusal =
+  | 'read-only'
+  | 'rate'
+  | 'banned-word'
+  | 'links-off'
+  | 'attachments-off'
+  | 'edit-off'
+  | 'edit-window'
+  | 'delete-off'
+  | 'reactions-off'
+  | 'search-off';
+
+/** Отказ в ленте — тому, кому отказали. */
+export interface ChatRefusedRelay {
+  reason: ChatRefusal;
 }
 
 /** Канал закрылся: его слаг (проверить, что закрыли именно открытый у тебя). */

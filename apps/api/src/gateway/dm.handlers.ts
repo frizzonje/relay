@@ -3,6 +3,7 @@ import type { ChatSessions } from './chat-sessions';
 import type { ChatService } from './chat.service';
 import { DM_PEOPLE_LIMIT, type DmService } from './dm.service';
 import type { Perimeter } from './perimeter';
+import type { SettingsService } from '../settings/settings.service';
 import {
   LIMIT,
   str,
@@ -30,21 +31,65 @@ import {
  * чужую переписку тому, кто угадал адрес, либо не пустить в свою собственную.
  */
 export class DmHandlers {
+  /**
+   * Кому и когда открывали новые беседы. Счёт «писем незнакомцу» ведётся здесь,
+   * в памяти процесса, — ровно как счёт неудачных паролей и пауза выгнанному
+   * гостю: рестарт api прощает всех, и это честно. В базе этому места нет:
+   * строка «в котором часу он открыл беседу» переживала бы саму беседу и
+   * рассказывала бы о человеке больше, чем сама переписка.
+   */
+  private readonly started = new Map<string, number[]>();
+
   constructor(
     private readonly dm: DmService,
     private readonly chat: ChatService,
     private readonly chats: ChatSessions,
     private readonly perimeter: Perimeter,
+    private readonly settings: SettingsService,
   ) {}
 
   /**
    * Кто вправе пользоваться ЛС. Полноценная личность, и только она: у гостя по
    * инвайту личность живёт внутри одного приглашения, адресовать её потом
    * некому и незачем.
+   *
+   * Выключенные ЛС отвечают здесь же и всем четырём событиям сразу: выключить
+   * их наполовину — оставить список переписок без двери в них — значит показать
+   * человеку то, чего он больше не может открыть.
    */
   private me(client: AppSocket): string | undefined {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return undefined;
+    if (!this.settings.get<boolean>('direct.enabled')) return undefined;
     return this.perimeter.speaker(client)?.id;
+  }
+
+  /**
+   * Вправе ли этот человек завести НОВУЮ беседу с тем, кто ему не отвечал.
+   * Спрашивается только на заведении: правило про «писать первым» не должно
+   * обрывать разговор, который уже идёт.
+   */
+  private async mayStart(meId: string, peerId: string): Promise<boolean> {
+    const who = this.settings.get<string>('direct.whoCanStart');
+    if (who === 'nobody') return false;
+    if (who === 'seen-together' && !(await this.dm.seenTogether(meId, peerId))) return false;
+    return this.withinFirstMessageQuota(meId);
+  }
+
+  /**
+   * Не слишком ли много незнакомцев за последний час. Окно скользящее, а не
+   * «час с полуночи»: разослав сотню приглашений в 12:59, к 13:01 можно было бы
+   * разослать вторую.
+   */
+  private withinFirstMessageQuota(meId: string): boolean {
+    const perHour = this.settings.get<number>('direct.firstMessagesPerHour');
+    if (perHour <= 0) return false;
+    const since = Date.now() - 60 * 60_000;
+    const mine = (this.started.get(meId) ?? []).filter((ts) => ts > since);
+    // Подчищаем на месте: карта живёт всю жизнь процесса, а заводить таймер
+    // ради десятка записей незачем (см. паузу выгнанному гостю в периметре).
+    if (mine.length) this.started.set(meId, mine);
+    else this.started.delete(meId);
+    return mine.length < perHour;
   }
 
   async open(client: AppSocket, payload: DmOpenPayload): Promise<DmOpenResult> {
@@ -53,15 +98,27 @@ export class DmHandlers {
     const fingerprint = trimmed(payload?.fingerprint, LIMIT.dmQuery);
     if (!fingerprint) return { ok: false, error: 'unknown' };
 
-    const res = await this.dm.open(meId, fingerprint);
-    if (!res.ok) return { ok: false, error: res.reason };
+    const res = await this.dm.open(meId, fingerprint, {
+      blockBanned: this.settings.get<boolean>('direct.blockFromBanned'),
+      previewLimit: this.settings.get<number>('messages.replyPreviewLength'),
+      mayStart: (peerId) => this.mayStart(meId, peerId),
+    });
+    // «Нельзя писать первым» — это отказ в праве, а не «такого человека нет»:
+    // спрашивавший видит собеседника в списке и обязан понять, почему беседа не
+    // открылась.
+    if (!res.ok)
+      return { ok: false, error: res.reason === 'not-allowed' ? 'forbidden' : res.reason };
+    // Счётчик пополняется по факту заведения, а не по попытке: неудачная
+    // (незнакомый отпечаток, свой собственный) не должна тратить час.
+    if (res.created) this.started.set(meId, [...(this.started.get(meId) ?? []), Date.now()]);
     return { ok: true, conversation: res.view };
   }
 
   async list(client: AppSocket): Promise<DmListResult> {
     const meId = this.me(client);
     if (!meId) return { ok: false, error: 'forbidden' };
-    return { ok: true, conversations: await this.dm.list(meId) };
+    const previewLimit = this.settings.get<number>('messages.replyPreviewLength');
+    return { ok: true, conversations: await this.dm.list(meId, previewLimit) };
   }
 
   /**

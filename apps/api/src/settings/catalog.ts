@@ -201,11 +201,13 @@ export const SETTINGS: readonly SettingSpec[] = [
     min: 1,
     max: 50,
   },
+  // Пять минут — COOLDOWN_MAX_MS в gateway/unlock.ts: докуда сегодня растёт
+  // простой после череды неудачных паролей.
   {
     key: 'access.unlockLockoutMinutes',
     group: 'access',
     kind: 'number',
-    fallback: 15,
+    fallback: 5,
     applies: 'now',
     min: 1,
     max: 1440,
@@ -293,23 +295,28 @@ export const SETTINGS: readonly SettingSpec[] = [
   },
 
   // ── moderation — модерация ───────────────────────────────────────────────
+  // Двадцать реплик в секунду и всплеск в сорок — это RL_REFILL_PER_SEC и
+  // RL_CAPACITY общего лимитера (gateway/perimeter.ts): столько сервер
+  // принимает от одного сокета сегодня. Потолок равен умолчанию по той же
+  // причине, что и у размера загрузки: выше общий лимитер всё равно не пустит,
+  // и поле, которое вверх не двигается, не должно этого обещать.
   {
     key: 'moderation.messageRatePerMinute',
     group: 'moderation',
     kind: 'number',
-    fallback: 60,
+    fallback: 1200,
     applies: 'now',
     min: 1,
-    max: 600,
+    max: 1200,
   },
   {
     key: 'moderation.messageBurst',
     group: 'moderation',
     kind: 'number',
-    fallback: 10,
+    fallback: 40,
     applies: 'now',
     min: 1,
-    max: 60,
+    max: 40,
   },
   {
     key: 'moderation.allowEdit',
@@ -566,12 +573,14 @@ export const SETTINGS: readonly SettingSpec[] = [
     options: ['everyone', 'seen-together', 'nobody'],
   },
   // Ноль — совсем нельзя писать первым; счёт идёт только по первым репликам
-  // незнакомцу, разговор с ответившим не ограничен ничем.
+  // незнакомцу, разговор с ответившим не ограничен ничем. Умолчание стоит на
+  // потолке: сегодня предела нет вовсе, и сотня — самое близкое к «как было»,
+  // что каталог умеет выразить. Полем предел ужимают, а не задают впервые.
   {
     key: 'direct.firstMessagesPerHour',
     group: 'direct',
     kind: 'number',
-    fallback: 5,
+    fallback: 100,
     applies: 'now',
     min: 0,
     max: 100,
