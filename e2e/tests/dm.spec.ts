@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test';
-import { person, test, unique } from '../fixtures/stand';
+import { openChannel, person, test, unique } from '../fixtures/stand';
 
 /**
  * Личные сообщения: то самое «готово» первого этапа плана 2.0 — двое
@@ -138,4 +138,59 @@ test('третий не видит чужой переписки', async ({ brow
   await expect(karla.getByText(secret)).toHaveCount(0);
   await expect(karla.getByTestId('dm-unread')).toHaveCount(0);
   await expect(karla.getByText(her, { exact: true })).toHaveCount(0);
+});
+
+test('док ЛС раздвигает раскладку, а не накрывает состав', async ({ browser }) => {
+  test.setTimeout(120_000);
+
+  /**
+   * Единственная проверка раскладки во всём наборе — и она здесь потому, что
+   * проверить это больше негде. В jsdom раскладки нет вовсе: там док и его
+   * сосед оба «на экране», как бы они ни лежали друг на друге. А лежали они
+   * именно так: панель ЛС выезжала поверх правой колонки и стирала её целиком
+   * — в канале состав, в беседе карточку собеседника с кнопкой звонка, то есть
+   * ровно того человека, к которому список и ведёт.
+   *
+   * Спрашиваем не «видно ли», а «пересекаются ли прямоугольники»: `toBeVisible`
+   * у накрытого элемента остаётся правдой — он на месте, просто его никому не
+   * видно.
+   */
+  const page = await person(browser, unique('Женя'));
+  await openChannel(page, 'общий');
+  // Состав приезжает не вместе с лентой, а следом за ростером канала: меряем,
+  // когда он на месте, иначе первый же замер под нагрузкой берёт пустоту.
+  await expect(page.getByTestId('online-members')).toBeVisible({ timeout: 20_000 });
+
+  const box = async (testId: string) => {
+    const b = await page.getByTestId(testId).boundingBox();
+    expect(b, `нет на экране: ${testId}`).not.toBeNull();
+    return b!;
+  };
+
+  // Свёрнутый док: язычок стоит в СВОЕЙ полосе, а не на краю состава.
+  const rosterClosed = await box('online-members');
+  const tab = await box('dm-tab');
+  expect(tab.x).toBeGreaterThanOrEqual(rosterClosed.x + rosterClosed.width);
+
+  await page.getByTestId('toolbar-direct').click();
+  await expect(page.getByTestId('dm-tab')).toHaveCount(0);
+
+  // Док едет 240 мс, и `boundingBox` анимации не ждёт: без этой строки замер
+  // попадал на середину хода — панель уже 232, полоса ещё 14.
+  await expect
+    .poll(async () => (await box('dm-dock')).width, { timeout: 20_000 })
+    .toBeGreaterThan(200);
+
+  // Раскрытый: обе колонки на экране целиком и не налезают друг на друга.
+  const roster = await box('online-members');
+  const dock = await box('dm-dock');
+  const panel = await box('dm-drawer');
+  expect(roster.width).toBeGreaterThan(200);
+  expect(roster.x + roster.width).toBeLessThanOrEqual(dock.x + 1);
+  // Список занял док целиком: полоска не осталась пустой рамкой рядом с ним.
+  expect(Math.abs(panel.width - dock.width)).toBeLessThanOrEqual(1);
+
+  // И место дока пришло от сцены — единственной тянущейся части раскладки.
+  const stage = await page.locator('main').boundingBox();
+  expect(stage!.x + stage!.width).toBeLessThanOrEqual(roster.x + 1);
 });

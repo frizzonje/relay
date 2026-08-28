@@ -59,10 +59,3 @@ export const navTitle: Variants = {
   show: { opacity: 1, x: 0, transition: { duration: 0.22, ease: [0.2, 0.8, 0.3, 1] } },
   exit: (dir: number) => ({ opacity: 0, x: dir * -18, transition: { duration: 0.14 } }),
 };
-
-/**
- * Панель, которая выезжает сбоку и уезжает обратно (раздел ЛС). Жёстче
- * `springLayout` и без отскока: у большой поверхности отскок читается как
- * промах мимо края экрана, а не как мягкость.
- */
-export const springDrawer: Transition = { type: 'spring', stiffness: 460, damping: 44 };

@@ -1,6 +1,7 @@
 'use client';
 
 import { Icon } from '@/components/ui/icon';
+import { cn } from '@/lib/utils';
 import { Identicon } from '@/components/ui/Identicon';
 import { shortFingerprint } from '@/lib/format';
 import { useT } from '@/lib/i18n';
@@ -26,6 +27,7 @@ export function DmPeerCard() {
   const t = useT();
   const peer = useUiStore((s) => s.dmPeer);
   const nick = useUiStore((s) => s.textLabel);
+  const dmSection = useUiStore((s) => s.dmSection);
 
   // Беседа ещё не выбрана (переходный кадр смены сцены) — рисовать чужое
   // лицо или пустую карточку нечем.
@@ -35,7 +37,17 @@ export function DmPeerCard() {
   const call = t('toolbar.call');
 
   return (
-    <aside className="panel panel-sidebar flex w-[232px] shrink-0 flex-col items-center gap-3 overflow-hidden border-l border-line px-4 py-8 max-md:hidden">
+    <aside
+      className={cn(
+        'panel panel-sidebar flex w-[232px] shrink-0 flex-col items-center gap-3 overflow-hidden border-l border-line px-4 py-8 max-md:hidden',
+        // Та же уступка, что у колонки состава в каркасе (см. AppShell): пока
+        // раскрыт док ЛС, на узком десктопе карточке места нет — она несжимаема
+        // и просто выдавила бы ленту беседы в ноль, вылезши на соседа. Личность
+        // собеседника при этом с экрана не пропадает: лицо, ник, отпечаток и
+        // статус стоят в шапке ленты (см. DmThread).
+        dmSection && 'max-lg:hidden',
+      )}
+    >
       <Identicon fingerprint={peer} size={64} />
       <div className="flex flex-col items-center gap-1 text-center">
         <span className="max-w-full truncate text-[15px] font-bold text-text-header">{nick}</span>

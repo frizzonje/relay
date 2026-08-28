@@ -1,29 +1,43 @@
 'use client';
 
-import { AnimatePresence, motion } from 'framer-motion';
 import { Icon } from '@/components/ui/icon';
 import { DmList } from '@/components/dm/DmList';
-import { springDrawer } from '@/lib/motion';
+import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
 import { useUnreadCount } from '@/stores/dm';
 import { useUiStore } from '@/stores/ui';
 
 /**
- * Панель ЛС на десктопе: выезжает справа, из-под рейки тулбара, и встаёт ровно
- * на место колонки состава — та же ширина 232px, те же верх и низ. Отсюда и
- * «встроена, а не наложена»: раскладка вокруг не дёргается ни на точку, а
- * список садится в уже знакомую глазу колонку.
+ * Док личных сообщений на десктопе: собственная колонка между составом и
+ * рейкой тулбара. Раскрытая — 232px, ровно как колонка состава рядом;
+ * свёрнутая — полоска в 14px с язычком.
  *
- * Раньше раздел подменял собой каналы в сайдбаре — на другом конце экрана от
- * кнопки, которой его открывали, и ценой всего списка каналов. Теперь каналы
- * не трогаются вовсе, а панель уезжает сама, стоит войти в канал (`openText`
- * гасит `dmSection`), оставляя за собой язычок.
+ * Колонка, а не всплывшая поверх панель, — и это главное в ней. Пока док
+ * накладывался, раскрыть список значило стереть с экрана всё, что стояло
+ * справа: в канале — состав, в беседе — карточку собеседника вместе с кнопкой
+ * звонка, то есть ровно того человека, к которому список и ведёт. Место дока
+ * забирает сцена — единственная тянущаяся часть раскладки; ни одна панель при
+ * этом ничего не теряет и никуда не прыгает.
  *
- * Язычок — не украшение: панель уехала не потому, что её закрыли, а потому что
- * человек занялся другим, и вернуть её должно быть нечем иным, кроме одного
- * движения к тому самому краю, откуда она ушла. Кнопка в рейке делает то же,
- * но она в 64 точках выше и говорит «раздел ЛС», а не «верни, что уехало».
+ * Свёрнутый док не исчезает, а сжимается до язычка: место под него
+ * зарезервировано всегда, поэтому язычку не приходится ложиться на соседа
+ * (раньше он лежал на правом краю колонки состава), а «уехала» и «раскрыта» —
+ * это два состояния ОДНОГО элемента. Отсюда же и то, что язычок не может
+ * остаться висеть поверх раскрытого списка: он не отдельная кнопка со своей
+ * анимацией ухода, а сам док в свёрнутом виде.
+ *
+ * Ширину ведёт CSS-переход, а не пружина Framer: ширина колонки — это
+ * раскладка, её каждый кадр пересчитывает весь ряд, и застрявшая на полпути
+ * пружина (вкладка в фоне, кадры не идут) оставила бы раскладку в
+ * недосчитанном состоянии. У CSS-перехода конечное значение стоит в стиле
+ * сразу, чем бы ни кончилась анимация.
  */
+
+/** Раскрытая ширина — та же, что у колонки состава: это одна и та же полоса. */
+export const DM_DOCK_WIDTH = 232;
+/** Свёрнутая: язычок и есть док, поэтому ширина полоски — часть раскладки. */
+export const DM_DOCK_STRIP = 14;
+
 export function DmDrawer() {
   const t = useT();
   const open = useUiStore((s) => s.dmSection);
@@ -31,55 +45,73 @@ export function DmDrawer() {
   const unread = useUnreadCount();
 
   return (
-    <>
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.div
-            key="dm-drawer"
-            data-testid="dm-drawer"
-            initial={{ x: '100%' }}
-            animate={{ x: 0 }}
-            exit={{ x: '100%' }}
-            transition={springDrawer}
-            // `right-16` — ширина рейки: панель стоит вплотную к ней, а уезжает
-            // ЗА неё (рейка выше по стопке, см. z-30 в Toolbar). Тень слева —
-            // единственное, чем панель отделена от сцены: границы там уже две.
-            className="absolute inset-y-0 right-16 z-20 flex w-[232px] border-l border-line shadow-[-10px_0_30px_rgba(0,0,0,0.32)] max-md:hidden"
-          >
-            <DmList />
-          </motion.div>
-        )}
-      </AnimatePresence>
+    <div
+      data-testid="dm-dock"
+      data-open={open || undefined}
+      className={cn(
+        'relative hidden shrink-0 overflow-hidden md:flex',
+        'transition-[width,background-color] duration-[240ms] ease-[cubic-bezier(0.2,0.8,0.3,1)] motion-reduce:transition-none',
+        // Свёрнутый — паз: самая глубокая поверхность каркаса между составом и
+        // рейкой, из которого торчит край панели. Раскрытый — поверхность
+        // самой панели, и раздвигающаяся полоса красится в её цвет заранее,
+        // пока список на ней проявляется. Границы у дока нет: свёрнутым её
+        // рисует язычок, раскрытым — сам список (ниже).
+        open ? 'panel panel-sidebar w-[232px]' : 'panel panel-deep w-3.5',
+      )}
+    >
+      {/* Список прижат к ЛЕВОМУ краю дока и держит свои 232 точки, пока колонка
+          растёт: он едет вместе с её краем, и первым из-под рейки выходит
+          начало строки — лицо и ник, а не хвост с временем.
 
-      <AnimatePresence initial={false}>
-        {!open && (
-          <motion.button
-            key="dm-tab"
-            type="button"
-            data-testid="dm-tab"
-            onClick={showDmList}
-            title={t('dm.expand')}
-            aria-label={t('dm.expand')}
-            // `y` держим здесь, а не классом `-translate-y-1/2`: Framer пишет
-            // transform целиком в style и класс бы затёр.
-            initial={{ opacity: 0, x: 8, y: '-50%' }}
-            animate={{ opacity: 1, x: 0, y: '-50%' }}
-            exit={{ opacity: 0, x: 8, y: '-50%' }}
-            transition={{ duration: 0.16, ease: [0.2, 0.8, 0.3, 1] }}
-            className="group absolute right-16 top-1/2 z-20 grid h-16 w-3.5 place-items-center rounded-l-[8px] border border-r-0 border-line bg-bg-sidebar text-text-faint shadow-[-3px_0_8px_rgba(0,0,0,0.18)] outline-none transition-[width,background-color,color] duration-150 hover:w-5 hover:bg-bg-hover hover:text-text-header focus-visible:ring-2 focus-visible:ring-line-strong max-md:hidden"
-          >
-            <Icon name="chevron-left" className="text-[13px]" strokeWidth={2} />
-            {/* Непрочитанное на язычке — тем же цветом, что бейдж в рейке: пока
-                панель уехала, точка в её списке никому не видна. */}
-            {unread > 0 && (
-              <span
-                aria-hidden
-                className="pointer-events-none absolute -left-1 top-2 h-2 w-2 rounded-full bg-danger"
-              />
+          Свёрнутым списка в разметке нет вовсе, и это не про экономию узлов.
+          Невидимый текст на странице остаётся текстом: его находит поиск по
+          странице, за него цепляется выделение, и он врёт всякому, кто читает
+          страницу не глазами — от экранного диктора до наших же прогонов, где
+          одна и та же реплика вдруг находится дважды. Прятать прозрачностью
+          то, чего на экране нет, — способ завести на странице второй,
+          невидимый интерфейс. */}
+      {open && (
+        <div
+          data-testid="dm-drawer"
+          className="absolute inset-y-0 left-0 flex w-[232px] border-l border-line"
+        >
+          <DmList />
+        </div>
+      )}
+
+      {!open && (
+        // Цель во всю высоту полоски, а не один язычок на 64px: попасть в
+        // 14 точек мышью тем легче, чем они длиннее, и промахнуться по краю
+        // экрана невозможно вовсе. Видимый язычок — метка внутри цели.
+        <button
+          type="button"
+          data-testid="dm-tab"
+          onClick={showDmList}
+          title={t('dm.expand')}
+          aria-label={t('dm.expand')}
+          className="group absolute inset-y-0 left-0 z-10 w-3.5 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-line-strong"
+        >
+          <span
+            className={cn(
+              'absolute left-0 top-1/2 flex h-16 w-3.5 -translate-y-1/2 flex-col items-center justify-center gap-1',
+              // Граница крепче обычной: язычок — единственный видимый признак
+              // свёрнутого дока, и на 14 точках его держит именно контур, а не
+              // заливка (она у него та же, что у спрятанной панели).
+              'rounded-l-[8px] border border-r-0 border-line-strong bg-bg-sidebar text-text-faint',
+              'transition-[height,background-color,color] duration-150 ease-[cubic-bezier(0.2,0.8,0.3,1)]',
+              'group-hover:h-20 group-hover:bg-bg-hover group-hover:text-text-header motion-reduce:transition-none',
             )}
-          </motion.button>
-        )}
-      </AnimatePresence>
-    </>
+          >
+            {/* Точка ВНУТРИ язычка: док обрезает всё, что торчит наружу, а
+                непрочитанное при свёрнутом списке больше нигде не видно —
+                кроме бейджа в рейке, до которого ещё надо доглядеть. */}
+            {unread > 0 && (
+              <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-strong" />
+            )}
+            <Icon name="chevron-left" className="text-[13px]" strokeWidth={2} />
+          </span>
+        </button>
+      )}
+    </div>
   );
 }
