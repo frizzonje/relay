@@ -82,7 +82,8 @@ export class DmHandlers {
    */
   private withinFirstMessageQuota(meId: string): boolean {
     const perHour = this.settings.get<number>('direct.firstMessagesPerHour');
-    if (perHour <= 0) return false;
+    // Ноль — без предела (см. каталог): «совсем нельзя» говорит `whoCanStart`.
+    if (perHour <= 0) return true;
     const since = Date.now() - 60 * 60_000;
     const mine = (this.started.get(meId) ?? []).filter((ts) => ts > since);
     // Подчищаем на месте: карта живёт всю жизнь процесса, а заводить таймер

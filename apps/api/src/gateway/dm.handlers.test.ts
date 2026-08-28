@@ -434,6 +434,17 @@ describe('настройки личной переписки', () => {
     expect((await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint })).ok).toBe(true);
   });
 
+  it('без настройки первых сообщений никто не считает', async () => {
+    // Умолчание — ноль, и ноль значит «без предела»: до панели переписку с
+    // незнакомцем не ограничивало ничто, и день обновления не повод это менять.
+    const { you, mine } = await pair();
+    const third = await personCookie('третий-без-квоты');
+    expect((await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint })).ok).toBe(true);
+    expect((await gw.handleDmOpen(asSocket(mine), { fingerprint: third.fingerprint })).ok).toBe(
+      true,
+    );
+  });
+
   it('счёт первых сообщений в час ограничивает только новые переписки', async () => {
     const { you, mine } = await pair();
     const third = await personCookie('третий');

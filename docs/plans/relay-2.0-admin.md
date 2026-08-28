@@ -202,7 +202,7 @@
 |---|---|---|---|
 | `direct.enabled` | boolean | true | now |
 | `direct.whoCanStart` | select `everyone` / `seen-together` / `nobody` | everyone | now |
-| `direct.firstMessagesPerHour` | number 0…100 | 100 | now |
+| `direct.firstMessagesPerHour` | number 0…100 | 0 (без предела) | now |
 | `direct.attachmentsAllowed` | boolean | true | now |
 | `direct.retentionMode` | select `inherit` / `days` / `forever` / `ephemeral` | inherit | now |
 | `direct.retentionDays` | number 1…3650 | 14 | now |
