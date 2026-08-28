@@ -777,6 +777,97 @@ git commit -m "feat(admin): perimeter, chat and direct messages obey the panel"
 
 ---
 
+### Задача 5а: Настройки действуют — доступ, личности и люди
+
+**Файлы:** `apps/api/src/identity/identity.service.ts`, `pairing.service.ts`,
+`identity.controller.ts`, `devices.controller.ts`, `apps/api/src/auth/auth.controller.ts`,
+`apps/api/src/gateway/moderation.handlers.ts`, `apps/api/src/gateway/chat.service.ts`
+(системные реплики) + их тесты.
+
+**Ключи (13):** `access.identityCreation`, `access.blockNewIdentities`,
+`access.deviceApprovalRequired`, `access.maxDevicesPerIdentity`, `access.sessionTtlDays`,
+`access.newIdentityQuietMinutes`, `access.loginRatePerMinute`, `people.nickMinLength`,
+`people.nickMaxLength`, `people.nickChangeCooldownMinutes`, `people.pruneInactiveDays`,
+`moderation.serverOwnersCanBan`, `moderation.banNotice`, `messages.systemMessages`.
+
+- [ ] **Шаг 1: Тесты.** «Закрытая регистрация не заводит личность, но пускает заведённую»;
+      «личность моложе тихого часа не пишет в общий канал, но читает»; «ник короче минимума
+      отвергается с причиной»; «переименование чаще кулдауна отвергается»; «владелец сервера
+      банит, только когда это разрешено»; «выключенные системные реплики не пишутся в ленту, а
+      события всё равно доходят»; «пропуск живёт столько, сколько сказано в настройке».
+- [ ] **Шаг 2: Упасть.**
+- [ ] **Шаг 3: Реализация.** `access.loginRatePerMinute` потребителя сегодня НЕ имеет (дверь
+      считает неудачи за окно, а не попытки в минуту) — завести счётчик попыток рядом с
+      существующим счётчиком неудач; умолчание обязано оставить сегодняшнее поведение.
+      `people.pruneInactiveDays` умолчанием 0 = «никого не чистим», и это единственный
+      честный вариант: чистки личностей сегодня нет вовсе.
+- [ ] **Шаг 4: Весь api зелёный.**
+- [ ] **Шаг 5: Коммит** `feat(admin): access, identities and people obey the panel`
+
+---
+
+### Задача 5б: Настройки действуют — файлы, хранение ЛС, голос и гости
+
+**Файлы:** `apps/api/src/uploads.ts`, `apps/api/src/db/retention.service.ts`,
+`apps/api/src/gateway/voice-sessions.ts`, `voice.handlers.ts`, `guests.handlers.ts`,
+`apps/api/src/sfu/*` + их тесты.
+
+**Ключи (13):** `files.perIdentityDailyBytes`, `files.installQuotaBytes`,
+`files.orphanSweepHours`, `files.blockExecutables`, `files.spoilerAllowed`,
+`direct.retentionMode`, `direct.retentionDays`, `spaces.maxVoiceOccupants`,
+`invites.maxGuestsPerChannel`, `voice.videoEnabled`, `voice.screenShareEnabled`,
+`voice.sfuThreshold`, `voice.iceRestartSeconds`.
+
+- [ ] **Шаг 1: Тесты.** «Квота личности на сутки отвергает следующий файл, но не рвёт чат»;
+      «квота инсталляции вытесняет старое, а не отказывает»; «переписка чистится своим сроком,
+      отдельным от каналов»; «в голосовую комнату сверх предела не пускают»; «выключённое видео
+      не даёт включить камеру и говорит почему»; «порог SFU берётся из настройки».
+- [ ] **Шаг 2: Упасть.**
+- [ ] **Шаг 3: Реализация.** `files.installQuotaBytes` и `files.orphanSweepHours` заменяют
+      живые константы `MAX_TOTAL_UPLOAD_BYTES` и `ORPHAN_TTL_MS` — константы остаются
+      умолчанием каталога. `direct.retention*` — вторая политика в том же `RetentionService`:
+      беседы чистятся своим сроком, и умолчание равно сегодняшнему (тот же срок, что у каналов).
+- [ ] **Шаг 4: Весь api зелёный.**
+- [ ] **Шаг 5: Коммит** `feat(admin): files, direct retention, voice and guests obey the panel`
+
+---
+
+### Задача 5в: Настройки доезжают до человека
+
+**Почему отдельной задачей.** Восемнадцать параметров — не запрет на сервере, а то, что видит
+и чем пользуется браузер: имя и эмодзи инсталляции, тема и язык по умолчанию, текст правил и
+приветствия, звуки, показывать ли отпечатки и «был в сети», умолчания микрофона, битрейты,
+баннер обслуживания. Сервер их сегодня знает и никому не говорит. Здесь же закрывается
+половина петли из задачи 5: событие `chat-refused` сервер уже шлёт, а веб его ещё не читает.
+
+**Файлы:** `apps/api/src/config.controller.ts`, `apps/api/src/gateway/signaling.gateway.ts`
+(рассылка снимка при изменении), `packages/shared/src/index.ts` + `gateway/protocol.ts`
+(тип снимка), `apps/web/stores/config.ts` (новый), `apps/web/components/providers/*`,
+места применения в вебе + тесты обеих сторон.
+
+**Ключи (18):** `appearance.*` (7), `notifications.*` (4), `people.showFingerprints`,
+`people.lastSeenVisible`, `direct.privacyNotice`, `voice.audioBitrateKbps`,
+`voice.videoBitrateKbps`, `voice.noiseSuppressionDefault`, `voice.pushToTalkDefault`,
+`maintenance.bannerText`.
+
+- [ ] **Шаг 1: Тесты.** «`/api/config` отдаёт снимок публичных настроек и ни одного секрета»;
+      «смена имени инсталляции доезжает до открытой вкладки без перезагрузки»; «выключённые
+      отпечатки не показываются нигде, включая подсказки»; «отказ ленты виден человеку
+      причиной, а не тишиной»; «битрейт из настроек уезжает в отправителя дорожки».
+- [ ] **Шаг 2: Упасть.**
+- [ ] **Шаг 3: Реализация.** Снимок — ТОТ ЖЕ `SettingsService.public()`, из которого секреты
+      уже вычищены каталогом; второго списка «что можно показывать» не заводить. Рассылка при
+      изменении — подпиской `onChange`, одним событием на всех.
+- [ ] **Шаг 4: Тесты обеих сторон + e2e-проверка одного параметра насквозь.**
+- [ ] **Шаг 5: Коммит** `feat(admin): the browser learns what the installation is set to`
+
+**Заодно чинится «потолок, который врёт»** (тот же сорт, что удалённые `video` и гигабайт
+загрузки): `messages.maxLength` предлагает до 8000 при клиенте, режущем на 500, а
+`spaces.channelNameMaxLength` — до 64 при клиенте, режущем на 32. Как только клиент узнаёт
+действующие значения, оба поля начинают работать во всём объёме; до тех пор их потолки лгут.
+
+---
+
 ### Задача 6: Журнал
 
 **Файлы:**
@@ -1060,6 +1151,8 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 
 - Владелец открывает панель из тулбара; никто другой её не открывает и не может позвать ни
   одно её событие.
+- Каждый из 97 параметров каталога ДЕЙСТВУЕТ: у него есть потребитель в коде, и это
+  проверено тестом. Поле, которое ничего не делает, — брак этапа, а не мелочь.
 - Все 97 параметров каталога видны, правятся (кроме помеченных `env`) и переживают
   перезапуск.
 - Инсталляция, где панель не открывали, ведёт себя ровно как до этапа — тест на умолчания
