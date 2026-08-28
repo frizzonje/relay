@@ -140,7 +140,7 @@ test('третий не видит чужой переписки', async ({ brow
   await expect(karla.getByText(her, { exact: true })).toHaveCount(0);
 });
 
-test('док ЛС раздвигает раскладку, а не накрывает состав', async ({ browser }) => {
+test('док ЛС раздвигает раскладку, а свёрнутый возвращает её как была', async ({ browser }) => {
   test.setTimeout(120_000);
 
   /**
@@ -151,9 +151,14 @@ test('док ЛС раздвигает раскладку, а не накрыв�
    * — в канале состав, в беседе карточку собеседника с кнопкой звонка, то есть
    * ровно того человека, к которому список и ведёт.
    *
-   * Спрашиваем не «видно ли», а «пересекаются ли прямоугольники»: `toBeVisible`
-   * у накрытого элемента остаётся правдой — он на месте, просто его никому не
-   * видно.
+   * Второе, что здесь держится, — «свернул и стало как раньше»: между составом
+   * и рейкой не остаётся ни полоски, ни язычка, ни пустого проёма. Раздел,
+   * которым сейчас не пользуются, обязан уходить с экрана без остатка.
+   *
+   * Спрашиваем не «видно ли», а координаты прямоугольников: `toBeVisible` у
+   * накрытого элемента остаётся правдой — он на месте, просто его никому не
+   * видно, — а у схлопнутого в ноль дока `boundingBox` вернул бы null вместо
+   * честного «ширина 0».
    */
   const page = await person(browser, unique('Женя'));
   await openChannel(page, 'общий');
@@ -161,30 +166,37 @@ test('док ЛС раздвигает раскладку, а не накрыв�
   // когда он на месте, иначе первый же замер под нагрузкой берёт пустоту.
   await expect(page.getByTestId('online-members')).toBeVisible({ timeout: 20_000 });
 
-  const box = async (testId: string) => {
-    const b = await page.getByTestId(testId).boundingBox();
-    expect(b, `нет на экране: ${testId}`).not.toBeNull();
-    return b!;
+  const rect = (testId: string) =>
+    page.getByTestId(testId).evaluate((e) => {
+      const r = e.getBoundingClientRect();
+      return { x: r.x, width: r.width };
+    });
+
+  /**
+   * «Как раньше» одной строкой: состав упирается в рейку, между ними ничего.
+   * Док нулевой ширины стоит ровно на этой границе — его `x` и есть левый край
+   * рейки, поэтому двух замеров хватает на оба утверждения сразу.
+   */
+  const flush = async () => {
+    const roster = await rect('online-members');
+    const dock = await rect('dm-dock');
+    expect(dock.width).toBe(0);
+    expect(Math.abs(roster.x + roster.width - dock.x)).toBeLessThanOrEqual(1);
   };
 
-  // Свёрнутый док: язычок стоит в СВОЕЙ полосе, а не на краю состава.
-  const rosterClosed = await box('online-members');
-  const tab = await box('dm-tab');
-  expect(tab.x).toBeGreaterThanOrEqual(rosterClosed.x + rosterClosed.width);
+  await flush();
 
   await page.getByTestId('toolbar-direct').click();
-  await expect(page.getByTestId('dm-tab')).toHaveCount(0);
-
-  // Док едет 240 мс, и `boundingBox` анимации не ждёт: без этой строки замер
-  // попадал на середину хода — панель уже 232, полоса ещё 14.
+  // Створка едет 240 мс, и замер её не ждёт: без этой строки он попадал на
+  // середину хода — панель уже 232, колонка ещё 14.
   await expect
-    .poll(async () => (await box('dm-dock')).width, { timeout: 20_000 })
+    .poll(async () => (await rect('dm-dock')).width, { timeout: 20_000 })
     .toBeGreaterThan(200);
 
   // Раскрытый: обе колонки на экране целиком и не налезают друг на друга.
-  const roster = await box('online-members');
-  const dock = await box('dm-dock');
-  const panel = await box('dm-drawer');
+  const roster = await rect('online-members');
+  const dock = await rect('dm-dock');
+  const panel = await rect('dm-drawer');
   expect(roster.width).toBeGreaterThan(200);
   expect(roster.x + roster.width).toBeLessThanOrEqual(dock.x + 1);
   // Список занял док целиком: полоска не осталась пустой рамкой рядом с ним.
@@ -193,4 +205,13 @@ test('док ЛС раздвигает раскладку, а не накрыв�
   // И место дока пришло от сцены — единственной тянущейся части раскладки.
   const stage = await page.locator('main').boundingBox();
   expect(stage!.x + stage!.width).toBeLessThanOrEqual(roster.x + 1);
+
+  // Сворачиваем той же кнопкой, которой открывали, — своей у свёрнутого дока
+  // нет и не должно быть.
+  await page.getByTestId('toolbar-direct').click();
+  await expect.poll(async () => (await rect('dm-dock')).width, { timeout: 20_000 }).toBe(0);
+  // Уехавший список снят со страницы, а не спрятан: иначе его нашли бы поиск по
+  // странице и экранный диктор.
+  await expect(page.getByTestId('dm-drawer')).toHaveCount(0);
+  await flush();
 });

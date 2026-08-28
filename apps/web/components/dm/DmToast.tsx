@@ -37,16 +37,16 @@ export function showDmToast(relay: DmActivityRelay) {
         // Кнопка, а не div с onClick: облачко — обычная цель для клавиатуры,
         // и таб должен на неё попадать, пока она на экране.
         // На десктопе облачко занимает ровно колонку состава: 232px в ширину
-        // и правым краем вплотную к свёрнутому доку ЛС. Справа от колонки
-        // состава стоят двое: полоска дока (DM_DOCK_STRIP, 14px) и рейка
-        // тулбара (64px). sonner держит тост в 32px от края экрана — отсюда
-        // сдвиг на 14 + 64 − 32 = 46; margin на его месте раздувал бы ширину,
-        // не двигая карточку. В итоге левая граница облачка совпадает с левой
-        // границей колонки состава — оно встроено в ту же сетку, а не висит в
-        // углу само по себе. Раскрытый док съезжает под облачко: гнаться за
-        // уехавшей колонкой значило бы двигать облачко на каждый чужой клик.
+        // и правым краем вплотную к ней. Справа от состава остаётся одна рейка
+        // тулбара (64px) — свёрнутый док ЛС не занимает ничего (см. DmDrawer).
+        // sonner держит тост в 32px от края экрана, отсюда сдвиг на 64 − 32 =
+        // 32; margin на его месте раздувал бы ширину, не двигая карточку. В
+        // итоге границы облачка совпадают с границами колонки состава — оно
+        // встроено в ту же сетку, а не висит в углу само по себе. Раскрытый док
+        // съезжает под облачко: гнаться за уехавшей колонкой значило бы двигать
+        // облачко на каждый чужой клик.
         // На узком экране рейки справа нет — там тулбар полосой сверху.
-        className="group flex w-[336px] max-w-[86vw] items-start gap-2.5 rounded-[14px] border border-line bg-bg-elev px-3 py-2.5 text-left shadow-[0_20px_60px_rgba(0,0,0,0.5)] outline-none transition-[transform,border-color] duration-150 hover:-translate-y-0.5 hover:border-line-strong focus-visible:ring-2 focus-visible:ring-line-strong md:w-[232px] md:-translate-x-[46px]"
+        className="group flex w-[336px] max-w-[86vw] items-start gap-2.5 rounded-[14px] border border-line bg-bg-elev px-3 py-2.5 text-left shadow-[0_20px_60px_rgba(0,0,0,0.5)] outline-none transition-[transform,border-color] duration-150 hover:-translate-y-0.5 hover:border-line-strong focus-visible:ring-2 focus-visible:ring-line-strong md:w-[232px] md:-translate-x-8"
       >
         <span className="mt-0.5 shrink-0">
           <Identicon fingerprint={relay.peer.fingerprint} size={30} />

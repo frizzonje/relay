@@ -11,6 +11,15 @@ import { useUiStore } from '@/stores/ui';
 import { useDmStore, useUnreadCount, useUnreadIn } from '@/stores/dm';
 import { useT } from '@/lib/i18n';
 
+/**
+ * Якорь на цели «ЛС» в рейке. Свёрнутый док ЛС не оставляет на экране ничего
+ * (см. DmDrawer), и эта кнопка — весь раздел разом: и вход в него, и место,
+ * куда возвращается фокус, когда панель уезжает из-под клавиатуры. Id, а не
+ * `data-testid`: тестовая метка не должна становиться опорой для работающего
+ * кода — иначе её нельзя ни переименовать, ни снять.
+ */
+export const DM_ENTRY_ID = 'dm-entry';
+
 /** Одна цель тулбара — общее описание для рейки и полосы. */
 interface Target {
   key: 'direct' | 'admin';
@@ -82,6 +91,7 @@ export function Toolbar() {
  */
 function TargetButton({
   target,
+  id,
   tooltip,
   accessibleLabel,
   className,
@@ -89,6 +99,8 @@ function TargetButton({
   badgeRing,
 }: {
   target: Target;
+  /** Якорь для внешних ссылок на кнопку (см. DM_ENTRY_ID). */
+  id?: string;
   tooltip: string;
   accessibleLabel: string;
   className: string;
@@ -99,6 +111,7 @@ function TargetButton({
   return (
     <button
       type="button"
+      id={id}
       data-testid={target.testId}
       title={tooltip}
       aria-label={accessibleLabel}
@@ -158,6 +171,10 @@ function ToolbarRail({ targets }: { targets: Target[] }) {
         <TargetButton
           key={target.key}
           target={target}
+          // Только в рейке: полоса на телефоне — это тот же компонент, и оба
+          // разом на странице сделали бы id неоднозначным. Дока на телефоне
+          // нет, возвращать фокус там некому.
+          id={target.key === 'direct' ? DM_ENTRY_ID : undefined}
           tooltip={target.disabled ? soon : target.label}
           accessibleLabel={accessibleLabel(
             target,

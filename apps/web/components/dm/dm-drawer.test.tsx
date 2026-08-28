@@ -8,20 +8,19 @@ import { useUnreadStore } from '@/stores/unread';
 import { useUiStore } from '@/stores/ui';
 
 /**
- * Док ЛС на десктопе не исчезает, а сжимается до язычка: это одна колонка в
- * двух состояниях. Тест держит именно эту пару — раскрытый список ИЛИ язычок,
- * никогда оба и никогда ни одного, — и то, что язычок разворачивает, а не
- * переключает: в беседу приходят и лицом из рейки, при свёрнутом списке, и
- * тумблер на этом шаге закрывал бы список ровно тогда, когда его просили
- * открыть.
+ * Док ЛС на десктопе: раскрыт — колонка со списком, свёрнут — НИЧЕГО. Тест
+ * держит именно это «ничего»: ни ширины, ни списка на странице. Свёрнутый док,
+ * оставляющий на экране хоть полоску, — та самая жалоба, из-за которой всё это
+ * и переписано: раздел, которым не пользуются, не должен занимать место.
  *
- * «Списка нет» здесь значит буквально нет в разметке: невидимый текст на
- * странице остаётся текстом — его находит поиск по странице и читает экранный
- * диктор (см. комментарий в DmDrawer).
+ * «Списка нет» здесь значит буквально нет в разметке, а не спрятан
+ * прозрачностью: невидимый текст на странице остаётся текстом — его находит
+ * поиск по странице и читает экранный диктор (см. комментарий в DmDrawer).
  *
- * Геометрию — что док занимает СВОЮ полосу и не накрывает соседа — держит
- * e2e (`e2e/tests/dm.spec.ts`): в jsdom раскладки нет, и проверить её здесь
- * можно было бы только сверкой классов, то есть пересказом разметки.
+ * Геометрию — что раскрытый док занимает СВОЮ полосу и не накрывает соседа, а
+ * свёрнутый возвращает раскладку к прежней — держит e2e
+ * (`e2e/tests/dm.spec.ts`): в jsdom раскладки нет, и проверить её здесь можно
+ * было бы только сверкой классов, то есть пересказом разметки.
  */
 
 const slug = 'dm-0123456789abcdef01234567';
@@ -35,7 +34,7 @@ function render(): void {
 
 const el = (id: string) => host.querySelector(`[data-testid="${id}"]`);
 
-describe('панель ЛС на десктопе', () => {
+describe('док ЛС на десктопе', () => {
   beforeEach(() => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     useDmStore.getState().reset();
@@ -51,33 +50,25 @@ describe('панель ЛС на десктопе', () => {
     host.remove();
   });
 
-  it('свёрнутый — на экране язычок, а списка нет вовсе', () => {
+  it('свёрнутый не занимает ничего и списка на странице не оставляет', () => {
     render();
-    expect(el('dm-tab')).toBeTruthy();
-    expect(el('dm-dock')!.getAttribute('data-open')).toBeNull();
+    const dock = el('dm-dock') as HTMLElement;
+    expect(dock.getAttribute('data-open')).toBeNull();
+    expect(dock.style.width).toBe('0px');
     expect(el('dm-drawer')).toBeNull();
   });
 
-  it('язычок разворачивает панель, а не переключает её', () => {
-    render();
-    const tab = el('dm-tab') as HTMLButtonElement;
-    act(() => tab.click());
-    expect(useUiStore.getState().dmSection).toBe(true);
-    // Второй зов того же обработчика не должен закрывать: язычок отвечает на
-    // «покажи», и другого ответа у него нет.
-    act(() => tab.click());
-    expect(useUiStore.getState().dmSection).toBe(true);
-  });
-
-  it('раскрытая — на экране список и кнопка «свернуть», язычка нет', () => {
+  it('раскрытый — список на своей ширине и кнопка «свернуть»', () => {
     useUiStore.setState({ dmSection: true });
     render();
-    const drawer = el('dm-drawer')!;
+    const dock = el('dm-dock') as HTMLElement;
+    const drawer = el('dm-drawer') as HTMLElement;
+    expect(dock.getAttribute('data-open')).toBe('true');
+    expect(dock.style.width).toBe('232px');
     expect(drawer).toBeTruthy();
-    expect(el('dm-dock')!.getAttribute('data-open')).toBe('true');
-    // Язычок не «гаснет поверх» раскрытого списка, а перестаёт существовать:
-    // это то же самое место разметки, и двух состояний разом у него нет.
-    expect(el('dm-tab')).toBeNull();
+    // Список занял док целиком: пустой рамки рядом с ним не остаётся.
+    expect(drawer.style.width).toBe(dock.style.width);
+
     const collapse = [...drawer.querySelectorAll('button')].find((b) =>
       /Свернуть|Collapse/i.test(b.getAttribute('aria-label') ?? ''),
     );
@@ -86,7 +77,41 @@ describe('панель ЛС на десктопе', () => {
     expect(useUiStore.getState().dmSection).toBe(false);
   });
 
-  it('на язычке видно непрочитанное — иначе оно спрятано вместе с панелью', () => {
+  it('уезжая, список остаётся на экране, но уже недоступен', () => {
+    useUiStore.setState({ dmSection: true });
+    render();
+    act(() => useUiStore.getState().toggleDmSection());
+
+    // Створка едет 240 мс, и всё это время списку есть что показывать: снять
+    // его сразу значило бы показать пустой проём — «моргнула», а не «уехала».
+    const drawer = el('dm-drawer') as HTMLElement;
+    expect(drawer).toBeTruthy();
+    expect((el('dm-dock') as HTMLElement).style.width).toBe('0px');
+    // Видна она на этом пути или нет — работать с ней уже нельзя: `inert`
+    // убирает уезжающую панель с клавиатуры и из речи диктора сразу.
+    expect(drawer.hasAttribute('inert')).toBe(true);
+  });
+
+  it('свернув с клавиатуры, фокус не теряется, а возвращается в рейку', () => {
+    const entry = document.createElement('button');
+    entry.id = 'dm-entry';
+    document.body.appendChild(entry);
+
+    useUiStore.setState({ dmSection: true });
+    render();
+    const collapse = [...el('dm-drawer')!.querySelectorAll('button')].find((b) =>
+      /Свернуть|Collapse/i.test(b.getAttribute('aria-label') ?? ''),
+    )!;
+    collapse.focus();
+    act(() => collapse.click());
+
+    // Иначе фокус остался бы на узле, который вот-вот снимут со страницы, и
+    // следующий Tab начал бы обход заново — с самого верха документа.
+    expect(document.activeElement).toBe(entry);
+    entry.remove();
+  });
+
+  it('свёрнутый счёт непрочитанного не прячет — он на кнопке рейки', () => {
     useDmStore.getState().setConversations([
       {
         slug,
@@ -97,10 +122,8 @@ describe('панель ЛС на десктопе', () => {
       },
     ]);
     render();
-    expect(el('dm-tab')!.querySelector('span[aria-hidden]')).toBeTruthy();
-
-    useUnreadStore.setState({ lastRead: { [slug]: 9000 } });
-    render();
-    expect(el('dm-tab')!.querySelector('span[aria-hidden]')).toBeNull();
+    // Здесь только договор: своих меток у свёрнутого дока нет и быть не должно,
+    // а бейдж на цели «ЛС» проверяет toolbar.test.tsx — там, где он и живёт.
+    expect(el('dm-dock')!.textContent).toBe('');
   });
 });
