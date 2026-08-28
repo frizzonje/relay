@@ -298,7 +298,10 @@ describe('умолчание равно сегодняшнему поведен�
     const spec = settingSpec('files.maxUploadBytes');
     expect(spec?.kind).toBe('bytes');
     expect(spec?.min).toBe(1024);
-    expect(spec?.max).toBe(1024 ** 3);
+    // Потолок равен умолчанию: настройкой предел только ужимают. Выше 25 МиБ
+    // тело обрывает multer, а до него отказывает браузер — поле, которое вверх
+    // не двигается, не должно предлагать гигабайт.
+    expect(spec?.max).toBe(25 * 1024 ** 2);
     expect(spec?.fallback).toBe(25 * 1024 ** 2);
   });
 
