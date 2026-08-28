@@ -1,13 +1,14 @@
-import { Logger } from '@nestjs/common';
+import { HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DataSource } from 'typeorm';
-import { ChannelRow, MessageRow, ServerRow } from './db/entities';
+import { AttachmentRow, ChannelRow, MessageRow, ServerRow } from './db/entities';
 import { resetDatabase, testDatabase } from './db/testing';
-import { UploadByteBudget } from './upload.guard';
+import { SettingsService } from './settings/settings.service';
+import { UploadByteBudget, UploadsEnabledGuard } from './upload.guard';
 import { UploadsService, parseBytes } from './uploads';
 
 /**
@@ -19,6 +20,8 @@ import { UploadsService, parseBytes } from './uploads';
 let dir: string;
 let warned: ReturnType<typeof vi.spyOn>;
 let db: DataSource;
+let settings: SettingsService;
+const owner = randomUUID();
 
 beforeAll(async () => {
   db = await testDatabase();
@@ -30,6 +33,10 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetDatabase(db);
+  // Настройки настоящие и пустые: это «инсталляция, где панель не открывали»,
+  // и файловая политика в ней обязана совпадать с той, что была до панели.
+  settings = new SettingsService(db);
+  await settings.onModuleInit();
   dir = mkdtempSync(join(tmpdir(), 'relay-uploads-'));
   warned = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
   vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
@@ -45,7 +52,7 @@ afterEach(() => {
 // нельзя, иначе сущности станут другими классами, чем те, что знает открытое
 // соединение с базой.
 async function makeService(quota: string) {
-  return new UploadsService(db, dir, Number(quota));
+  return new UploadsService(db, settings, dir, Number(quota));
 }
 
 /** Канал, которому можно приписать сообщение с вложением. */
@@ -100,12 +107,22 @@ async function ageUpload(id: string, hours: number): Promise<void> {
 
 // Кладём файл на диск и отдаём его так, как отдал бы multer. `ageSec` разводит
 // файлы по времени: вытеснение идёт по mtime.
-function put(name: string, size: number, ageSec: number) {
+function put(name: string, size: number, ageSec: number, mimetype = 'application/octet-stream') {
   const full = join(dir, name);
   writeFileSync(full, Buffer.alloc(size));
   const when = new Date(Date.now() - ageSec * 1000);
   utimesSync(full, when, when);
-  return { filename: name, originalname: name, size, mimetype: 'application/octet-stream' };
+  return { filename: name, originalname: name, size, mimetype };
+}
+
+/** Код отказа, с которым `register` не принял загрузку. */
+async function refusalOf(run: Promise<unknown>): Promise<number> {
+  const err = await run.then(
+    () => null,
+    (e: unknown) => e,
+  );
+  expect(err).toBeInstanceOf(HttpException);
+  return (err as HttpException).getStatus();
 }
 
 describe('parseBytes', () => {
@@ -283,5 +300,109 @@ describe('бюджет байтов на адрес', () => {
     b.charge('ip-1', 1000, 0);
     expect(b.allow('ip-1', 0)).toBe(false);
     expect(b.allow('ip-2', 0)).toBe(true);
+  });
+});
+
+/**
+ * Файловая политика — то, чем владелец закрывает загрузки, режет размер или
+ * запрещает вид. Проверяется главным образом одно: правка в панели действует
+ * на живом сервисе, а не после перезапуска.
+ */
+describe('файловая политика', () => {
+  it('ненастроенная инсталляция принимает ровно то же, что и до панели', async () => {
+    const svc = await makeService('1000000');
+    const out = await svc.register(put('кот.png', 1000, 0, 'image/png'));
+    expect(out.kind).toBe('image');
+    // 25 МиБ — сегодняшний потолок на файл; ровно он и остаётся умолчанием.
+    expect(await svc.exists('кот.png')).toBe(true);
+  });
+
+  it('выключенные загрузки отвергают файл и не оставляют его на диске', async () => {
+    const svc = await makeService('1000000');
+    await settings.set('files.uploadsEnabled', false, owner);
+
+    expect(await refusalOf(svc.register(put('x.bin', 10, 0)))).toBe(HttpStatus.FORBIDDEN);
+    // Ни тела, ни строки: отказ, копящий мусор, — это не отказ.
+    expect(existsSync(join(dir, 'x.bin'))).toBe(false);
+    expect(await db.getRepository(AttachmentRow).count()).toBe(0);
+  });
+
+  it('размер ограничен настройкой, а не только потолком процесса', async () => {
+    const svc = await makeService('1000000');
+    await settings.set('files.maxUploadBytes', 1024, owner);
+
+    await svc.register(put('ровно.bin', 1024, 0));
+    expect(await refusalOf(svc.register(put('лишку.bin', 2048, 0)))).toBe(
+      HttpStatus.PAYLOAD_TOO_LARGE,
+    );
+    expect(existsSync(join(dir, 'лишку.bin'))).toBe(false);
+  });
+
+  it('смена размера действует на том же сервисе, без перезапуска', async () => {
+    const svc = await makeService('1000000');
+    expect((await svc.register(put('первый.bin', 2048, 0))).size).toBe(2048);
+
+    await settings.set('files.maxUploadBytes', 1024, owner);
+    expect(await refusalOf(svc.register(put('второй.bin', 2048, 0)))).toBe(
+      HttpStatus.PAYLOAD_TOO_LARGE,
+    );
+  });
+
+  it('запрещённый вид не проходит, и вид считает тот же detectKind', async () => {
+    const svc = await makeService('1000000');
+    await settings.set('files.allowedKinds', ['image'], owner);
+
+    await svc.register(put('кот.png', 10, 0, 'image/png'));
+    expect(await refusalOf(svc.register(put('трек.mp3', 10, 0, 'audio/mpeg')))).toBe(
+      HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+    );
+  });
+
+  /**
+   * Видов ровно три, и «video» среди них нет: ролик приезжает как `file`.
+   * Значит запретить видео этой настройкой нельзя, а снявший «файл» унесёт
+   * вместе с роликами и pdf — пусть это скажет тест, а не комментарий.
+   */
+  it('ролик считается файлом, а не отдельным видом', async () => {
+    const svc = await makeService('1000000');
+    expect((await svc.register(put('ролик.mp4', 10, 0, 'video/mp4'))).kind).toBe('file');
+
+    await settings.set('files.allowedKinds', ['image', 'audio'], owner);
+    expect(await refusalOf(svc.register(put('другой.mp4', 10, 0, 'video/mp4')))).toBe(
+      HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+    );
+  });
+
+  it('отказ не спотыкается о тело, которого на диске уже нет', async () => {
+    const svc = await makeService('1000000');
+    await settings.set('files.uploadsEnabled', false, owner);
+    // Файл унесло подметание, пока запрос шёл: отказ от этого не меняется.
+    expect(
+      await refusalOf(
+        svc.register({
+          filename: 'призрак.bin',
+          originalname: 'призрак.bin',
+          size: 10,
+          mimetype: 'application/octet-stream',
+        }),
+      ),
+    ).toBe(HttpStatus.FORBIDDEN);
+  });
+});
+
+describe('гард выключенных загрузок', () => {
+  it('пускает, пока загрузки включены', () => {
+    expect(new UploadsEnabledGuard(settings).canActivate()).toBe(true);
+  });
+
+  it('выключенные — отказ ещё до того, как multer начнёт писать тело', async () => {
+    await settings.set('files.uploadsEnabled', false, owner);
+    const guard = new UploadsEnabledGuard(settings);
+    expect(() => guard.canActivate()).toThrow(HttpException);
+    try {
+      guard.canActivate();
+    } catch (e) {
+      expect((e as HttpException).getStatus()).toBe(HttpStatus.FORBIDDEN);
+    }
   });
 });

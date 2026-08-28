@@ -1,5 +1,7 @@
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { SettingsService } from '../settings/settings.service';
+import { describeRetention, type Retention, type RetentionMode } from './retention.policy';
 
 /**
  * Ретенция: сколько живёт переписка.
@@ -9,117 +11,57 @@ import { DataSource } from 'typeorm';
  * исключений, кроме одного: закреплённые сообщения. Оно потому и единственное,
  * что явное — человек сам сказал «это должно остаться».
  *
+ * Срок берётся у настроек, а не у окружения. `RETENTION_DAYS` по-прежнему
+ * работает, но ровно один раз: `SettingsService` переносит её в таблицу на
+ * первом старте (см. его `seed`). Читать переменную и здесь значило бы завести
+ * второй источник правды — и панель, показывающая тридцать дней, чистила бы по
+ * четырнадцати.
+ *
  * Файлы удаляются не здесь: осиротевшее вложение подметает `UploadsService` —
  * ему всё равно, чьё сообщение исчезло, ретенции или руки владельца.
  */
 
 const HOUR_MS = 60 * 60 * 1000;
 
-/** Как часто ходим. Без срока хранения — раз в минуту, см. `parseRetention`. */
+/** Как часто ходим. Без срока хранения — раз в минуту, см. `apply`. */
 const SWEEP_INTERVAL_MS = HOUR_MS;
 const SWEEP_INTERVAL_EPHEMERAL_MS = 60 * 1000;
 
-export const DEFAULT_RETENTION_DAYS = 14;
-
-/**
- * Что инсталляция делает с историей. Три исхода, а не число, — потому что
- * «хранить N дней», «хранить всегда» и «не хранить вовсе» это три разных
- * обещания, и одно число их различает только по договорённости, о которой
- * человек не знает.
- */
-export type RetentionMode = 'days' | 'forever' | 'ephemeral';
-
-export type Retention =
-  | { mode: 'days'; days: number }
-  | { mode: 'forever' }
-  | { mode: 'ephemeral' };
-
-export const DEFAULT_RETENTION: Retention = { mode: 'days', days: DEFAULT_RETENTION_DAYS };
-
-/** Слова, которыми настройка называется вслух. Первое — каноническое. */
-const FOREVER_WORDS = ['forever', 'never', 'unlimited', 'off'];
-const EPHEMERAL_WORDS = ['ephemeral', 'none'];
-
-/**
- * Разбор `RETENTION_DAYS`. `null` — «это не похоже ни на что», выше подставят
- * дефолт и скажут об этом в лог.
- *
- * **Ноль означает «хранить всегда», а не «не хранить».** Соблазн был обратный:
- * ноль дней буквально и есть ноль дней хранения. Но за пределами этого файла
- * ноль почти везде читается как «предела нет» (`0` в `MaxAge`, в `TTL`, в
- * `LIMIT 0` уже нет — и именно поэтому договорённость не спасает), и человек,
- * который на своём сервере и своём диске хочет «храни всё», наберёт `0`
- * первым делом. Ошибиться тут можно в две стороны, и они не равны: лишнее
- * сохранённое удаляется одной командой, а удалённое по чужой догадке не
- * возвращается ничем. Поэтому число выбирает безопасную сторону, а редкое
- * «не хранить вовсе» получает собственное слово, которое случайно не наберёшь.
- *
- * Отрицательное сюда же: раньше это был недокументированный способ выключить
- * ретенцию, и инсталляция, настроенная так, продолжает работать как прежде.
- */
-export function parseRetention(
-  raw: string | undefined = process.env.RETENTION_DAYS,
-): Retention | null {
-  if (raw === undefined) return DEFAULT_RETENTION;
-  const text = raw.trim().toLowerCase();
-  if (text === '') return DEFAULT_RETENTION;
-  if (FOREVER_WORDS.includes(text)) return { mode: 'forever' };
-  if (EPHEMERAL_WORDS.includes(text)) return { mode: 'ephemeral' };
-  const value = Number(text);
-  if (!Number.isFinite(value)) return null;
-  if (value <= 0) return { mode: 'forever' };
-  return { mode: 'days', days: value };
-}
-
-/** Действующая политика: мусор в переменной уже заменён дефолтом. */
-export function retention(raw?: string): Retention {
-  return parseRetention(raw) ?? DEFAULT_RETENTION;
-}
-
-/**
- * Политика словами — одной строкой, в лог при старте и в отказ инсталлятора.
- * Хранение — то, о чём человек имеет право узнать, не читая исходник.
- */
-export function describeRetention(r: Retention): string {
-  if (r.mode === 'forever') return 'переписка хранится без срока';
-  if (r.mode === 'ephemeral') return 'переписка не хранится вовсе';
-  return `переписка хранится ${r.days} дн.`;
-}
+/** Настройки, от которых зависит расписание. Смена любой из них его пересобирает. */
+const WATCHED = ['messages.retentionMode', 'messages.retentionDays'];
 
 @Injectable()
-export class RetentionService implements OnModuleInit {
+export class RetentionService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RetentionService.name);
   private timer: ReturnType<typeof setInterval> | null = null;
+  private unsubscribe: (() => void) | null = null;
 
-  constructor(private readonly db: DataSource) {}
+  constructor(
+    private readonly db: DataSource,
+    private readonly settings: SettingsService,
+  ) {}
 
   onModuleInit(): void {
-    // Мусор в переменной — это не повод молча выбрать дефолт: «14» и «непонятно
-    // что, поэтому 14» выглядят в логе одинаково, а означают разное.
-    if (parseRetention() === null) {
-      this.logger.warn(
-        `RETENTION_DAYS="${process.env.RETENTION_DAYS}" не похоже ни на число дней, ` +
-          `ни на «${FOREVER_WORDS[0]}», ни на «${EPHEMERAL_WORDS[0]}» — беру ` +
-          `${DEFAULT_RETENTION_DAYS} дн.`,
-      );
-    }
-
-    const policy = this.effective();
-    // Говорим всегда, а не только на необычном значении: хранение — обещание
-    // людям на этом сервере, и хозяин должен видеть его при каждом старте.
-    this.logger.log(`ретенция: ${describeRetention(policy)}`);
-    if (policy.mode === 'forever') return;
-
-    void this.sweep();
-    // Без срока хранения час подметания был бы часом хранения.
-    const interval = policy.mode === 'ephemeral' ? SWEEP_INTERVAL_EPHEMERAL_MS : SWEEP_INTERVAL_MS;
-    this.timer = setInterval(() => void this.sweep(), interval);
-    this.timer.unref?.();
+    this.apply();
+    // Настройка, которая начинает действовать только после перезапуска, — не
+    // настройка: человек, поставивший в панели три дня, ждёт, что недельное
+    // уйдёт сегодня, а не с ближайшим обновлением образа.
+    this.unsubscribe = this.settings.onChange((key) => {
+      if (WATCHED.includes(key)) this.apply();
+    });
   }
 
-  /** Что делаем на самом деле (мусор в переменной → дефолт). */
+  onModuleDestroy(): void {
+    this.stop();
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+  }
+
+  /** Что делаем на самом деле — ровно то, что показывает панель. */
   effective(): Retention {
-    return retention();
+    const mode = this.settings.get<RetentionMode>('messages.retentionMode');
+    if (mode !== 'days') return { mode };
+    return { mode, days: this.settings.get<number>('messages.retentionDays') };
   }
 
   /**
@@ -144,5 +86,32 @@ export class RetentionService implements OnModuleInit {
     const removed = res.affected ?? 0;
     if (removed) this.logger.log(`ретенция: удалено реплик — ${removed}`);
     return removed;
+  }
+
+  /**
+   * Взять действующую политику и пересобрать под неё расписание. Зовётся и на
+   * старте, и на каждой смене настройки — второй раз это важнее: сменив режим
+   * с «хранить всегда» на «не хранить», человек остался бы без единого прохода,
+   * потому что таймера у «всегда» нет вовсе.
+   */
+  private apply(): void {
+    this.stop();
+    const policy = this.effective();
+    // Говорим всегда, а не только на необычном значении: хранение — обещание
+    // людям на этом сервере, и хозяин должен видеть его при каждом старте и
+    // при каждой правке.
+    this.logger.log(`ретенция: ${describeRetention(policy)}`);
+    if (policy.mode === 'forever') return;
+
+    void this.sweep();
+    // Без срока хранения час подметания был бы часом хранения.
+    const interval = policy.mode === 'ephemeral' ? SWEEP_INTERVAL_EPHEMERAL_MS : SWEEP_INTERVAL_MS;
+    this.timer = setInterval(() => void this.sweep(), interval);
+    this.timer.unref?.();
+  }
+
+  private stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
   }
 }

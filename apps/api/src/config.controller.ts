@@ -1,5 +1,6 @@
 import { Controller, Get } from '@nestjs/common';
-import { retention, type RetentionMode } from './db/retention.service';
+import { type RetentionMode } from './db/retention.policy';
+import { RetentionService } from './db/retention.service';
 import { issueTurnCredentials, turnSecret } from './turn';
 import { sfuHealthy } from './sfu/sfu-health';
 import { serverVersion } from './version';
@@ -19,6 +20,14 @@ function splitUrls(value: string | undefined): string[] {
 
 @Controller('api')
 export class ConfigController {
+  /**
+   * Ретенцию спрашиваем у того же сервиса, который её и исполняет. Второй
+   * источник (окружение, свой разбор настройки) разошёлся бы с первым молча:
+   * вкладка написала бы «тридцать дней», а подметание ходило бы по
+   * четырнадцати, и человек поверил бы вкладке.
+   */
+  constructor(private readonly retention: RetentionService) {}
+
   @Get('config')
   async getConfig(): Promise<{
     iceServers: IceServer[];
@@ -99,7 +108,7 @@ export class ConfigController {
     // Что будет с перепиской. Клиенту это нужно не для красоты: без срока он не
     // может объяснить человеку, куда делся верх ленты, и «начало канала»
     // выглядит одинаково с «дальше уже удалено».
-    const policy = retention();
+    const policy = this.retention.effective();
     return {
       iceServers,
       sfu,

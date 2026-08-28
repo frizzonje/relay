@@ -10,7 +10,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { randomBytes } from 'crypto';
 import type { Request } from 'express';
-import { UploadRateGuard, uploadBudget } from './upload.guard';
+import { UploadRateGuard, UploadsEnabledGuard, uploadBudget } from './upload.guard';
 import { Attachment, MAX_UPLOAD_BYTES, UPLOAD_DIR, UploadsService } from './uploads';
 
 // multer без @types — берём через require, чтобы не тянуть декларации
@@ -36,10 +36,12 @@ export class UploadController {
   constructor(private readonly uploads: UploadsService) {}
 
   @Post('upload')
-  // Гард — до интерсептора: отказ приходит раньше, чем multer начнёт писать
+  // Гарды — до интерсептора: отказ приходит раньше, чем multer начнёт писать
   // тело на диск. Порядок в Nest именно такой (guards → interceptors), и
-  // держится вся защита на нём.
-  @UseGuards(UploadRateGuard)
+  // держится вся защита на нём. Выключенные в панели загрузки отвергаются
+  // здесь же — принять тело, чтобы потом его удалить, было бы честно, но
+  // дороже ровно на весь файл.
+  @UseGuards(UploadsEnabledGuard, UploadRateGuard)
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({

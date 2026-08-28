@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DataSource } from 'typeorm';
 
 const sfuHealthy = vi.hoisted(() => vi.fn(async () => false));
 vi.mock('./sfu/sfu-health', () => ({ sfuHealthy }));
 
 import { ConfigController } from './config.controller';
+import { RetentionService } from './db/retention.service';
+import { resetDatabase, testDatabase } from './db/testing';
+import { SettingsService } from './settings/settings.service';
 import { signTurnUsername } from './turn';
 
 /**
@@ -24,16 +29,36 @@ const ENV = [
   'RELAY_VERSION',
 ] as const;
 
-beforeEach(() => {
+let db: DataSource;
+let settings: SettingsService;
+const owner = randomUUID();
+
+beforeAll(async () => {
+  db = await testDatabase();
+});
+
+afterAll(async () => {
+  await db?.destroy();
+});
+
+beforeEach(async () => {
   for (const key of ENV) delete process.env[key];
   sfuHealthy.mockResolvedValue(false);
+  // Настройки настоящие и пустые — это и есть «инсталляция, где панель не
+  // открывали»: срок хранения обязан оказаться сегодняшним.
+  await resetDatabase(db);
+  settings = new SettingsService(db);
+  await settings.onModuleInit();
 });
 afterEach(() => {
   for (const key of ENV) delete process.env[key];
   vi.restoreAllMocks();
 });
 
-const read = () => new ConfigController().getConfig();
+// Ретенцию конфиг спрашивает у того же сервиса, который её и исполняет:
+// собственного разбора настройки у ручки нет, иначе панель и подметание
+// разошлись бы молча.
+const read = () => new ConfigController(new RetentionService(db, settings)).getConfig();
 
 describe('STUN', () => {
   it('без настроек — публичные Google, чтобы звонок собрался «из коробки»', async () => {
@@ -187,18 +212,30 @@ describe('версия сервера', () => {
 });
 
 describe('ретенция наружу', () => {
+  it('ненастроенная инсталляция отдаёт сегодняшние четырнадцать дней', async () => {
+    expect(await read()).toMatchObject({ retentionDays: 14, retentionMode: 'days' });
+  });
+
   it('дни едут числом и режимом сразу — по числу одному их не различить', async () => {
-    process.env.RETENTION_DAYS = '30';
-    const cfg = await read();
-    expect(cfg).toMatchObject({ retentionDays: 30, retentionMode: 'days' });
-    delete process.env.RETENTION_DAYS;
+    await settings.set('messages.retentionDays', 30, owner);
+    expect(await read()).toMatchObject({ retentionDays: 30, retentionMode: 'days' });
   });
 
   it('«без срока» и «не хранить» — разные режимы при одинаковом нуле дней', async () => {
-    process.env.RETENTION_DAYS = 'forever';
+    await settings.set('messages.retentionMode', 'forever', owner);
     expect(await read()).toMatchObject({ retentionDays: 0, retentionMode: 'forever' });
-    process.env.RETENTION_DAYS = 'ephemeral';
+    await settings.set('messages.retentionMode', 'ephemeral', owner);
     expect(await read()).toMatchObject({ retentionDays: 0, retentionMode: 'ephemeral' });
-    delete process.env.RETENTION_DAYS;
+  });
+
+  /**
+   * Клиент рисует по этому числу подпись «дальше уже удалено». Останься оно
+   * снимком со старта — человек, сокративший срок в панели, увидел бы старое
+   * обещание до перезапуска api.
+   */
+  it('смена срока видна следующему же запросу конфига, без перезапуска', async () => {
+    expect(await read()).toMatchObject({ retentionDays: 14 });
+    await settings.set('messages.retentionDays', 3, owner);
+    expect(await read()).toMatchObject({ retentionDays: 3 });
   });
 });

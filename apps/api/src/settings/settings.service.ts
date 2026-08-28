@@ -1,7 +1,7 @@
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { SettingRow } from '../db/entities';
-import { parseRetention } from '../db/retention.service';
+import { parseRetention, retentionEnvComplaint } from '../db/retention.policy';
 import {
   SETTINGS,
   defaults,
@@ -221,6 +221,15 @@ export class SettingsService implements OnModuleInit {
    * не настраивал.
    */
   private async seed(): Promise<void> {
+    // Непонятое значение переменной — не повод молча взять умолчание: «14» и
+    // «непонятно что, поэтому 14» выглядят в логе одинаково, а означают
+    // разное. Сказать об этом можно только здесь: дальше `RETENTION_DAYS`
+    // никто не читает.
+    const raw = process.env.RETENTION_DAYS;
+    if (raw !== undefined && parseRetention(raw) === null) {
+      this.logger.warn(`настройки: ${retentionEnvComplaint(raw)} — беру умолчания каталога`);
+    }
+
     for (const key of SEEDED_FROM_ENV) {
       if (this.overrides.has(key)) continue; // переопределение есть — окружение опоздало
       const value = envValue(key);
@@ -268,8 +277,27 @@ export class SettingsService implements OnModuleInit {
     this.overrides.set(key, Object.isFrozen(value) ? value : freeze(value));
   }
 
+  /**
+   * Разбудить потребителей. Бросивший слушатель дальше себя не идёт: значение
+   * к этому моменту уже в базе и в кэше, откатывать нечего, а исключение
+   * наружу означало бы «не сохранено» на сохранённом — и панель показала бы
+   * ошибку там, где настройка сменилась.
+   *
+   * Молчать при этом нельзя: подписчик, тихо не узнавший о правке, — это ровно
+   * тот случай, когда настройка «есть, но не действует», и найти его потом
+   * можно только по этой строке.
+   */
   private emit(key: string, value: SettingValue): void {
-    for (const listener of this.listeners) listener(key, value);
+    for (const listener of this.listeners) {
+      try {
+        listener(key, value);
+      } catch (err) {
+        this.logger.error(
+          `настройки: подписчик на ${key} бросил исключение — правка сохранена, но до него не дошла`,
+          err instanceof Error ? err.stack : String(err),
+        );
+      }
+    }
   }
 }
 

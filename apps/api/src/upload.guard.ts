@@ -6,6 +6,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import type { Request } from 'express';
+import { SettingsService } from './settings/settings.service';
 
 /**
  * Лимит на `POST /api/upload` — единственный публичный POST, который пишет на
@@ -85,5 +86,24 @@ export class UploadRateGuard implements CanActivate {
     // Caddy, а не то, что клиент написал в X-Forwarded-For.
     if (uploadBudget.allow(req.ip ?? 'unknown')) return true;
     throw new HttpException('too many uploads', HttpStatus.TOO_MANY_REQUESTS);
+  }
+}
+
+/**
+ * Выключенные загрузки. Единственное из файловой политики, что решается ДО
+ * того, как multer начнёт писать тело: гарды в Nest идут раньше интерсепторов,
+ * и здесь ещё нет ни файла, ни его настоящего размера.
+ *
+ * Размер и вид проверяются позже, по записанному файлу (`UploadsService`), —
+ * гард о них не знает и знать не может, а верить `Content-Length` нельзя: его
+ * пишет клиент, и в нём вдобавок лежит обёртка multipart.
+ */
+@Injectable()
+export class UploadsEnabledGuard implements CanActivate {
+  constructor(private readonly settings: SettingsService) {}
+
+  canActivate(): boolean {
+    if (this.settings.get<boolean>('files.uploadsEnabled')) return true;
+    throw new HttpException('загрузки выключены', HttpStatus.FORBIDDEN);
   }
 }

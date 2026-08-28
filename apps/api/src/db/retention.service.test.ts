@@ -2,8 +2,10 @@ import { Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DataSource } from 'typeorm';
+import { SettingsService } from '../settings/settings.service';
 import { ChannelRow, MessageRow, PinRow, ServerRow } from './entities';
-import { RetentionService, parseRetention, retention } from './retention.service';
+import { parseRetention } from './retention.policy';
+import { RetentionService } from './retention.service';
 import { resetDatabase, testDatabase } from './testing';
 
 /**
@@ -13,6 +15,7 @@ import { resetDatabase, testDatabase } from './testing';
  */
 
 let db: DataSource;
+const owner = randomUUID();
 
 beforeAll(async () => {
   db = await testDatabase();
@@ -84,6 +87,23 @@ async function texts(): Promise<string[]> {
   return rows.map((r) => r.text);
 }
 
+/**
+ * Настройки такой инсталляции — как их видит живой процесс: посев из окружения
+ * уже прошёл. `RETENTION_DAYS` доезжает до ретенции только этой дорогой:
+ * своего разбора переменной у сервиса больше нет, и второй источник срока
+ * разошёлся бы с тем, что показывает панель.
+ */
+async function settingsWith(env?: string): Promise<SettingsService> {
+  if (env !== undefined) vi.stubEnv('RETENTION_DAYS', env);
+  const settings = new SettingsService(db);
+  await settings.onModuleInit();
+  return settings;
+}
+
+async function retentionFor(env?: string): Promise<RetentionService> {
+  return new RetentionService(db, await settingsWith(env));
+}
+
 describe('срок из окружения', () => {
   it('не задан — четырнадцать дней', () => {
     expect(parseRetention(undefined)).toEqual({ mode: 'days', days: 14 });
@@ -92,7 +112,6 @@ describe('срок из окружения', () => {
 
   it('мусор — null, чтобы об этом можно было сказать вслух, а не молча подставить дефолт', () => {
     expect(parseRetention('когда-нибудь')).toBeNull();
-    expect(retention('когда-нибудь')).toEqual({ mode: 'days', days: 14 });
   });
 
   it('положительное число — столько дней и есть', () => {
@@ -129,16 +148,16 @@ describe('срок из окружения', () => {
 
 describe('проход ретенции', () => {
   it('удаляет старое, свежее не трогает', async () => {
-    vi.stubEnv('RETENTION_DAYS', '14');
+    const service = await retentionFor('14');
     await say('позавчерашнее', 2);
     await say('древнее', 20);
 
-    expect(await new RetentionService(db).sweep()).toBe(1);
+    expect(await service.sweep()).toBe(1);
     expect(await texts()).toEqual(['позавчерашнее']);
   });
 
   it('закреплённое переживает срок — единственное исключение', async () => {
-    vi.stubEnv('RETENTION_DAYS', '14');
+    const service = await retentionFor('14');
     const pinned = await say('важное', 100);
     await say('обычное', 100);
     await db.getRepository(PinRow).insert({
@@ -147,47 +166,45 @@ describe('проход ретенции', () => {
       pinnedBy: null,
     });
 
-    expect(await new RetentionService(db).sweep()).toBe(1);
+    expect(await service.sweep()).toBe(1);
     expect(await texts()).toEqual(['важное']);
   });
 
   it('«ephemeral» — не хранить: чистится всё, включая сегодняшнее', async () => {
-    vi.stubEnv('RETENTION_DAYS', 'ephemeral');
+    const service = await retentionFor('ephemeral');
     await say('только что', 0);
-    await new RetentionService(db).sweep();
+    await service.sweep();
     expect(await texts()).toEqual([]);
   });
 
   it('ноль не удаляет ничего — иначе он бы значил ровно обратное задуманному', async () => {
-    vi.stubEnv('RETENTION_DAYS', '0');
+    const service = await retentionFor('0');
     await say('древнее', 1000);
-    expect(await new RetentionService(db).sweep()).toBe(0);
+    expect(await service.sweep()).toBe(0);
     expect(await texts()).toEqual(['древнее']);
   });
 
   it('мусор в переменной не отменяет ретенцию, а откатывает её к дефолту', async () => {
-    vi.stubEnv('RETENTION_DAYS', 'когда-нибудь');
+    const service = await retentionFor('когда-нибудь');
     await say('древнее', 20);
     await say('вчерашнее', 1);
-    const service = new RetentionService(db);
     expect(service.effective()).toEqual({ mode: 'days', days: 14 });
     await service.sweep();
     expect(await texts()).toEqual(['вчерашнее']);
   });
 
   it('отрицательное — не удалять никогда: у инсталляции есть право так решить', async () => {
-    vi.stubEnv('RETENTION_DAYS', '-1');
+    const service = await retentionFor('-1');
     await say('древнее', 1000);
-    expect(await new RetentionService(db).sweep()).toBe(0);
+    expect(await service.sweep()).toBe(0);
     expect(await texts()).toEqual(['древнее']);
   });
 });
 
 describe('расписание', () => {
   it('первый проход — сразу на старте, а не через час', async () => {
-    vi.stubEnv('RETENTION_DAYS', '14');
+    const service = await retentionFor('14');
     await say('древнее', 20);
-    const service = new RetentionService(db);
     const sweep = vi.spyOn(service, 'sweep');
     service.onModuleInit();
     expect(sweep).toHaveBeenCalledTimes(1);
@@ -195,10 +212,11 @@ describe('расписание', () => {
     expect(await texts()).toEqual([]);
   });
 
-  it('«не хранить» означает, что ходим чаще часа: час был бы часом хранения', () => {
-    vi.stubEnv('RETENTION_DAYS', 'ephemeral');
+  it('«не хранить» означает, что ходим чаще часа: час был бы часом хранения', async () => {
+    // Сервис собирается до подмены таймеров: настройки идут в базу, а запрос
+    // под фейковыми таймерами повис бы вместе со всем прогоном.
+    const service = await retentionFor('ephemeral');
     vi.useFakeTimers();
-    const service = new RetentionService(db);
     const sweep = vi.spyOn(service, 'sweep').mockResolvedValue(0);
     service.onModuleInit();
     sweep.mockClear();
@@ -208,10 +226,9 @@ describe('расписание', () => {
     vi.useRealTimers();
   });
 
-  it('при «всегда» таймер не заводится вовсе', () => {
-    vi.stubEnv('RETENTION_DAYS', 'forever');
+  it('при «всегда» таймер не заводится вовсе', async () => {
+    const service = await retentionFor('forever');
     vi.useFakeTimers();
-    const service = new RetentionService(db);
     const sweep = vi.spyOn(service, 'sweep').mockResolvedValue(0);
     service.onModuleInit();
 
@@ -225,8 +242,7 @@ describe('расписание', () => {
    * каждом старте, а не только когда значение необычное: хозяин, который его
    * не выбирал, узнаёт о нём отсюда и больше ниоткуда.
    */
-  it('политика проговаривается в лог на каждом старте, какой бы она ни была', () => {
-    vi.useFakeTimers();
+  it('политика проговаривается в лог на каждом старте, какой бы она ни была', async () => {
     const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {});
 
     for (const [value, said] of [
@@ -234,24 +250,66 @@ describe('расписание', () => {
       ['ephemeral', 'не хранится вовсе'],
       ['30', '30 дн.'],
     ] as const) {
+      // Каждый заход — своя инсталляция: посев из окружения опаздывает к
+      // переопределению, оставшемуся в таблице от предыдущего значения.
+      await db.query('TRUNCATE settings');
+      const service = await retentionFor(value);
       log.mockClear();
-      vi.stubEnv('RETENTION_DAYS', value);
-      const service = new RetentionService(db);
+      vi.useFakeTimers();
       vi.spyOn(service, 'sweep').mockResolvedValue(0);
       service.onModuleInit();
       expect(log.mock.calls.flat().join(' ')).toContain(said);
+      vi.useRealTimers();
     }
-    vi.useRealTimers();
+  });
+});
+
+/**
+ * Настройка, действующая только после перезапуска, — не настройка. Хозяин,
+ * поставивший в панели два дня, ждёт, что недельное уйдёт сегодня.
+ */
+describe('срок из настроек, а не из перезапуска', () => {
+  it('смена срока меняет то, что уносит ближайший же проход', async () => {
+    const settings = await settingsWith();
+    const service = new RetentionService(db, settings);
+    await say('вчерашнее', 1);
+    await say('трёхдневное', 3);
+
+    // Умолчание каталога — сегодняшние четырнадцать дней: не уходит ничего.
+    expect(await service.sweep()).toBe(0);
+
+    expect(await settings.set('messages.retentionDays', 2, owner)).toMatchObject({ ok: true });
+    expect(await service.sweep()).toBe(1);
+    expect(await texts()).toEqual(['вчерашнее']);
   });
 
-  it('мусор говорится отдельно: «14» и «непонятно что, поэтому 14» — разное', () => {
-    vi.stubEnv('RETENTION_DAYS', 'когда-нибудь');
-    vi.useFakeTimers();
-    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
-    const service = new RetentionService(db);
-    vi.spyOn(service, 'sweep').mockResolvedValue(0);
+  it('смена режима будит проход сразу, а не с ближайшим таймером', async () => {
+    const settings = await settingsWith('forever');
+    const service = new RetentionService(db, settings);
     service.onModuleInit();
-    expect(warn.mock.calls.flat().join(' ')).toContain('когда-нибудь');
-    vi.useRealTimers();
+    await say('только что', 0);
+    // «Хранить всегда» — таймера нет вовсе, и без подписки смена режима
+    // осталась бы обещанием до перезапуска.
+    expect(await texts()).toEqual(['только что']);
+
+    const sweep = vi.spyOn(service, 'sweep');
+    await settings.set('messages.retentionMode', 'ephemeral', owner);
+    expect(sweep).toHaveBeenCalledTimes(1);
+    await sweep.mock.results[0].value;
+
+    expect(await texts()).toEqual([]);
+    service.onModuleDestroy();
+  });
+
+  it('остановленный сервис на чужие правки больше не просыпается', async () => {
+    const settings = await settingsWith();
+    const service = new RetentionService(db, settings);
+    const sweep = vi.spyOn(service, 'sweep').mockResolvedValue(0);
+    service.onModuleInit();
+    service.onModuleDestroy();
+
+    sweep.mockClear();
+    await settings.set('messages.retentionDays', 3, owner);
+    expect(sweep).not.toHaveBeenCalled();
   });
 });

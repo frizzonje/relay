@@ -115,6 +115,18 @@ describe('окружение', () => {
     expect(settings.get<number>('messages.retentionDays')).toBe(14);
   });
 
+  /**
+   * «Четырнадцать» и «непонятно что, поэтому четырнадцать» выглядят в логе
+   * одинаково, а означают разное. Сказать об этом можно только здесь: дальше
+   * `RETENTION_DAYS` не читает никто, ретенция берёт срок уже у настроек.
+   */
+  it('мусор в переменной не остаётся молчаливым', async () => {
+    vi.stubEnv('RETENTION_DAYS', 'когда-нибудь');
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+    await started();
+    expect(warn.mock.calls.flat().join(' ')).toContain('когда-нибудь');
+  });
+
   it('нецелый срок не проходит проверку каталога и остаётся в логе', async () => {
     vi.stubEnv('RETENTION_DAYS', '1.5');
     const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
@@ -320,6 +332,32 @@ describe('подписка', () => {
     off();
     await settings.set('messages.pageSize', 60, owner);
     expect(seen).toEqual([['messages.pageSize', 100]]);
+  });
+
+  /**
+   * Подписчик — чужой код, и он умеет падать. Значение к моменту рассылки уже
+   * в базе и в кэше: откатывать нечего, а исключение наружу означало бы
+   * «не сохранено» на сохранённом — панель показала бы ошибку там, где
+   * настройка сменилась.
+   */
+  it('бросивший подписчик не срывает запись и не глушит соседей', async () => {
+    const settings = await started();
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+    const seen: string[] = [];
+    settings.onChange(() => {
+      throw new Error('подписчик сломался');
+    });
+    settings.onChange((key) => seen.push(key));
+
+    expect(await settings.set('messages.pageSize', 100, owner)).toMatchObject({
+      ok: true,
+      changed: true,
+    });
+    expect(seen).toEqual(['messages.pageSize']);
+    expect((await row('messages.pageSize'))?.value).toBe(100);
+    // Потребитель, тихо не узнавший о правке, — это «настройка есть, но не
+    // действует»; найти такое потом можно только по этой строке.
+    expect(error.mock.calls.flat().join(' ')).toContain('messages.pageSize');
   });
 
   it('сброс группы будит теми же ключами', async () => {
