@@ -169,6 +169,12 @@
     pointer-events: none;
     background: var(--color-bg-app);
     contain: layout paint;
+    /* Размеры фона живут здесь, а не в трёх местах: шаг точечной сетки читает
+       ещё и клиентский слой (Background.tsx) — он двигает окошко mesh'а ровно
+       на кратное шагу, иначе яркие точки разъехались бы с тусклыми. */
+    --atmos-dot: 26px;
+    --atmos-spot: 240px;
+    --atmos-mesh: 150px;
   }
 
   /* Точечная сетка: 1px точки, маска-виньетка к краям */
@@ -181,19 +187,44 @@
     mask-image: radial-gradient(130% 120% at 50% 40%, #000 20%, transparent 82%);
   }
 
-  /* Два медленно дрейфующих холодных световых пятна */
+  /* Два медленно дрейфующих холодных световых пятна.
+
+     Ни blur, ни mix-blend-mode здесь нет, и это не экономия на спичках. Оба
+     стоили кадров: пятно размером в полэкрана с `filter: blur(48px)` и
+     смешиванием по `screen` браузер не может нарисовать один раз и потом
+     возить готовой картинкой — он пересобирает его на КАЖДОМ кадре, который
+     страница вообще рисует. А рисует она их непрерывно: хватает пульсирующей
+     точки «в сети» в углу. Замер на стенде: 7-10 кадров в секунду с этими
+     двумя свойствами против 46 без них.
+
+     Размытие ничего и не давало: под ним лежит радиальный градиент, гаснущий в
+     прозрачность на 60% радиуса, — размывать там уже нечего.
+
+     `screen` над почти чёрным фоном тёмной темы (#08090b) даёт тот же цвет,
+     что и обычное наложение: формула screen при чёрной подложке вырождается в
+     исходный цвет. Разница появляется на СВЕТЛОЙ теме — там `screen` над почти
+     белым фоном гасил пятна до невидимости, а обычное наложение нарисовало бы
+     синие кляксы, которых в макете никогда не было. Поэтому на светлой теме
+     пятен просто нет (ниже) — ровно то, что человек видел и раньше. */
   .atmos__glow {
     position: absolute;
-    filter: blur(48px);
-    mix-blend-mode: screen;
     will-change: transform;
   }
+  /* `ellipse closest-side`, а не `circle`: круг по дальнему углу в узкой
+     высокой коробке шире её самой, и градиент обрывался о боковую грань прямой
+     вертикальной чертой. Раньше эту черту прятало размытие в 48px — то самое,
+     которое стоило кадров. Эллипс по ближней стороне гаснет ровно на краю
+     коробки, поэтому обрывать нечего и размывать нечего. */
   .atmos__glow--a {
     width: 52%;
     height: 160%;
     left: -6%;
     top: -30%;
-    background: radial-gradient(circle at center, rgba(120, 150, 200, 0.16), transparent 60%);
+    background: radial-gradient(
+      ellipse closest-side at center,
+      rgba(120, 150, 200, 0.16),
+      transparent
+    );
     animation: bbDrift1 22s ease-in-out infinite;
   }
   .atmos__glow--b {
@@ -201,49 +232,91 @@
     height: 160%;
     right: -8%;
     bottom: -32%;
-    background: radial-gradient(circle at center, rgba(190, 196, 214, 0.11), transparent 60%);
+    background: radial-gradient(
+      ellipse closest-side at center,
+      rgba(190, 196, 214, 0.11),
+      transparent
+    );
     animation: bbDrift2 28s ease-in-out infinite;
   }
 
-  /* Интерактивный спотлайт: холодный свет под курсором (--mx/--my задаёт
-     клиентский слой через ref без ре-рендера). */
+  /* Интерактивный спотлайт: холодный свет под курсором. Положение задаёт
+     клиентский слой (Background.tsx) через ref, без ре-рендера React.
+
+     Слой размером с сам свет, а не с экран, и ездит он transform'ом. Раньше это
+     был градиент во весь экран, чей центр задавался переменными --mx/--my: на
+     каждое движение мыши браузер перерисовывал полный экран — и тем сильнее
+     дёргалось, чем быстрее человек вёл курсором, то есть ровно в тот момент,
+     когда это заметнее всего. Готовая картинка, которую возят transform'ом, не
+     перерисовывается вовсе.
+
+     Смешивания `screen` здесь нет по той же причине, что и у пятен выше, и с
+     тем же следствием: на светлой теме спотлайта нет — там он и раньше был
+     неразличим. */
   .atmos__spot {
     position: absolute;
-    inset: 0;
+    left: 0;
+    top: 0;
+    width: calc(var(--atmos-spot) * 2);
+    height: calc(var(--atmos-spot) * 2);
+    margin: calc(-1 * var(--atmos-spot)) 0 0 calc(-1 * var(--atmos-spot));
     opacity: 0;
     transition: opacity 0.4s ease;
-    mix-blend-mode: screen;
     pointer-events: none;
+    will-change: transform;
     background: radial-gradient(
-      240px circle at var(--mx, 50%) var(--my, 50%),
+      var(--atmos-spot) circle at center,
       rgba(150, 180, 235, 0.2),
       rgba(150, 180, 235, 0.07) 40%,
       transparent 66%
     );
   }
-  /* Проступающая mesh-сетка более ярких точек в радиусе спотлайта */
+
+  /* Проступающая сетка более ярких точек в радиусе спотлайта — окошко с
+     маской, которое ездит по неподвижной сетке. Маска тоже постоянная: раньше
+     её центр задавали те же --mx/--my, а маска во весь экран пересчитывается
+     на каждое движение мыши целиком. */
   .atmos__mesh {
     position: absolute;
-    inset: 0;
+    left: 0;
+    top: 0;
+    width: calc(var(--atmos-mesh) * 2);
+    height: calc(var(--atmos-mesh) * 2);
+    margin: calc(-1 * var(--atmos-mesh)) 0 0 calc(-1 * var(--atmos-mesh));
+    overflow: hidden;
     opacity: 0;
     transition: opacity 0.4s ease;
     pointer-events: none;
-    background-image: radial-gradient(rgba(180, 205, 255, 0.9) 1px, transparent 1.6px);
-    background-size: 26px 26px;
-    -webkit-mask-image: radial-gradient(
-      150px circle at var(--mx, 50%) var(--my, 50%),
-      #000,
-      transparent 70%
-    );
-    mask-image: radial-gradient(
-      150px circle at var(--mx, 50%) var(--my, 50%),
-      #000,
-      transparent 70%
-    );
+    will-change: transform;
+    -webkit-mask-image: radial-gradient(var(--atmos-mesh) circle at center, #000, transparent 70%);
+    mask-image: radial-gradient(var(--atmos-mesh) circle at center, #000, transparent 70%);
   }
+
+  /* Сама сетка внутри окошка. Она обязана стоять на месте, пока окошко ездит:
+     яркие точки — это те же точки фона, только зажжённые, и разъехаться им с
+     тусклыми нельзя. Поэтому клиентский слой сдвигает её ОБРАТНО на столько
+     же, но по остатку от шага сетки: рисунок повторяется каждые --atmos-dot,
+     и сдвига в пределах одного шага хватает, чтобы попасть в ту же клетку.
+     Запас по --atmos-dot с каждой стороны — чтобы этот сдвиг не обнажил край. */
+  .atmos__mesh-dots {
+    position: absolute;
+    inset: calc(-2 * var(--atmos-dot));
+    background-image: radial-gradient(rgba(180, 205, 255, 0.9) 1px, transparent 1.6px);
+    background-size: var(--atmos-dot) var(--atmos-dot);
+    will-change: transform;
+  }
+
   .atmos.is-active .atmos__spot,
   .atmos.is-active .atmos__mesh {
     opacity: 1;
+  }
+
+  /* Светлая тема: холодного света на белом не было и нет — см. комментарий к
+     .atmos__glow. `display: none` вместо прозрачности: слой с нулевой
+     прозрачностью браузер всё равно держит и складывает с остальными. */
+  :root[data-theme='light'] .atmos__glow,
+  :root[data-theme='light'] .atmos__spot {
+    display: none;
   }
 }
 
