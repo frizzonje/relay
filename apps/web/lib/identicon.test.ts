@@ -25,14 +25,14 @@ describe('стабильность', () => {
 
   it('кеш отдаёт ровно то же, что и прямой вызов', () => {
     expect(identicon(A, 38)).toBe(identiconSvg(A, 38));
-    expect(identicon(A, 38, { still: true })).toBe(identiconSvg(A, 38, { still: true }));
+    expect(identicon(A, 38, { alive: true })).toBe(identiconSvg(A, 38, { alive: true }));
   });
 
   it('кеш не путает размер и неподвижность', () => {
     // Ключ кеша обязан включать всё, от чего зависит разметка: мелкий размер
     // меняет геометрию, «без движения» — наличие дрейфа.
     expect(identicon(A, 22)).not.toBe(identicon(A, 38));
-    expect(identicon(A, 38, { still: true })).not.toBe(identicon(A, 38));
+    expect(identicon(A, 38, { alive: true })).not.toBe(identicon(A, 38));
   });
 });
 
@@ -98,10 +98,13 @@ describe('разметка', () => {
     expect(svg).toContain('animation-delay:0.11s');
   });
 
-  it('«без движения» — значит без дрейфа', () => {
+  it('дрейф — по запросу, и по умолчанию его нет', () => {
+    // Умолчание важнее самой возможности: лицо, поставленное в новый список,
+    // не должно молча начать пересчитывать размытие 60 раз в секунду.
     // Не «анимация с нулевой длительностью», а её отсутствие: остановленная
     // анимация всё равно держит слой композитора.
-    expect(identiconSvg(A, 38, { still: true })).not.toContain('rlDrift');
+    expect(identiconSvg(A, 38)).not.toContain('rlDrift');
+    expect(identiconSvg(A, 38, { alive: true })).toContain('rlDrift');
   });
 
   it('мелкий размер рисуется проще крупного', () => {

@@ -83,7 +83,7 @@ export function BanAuthorDialog({
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2 rounded-[10px] border border-line bg-bg-deep/60 px-3 py-2">
               {shown.message.fingerprint && (
-                <Identicon fingerprint={shown.message.fingerprint} size={22} />
+                <Identicon fingerprint={shown.message.fingerprint} size={22} alive />
               )}
               <div className="min-w-0">
                 <div className="truncate text-[13px] font-semibold text-text-header">

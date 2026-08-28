@@ -48,6 +48,10 @@ export function DmPeerCard() {
         dmSection && 'max-lg:hidden',
       )}
     >
+      {/* Самое крупное лицо на экране — и оно не дышит. Дрейф пересчитывает
+          размытие каждый кадр (см. lib/identicon.ts), а здесь рядом и так
+          написано словами, в сети человек или нет: движение тут ничего не
+          добавляет, кроме счёта. */}
       <Identicon fingerprint={peer} size={64} />
       <div className="flex flex-col items-center gap-1 text-center">
         <span className="max-w-full truncate text-[15px] font-bold text-text-header">{nick}</span>

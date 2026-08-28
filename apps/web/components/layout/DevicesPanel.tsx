@@ -64,7 +64,7 @@ export function DevicesPanel() {
   return (
     <div className="flex flex-col gap-5">
       <div className="flex items-center gap-3">
-        <Identicon fingerprint={me?.fingerprint ?? ''} size={44} />
+        <Identicon fingerprint={me?.fingerprint ?? ''} size={44} alive />
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="truncate text-[15px] font-semibold text-text-header">@{me?.nick}</span>

@@ -19,7 +19,7 @@ export const Identicon = memo(function Identicon({
   fingerprint,
   size = 32,
   speaking = false,
-  still = false,
+  alive = false,
   title,
   className,
 }: {
@@ -28,14 +28,18 @@ export const Identicon = memo(function Identicon({
   size?: number;
   /**
    * Человек сейчас говорит: поле бьётся поясами изнутри наружу. Берётся из того
-   * же источника, что и обводка плитки, — иначе лицо и рамка спорили бы.
+   * же источника, что и обводка плитки, — иначе лицо и рамка спорили бы. Это
+   * единственное движение, которое лицу положено в списках и плитках: оно
+   * что-то значит и кончается вместе с речью.
    */
   speaking?: boolean;
   /**
-   * Совсем без движения — там, где лиц на экране может быть сколько угодно.
-   * Не «остановленная анимация»: остановленная всё равно держит слой.
+   * Лицо дышит. По умолчанию — нет: дрейф крутит группу под гауссовым
+   * размытием, и браузер пересчитывает размытие каждый кадр, для каждого лица
+   * (см. lib/identicon.ts — там же замер). Просить движение стоит там, где
+   * лицо одно и оно предмет экрана; в списках и стеках — нельзя.
    */
-  still?: boolean;
+  alive?: boolean;
   className?: string;
   title?: string;
 }) {
@@ -50,7 +54,7 @@ export const Identicon = memo(function Identicon({
       aria-label={title}
       aria-hidden={title ? undefined : true}
       title={title}
-      dangerouslySetInnerHTML={{ __html: identicon(fingerprint, size, { still }) }}
+      dangerouslySetInnerHTML={{ __html: identicon(fingerprint, size, { alive }) }}
     />
   );
 });
