@@ -20,6 +20,7 @@ import { DmService } from './gateway/dm.service';
 import { RegistryService } from './gateway/registry.service';
 import { MetricsService } from './metrics';
 import { RetentionService } from './db/retention.service';
+import { SettingsService } from './settings/settings.service';
 import { UploadsService } from './uploads';
 
 /**
@@ -59,6 +60,7 @@ export class AppModule {
         RegistryService,
         MetricsService,
         RetentionService,
+        SettingsService,
         UploadsService,
       ],
     };

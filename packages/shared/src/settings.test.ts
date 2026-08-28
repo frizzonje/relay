@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   APP_NAME,
@@ -417,5 +419,42 @@ describe('проверка значения — прочие виды', () => {
   it('спецификация ищется по ключу и не выдумывает несуществующий', () => {
     expect(settingSpec('voice.turnUrls')?.group).toBe('voice');
     expect(settingSpec('voice.нет')).toBeUndefined();
+  });
+});
+
+/**
+ * Каталог существует в двух экземплярах: этот и `apps/api/src/settings/catalog.ts`.
+ * Так вышло не от лени — api намеренно не зависит от этого пакета (см.
+ * `gateway/protocol.ts`), а собирается он в commonjs из своего `src`, куда
+ * исходник на ESM попросту не доедет ни компиляцией, ни `require`.
+ *
+ * Цена копии — расхождение, и оно было бы худшего сорта: панель показала бы
+ * границы, по которым сервер не проверяет, а владелец узнал бы об этом,
+ * получив отказ на значение, которое ему только что предложили. Поэтому копия
+ * сверяется не по духу, а по букве.
+ */
+describe('копия каталога в api', () => {
+  /** Всё, начиная с первого объявления: до него у файлов своя шапка и свой импорт. */
+  const body = (src: string) => {
+    const at = src.indexOf('export type SettingKind');
+    expect(at).toBeGreaterThan(0);
+    return src.slice(at);
+  };
+
+  it('совпадает с этим файлом слово в слово', () => {
+    const mine = readFileSync(fileURLToPath(new URL('./settings.ts', import.meta.url)), 'utf8');
+    const theirs = readFileSync(
+      fileURLToPath(new URL('../../../apps/api/src/settings/catalog.ts', import.meta.url)),
+      'utf8',
+    );
+    expect(body(theirs)).toBe(body(mine));
+  });
+
+  it('берёт вид вложения у сервера, а не у этого пакета', () => {
+    const theirs = readFileSync(
+      fileURLToPath(new URL('../../../apps/api/src/settings/catalog.ts', import.meta.url)),
+      'utf8',
+    );
+    expect(theirs).toContain("import type { AttachmentKind } from '../uploads';");
   });
 });
