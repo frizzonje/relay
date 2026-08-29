@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { SETTING_GROUPS, type SettingGroup, type SettingSpec } from '@relay/shared';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
@@ -13,6 +13,8 @@ import { useAdminStore } from '@/stores/admin';
 import { useOwnerStore } from '@/stores/owner';
 import { useUiStore } from '@/stores/ui';
 import { SettingField } from '@/components/admin/SettingField';
+import { PeopleTab } from '@/components/admin/PeopleTab';
+import { BansTab } from '@/components/admin/BansTab';
 
 /**
  * Панель инсталляции — окно владельца.
@@ -26,10 +28,30 @@ import { SettingField } from '@/components/admin/SettingField';
  * `SETTING_GROUPS` задаёт лишь ПОРЯДОК: группа, о которой панель не знает
  * (сервер новее), встаёт в конец, а не пропадает вместе со своими полями.
  *
+ * Кроме них есть вкладки, у которых параметров нет вовсе: люди и баны. Они
+ * стоят за чертой в конце списка и живут своими событиями (`admin-people`,
+ * `admin-bans`, `admin-action`), а не каталогом, — потому и отделены: «сбросить
+ * эту вкладку к умолчаниям» на списке людей не значит ничего.
+ *
  * Прав панель не раздаёт: их проверяет сервер на каждом событии (§9). Кнопка,
  * которую клиент не нарисовал, ничего не запрещает — поэтому здесь только «есть
  * ли смысл рисовать», а не «можно ли».
  */
+
+/**
+ * Вкладки, которых в каталоге нет.
+ *
+ * Названы `identities`, а не `people`: `people` — это ГРУППА ПАРАМЕТРОВ о людях
+ * (длина ника, показывать ли отпечатки), и две вкладки с одним именем спорили
+ * бы и на экране, и в разметке.
+ */
+const EXTRA_TABS = ['identities', 'bans'] as const;
+
+type ExtraTab = (typeof EXTRA_TABS)[number];
+type AdminTab = SettingGroup | ExtraTab;
+
+const isExtra = (tab: AdminTab): tab is ExtraTab => (EXTRA_TABS as readonly string[]).includes(tab);
+
 export function AdminDialog() {
   const t = useT();
   const open = useUiStore((s) => s.adminOpen);
@@ -38,7 +60,7 @@ export function AdminDialog() {
   const loaded = useAdminStore((s) => s.loaded);
   const catalog = useAdminStore((s) => s.catalog);
   const error = useAdminStore((s) => s.error);
-  const [tab, setTab] = useState<SettingGroup | null>(null);
+  const [tab, setTab] = useState<AdminTab | null>(null);
   const [resetting, setResetting] = useState(false);
 
   // Открылась — спрашиваем состояние; закрылась — забываем его. Стор пережил бы
@@ -64,7 +86,8 @@ export function AdminDialog() {
   // и вызов ничего не делает). Тот же приём, что в личных настройках.
   const navRef = useRef<HTMLElement>(null);
   const groups = useMemo(() => groupsOf(catalog), [catalog]);
-  const active = tab && groups.includes(tab) ? tab : (groups[0] ?? null);
+  const tabs = useMemo<AdminTab[]>(() => [...groups, ...EXTRA_TABS], [groups]);
+  const active = tab && tabs.includes(tab) ? tab : (tabs[0] ?? null);
   useEffect(() => {
     // `scrollIntoView?.` — не перестраховка: в jsdom его нет вовсе, и без
     // вопросительного знака открытие панели падало бы в тестах, ничего не
@@ -103,32 +126,41 @@ export function AdminDialog() {
           <div className="px-2 pb-2 pt-1 font-mono text-[11px] uppercase tracking-[0.2em] text-text-faint max-md:hidden">
             {t('admin.title')}
           </div>
-          {groups.map((group) => (
-            <button
-              key={group}
-              type="button"
-              data-testid={`admin-tab-${group}`}
-              onClick={() => setTab(group)}
-              aria-current={group === active}
-              className={cn(
-                'relative rounded-[8px] px-3 py-2 text-left text-[14px] outline-none transition-colors',
-                'max-md:shrink-0 max-md:whitespace-nowrap',
-                group === active
-                  ? 'text-text-header'
-                  : 'text-text-muted hover:bg-bg-hover hover:text-text',
-              )}
-            >
-              {/* Подложка одна на всю группу: общий layoutId — и она переезжает
-                  к выбранной вкладке, а не мигает на новом месте. */}
-              {group === active && (
-                <motion.span
-                  layoutId="admin-tab"
-                  transition={springTab}
-                  className="absolute inset-0 rounded-[8px] bg-bg-active"
+          {tabs.map((item, at) => (
+            <Fragment key={item}>
+              {/* Черта отделяет параметры от того, что параметрами не правится:
+                  на списке людей нечего сбрасывать к умолчаниям. */}
+              {at === groups.length && (
+                <div
+                  aria-hidden
+                  className="my-1.5 border-t border-line max-md:my-0 max-md:ml-1 max-md:mr-1 max-md:border-l max-md:border-t-0"
                 />
               )}
-              <span className="relative">{groupName(t, group)}</span>
-            </button>
+              <button
+                type="button"
+                data-testid={`admin-tab-${item}`}
+                onClick={() => setTab(item)}
+                aria-current={item === active}
+                className={cn(
+                  'relative rounded-[8px] px-3 py-2 text-left text-[14px] outline-none transition-colors',
+                  'max-md:shrink-0 max-md:whitespace-nowrap',
+                  item === active
+                    ? 'text-text-header'
+                    : 'text-text-muted hover:bg-bg-hover hover:text-text',
+                )}
+              >
+                {/* Подложка одна на всю колонку: общий layoutId — и она
+                    переезжает к выбранной вкладке, а не мигает на новом месте. */}
+                {item === active && (
+                  <motion.span
+                    layoutId="admin-tab"
+                    transition={springTab}
+                    className="absolute inset-0 rounded-[8px] bg-bg-active"
+                  />
+                )}
+                <span className="relative">{tabName(t, item)}</span>
+              </button>
+            </Fragment>
           ))}
         </nav>
 
@@ -144,7 +176,7 @@ export function AdminDialog() {
                   exit="exit"
                   className="block"
                 >
-                  {active ? groupName(t, active) : t('admin.title')}
+                  {active ? tabName(t, active) : t('admin.title')}
                 </motion.span>
               </AnimatePresence>
             </h2>
@@ -176,19 +208,30 @@ export function AdminDialog() {
                   exit="exit"
                   className="flex flex-col gap-2.5"
                 >
-                  {fields.map((spec) => (
-                    <SettingField key={spec.key} spec={spec} />
-                  ))}
+                  {active === 'identities' ? (
+                    <PeopleTab />
+                  ) : active === 'bans' ? (
+                    <BansTab />
+                  ) : (
+                    <>
+                      {fields.map((spec) => (
+                        <SettingField key={spec.key} spec={spec} />
+                      ))}
 
-                  {active && (
-                    <button
-                      type="button"
-                      data-testid="admin-reset-group"
-                      onClick={() => setResetting(true)}
-                      className="mt-2 self-start rounded-[8px] px-3 py-2 text-[13px] text-text-muted outline-none transition-colors hover:bg-danger/10 hover:text-danger"
-                    >
-                      {t('admin.reset')}
-                    </button>
+                      {/* «Вернуть к умолчаниям» — только у вкладки параметров:
+                          у списка людей умолчаний нет, и кнопка там означала бы
+                          неизвестно что. */}
+                      {active && (
+                        <button
+                          type="button"
+                          data-testid="admin-reset-group"
+                          onClick={() => setResetting(true)}
+                          className="mt-2 self-start rounded-[8px] px-3 py-2 text-[13px] text-text-muted outline-none transition-colors hover:bg-danger/10 hover:text-danger"
+                        >
+                          {t('admin.reset')}
+                        </button>
+                      )}
+                    </>
                   )}
                 </motion.div>
               </AnimatePresence>
@@ -197,11 +240,11 @@ export function AdminDialog() {
         </div>
       </DialogContent>
 
-      {active && resetting && (
+      {active && !isExtra(active) && resetting && (
         <ConfirmDialog
           open
           onOpenChange={(v) => !v && setResetting(false)}
-          title={t('admin.reset.title', { group: groupName(t, active) })}
+          title={t('admin.reset.title', { group: tabName(t, active) })}
           description={t('admin.reset.body')}
           confirmLabel={t('admin.reset.apply')}
           onConfirm={() => {
@@ -238,9 +281,14 @@ function groupsOf(catalog: SettingSpec[]): SettingGroup[] {
   return [...known, ...unknown];
 }
 
-/** Имя вкладки — по имени группы, как и всё остальное в панели. */
-function groupName(t: (key: MessageKey) => string, group: SettingGroup): string {
-  const message = `settings.group.${group}` as MessageKey;
+/**
+ * Имя вкладки — по её ключу, как и всё остальное в панели: группа берёт его из
+ * словаря групп, внекаталожная — из своего. Ключа нет в словаре только у
+ * группы, заведённой сервером новее, — она называется машинным именем, и это
+ * лучше пустого места, за которое не взяться.
+ */
+function tabName(t: (key: MessageKey) => string, tab: AdminTab): string {
+  const message = (isExtra(tab) ? `admin.tab.${tab}` : `settings.group.${tab}`) as MessageKey;
   const text = t(message);
-  return text === message ? group : text;
+  return text === message ? tab : text;
 }

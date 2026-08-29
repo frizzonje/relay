@@ -1,11 +1,17 @@
 import { create } from 'zustand';
 import type {
+  AdminAction,
+  AdminActionResult,
+  AdminBansResult,
   AdminChangedRelay,
   AdminOverview,
   AdminPasswordResult,
+  AdminPeopleResult,
+  AdminPerson,
   AdminResetResult,
   AdminSetResult,
   AdminStateResult,
+  BanEntry,
   SettingGroup,
   SettingSpec,
   SettingValue,
@@ -110,6 +116,34 @@ interface AdminState {
    * полей в этот момент может не быть вовсе.
    */
   error: AdminFieldError | null;
+
+  /**
+   * Страница людей — то, что показывает вкладка личностей.
+   *
+   * Список живёт в сторе, а не во вкладке, ровно ради одного обещания: бан,
+   * поставленный на одной вкладке, виден на другой в тот же миг. Держи его
+   * каждая вкладка у себя — снятый бан вернул бы человека в общий список
+   * только после того, как панель закроют и откроют заново.
+   */
+  people: AdminPerson[];
+  /** Ключ следующей страницы. `null` — ниже ничего нет. */
+  peopleCursor: string | null;
+  /** Поиск, которым набран текущий список: ответ на устаревший не берём. */
+  peopleQuery: string;
+  /** Спрашиваем страницу прямо сейчас. */
+  peopleBusy: boolean;
+  /** Хоть раз спросили: пустой список без этого неотличим от «ещё не грузили». */
+  peopleLoaded: boolean;
+  bans: BanEntry[];
+  bansBusy: boolean;
+  bansLoaded: boolean;
+  /**
+   * Отказ на список целиком (людей не отдали, баны не отдали). Отдельно от
+   * `error`, который гасит всю панель: список — одна её вкладка, и молчать о
+   * нём поверх работающих настроек было бы враньём в обе стороны.
+   */
+  listError: AdminFieldError | null;
+
   load: () => Promise<void>;
   set: (key: string, value: SettingValue, opts?: { confirm?: boolean }) => Promise<void>;
   /** Правка из другой сессии владельца (`admin-changed`, §9.6). */
@@ -117,12 +151,45 @@ interface AdminState {
   resetGroup: (group: SettingGroup) => Promise<void>;
   /** Пароль инсталляции — своей дорогой (§9.5), не через `set`. */
   setPassword: (password: string) => Promise<void>;
+
+  /** Первая страница людей: пустой запрос — просто список. */
+  loadPeople: (query?: string) => Promise<void>;
+  /** Следующая страница по курсору. Без курсора не делает ничего. */
+  morePeople: () => Promise<void>;
+  loadBans: () => Promise<void>;
+  /**
+   * Бан, разбан и отзыв чужого устройства.
+   *
+   * Возвращают причину отказа, а не кладут её в стор: отказ здесь относится к
+   * одной строке списка («такого отпечатка нет», «это твоё устройство»), и
+   * показывать его надо рядом с ней, а не общей полосой над всей вкладкой.
+   * `null` — получилось.
+   */
+  ban: (fingerprint: string) => Promise<AdminFieldError | null>;
+  unban: (fingerprint: string) => Promise<AdminFieldError | null>;
+  revokeDevice: (deviceId: string) => Promise<AdminFieldError | null>;
+
   reset: () => void;
 }
 
 const initial: Pick<
   AdminState,
-  'loaded' | 'catalog' | 'values' | 'overview' | 'saving' | 'errors' | 'error'
+  | 'loaded'
+  | 'catalog'
+  | 'values'
+  | 'overview'
+  | 'saving'
+  | 'errors'
+  | 'error'
+  | 'people'
+  | 'peopleCursor'
+  | 'peopleQuery'
+  | 'peopleBusy'
+  | 'peopleLoaded'
+  | 'bans'
+  | 'bansBusy'
+  | 'bansLoaded'
+  | 'listError'
 > = {
   loaded: false,
   catalog: [],
@@ -131,6 +198,15 @@ const initial: Pick<
   saving: [],
   errors: {},
   error: null,
+  people: [],
+  peopleCursor: null,
+  peopleQuery: '',
+  peopleBusy: false,
+  peopleLoaded: false,
+  bans: [],
+  bansBusy: false,
+  bansLoaded: false,
+  listError: null,
 };
 
 /** Тот же набор без одного ключа — отказ снимается, когда поле трогают заново. */
@@ -285,12 +361,126 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
     patch((s) => ({ values: { ...s.values, [key]: res.set }, errors: without(s.errors, key) }));
   },
 
+  loadPeople: async (query) => {
+    const asked = query ?? get().peopleQuery;
+    patch({ peopleQuery: asked, peopleBusy: true, listError: null });
+    const res = await ack<AdminPeopleResult>((cb) =>
+      // Поиск серверный: людей может быть тысяча, и выбирать нужного из
+      // привезённой тысячи — это привезти тысячу.
+      getSocket().emit('admin-people', asked ? { query: asked } : {}, cb),
+    );
+    // Пока летел ответ, человек дописал запрос. Страница по «ма» поверх
+    // страницы по «маша» выглядит как поиск, который врёт через раз.
+    if (get().peopleQuery !== asked) return;
+    if (!res.ok) {
+      patch({ peopleBusy: false, listError: res.error });
+      return;
+    }
+    patch({
+      people: res.people,
+      peopleCursor: res.cursor ?? null,
+      peopleBusy: false,
+      peopleLoaded: true,
+    });
+  },
+
+  morePeople: async () => {
+    const { peopleCursor: cursor, peopleQuery: asked, peopleBusy } = get();
+    // Курсор приходит, только если ниже что-то осталось (§9.3): его отсутствие
+    // и есть конец списка, а не повод спросить ещё раз.
+    if (!cursor || peopleBusy) return;
+    patch({ peopleBusy: true, listError: null });
+    const res = await ack<AdminPeopleResult>((cb) =>
+      getSocket().emit('admin-people', asked ? { query: asked, cursor } : { cursor }, cb),
+    );
+    if (get().peopleQuery !== asked) return;
+    if (!res.ok) {
+      patch({ peopleBusy: false, listError: res.error });
+      return;
+    }
+    patch((s) => ({
+      people: [...s.people, ...res.people],
+      peopleCursor: res.cursor ?? null,
+      peopleBusy: false,
+    }));
+  },
+
+  loadBans: async () => {
+    patch({ bansBusy: true, listError: null });
+    const res = await ack<AdminBansResult>((cb) => getSocket().emit('admin-bans', cb));
+    if (!res.ok) {
+      patch({ bansBusy: false, listError: res.error });
+      return;
+    }
+    patch({ bans: res.bans, bansBusy: false, bansLoaded: true });
+  },
+
+  ban: async (fingerprint) => {
+    const res = await act('ban', fingerprint);
+    if (!res.ok) return res.error;
+    patch((s) => ({
+      people: s.people.map((p) => (p.fingerprint === fingerprint ? { ...p, banned: true } : p)),
+      // Строку бана — когда и кем — пишет сервер, и сочинить её здесь значило бы
+      // показать на соседней вкладке не то, что лежит в базе. Помечаем список
+      // несвежим: вкладка банов спросит его, когда её откроют.
+      bansLoaded: false,
+      listError: null,
+    }));
+    return null;
+  },
+
+  unban: async (fingerprint) => {
+    const res = await act('unban', fingerprint);
+    if (!res.ok) return res.error;
+    // А вот разбан известен целиком: строка бана исчезает, человек перестаёт
+    // быть забаненным. Перечитывать за этим нечего, и человек возвращается в
+    // общий список сразу — панель для этого не закрывают и не открывают заново.
+    patch((s) => ({
+      people: s.people.map((p) => (p.fingerprint === fingerprint ? { ...p, banned: false } : p)),
+      bans: s.bans.filter((entry) => entry.fingerprint !== fingerprint),
+      listError: null,
+    }));
+    return null;
+  },
+
+  revokeDevice: async (deviceId) => {
+    const res = await act('revoke-device', deviceId);
+    if (!res.ok) return res.error;
+    // Id устройства уникален на всю инсталляцию, поэтому ищем его по всем
+    // показанным людям, а не спрашиваем, у кого он был.
+    patch((s) => ({
+      people: s.people.map((person) => {
+        if (!person.devices.some((d) => d.id === deviceId)) return person;
+        return {
+          ...person,
+          devices: person.devices.map((d) => (d.id === deviceId ? { ...d, revoked: true } : d)),
+        };
+      }),
+    }));
+    return null;
+  },
+
   reset: () => {
     pending.clear();
     confirmed.clear();
     patch({ ...initial });
   },
 }));
+
+/**
+ * Действие панели с подтверждением.
+ *
+ * `confirm: true` уезжает всегда, потому что подтверждения просят все действия,
+ * кроме выгрузки (§9.4), а спрашивать человека или нет — решает экран: бан
+ * останавливают вопросом, разбан обратим и вопросом не останавливают. Поле в
+ * запросе — то, чем за этот выбор отвечают перед сервером; доверять тому, что
+ * панель показала диалог, сервер не станет и не должен.
+ */
+function act(action: AdminAction, target: string): Promise<Answered<AdminActionResult>> {
+  return ack<AdminActionResult>((cb) =>
+    getSocket().emit('admin-action', { action, target, confirm: true }, cb),
+  );
+}
 
 /**
  * Ключ пароля инсталляции — по каталогу, а не по имени.
