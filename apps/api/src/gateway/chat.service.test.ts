@@ -188,6 +188,29 @@ describe('страницы ленты', () => {
     expect(ids.size).toBe(PAGE_SIZE + 10);
   });
 
+  it('владелец укоротил страницу — лента слушается его, а не константы', async () => {
+    // Ровно та поломка, ради которой заведён `consumers.test.ts` в @relay/shared:
+    // настройка исправно сохранялась, а лента читала константу рядом с ней.
+    await tune(settings, 'messages.pageSize', 10);
+    const page = await chat.history('obshchii');
+    expect(page.messages).toHaveLength(10);
+    expect(page.messages[9].text).toBe(`${PAGE_SIZE + 9}`);
+    expect(page.more).toBe(true);
+  });
+
+  it('укороченная страница листается без потерь и повторов', async () => {
+    // Длина берётся РАЗ на запрос и передаётся доводом: возьми `page()` её
+    // заново, правка между запросом и нарезкой порезала бы выборку не по той
+    // длине, по которой её брали.
+    await tune(settings, 'messages.pageSize', 10);
+    const first = await chat.history('obshchii');
+    const top = first.messages[0];
+    const older = await chat.older('obshchii', top.ts, top.id!);
+    expect(older.messages).toHaveLength(10);
+    const ids = new Set([...first.messages, ...older.messages].map((m) => m.id));
+    expect(ids.size).toBe(20);
+  });
+
   it('реплики одной миллисекунды не теряются на границе страницы', async () => {
     // Курсор из одного времени схлопнул бы их: в базе они неразличимы по ts.
     await db.query("UPDATE messages SET created_at = '2020-01-01T00:00:00Z'");

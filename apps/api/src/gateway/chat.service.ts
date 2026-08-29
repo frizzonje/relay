@@ -41,7 +41,14 @@ import { RegistryService } from './registry.service';
 /** Комнаты чата в socket.io живут с префиксом — чтобы не пересечься с эфиром. */
 export const CHAT_PREFIX = 'chat:';
 
-/** Сколько реплик отдаём одной страницей — и при входе в канал, и при подгрузке. */
+/**
+ * Сколько реплик отдаём одной страницей — и при входе в канал, и при подгрузке.
+ *
+ * Умолчание, а не закон: размер страницы правится в панели
+ * (`messages.pageSize`), и читает его `pageSize()` ниже. Константа осталась
+ * ровно тем, чем была до панели, — поведением инсталляции, где настройку не
+ * трогали, — и её же сверяет с копией в `@relay/shared` тест общих констант.
+ */
 export const PAGE_SIZE = 50;
 
 /**
@@ -308,8 +315,9 @@ export class ChatService implements OnModuleInit {
   async history(slug: string): Promise<Page> {
     const channelId = this.channelId(slug);
     if (!channelId) return { messages: [], more: false };
-    const rows = await this.feed().where('m.channel_id = :channelId', { channelId }).getMany();
-    return this.page(rows);
+    const size = this.pageSize();
+    const rows = await this.feed(size).where('m.channel_id = :channelId', { channelId }).getMany();
+    return this.page(rows, size);
   }
 
   /**
@@ -320,14 +328,15 @@ export class ChatService implements OnModuleInit {
   async older(slug: string, beforeTs: number, beforeId: string): Promise<Page> {
     const channelId = this.channelId(slug);
     if (!channelId || !isUuid(beforeId)) return { messages: [], more: false };
-    const rows = await this.feed()
+    const size = this.pageSize();
+    const rows = await this.feed(size)
       .where('m.channel_id = :channelId', { channelId })
       .andWhere('(m.created_at, m.id) < (:beforeAt, :beforeId)', {
         beforeAt: new Date(beforeTs),
         beforeId,
       })
       .getMany();
-    return this.page(rows);
+    return this.page(rows, size);
   }
 
   /**
@@ -338,6 +347,7 @@ export class ChatService implements OnModuleInit {
   async newer(slug: string, afterTs: number, afterId: string): Promise<FeedWindow> {
     const channelId = this.channelId(slug);
     if (!channelId || !isUuid(afterId)) return { messages: [], more: false, moreAfter: false };
+    const size = this.pageSize();
     const rows = await this.db
       .getRepository(MessageRow)
       .createQueryBuilder('m')
@@ -351,10 +361,10 @@ export class ChatService implements OnModuleInit {
       })
       .orderBy('m.createdAt', 'ASC')
       .addOrderBy('m.id', 'ASC')
-      .limit(PAGE_SIZE + 1)
+      .limit(size + 1)
       .getMany();
-    const moreAfter = rows.length > PAGE_SIZE;
-    const slice = moreAfter ? rows.slice(0, PAGE_SIZE) : rows;
+    const moreAfter = rows.length > size;
+    const slice = moreAfter ? rows.slice(0, size) : rows;
     return { messages: slice.map(toMessage), more: false, moreAfter };
   }
 
@@ -847,7 +857,19 @@ export class ChatService implements OnModuleInit {
    * есть ответ на вопрос «есть ли выше ещё» — считать общее число реплик
    * канала ради одного булева значения было бы расточительно.
    */
-  private feed() {
+  /**
+   * Размер страницы, каким его назначил владелец.
+   *
+   * Спрашивается РАЗ на запрос, и полученное число передаётся дальше доводом:
+   * между `feed()` и `page()` стоит `await`, и правка настройки, попавшая в
+   * этот зазор, порезала бы выборку не по той длине, по которой её брали, —
+   * то есть потеряла бы реплику или соврала про «есть ещё».
+   */
+  private pageSize(): number {
+    return this.settings.get<number>('messages.pageSize');
+  }
+
+  private feed(size: number) {
     return (
       this.db
         .getRepository(MessageRow)
@@ -859,13 +881,13 @@ export class ChatService implements OnModuleInit {
         .addOrderBy('m.id', 'DESC')
         // `limit`, а не `take`: вложение — связь «многие к одному», лишних строк
         // от неё не бывает, и городить ради этого подзапрос с DISTINCT незачем.
-        .limit(PAGE_SIZE + 1)
+        .limit(size + 1)
     );
   }
 
-  private page(rows: MessageRow[]): Page {
-    const more = rows.length > PAGE_SIZE;
-    const slice = more ? rows.slice(0, PAGE_SIZE) : rows;
+  private page(rows: MessageRow[], size: number): Page {
+    const more = rows.length > size;
+    const slice = more ? rows.slice(0, size) : rows;
     return { messages: slice.reverse().map(toMessage), more };
   }
 
