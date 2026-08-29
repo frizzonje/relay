@@ -979,5 +979,7 @@
   "voice.toast.sfuDownWaiting": "The media server is unavailable. Waiting for it: too many people here for direct calls.",
   "voice.toast.speakerSwitched": "Speakers: {device}",
   "voice.toast.speakerSwitched.fallback": "device switched",
-  "voice.toast.youAreDirect": "You are calling directly while the others go through the media server. They cannot hear you: rejoin the channel."
+  "voice.toast.youAreDirect": "You are calling directly while the others go through the media server. They cannot hear you: rejoin the channel.",
+  "maintenance.title": "Closed for maintenance",
+  "maintenance.body": "The installation is unavailable for a while. Try again a bit later."
 }

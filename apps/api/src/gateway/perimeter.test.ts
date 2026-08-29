@@ -743,6 +743,31 @@ describe('режим обслуживания', () => {
     expect(outsider.refused?.message).not.toBe('banned');
   });
 
+  it('текст владельца едет вместе с отказом — другого пути к отвергнутому нет', async () => {
+    // Снимок настроек приходит по сокету, а у того, кого не пустили, сокета как
+    // раз и не будет. Значит либо текст едет рядом с ошибкой, либо человек
+    // видит «не удалось подключиться» и гадает, что сломалось.
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'maintenance.mode', true);
+    await tune(settings, 'maintenance.message', 'Вернёмся к семи вечера');
+
+    const outsider = await knock(gw, server, (await personCookie('Гостья')).cookie, 'g');
+    expect(outsider.refused?.message).toBe('maintenance');
+    expect(
+      (outsider.refused as (Error & { data?: { message?: string } }) | undefined)?.data,
+    ).toEqual({ message: 'Вернёмся к семи вечера' });
+  });
+
+  it('без текста отказ уезжает голым, а не с пустой строкой', async () => {
+    // Пустую строку экран показал бы пустым прямоугольником вместо объяснения;
+    // отсутствие поля он читает как «объяснения не оставили» и говорит своими
+    // словами.
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'maintenance.mode', true);
+    const outsider = await knock(gw, server, (await personCookie('Гостья')).cookie, 'g2');
+    expect((outsider.refused as (Error & { data?: unknown }) | undefined)?.data).toBeUndefined();
+  });
+
   it('без записи в панели дверь открыта всем — как было всегда', async () => {
     const { gw, server } = await makeGateway();
     const anon = await personCookie('Просто человек');

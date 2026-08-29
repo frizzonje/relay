@@ -18,9 +18,21 @@ export type Outdated = 'client' | 'server';
 interface ContractState {
   outdated: Outdated | null;
   setOutdated: (side: Outdated) => void;
+  /**
+   * Инсталляция закрыта на обслуживание. Строка — то, что написал владелец
+   * (`maintenance.message`); пустая означает «закрыто, а объяснения не
+   * оставили», и экран скажет об этом своими словами.
+   *
+   * Едет она вместе с отказом двери, а не снимком настроек: снимок приходит по
+   * сокету, которого у отвергнутого как раз и нет.
+   */
+  maintenance: string | null;
+  setMaintenance: (text: string) => void;
 }
 
 export const useContractStore = create<ContractState>((set) => ({
   outdated: null,
   setOutdated: (side) => set({ outdated: side }),
+  maintenance: null,
+  setMaintenance: (text) => set({ maintenance: text }),
 }));

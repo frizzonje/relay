@@ -6,6 +6,7 @@ import { Icon } from '@/components/ui/icon';
 import { fmtBytes } from '@/lib/format';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import { useT } from '@/lib/i18n';
+import { useSetting } from '@/stores/config';
 
 /**
  * Вложение в сообщении: картинка инлайн, mp3 — плеером, прочее — карточкой
@@ -15,16 +16,24 @@ import { useT } from '@/lib/i18n';
  * Спойлер (att.spoiler) прячет вложение под заблюренной плашкой до клика — как
  * в Discord. Картинка под спойлером всё же грузится (иначе не показать по клику),
  * но замазана до раскрытия.
+ *
+ * Инсталляция может выключить раскрытие картинок целиком
+ * (`files.imagePreviews`): тогда картинка приезжает карточкой, как pdf, — её не
+ * запретили, её перестали показывать не спросив. Владельцу это нужно там, где
+ * лента открыта посторонним глазам, а решает это клиент: «показывать» — вопрос
+ * экрана, а не сервера.
  */
 export function MessageAttachment({ att }: { att: Attachment }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [revealed, setRevealed] = useState(!att.spoiler);
+  const previews = useSetting<boolean>('files.imagePreviews');
+  const asImage = att.kind === 'image' && previews;
 
   // Спойлер: заблюренная плашка «показать». Для картинки — размытый превью,
   // для прочего — нейтральная карточка, чтобы имя файла не выдавало содержимое.
   if (!revealed) {
-    const isImg = att.kind === 'image';
+    const isImg = asImage;
     return (
       <div className="mt-1.5 max-w-[420px]">
         <button
@@ -57,7 +66,7 @@ export function MessageAttachment({ att }: { att: Attachment }) {
     );
   }
 
-  if (att.kind === 'image') {
+  if (asImage) {
     return (
       <div className="mt-1.5 max-w-[420px]">
         <button

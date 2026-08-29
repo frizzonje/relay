@@ -544,7 +544,17 @@ export const SETTINGS: readonly SettingSpec[] = [
     options: ATTACHMENT_KINDS,
     max: ATTACHMENT_KINDS.length,
   },
-  { key: 'files.imagePreviews', group: 'files', kind: 'boolean', fallback: true, applies: 'now' },
+  // Выключенные превью не запрещают картинку — они перестают её раскрывать в
+  // ленте: файл приезжает карточкой, как pdf. Решает это клиент, потому что
+  // «показывать» — вопрос экрана, а не сервера.
+  {
+    key: 'files.imagePreviews',
+    group: 'files',
+    kind: 'boolean',
+    fallback: true,
+    applies: 'now',
+    client: true,
+  },
   // Ноль — без квоты: сегодня никто ничего не считает.
   {
     key: 'files.perIdentityDailyBytes',

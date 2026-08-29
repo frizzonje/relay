@@ -418,7 +418,18 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
         // ошибки: белый экран вместо объяснения — худший из ответов на «почему
         // меня не пускает».
         if (refusal) {
-          next(new Error(refusal === 'banned' ? BANNED_ERROR : MAINTENANCE_ERROR));
+          if (refusal === 'banned') {
+            next(new Error(BANNED_ERROR));
+            return;
+          }
+          // Текст обслуживания едет ВМЕСТЕ с отказом, а не снимком настроек:
+          // снимок приезжает по сокету, которого у отвергнутого как раз и нет.
+          // socket.io доставляет `data` рядом с сообщением ошибки — это
+          // единственное, что доходит до того, кого не пустили.
+          const err = new Error(MAINTENANCE_ERROR) as Error & { data?: unknown };
+          const text = this.settings.get<string>('maintenance.message').trim();
+          if (text) err.data = { message: text };
+          next(err);
           return;
         }
         next();

@@ -426,9 +426,20 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       // разным людям (см. OutdatedGate).
       if (err?.message === 'client-outdated') useContractStore.getState().setOutdated('client');
       if (err?.message === 'server-outdated') useContractStore.getState().setOutdated('server');
+      // Обслуживание. Текст владельца приезжает рядом с ошибкой — другого пути
+      // к отвергнутому нет: сокета у него не будет, пока обслуживание идёт.
+      if (err?.message === 'maintenance') {
+        const data = (err as Error & { data?: { message?: unknown } }).data;
+        const text = typeof data?.message === 'string' ? data.message : '';
+        useContractStore.getState().setMaintenance(text);
+      }
     });
 
     socket.on('connect', () => {
+      // Дверь открылась — обслуживание кончилось, пока мы стучались.
+      if (useContractStore.getState().maintenance !== null) {
+        useContractStore.setState({ maintenance: null });
+      }
       // Дверь открылась — значит бана уже нет: разбанили, пока мы стучались.
       useModerationStore.getState().setBanned(false);
       // Разблокировки едут в handshake пропусками (см. lib/socket) и успевают
