@@ -265,7 +265,6 @@
 | Ключ | Вид | Умолчание | Применение |
 |---|---|---|---|
 | `notifications.soundEnabled` | boolean | true | now |
-| `notifications.desktopEnabled` | boolean | true | now |
 | `notifications.mentionSound` | boolean | true | now |
 | `notifications.directSound` | boolean | true | now |
 
@@ -281,11 +280,11 @@
 владельца, прогнать ретенцию сейчас, подмести осиротевшие файлы, отозвать все сессии,
 выгрузить настройки в JSON, загрузить настройки из JSON, сбросить группу к умолчаниям.
 
-**Итого: 95 параметров в 12 группах + 7 действий + 4 таблицы** (люди, баны, журнал, сводка).
+**Итого: 94 параметра в 12 группах + 7 действий + 4 таблицы** (люди, баны, журнал, сводка).
 
-Проверка счётом (её же делает тест `SETTINGS.length === 95`): access 10, people 6,
+Проверка счётом (её же делает тест `SETTINGS.length === 94`): access 10, people 6,
 moderation 12, messages 10, files 9, direct 8, spaces 8, voice 12, invites 6, appearance 7,
-notifications 4, maintenance 3.
+notifications 3, maintenance 3.
 
 Этап B добавит тринадцатую группу `calls` (7 параметров) — тогда же в тесте станет 105.
 
@@ -525,8 +524,8 @@ describe('проверка значения', () => {
     expect(validateSetting('files.allowedKinds', [1])).toEqual({ ok: false, error: 'wrong-type' });
   });
 
-  it('знает все 95 параметров каталога', () => {
-    expect(SETTINGS.length).toBe(95);
+  it('знает все 94 параметра каталога', () => {
+    expect(SETTINGS.length).toBe(94);
     expect(settingSpec('maintenance.mode')?.danger).toBe(true);
   });
 });
@@ -541,7 +540,7 @@ docker run --rm -v "$PWD":/mono -w /mono node:20-alpine sh -c 'corepack enable &
 - [ ] **Шаг 3: Реализация каталога**
 
 `packages/shared/src/settings.ts` — типы из блока «Интерфейсы» выше, затем массив `SETTINGS`
-ровно по таблицам раздела «Каталог параметров» (95 строк), затем `settingSpec`, `defaults` и
+ровно по таблицам раздела «Каталог параметров» (94 строки), затем `settingSpec`, `defaults` и
 `validateSetting`. Шапка файла объясняет, почему это данные, а не экраны:
 
 ```ts
@@ -858,7 +857,7 @@ git commit -m "feat(admin): perimeter, chat and direct messages obey the panel"
 (тип снимка), `apps/web/stores/config.ts` (новый), `apps/web/components/providers/*`,
 места применения в вебе + тесты обеих сторон.
 
-**Ключи (20):** `appearance.*` (7), `notifications.*` (4), `people.showFingerprints`,
+**Ключи (19):** `appearance.*` (7), `notifications.*` (4), `people.showFingerprints`,
 `people.lastSeenVisible`, `direct.privacyNotice`, `voice.audioBitrateKbps`,
 `voice.videoBitrateKbps`, `voice.noiseSuppressionDefault`, `voice.pushToTalkDefault`,
 `maintenance.bannerText`, плюс приехавшие из 5б `voice.sfuThreshold` (порог, ниже которого
@@ -1168,9 +1167,9 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 
 - Владелец открывает панель из тулбара; никто другой её не открывает и не может позвать ни
   одно её событие.
-- Каждый из 95 параметров каталога ДЕЙСТВУЕТ: у него есть потребитель в коде, и это
+- Каждый из 94 параметров каталога ДЕЙСТВУЕТ: у него есть потребитель в коде, и это
   проверено тестом. Поле, которое ничего не делает, — брак этапа, а не мелочь.
-- Все 95 параметров каталога видны, правятся (кроме помеченных `env`) и переживают
+- Все 94 параметра каталога видны, правятся (кроме помеченных `env`) и переживают
   перезапуск.
 - Инсталляция, где панель не открывали, ведёт себя ровно как до этапа — тест на умолчания
   зелёный.
