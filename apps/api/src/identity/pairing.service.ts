@@ -1,7 +1,11 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { DataSource, IsNull } from 'typeorm';
 import { DeviceRow, IdentityRow, MessageRow, RoleRow } from '../db/entities';
-import type { SettingsService } from '../settings/settings.service';
+// Значением, а не `import type`: тип стирается при сборке, и
+// `emitDecoratorMetadata` записывает в довод конструктора `Function` вместо
+// класса — Nest такой довод не разрешает и падает при старте. Тесты этого не
+// видят: они собирают сервисы руками, минуя контейнер.
+import { SettingsService } from '../settings/settings.service';
 import {
   certificateMessage,
   fingerprint,

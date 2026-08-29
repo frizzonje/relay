@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/dialog';
 import { Identicon } from '@/components/ui/Identicon';
 import { Icon } from '@/components/ui/icon';
-import { fmtSince } from '@/lib/format';
+import { fmtSince, shortFingerprint } from '@/lib/format';
 import { listBans, unban } from '@/lib/moderation';
 import { useT } from '@/lib/i18n';
 
@@ -84,8 +84,10 @@ export function BannedDialog({
                   <div className="truncate text-[14px] font-medium text-text-header">
                     {entry.nick}
                   </div>
+                  {/* Короткая форма, как везде: отпечаток стоит рядом с лицом не
+                      для доказательства, а чтобы глазами отличить двух тёзок. */}
                   <div className="truncate font-mono text-[11px] text-text-muted">
-                    {entry.fingerprint}
+                    {shortFingerprint(entry.fingerprint)}
                   </div>
                   <div className="truncate text-[12px] text-text-muted">
                     {entry.by

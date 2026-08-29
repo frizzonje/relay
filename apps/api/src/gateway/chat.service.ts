@@ -3,7 +3,11 @@ import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { AttachmentRow, IdentityRow, MessageRow, PinRow } from '../db/entities';
 import type { Attachment } from '../uploads';
-import type { SettingsService } from '../settings/settings.service';
+// Значением, а не `import type`: тип стирается при сборке, и
+// `emitDecoratorMetadata` записывает в довод конструктора `Function` вместо
+// класса — Nest такой довод не разрешает и падает при старте. Тесты этого не
+// видят: они собирают сервисы руками, минуя контейнер.
+import { SettingsService } from '../settings/settings.service';
 import {
   LIMIT,
   type ChatMessage,
