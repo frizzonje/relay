@@ -1,8 +1,9 @@
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, Optional, type OnModuleInit } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { SettingRow } from '../db/entities';
 import { parseRetention, retentionEnvComplaint } from '../db/retention.policy';
 import { parseBytes } from '../uploads.policy';
+import { AuditService } from './audit.service';
 import {
   SETTINGS,
   defaults,
@@ -76,7 +77,16 @@ export class SettingsService implements OnModuleInit {
 
   private readonly listeners = new Set<SettingsListener>();
 
-  constructor(private readonly db: DataSource) {}
+  /**
+   * Журнал не деталь сборки: сервису, у которого есть база, всегда есть куда
+   * записать, кто и что поменял. Поэтому он не обязательный довод, а довод со
+   * значением по умолчанию — тест, собравший сервис руками, ведёт журнал ровно
+   * так же, как рабочая инсталляция, и «в тесте не записалось» не бывает.
+   */
+  constructor(
+    private readonly db: DataSource,
+    @Optional() private readonly audit: AuditService = new AuditService(db),
+  ) {}
 
   async onModuleInit(): Promise<void> {
     await this.load();
@@ -174,6 +184,15 @@ export class SettingsService implements OnModuleInit {
     await this.write(key, check.value, by);
     this.remember(key, check.value);
     this.emit(key, check.value);
+    // В журнал уходит только состоявшаяся правка: «поменял на то же самое»
+    // отсеяно выше, и записывать его значило бы забить журнал строками, из
+    // которых ничего не следует. Секрету сюда не дойти — его отбили отказом.
+    await this.audit.write({
+      actor: by,
+      action: 'setting-changed',
+      target: key,
+      detail: { from: before, to: check.value },
+    });
     return { ok: true, changed: true, before };
   }
 
@@ -202,10 +221,21 @@ export class SettingsService implements OnModuleInit {
     for (const key of keys) this.overrides.delete(key);
     for (const key of changed) this.emit(key, this.base[key]);
 
-    // След до появления журнала (задача 6): сброс — единственная операция,
-    // которая стирает чужие правки пачкой, и «кто это сделал» спрашивают о ней
-    // первым делом.
-    this.logger.log(`настройки: группа ${group} сброшена к умолчаниям (${by})`);
+    // Запись ОДНА на весь сброс, а не по одной на ключ: человек нажал один
+    // раз, и журнал, разложивший это нажатие на дюжину строк, спрятал бы за
+    // ними всё остальное. Что именно поменялось, лежит в подробностях.
+    //
+    // Сброса, ничего не изменившего, в журнале нет по той же причине, что и у
+    // записи «поменял на то же самое»: переопределения были стёрты, но
+    // инсталляция ведёт себя ровно как минуту назад.
+    if (changed.length) {
+      await this.audit.write({
+        actor: by,
+        action: 'settings-reset',
+        target: group,
+        detail: { keys: changed },
+      });
+    }
     return changed;
   }
 
@@ -275,6 +305,9 @@ export class SettingsService implements OnModuleInit {
         continue;
       }
       // Автора нет: это не правка человека, а перенос того, что уже было.
+      // В журнал посев не попадает по той же причине: поведение инсталляции не
+      // изменилось, изменилось лишь место, где записано значение, — а строка
+      // «система поменяла хранение» отправила бы читателя искать несделанное.
       await this.write(key, check.value, null);
       this.remember(key, check.value);
       this.logger.log(`настройки: ${key} засеян из окружения — ${JSON.stringify(check.value)}`);

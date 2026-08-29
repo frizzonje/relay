@@ -14,13 +14,16 @@ import {
   MAX_UPLOAD_BYTES,
   PROTOCOL_VERSION,
   REACTION_EMOJIS,
+  SYSTEM_ACTOR_NICK,
   TOKEN_TTL_MS,
+  UNKNOWN_ACTOR_NICK,
   isDmSlug,
   issueGuestToken,
   issueToken,
   parseCookies,
   verifyGuestToken,
   verifyToken,
+  type AuditAction,
   type ChatRefusal,
   type VoiceRefusal,
 } from './index';
@@ -152,6 +155,44 @@ describe('константы совпадают с копией в api', () => {
       .match(/'[a-z-]+'/g)!;
     const mine: VoiceRefusal[] = ['video-off', 'screen-share-off', 'room-full', 'guests-full'];
     expect(reasons.map((r) => r.slice(1, -1))).toEqual(mine);
+  });
+
+  it('действия журнала — те же, что называет сервер', () => {
+    // Панель подбирает подпись строки по этому имени. Разъехавшись, половины
+    // дают не ошибку сборки, а журнал, в котором часть строк без подписи, —
+    // причём именно те, что записаны новым сервером и потому важнее прочих.
+    const protocol = apiSource('gateway/protocol.ts');
+    const actions = protocol
+      .slice(protocol.indexOf('export type AuditAction ='))
+      .split(';')[0]
+      .match(/'[a-z-]+'/g)!;
+    const mine: AuditAction[] = [
+      'setting-changed',
+      'settings-reset',
+      'ban',
+      'unban',
+      'owner-claimed',
+      'owner-link-issued',
+      'password-changed',
+      'retention-run',
+      'files-swept',
+      'sessions-revoked',
+      'device-revoked',
+      'settings-imported',
+    ];
+    expect(actions.map((a) => a.slice(1, -1))).toEqual(mine);
+  });
+
+  it('ник системной записи тот же — по нему её подписывает сервер', () => {
+    // Узнают систему не по нему (для этого есть `AuditEntry.system`), но в
+    // колонку он ложится буквально, и разъехавшись, половины показали бы в
+    // журнале два разных «автора» у одного и того же действия машины.
+    expect(apiSource('gateway/protocol.ts')).toContain(
+      `export const SYSTEM_ACTOR_NICK = '${SYSTEM_ACTOR_NICK}';`,
+    );
+    expect(apiSource('gateway/protocol.ts')).toContain(
+      `export const UNKNOWN_ACTOR_NICK = '${UNKNOWN_ACTOR_NICK}';`,
+    );
   });
 
   it('лимиты длин — те, на которых сервер режет', () => {

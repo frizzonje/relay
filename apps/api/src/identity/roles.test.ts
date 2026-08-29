@@ -109,11 +109,11 @@ describe('бан', () => {
     await roles.ban(anya.id, 'srv', boss.id);
     await roles.ban(anya.id, null, boss.id);
 
-    expect(await roles.unban(anya.id, 'srv')).toBe(true);
+    expect(await roles.unban(anya.id, 'srv', boss.id)).toBe(true);
     expect(await roles.rightsOf(anya.id)).toEqual({ banned: true, bannedFrom: new Set() });
     // Разбан того, кого не банили, — не ошибка, но и не «сделано»: модератор
     // жмёт кнопку по списку, который мог устареть.
-    expect(await roles.unban(anya.id, 'srv')).toBe(false);
+    expect(await roles.unban(anya.id, 'srv', boss.id)).toBe(false);
   });
 
   it('список показывает лицо, имя и того, кто забанил', async () => {

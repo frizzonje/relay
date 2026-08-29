@@ -2,6 +2,7 @@ import { Injectable, Logger, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DataSource, LessThan, IsNull } from 'typeorm';
 import { OwnerClaimRow, RoleRow } from '../db/entities';
+import { AuditService } from '../settings/audit.service';
 import { hashOwnerToken, isOwnerToken, newOwnerToken } from './crypto';
 
 /**
@@ -43,6 +44,10 @@ export class OwnerService {
   constructor(
     private readonly db: DataSource,
     @Optional() private readonly now: () => number = Date.now,
+    // Со значением по умолчанию — по той же причине, что у соседей: журнал
+    // ходит в ту же базу и нужен здесь всегда, а обязательным доводом он ломал
+    // бы порядок у всех, кто собирает сервис руками.
+    @Optional() private readonly audit: AuditService = new AuditService(db, now),
   ) {}
 
   /**
@@ -52,8 +57,13 @@ export class OwnerService {
    *
    * Возвращается сам ключ — единственный раз, когда он вообще существует в
    * читаемом виде. В базе остаётся только его хэш.
+   *
+   * `by` — кто перевыпустил. Пусто у `relay owner-link`: там за человека
+   * ручается доступ к машине, личности у него в этот момент нет вовсе, и в
+   * журнале такая строка честно значится системной. Из панели ссылку
+   * перевыпускает владелец, и там автор есть.
    */
-  async issue(): Promise<{ token: string; expiresAt: Date }> {
+  async issue(by: string | null = null): Promise<{ token: string; expiresAt: Date }> {
     const token = newOwnerToken();
     const expiresAt = new Date(this.now() + CLAIM_TTL_MS);
     const claims = this.db.getRepository(OwnerClaimRow);
@@ -80,6 +90,13 @@ export class OwnerService {
     });
 
     this.logger.log('выпущено приглашение во владельцы');
+    // Сам ключ в журнал не попадает и попасть не может: строка о выпуске нужна,
+    // чтобы человек увидел чужой перевыпуск, а не чтобы им воспользоваться.
+    await this.audit.write({
+      actor: by,
+      action: 'owner-link-issued',
+      detail: { expiresAt: expiresAt.toISOString() },
+    });
     return { token, expiresAt };
   }
 
@@ -88,12 +105,17 @@ export class OwnerService {
    * использованным и смена владельца — это одно событие, и половина его
    * означала бы либо сожжённую ссылку без владельца, либо ссылку, годную
    * дважды.
+   *
+   * В журнал строка уходит ПОСЛЕ транзакции, а не внутри неё: неудачный запрос
+   * внутри отравляет транзакцию целиком, и «не записалось в журнал»
+   * превратилось бы в «власть не перешла» — ровно наоборот тому, чего от
+   * журнала хотят.
    */
   async claim(token: unknown, identityId: string): Promise<ClaimResult> {
     if (!isOwnerToken(token)) return { ok: false, reason: 'bad-token' };
     const hash = hashOwnerToken(token);
 
-    return this.db.transaction(async (m) => {
+    const done = await this.db.transaction(async (m) => {
       // Блокировка строки: два клика по одной ссылке в двух окнах — это
       // обычная жизнь, и второй обязан увидеть «уже использована», а не стать
       // вторым владельцем.
@@ -111,6 +133,18 @@ export class OwnerService {
       // Прежний владелец теряет роль — строкой меньше, и он снова обычный
       // человек. Кем он был, помнит использованное приглашение: там записано,
       // кто и когда брал власть до него.
+      //
+      // Кто это был, читается ДО удаления и уезжает наружу вместе с ответом:
+      // «власть перешла от Ани к Борису» и есть содержание записи в журнале, а
+      // после коммита спрашивать об этом уже некого. Сразу личностью, а не id:
+      // строку журнала читают глазами, и «отобрана у 9f2c…» не говорит ничего.
+      const prev = await m.getRepository(RoleRow).findOne({
+        where: { serverId: IsNull(), role: OWNER_ROLE },
+        relations: { identity: true },
+      });
+      const previous = prev?.identity
+        ? { fingerprint: prev.identity.fingerprint, nick: prev.identity.nick }
+        : null;
       await m.getRepository(RoleRow).delete({ serverId: IsNull(), role: OWNER_ROLE });
       // И всё, что было записано о новом владельце, — тоже. Записано о нём
       // может быть только одно: бан. Ссылка из ssh сильнее любого бана, иначе
@@ -129,8 +163,18 @@ export class OwnerService {
       });
 
       this.logger.log(`владельцем инсталляции стала личность ${identityId}`);
-      return { ok: true as const };
+      return { ok: true as const, previous };
     });
+    if (!done.ok) return done;
+
+    // Прежнего владельца нет вовсе — власть взяли впервые, и подробностей у
+    // записи нет: пустое «от кого» лучше выдуманного.
+    await this.audit.write({
+      actor: identityId,
+      action: 'owner-claimed',
+      detail: done.previous ? { previous: done.previous } : {},
+    });
+    return { ok: true };
   }
 
   /** Владелец ли. Вопрос задаётся про себя и только про себя. */

@@ -2,6 +2,7 @@ import { Injectable, Logger, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DataSource, IsNull } from 'typeorm';
 import { IdentityRow, RoleRow } from '../db/entities';
+import { AuditService } from '../settings/audit.service';
 import { OWNER_ROLE } from './owner.service';
 
 /**
@@ -61,6 +62,11 @@ export class RolesService {
   constructor(
     private readonly db: DataSource,
     @Optional() private readonly now: () => number = Date.now,
+    // Журнал со значением по умолчанию, а не обязательным доводом: он ходит в
+    // ту же базу, ничего не хранит и нужен здесь всегда. Собранный руками
+    // сервис ведёт журнал так же, как рабочий, — «в тесте не записалось» не
+    // бывает, и порядок доводов у соседей не ломается.
+    @Optional() private readonly audit: AuditService = new AuditService(db, now),
   ) {}
 
   /**
@@ -93,8 +99,13 @@ export class RolesService {
     by: string,
   ): Promise<{ ok: true } | { ok: false; reason: BanFailure }> {
     if (identityId === by) return { ok: false, reason: 'forbidden' };
-    const known = await this.db.getRepository(IdentityRow).countBy({ id: identityId });
-    if (!known) return { ok: false, reason: 'unknown' };
+    // Имя и отпечаток берутся здесь же, одним запросом вместо `countBy`: в
+    // журнал уезжает не id (его никто не читает глазами), а отпечаток — та же
+    // ручка, которой забаненный показан в панели, — и имя снимком.
+    const target = await this.db
+      .getRepository(IdentityRow)
+      .findOne({ where: { id: identityId }, select: { id: true, nick: true, fingerprint: true } });
+    if (!target) return { ok: false, reason: 'unknown' };
     const owner = await this.db
       .getRepository(RoleRow)
       .countBy({ identityId, serverId: IsNull(), role: OWNER_ROLE });
@@ -119,18 +130,50 @@ export class RolesService {
       .execute();
 
     this.logger.log(`бан личности ${identityId} (${serverId ?? 'вся инсталляция'}) от ${by}`);
+    // После бана, а не вместо него: журнал не вправе отменить состоявшееся
+    // (`write` не бросает вовсе — см. `AuditService`). Охват уезжает как есть:
+    // пусто — вся инсталляция, и это ровно то, что человек хочет знать через
+    // год, глядя на строку.
+    await this.audit.write({
+      actor: by,
+      action: 'ban',
+      target: target.fingerprint,
+      detail: { nick: target.nick, server: serverId },
+    });
     return { ok: true };
   }
 
-  /** Разбанить. `false` — такого бана и не было. */
-  async unban(identityId: string, serverId: string | null): Promise<boolean> {
+  /**
+   * Разбанить. `false` — такого бана и не было.
+   *
+   * Кто разбанил, спрашивается доводом: до журнала это никого не интересовало —
+   * строка просто исчезала, — а теперь снятие бана надо кому-то приписать. Это
+   * ровно тот вопрос, ради которого журнал и заведён.
+   */
+  async unban(identityId: string, serverId: string | null, by: string): Promise<boolean> {
+    // Бан не переживает свою личность: строка роли уходит вместе с ней
+    // (внешний ключ с CASCADE). Поэтому неизвестная личность — это заведомо
+    // «такого бана и не было», а не повод писать в журнал строку без имени.
+    const target = await this.db
+      .getRepository(IdentityRow)
+      .findOne({ where: { id: identityId }, select: { id: true, nick: true, fingerprint: true } });
+    if (!target) return false;
+
     const res = await this.db.getRepository(RoleRow).delete({
       identityId,
       serverId: serverId ?? IsNull(),
       role: BANNED_ROLE,
     });
-    if (res.affected) this.logger.log(`разбан ${identityId} (${serverId ?? 'вся инсталляция'})`);
-    return !!res.affected;
+    if (!res.affected) return false;
+
+    this.logger.log(`разбан ${identityId} (${serverId ?? 'вся инсталляция'})`);
+    await this.audit.write({
+      actor: by,
+      action: 'unban',
+      target: target.fingerprint,
+      detail: { nick: target.nick, server: serverId },
+    });
+    return true;
   }
 
   /**

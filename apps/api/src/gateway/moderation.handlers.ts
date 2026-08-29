@@ -102,11 +102,16 @@ export class ModerationHandlers {
   async unban(client: AppSocket, payload: ModerationUnbanPayload): Promise<ModerationResult> {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
       return { ok: false, error: 'forbidden' };
+    // Кто снимает бан — теперь вопрос с ответом: снятие попадает в журнал, и
+    // приписывать его некому, если спрашивающий не назвал себя личностью.
+    const me = this.perimeter.speaker(client);
+    if (!me) return { ok: false, error: 'forbidden' };
     const scope = this.moderation.scopeFor(client, str(payload?.server));
     if (scope === undefined) return { ok: false, error: 'forbidden' };
     const identityId = await this.roles.byFingerprint(payload?.fingerprint);
     if (!identityId) return { ok: false, error: 'not-found' };
-    if (!(await this.roles.unban(identityId, scope))) return { ok: false, error: 'not-found' };
+    if (!(await this.roles.unban(identityId, scope, me.id)))
+      return { ok: false, error: 'not-found' };
     this.moderation.liftBan(identityId, scope);
     return { ok: true };
   }
