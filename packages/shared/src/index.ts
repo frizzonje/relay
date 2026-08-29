@@ -74,6 +74,8 @@ import type {
   AdminAuditResult,
   AdminBansResult,
   AdminChangedRelay,
+  AdminPasswordPayload,
+  AdminPasswordResult,
   AdminPeoplePayload,
   AdminPeopleResult,
   AdminResetPayload,
@@ -1328,6 +1330,8 @@ export interface ClientToServerEvents {
   'admin-bans': (cb: (res: AdminBansResult) => void) => void;
   'admin-audit': (payload: AdminAuditPayload, cb: (res: AdminAuditResult) => void) => void;
   'admin-action': (payload: AdminActionPayload, cb: (res: AdminActionResult) => void) => void;
+  /** Пароль инсталляции — своя дорога: хэш, отзыв пропусков и разрыв сокетов. */
+  'admin-password': (payload: AdminPasswordPayload, cb: (res: AdminPasswordResult) => void) => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────

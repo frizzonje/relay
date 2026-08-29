@@ -1,7 +1,10 @@
 import { Injectable, Logger, Optional, type OnModuleInit } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { type SiteSecret, useSiteSecret } from '../auth/auth';
 import { SettingRow } from '../db/entities';
 import { parseRetention, retentionEnvComplaint } from '../db/retention.policy';
+import { hashServerPassword } from '../gateway/unlock';
+import { revokeAllSessions } from '../identity/session';
 import { parseBytes } from '../uploads.policy';
 import { AuditService } from './audit.service';
 import {
@@ -65,6 +68,17 @@ export const SEEDED_FROM_ENV: readonly string[] = [
   'files.installQuotaBytes',
 ];
 
+/** Пароль инсталляции. Ключ назван один раз: его знают три метода из четырёх. */
+const SITE_PASSWORD_KEY = 'access.sitePasswordSet';
+
+/** Флажок «спрашивать пароль на входе». Без пароля не значит ничего — см. `siteSecret`. */
+const SITE_PASSWORD_ENABLED_KEY = 'access.sitePasswordEnabled';
+
+/** Итог смены пароля. `set` — заперта ли инсталляция теперь. */
+export type SitePasswordResult =
+  | { ok: true; set: boolean; changed: boolean }
+  | { ok: false; error: SettingError };
+
 @Injectable()
 export class SettingsService implements OnModuleInit {
   private readonly logger = new Logger(SettingsService.name);
@@ -91,6 +105,11 @@ export class SettingsService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     await this.load();
     await this.seed();
+    // С этого мгновения на вопрос «чем заперта инсталляция» отвечает таблица, а
+    // не одно лишь окружение. Спрашивают это оттуда, где DI нет и не будет:
+    // express-миддлвара перед http api и разбор handshake socket.io, — поэтому
+    // связь ставится подстановкой, а не доводом конструктора.
+    useSiteSecret(() => this.siteSecret());
   }
 
   /**
@@ -239,6 +258,83 @@ export class SettingsService implements OnModuleInit {
     return changed;
   }
 
+  /**
+   * Чем заперта инсталляция — единственный ответ на этот вопрос во всём api.
+   *
+   * Правил здесь два, и оба стоят того, чтобы их назвать.
+   *
+   * ПАНЕЛЬ ГЛАВНЕЕ ОКРУЖЕНИЯ. Пароль, заданный владельцем, побеждает
+   * `SITE_PASSWORD`: иначе правка в панели молча откатывалась бы к содержимому
+   * `.env` — того самого файла, который человек и не хотел больше трогать.
+   * Убрав пароль из панели, инсталляция возвращается к переменной, если та
+   * есть: `.env` остаётся резервом, как и обещает каталог.
+   *
+   * ВОРОТА БЕЗ ПАРОЛЯ — НЕ ВОРОТА. Флажок выключает дверь, но не заводит её:
+   * `access.sitePasswordEnabled` включён по умолчанию, а пароля у инсталляции
+   * может не быть вовсе, — и проверь мы один лишь флажок, обновление заперло бы
+   * открытую инсталляцию от её собственных людей, не сообщив им пароля, которого
+   * нет.
+   */
+  siteSecret(): SiteSecret {
+    if (!this.get<boolean>(SITE_PASSWORD_ENABLED_KEY)) return { kind: 'none' };
+    return this.storedSecret();
+  }
+
+  /**
+   * Сменить пароль инсталляции — своя дорога, мимо `set`.
+   *
+   * Общая запись секретам отказывает (`secret-path`), и это правильно: там
+   * значение легло бы в jsonb как есть. Здесь оно хэшируется и в таблицу уходит
+   * уже `salt:hash`; самого пароля после возврата из этого метода не знает
+   * никто — ни база, ни журнал, ни одно событие.
+   *
+   * Пустая строка — снять пароль, заданный из панели. Инсталляция при этом не
+   * обязательно открывается: под панельным паролем может лежать `SITE_PASSWORD`,
+   * и она возвращается к нему.
+   *
+   * Смена отзывает ВСЁ ВЫДАННОЕ, и двумя разными способами сразу. Пропуска
+   * (`relay_pass`) и гостевые ссылки умирают сами — они подписаны материалом,
+   * которого больше нет. Сессии личностей приходится отзывать вслух
+   * (`revokeAllSessions`): они подписаны своим ключом и пароля не знают, а
+   * устройство, которое перестало быть желанным внутри, пережило бы смену
+   * пароля именно потому, что личность — это ключ, а не пароль.
+   */
+  async setSitePassword(value: unknown, by: string): Promise<SitePasswordResult> {
+    const check = validateSetting(SITE_PASSWORD_KEY, value);
+    if (!check.ok) return { ok: false, error: check.error };
+    const plain = check.value as string;
+
+    // Сравниваем то, чем инсталляция заперта, а не «было ли задано»: при
+    // выключенном флажке ворот сейчас нет, но смена пароля от этого не
+    // перестаёт быть сменой пароля, и в журнал она обязана попасть.
+    const before = this.storedSecret();
+    if (plain) {
+      const hash = await hashServerPassword(plain);
+      await this.write(SITE_PASSWORD_KEY, hash, by);
+      this.remember(SITE_PASSWORD_KEY, hash);
+    } else {
+      // Строку удаляем, а не пишем пустую: «пароля из панели нет» и «из панели
+      // задали пустой» — это одно и то же состояние, и второй способ его
+      // записать разошёлся бы с первым на резерве из `.env`.
+      await this.db.getRepository(SettingRow).delete(SITE_PASSWORD_KEY);
+      this.overrides.delete(SITE_PASSWORD_KEY);
+    }
+    const after = this.storedSecret();
+    const set = after.kind !== 'none';
+
+    // Ничего не поменялось — снять несуществующий пароль на инсталляции, где
+    // его и не было. Отзывать нечего, и записывать в журнал нечего: та же
+    // разборчивость, что у `set` с его `changed: false`.
+    if (sameSecret(before, after)) return { ok: true, set, changed: false };
+
+    revokeAllSessions();
+    // Значение секрета в журнал не уходит ни при каких условиях — ни новое, ни
+    // прежнее, ни его длина. Записывается ФАКТ: кто и когда, и заперта ли
+    // инсталляция теперь.
+    await this.audit.write({ actor: by, action: 'password-changed', detail: { set } });
+    return { ok: true, set, changed: true };
+  }
+
   /** Подписка на изменение. Возвращает отписку — ею живут потребители. */
   onChange(listener: SettingsListener): () => void {
     this.listeners.add(listener);
@@ -327,6 +423,18 @@ export class SettingsService implements OnModuleInit {
     );
   }
 
+  /**
+   * Пароль инсталляции без оглядки на флажок: панельный, иначе из окружения,
+   * иначе никакого. Флажок спрашивает `siteSecret` — а смене пароля он не
+   * указ, и сравнивать «что было» с «что стало» надо именно здесь.
+   */
+  private storedSecret(): SiteSecret {
+    const stored = this.overrides.get(SITE_PASSWORD_KEY);
+    if (typeof stored === 'string' && stored) return { kind: 'hash', value: stored };
+    const fromEnv = process.env.SITE_PASSWORD ?? '';
+    return fromEnv ? { kind: 'plain', value: fromEnv } : { kind: 'none' };
+  }
+
   /** Секрет наружу уходит признаком. Здесь — откуда этот признак берётся. */
   private secretIsSet(spec: SettingSpec): boolean {
     if (spec.readOnly) return (process.env[spec.env!] ?? '') !== '';
@@ -386,6 +494,15 @@ function envValue(key: string): SettingValue | undefined {
   if (!policy) return undefined;
   if (key === 'messages.retentionMode') return policy.mode;
   return policy.mode === 'days' ? policy.days : undefined;
+}
+
+/**
+ * Тот же самый пароль или другой. Разный вид при одинаковом значении — тоже
+ * «другой»: пароль из панели и такая же строка в `.env` подписывают по-разному.
+ */
+function sameSecret(a: SiteSecret, b: SiteSecret): boolean {
+  if (a.kind !== b.kind) return false;
+  return a.kind === 'none' || b.kind === 'none' || a.value === b.value;
 }
 
 /** Равенство значений каталога. Список сравнивается по составу и порядку. */

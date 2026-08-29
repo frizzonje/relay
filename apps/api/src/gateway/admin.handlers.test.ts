@@ -55,6 +55,7 @@ const KNOCK: Record<string, (gw: SignalingGateway, sock: Socket) => Promise<Refu
   'admin-bans': (gw, s) => gw.handleAdminBans(s),
   'admin-audit': (gw, s) => gw.handleAdminAudit(s, {}),
   'admin-action': (gw, s) => gw.handleAdminAction(s, { action: 'export', confirm: true }),
+  'admin-password': (gw, s) => gw.handleAdminPassword(s, { password: 'слово', confirm: true }),
 };
 
 /** Владелец инсталляции на связи. Возвращает его сокет и его же личность. */
@@ -683,3 +684,61 @@ async function messagesLeft(): Promise<string> {
   const [row] = await database().query('SELECT count(*) AS n FROM messages');
   return (row as { n: string }).n;
 }
+
+/**
+ * Пароль инсталляции ходит своей дорогой (`admin-password`), потому что он
+ * единственный секрет, который хэшируется и чья смена отзывает выданное.
+ * Устройство самой смены проверяет `settings.service.test.ts`; здесь — то, что
+ * добавляет к ней панель: подтверждение, отзыв чужих сокетов и молчание о
+ * значении.
+ */
+describe('пароль инсталляции', () => {
+  it('без подтверждения не меняет — опасное просит его на сервере, а не в диалоге', async () => {
+    const { gw, sock, settings } = await ownerOnline();
+    expect(await gw.handleAdminPassword(asSocket(sock), { password: 'слово' })).toEqual({
+      ok: false,
+      error: 'needs-confirm',
+    });
+    expect(settings.siteSecret()).toEqual({ kind: 'none' });
+  });
+
+  it('меняет пароль и выгоняет всех, кроме себя', async () => {
+    // Сессии отозваны, а значит чужие сокеты держатся на личности, которой
+    // больше не подтвердить. Своего владельца не рвём: он только что нажал
+    // кнопку и должен увидеть ответ.
+    const { gw, server, sock, settings } = await ownerOnline();
+    const other = await connectAs(gw, server, (await personCookie('Сосед')).cookie, { id: 'o' });
+
+    const res = await gw.handleAdminPassword(asSocket(sock), {
+      password: 'новое-слово',
+      confirm: true,
+    });
+    expect(res).toMatchObject({ ok: true, set: true, changed: true });
+    expect(settings.siteSecret().kind).toBe('hash');
+    expect(other.disconnected).toBe(true);
+    expect(sock.disconnected).toBe(false);
+  });
+
+  it('ни значения, ни хэша не отдаёт в ответе и в состоянии панели', async () => {
+    const { gw, sock } = await ownerOnline();
+    const res = await gw.handleAdminPassword(asSocket(sock), {
+      password: 'очень-тайное-слово',
+      confirm: true,
+    });
+    expect(JSON.stringify(res)).not.toContain('очень-тайное-слово');
+
+    const state = await gw.handleAdminState(asSocket(sock));
+    if (!state.ok) throw new Error('состояние не отдали');
+    expect(JSON.stringify(state)).not.toContain('очень-тайное-слово');
+    // Панель видит ровно признак «задано» — им она и рисует поле.
+    expect(state.values['access.sitePasswordSet']).toBe(true);
+  });
+
+  it('негодное значение отвергает причиной из каталога', async () => {
+    const { gw, sock } = await ownerOnline();
+    expect(await gw.handleAdminPassword(asSocket(sock), { password: 42, confirm: true })).toEqual({
+      ok: false,
+      error: 'wrong-type',
+    });
+  });
+});

@@ -59,9 +59,12 @@ describe('api auth (sync, node:crypto)', () => {
     expect(verifyToken(value)).toBe(false);
   });
 
-  it('passwordMatches — постоянное время, корректное сравнение', () => {
-    expect(passwordMatches(PASS)).toBe(true);
-    expect(passwordMatches('неверно')).toBe(false);
+  it('passwordMatches — постоянное время, корректное сравнение', async () => {
+    // Асинхронна с этапа C: пароль из панели проверяется scrypt'ом, а он
+    // считается в пуле, а не на месте. Пароль из `.env` по-прежнему сравнивается
+    // хэшами равной длины — чтобы не утекала длина.
+    expect(await passwordMatches(PASS)).toBe(true);
+    expect(await passwordMatches('неверно')).toBe(false);
   });
 
   it('isAuthorized: кука, Bearer-заголовок или handshake.auth.token', () => {

@@ -30,6 +30,8 @@ import {
   type AdminBansResult,
   type AdminExport,
   type AdminImportRejection,
+  type AdminPasswordPayload,
+  type AdminPasswordResult,
   type AdminPeoplePayload,
   type AdminPeopleResult,
   type AdminResetPayload,
@@ -65,6 +67,9 @@ import {
  * одного нажатия, пропущенный — чужой переписки.
  */
 const SAFE_ACTIONS = new Set<AdminAction>(['export']);
+
+/** Пароль инсталляции. Подтверждение и пометка «опасное» спрашиваются у каталога. */
+const PASSWORD_KEY = 'access.sitePasswordSet';
 
 /** Всё, что панель умеет делать кнопкой. Порядок — как в контракте. */
 const ACTIONS: readonly AdminAction[] = [
@@ -185,6 +190,39 @@ export class AdminHandlers {
     return { ok: true, group, changed, values: this.settings.public() };
   }
 
+  /**
+   * Сменить пароль инсталляции.
+   *
+   * Своё событие, а не поле в `admin-set`: общая запись секретам отказывает
+   * (`secret-path`), и правильно делает — там значение легло бы в jsonb как
+   * есть. Здесь оно уходит в scrypt, а всё выданное под прежним паролем
+   * перестаёт пускать в тот же миг: пропуска и гостевые ссылки подписаны
+   * материалом, которого больше нет, сессии личностей отзывает сам сервис.
+   *
+   * Подтверждение спрашивается всегда, и не «потому что страшно»: параметр
+   * помечен в каталоге `danger`, и спрашиваем мы ровно по этой пометке.
+   *
+   * Живые сокеты рвём ВСЕ, включая гостей по ссылке, — тем же кодом, что и
+   * отзыв сессий, и по той же причине: пропуск проверяется один раз, при
+   * подключении. Гость здесь не исключение, в отличие от отзыва сессий: его
+   * ссылка подписана тем же паролем и уже недействительна.
+   */
+  async password(client: AppSocket, payload: AdminPasswordPayload): Promise<AdminPasswordResult> {
+    const me = this.me(client);
+    if (!me) return { ok: false, error: 'forbidden' };
+    if (settingSpec(PASSWORD_KEY)?.danger && payload?.confirm !== true) {
+      return { ok: false, error: 'needs-confirm' };
+    }
+
+    // Значение передаём как пришло: `str()` превратил бы число в пустую строку,
+    // то есть «снять пароль» — не то, о чём просили. Пусть отказывает каталог.
+    const res = await this.settings.setSitePassword(payload?.password, me.id);
+    if (!res.ok) return { ok: false, error: res.error };
+
+    const count = res.changed ? this.dropOthers(client, () => true) : 0;
+    return { ok: true, set: res.set, changed: res.changed, count };
+  }
+
   /** Страница людей: лицо (отпечаток), имя, устройства и положение. */
   async people(client: AppSocket, payload: AdminPeoplePayload): Promise<AdminPeopleResult> {
     if (!this.me(client)) return { ok: false, error: 'forbidden' };
@@ -300,14 +338,9 @@ export class AdminHandlers {
    */
   private async revokeSessions(client: AppSocket, me: Speaker): Promise<AdminActionResult> {
     revokeAllSessions();
-    let count = 0;
-    for (const sock of [...(this.serverOf()?.sockets.sockets.values() ?? [])]) {
-      // Гость по ссылке сессии не предъявлял — за него ручается токен
-      // приглашения, и отзыв сессий его не касается.
-      if (sock.id === client.id || !this.perimeter.speaker(sock)) continue;
-      sock.disconnect(true);
-      count += 1;
-    }
+    // Гость по ссылке сессии не предъявлял — за него ручается токен
+    // приглашения, и отзыв сессий его не касается.
+    const count = this.dropOthers(client, (sock) => !!this.perimeter.speaker(sock));
     await this.audit.write({
       actor: me.id,
       action: 'sessions-revoked',
@@ -466,6 +499,24 @@ export class AdminHandlers {
       if (sock.id === from.id) continue;
       sock.emit('admin-changed', { keys, values });
     }
+  }
+
+  /**
+   * Оборвать чужие живые сокеты — тех из них, кого выбрали.
+   *
+   * Личность и пропуск узнаются один раз, при подключении, поэтому отозванное
+   * говорило бы в каналы до перезагрузки страницы, то есть часами. Сокет
+   * нажавшего не рвём никогда: оборвав его, мы не доставили бы ему же ответ, и
+   * панель осталась бы гадать, случилось ли что-нибудь.
+   */
+  private dropOthers(client: AppSocket, pick: (sock: AppSocket) => boolean): number {
+    let count = 0;
+    for (const sock of [...(this.serverOf()?.sockets.sockets.values() ?? [])]) {
+      if (sock.id === client.id || !pick(sock)) continue;
+      sock.disconnect(true);
+      count += 1;
+    }
+    return count;
   }
 
   /**

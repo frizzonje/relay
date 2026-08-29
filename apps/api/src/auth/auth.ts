@@ -1,4 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
+import { verifyServerPassword } from '../gateway/unlock';
 
 // Срок жизни пропуска. Подпись зависит от пароля: смена пароля
 // мгновенно отзывает все выданные куки.
@@ -6,16 +7,79 @@ const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export const AUTH_COOKIE = 'relay_pass';
 
-export function sitePassword(): string {
-  return process.env.SITE_PASSWORD ?? '';
+/**
+ * Чем инсталляция заперта прямо сейчас.
+ *
+ *   - `none` — воротами не заперта вовсе. Так живёт инсталляция без пароля, и
+ *     так же — та, у которой пароль задан, но ворота выключены настройкой;
+ *   - `plain` — пароль из `.env`, как было всегда;
+ *   - `hash` — пароль, заданный из панели: наружу и в базу уходит только
+ *     `salt:hash` (scrypt), самого пароля не знает никто, включая нас.
+ *
+ * «Ворота включены, а пароля нет» — это ОТСУТСТВИЕ ворот, а не запертая дверь.
+ * Инсталляция без `SITE_PASSWORD` сегодня пускает всех, а флажок
+ * `access.sitePasswordEnabled` включён по умолчанию: спроси мы один лишь
+ * флажок, первое же обновление заперло бы открытую инсталляцию от её
+ * собственных людей.
+ */
+export type SiteSecret =
+  | { kind: 'none' }
+  | { kind: 'plain'; value: string }
+  | { kind: 'hash'; value: string };
+
+/**
+ * Кто отвечает на вопрос «чем заперто».
+ *
+ * Модульная переменная, а не поле сервиса, потому что спрашивают отсюда те, у
+ * кого нет и не будет DI: express-миддлвара `authGate`, разбор handshake
+ * socket.io, гостевые ссылки. Ровно та же манера, что у ключа подписи сессий
+ * (`identity/session.ts`), и по той же причине.
+ *
+ * По умолчанию отвечает окружение — это и есть поведение relay до панели, и
+ * оно же остаётся у процесса, где настроек нет вовсе (тесты самих функций).
+ */
+let source: () => SiteSecret = envSecret;
+
+/** Настройки поднялись и знают про пароль из таблицы — спрашиваем их. */
+export function useSiteSecret(fn: () => SiteSecret): void {
+  source = fn;
+}
+
+/** Вернуть ответ окружению. Нужно тестам: источник живёт на весь процесс. */
+export function resetSiteSecret(): void {
+  source = envSecret;
+}
+
+function envSecret(): SiteSecret {
+  const raw = process.env.SITE_PASSWORD ?? '';
+  return raw ? { kind: 'plain', value: raw } : { kind: 'none' };
+}
+
+export function siteSecret(): SiteSecret {
+  return source();
+}
+
+/**
+ * Материал ключа подписи. Пустая строка — ворот нет, и подпись в этом случае
+ * ни от чего не защищает (её и не спрашивают: `verifyToken` пускает всех).
+ *
+ * Для пароля из `.env` это сам пароль — байт в байт как до панели, иначе
+ * обновление обесценило бы все выданные куки и заодно разошлось бы с
+ * Web-Crypto близнецом в `packages/shared/src/auth.ts`, который проверяет ту же
+ * куку в middleware фронта. Для пароля из панели — его хэш: другого стабильного
+ * материала у нас нет, а хэш меняется вместе с паролем, чего и надо.
+ */
+function keyMaterial(): string {
+  const secret = siteSecret();
+  return secret.kind === 'none' ? '' : secret.value;
 }
 
 export function authEnabled(): boolean {
-  return sitePassword().length > 0;
+  return siteSecret().kind !== 'none';
 }
 
 function sign(exp: number): string {
-  return createHmac('sha256', 'relay-auth-v1:' + sitePassword())
+  return createHmac('sha256', 'relay-auth-v1:' + keyMaterial())
     .update(String(exp))
     .digest('base64url');
 }
@@ -54,7 +118,7 @@ export interface GuestClaims {
 }
 
 function guestHmac(message: string): string {
-  return createHmac('sha256', 'relay-guest-v1:' + sitePassword())
+  return createHmac('sha256', 'relay-guest-v1:' + keyMaterial())
     .update(message)
     .digest('base64url');
 }
@@ -101,10 +165,25 @@ export function verifyGuestToken(token: string | undefined): GuestClaims | null 
   return { slug, exp, listen };
 }
 
-// Сравнение паролей за постоянное время — через хэши, чтобы не утекала длина
-export function passwordMatches(candidate: string): boolean {
+/**
+ * Тот ли пароль предъявили.
+ *
+ * Два случая и две проверки, обе за постоянное время. Пароль из `.env`
+ * сравнивается через sha256 — так было всегда, и хэши равной длины не дают
+ * утечь длине пароля. Пароль из панели проверяется тем же scrypt, что и пароли
+ * закрытых серверов (`gateway/unlock.ts`): своей манеры хэширования здесь не
+ * заводится, а вместе с кодом достаётся и семафор, который не даёт очереди из
+ * дорогих проверок забить пул libuv и остановить сигналинг.
+ *
+ * `none` — ворот нет; сюда в этом случае не приходят (дверь отвечает «открыто»
+ * раньше), а ответ «не сошлось» честнее, чем «сошлось» на пустом месте.
+ */
+export async function passwordMatches(candidate: string): Promise<boolean> {
+  const secret = siteSecret();
+  if (secret.kind === 'none') return false;
+  if (secret.kind === 'hash') return verifyServerPassword(candidate, secret.value);
   const a = createHash('sha256').update(candidate).digest();
-  const b = createHash('sha256').update(sitePassword()).digest();
+  const b = createHash('sha256').update(secret.value).digest();
   return timingSafeEqual(a, b);
 }
 

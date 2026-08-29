@@ -41,8 +41,15 @@ export class AuthController {
 
   constructor(private readonly settings: SettingsService) {}
 
+  /**
+   * Проверка пароля ждёт ответа: пароль, заданный из панели, лежит хэшем, и
+   * сверить его стоит одного scrypt. Дорого это НАМЕРЕННО, и обоюдоострость
+   * такой цены снимают оба счётчика выше (неудачи за десять минут и попытки за
+   * минуту) вместе с семафором в `gateway/unlock.ts`, через который проходят
+   * все проверки паролей инсталляции.
+   */
   @Post('api/login')
-  login(@Req() req: Request, @Res() res: Response, @Body() body: { password?: unknown }) {
+  async login(@Req() req: Request, @Res() res: Response, @Body() body: { password?: unknown }) {
     if (!authEnabled()) {
       res.json({ ok: true });
       return;
@@ -64,7 +71,7 @@ export class AuthController {
     }
 
     const password = typeof body?.password === 'string' ? body.password : '';
-    if (!password || !passwordMatches(password)) {
+    if (!password || !(await passwordMatches(password))) {
       this.recordFailure(ip);
       res.status(401).json({ error: 'invalid password' });
       return;

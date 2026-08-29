@@ -4,6 +4,17 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { DataSource } from 'typeorm';
 import { SettingRow } from '../db/entities';
 import { resetDatabase, testDatabase } from '../db/testing';
+import {
+  authEnabled,
+  issueGuestToken,
+  issueToken,
+  passwordMatches,
+  resetSiteSecret,
+  siteSecret,
+  verifyGuestToken,
+  verifyToken,
+} from '../auth/auth';
+import { issueSession, readSession } from '../identity/session';
 import { SETTINGS, type SettingValue } from './catalog';
 import { SEEDED_FROM_ENV, SettingsService } from './settings.service';
 
@@ -452,5 +463,160 @@ describe('сброс группы', () => {
   it('нетронутая группа не ходит в базу впустую', async () => {
     const settings = await started();
     expect(await settings.resetGroup('appearance', owner)).toEqual([]);
+  });
+});
+
+/**
+ * Пароль инсталляции — своя дорога, и проверяется она отдельно от прочих
+ * настроек по трём причинам сразу: он единственный секрет, который хэшируется;
+ * он единственный, чья смена отзывает выданное; и он единственный, у кого есть
+ * резерв в окружении. Ошибка в любом из трёх мест не выглядит ошибкой — она
+ * выглядит как «инсталляция вдруг никого не пускает» или, наоборот, «пускает
+ * всех».
+ */
+describe('пароль инсталляции', () => {
+  afterEach(() => resetSiteSecret());
+
+  /** Как отвечает дверь: `plain` — из окружения, `hash` — из панели. */
+  const gate = () => siteSecret().kind;
+
+  it('умолчание никого не запирает — как и до панели', async () => {
+    // Ни строки в таблице, ни переменной в окружении: инсталляция открыта, хотя
+    // флажок «спрашивать пароль» включён по умолчанию. Проверь дверь один лишь
+    // флажок — обновление заперло бы её от собственных людей.
+    const settings = await started();
+    expect(settings.get<boolean>('access.sitePasswordEnabled')).toBe(true);
+    expect(settings.siteSecret()).toEqual({ kind: 'none' });
+    expect(authEnabled()).toBe(false);
+  });
+
+  it('пароль из панели заменяет пароль из окружения', async () => {
+    vi.stubEnv('SITE_PASSWORD', 'из-файла');
+    const settings = await started();
+    expect(gate()).toBe('plain');
+
+    expect(await settings.setSitePassword('из-панели', owner)).toEqual({
+      ok: true,
+      set: true,
+      changed: true,
+    });
+    expect(gate()).toBe('hash');
+    // Старый перестаёт пускать в тот же миг, без перезапуска api.
+    expect(await passwordMatches('из-файла')).toBe(false);
+    expect(await passwordMatches('из-панели')).toBe(true);
+  });
+
+  it('снятый из панели пароль возвращает инсталляцию к окружению', async () => {
+    // `.env` — резерв, так обещает каталог: сняли панельный — снова действует
+    // переменная, а не «открыто всем».
+    vi.stubEnv('SITE_PASSWORD', 'из-файла');
+    const settings = await started();
+    await settings.setSitePassword('из-панели', owner);
+    expect(await settings.setSitePassword('', owner)).toEqual({
+      ok: true,
+      set: true,
+      changed: true,
+    });
+    expect(gate()).toBe('plain');
+    expect(await passwordMatches('из-файла')).toBe(true);
+    // Строка удалена, а не оставлена пустой: два способа записать одно
+    // состояние разошлись бы как раз на резерве.
+    expect(await row('access.sitePasswordSet')).toBeNull();
+  });
+
+  it('без резерва снятый пароль открывает инсталляцию, и это видно снаружи', async () => {
+    const settings = await started();
+    await settings.setSitePassword('на-время', owner);
+    expect(settings.public()['access.sitePasswordSet']).toBe(true);
+
+    expect(await settings.setSitePassword('', owner)).toEqual({
+      ok: true,
+      set: false,
+      changed: true,
+    });
+    expect(settings.siteSecret()).toEqual({ kind: 'none' });
+    // Панель говорит об этом прямо признаком, а не догадкой по пустой строке.
+    expect(settings.public()['access.sitePasswordSet']).toBe(false);
+  });
+
+  it('выключенный флажок снимает ворота, не теряя пароля', async () => {
+    const settings = await started();
+    await settings.setSitePassword('слово', owner);
+    await settings.set('access.sitePasswordEnabled', false, owner);
+
+    expect(settings.siteSecret()).toEqual({ kind: 'none' });
+    // Пароль при этом на месте — включив флажок обратно, владелец не набирает
+    // его заново.
+    expect(settings.public()['access.sitePasswordSet']).toBe(true);
+    await settings.set('access.sitePasswordEnabled', true, owner);
+    expect(await passwordMatches('слово')).toBe(true);
+  });
+
+  it('смена пароля отзывает всё выданное', async () => {
+    vi.stubEnv('SITE_PASSWORD', 'из-файла');
+    const settings = await started();
+    const pass = issueToken().value;
+    const guest = issueGuestToken('voice-obshchii').token;
+    const session = issueSession({ identityId: owner, deviceId: randomUUID() }).value;
+    expect(verifyToken(pass)).toBe(true);
+    expect(verifyGuestToken(guest)).not.toBeNull();
+
+    await settings.setSitePassword('другое', owner);
+
+    // Пропуск и гостевая ссылка умирают сами: они подписаны материалом,
+    // которого больше нет.
+    expect(verifyToken(pass)).toBe(false);
+    expect(verifyGuestToken(guest)).toBeNull();
+    // Сессия личности подписана своим ключом и про пароль не знает — её
+    // отзывают вслух, иначе устройство пережило бы смену пароля.
+    expect(readSession(session)).toBeNull();
+  });
+
+  it('снять несуществующий пароль — не событие: отзывать и записывать нечего', async () => {
+    const settings = await started();
+    const session = issueSession({ identityId: owner, deviceId: randomUUID() }).value;
+    expect(await settings.setSitePassword('', owner)).toEqual({
+      ok: true,
+      set: false,
+      changed: false,
+    });
+    expect(readSession(session)).not.toBeNull();
+  });
+
+  it('негодное значение отвергается каталогом и ничего не меняет', async () => {
+    const settings = await started();
+    await settings.setSitePassword('слово', owner);
+    expect(await settings.setSitePassword(42, owner)).toEqual({ ok: false, error: 'wrong-type' });
+    expect(await settings.setSitePassword('я'.repeat(500), owner)).toEqual({
+      ok: false,
+      error: 'too-long',
+    });
+    expect(await passwordMatches('слово')).toBe(true);
+  });
+
+  it('общая дорога пароль по-прежнему не пишет', async () => {
+    // Своя дорога появилась, но `set` от этого не ослаб: значение легло бы в
+    // jsonb как есть, то есть пароль открытым текстом в каждой резервной копии.
+    const settings = await started();
+    expect(await settings.set('access.sitePasswordSet', 'мимо', owner)).toEqual({
+      ok: false,
+      error: 'secret-path',
+    });
+  });
+
+  it('ни пароля, ни его хэша не видно снаружи — нигде', async () => {
+    const settings = await started();
+    await settings.setSitePassword('очень-тайное-слово', owner);
+    const hash = (await row('access.sitePasswordSet'))?.value as string;
+    expect(hash).toContain(':'); // salt:hash, а не сам пароль
+    expect(hash).not.toContain('очень-тайное-слово');
+
+    for (const outside of [settings.public(), settings.snapshot()]) {
+      expect(JSON.stringify(outside)).not.toContain('очень-тайное-слово');
+      expect(JSON.stringify(outside)).not.toContain(hash);
+    }
+    // В снимке для браузера параметра нет вовсе — даже признаком.
+    expect('access.sitePasswordSet' in settings.snapshot()).toBe(false);
+    expect(settings.public()['access.sitePasswordSet']).toBe(true);
   });
 });

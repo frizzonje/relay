@@ -845,6 +845,17 @@ export interface AdminActionPayload {
   values?: unknown;
 }
 
+/**
+ * Смена пароля инсталляции. Своё событие, а не поле в `admin-set` и не
+ * действие: пароль — единственный параметр, который одновременно секрет,
+ * хэшируется и отзывает всё выданное, и ехать ему в теле, общем с баном и
+ * импортом, незачем.
+ */
+export interface AdminPasswordPayload {
+  password?: unknown;
+  confirm?: unknown;
+}
+
 /** Политика хранения так, как её показывает сводка. */
 export interface AdminRetention {
   mode: RetentionMode;
@@ -937,6 +948,10 @@ export type AdminActionResult =
       imported?: { applied: string[]; rejected: AdminImportRejection[] };
       count?: number;
     }
+  | { ok: false; error: AdminRefusal };
+
+export type AdminPasswordResult =
+  | { ok: true; set: boolean; changed: boolean; count: number }
   | { ok: false; error: AdminRefusal };
 
 /** Настройку поменяли из другой сессии владельца — только его собственным сокетам. */

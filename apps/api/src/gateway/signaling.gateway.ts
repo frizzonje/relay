@@ -45,6 +45,8 @@ import {
   type AdminAuditPayload,
   type AdminAuditResult,
   type AdminBansResult,
+  type AdminPasswordPayload,
+  type AdminPasswordResult,
   type AdminPeoplePayload,
   type AdminPeopleResult,
   type AdminResetPayload,
@@ -914,6 +916,15 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() payload: AdminAuditPayload,
   ): Promise<AdminAuditResult> {
     return this.adminHandlers.journal(client, payload);
+  }
+
+  /** Пароль инсталляции — своя дорога, мимо `admin-set`. */
+  @SubscribeMessage('admin-password')
+  handleAdminPassword(
+    @ConnectedSocket() client: AppSocket,
+    @MessageBody() payload: AdminPasswordPayload,
+  ): Promise<AdminPasswordResult> {
+    return this.adminHandlers.password(client, payload);
   }
 
   @SubscribeMessage('admin-action')

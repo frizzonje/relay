@@ -96,10 +96,10 @@ afterEach(() => {
 });
 
 describe('POST /api/login', () => {
-  it('верный пароль выдаёт куку-пропуск, которая потом проходит проверку', () => {
+  it('верный пароль выдаёт куку-пропуск, которая потом проходит проверку', async () => {
     const c = controller();
     const r = res();
-    c.login(req(), r, { password: 'верный-пароль' });
+    await c.login(req(), r, { password: 'верный-пароль' });
     expect(r.body).toEqual({ ok: true });
     const cookie = r.cookies[AUTH_COOKIE];
     expect(cookie).toBeDefined();
@@ -107,66 +107,66 @@ describe('POST /api/login', () => {
     expect(cookie.opts).toMatchObject({ httpOnly: true, sameSite: 'lax', path: '/' });
   });
 
-  it('secure у куки повторяет протокол запроса — иначе её не примут по https', () => {
+  it('secure у куки повторяет протокол запроса — иначе её не примут по https', async () => {
     const c = controller();
     const plain = res();
-    c.login(req('10.0.0.1', false), plain, { password: 'верный-пароль' });
+    await c.login(req('10.0.0.1', false), plain, { password: 'верный-пароль' });
     expect(plain.cookies[AUTH_COOKIE].opts.secure).toBe(false);
 
     const tls = res();
-    c.login(req('10.0.0.2', true), tls, { password: 'верный-пароль' });
+    await c.login(req('10.0.0.2', true), tls, { password: 'верный-пароль' });
     expect(tls.cookies[AUTH_COOKIE].opts.secure).toBe(true);
   });
 
-  it('неверный и пустой пароль — 401 без куки', () => {
+  it('неверный и пустой пароль — 401 без куки', async () => {
     const c = controller();
     for (const password of ['мимо', '', 42, undefined]) {
       const r = res();
-      c.login(req(), r, { password });
+      await c.login(req(), r, { password });
       expect(r.code, String(password)).toBe(401);
       expect(r.cookies[AUTH_COOKIE]).toBeUndefined();
     }
   });
 
-  it('без пароля сайта пускает всех и куку не выдаёт — её нечем подписывать', () => {
+  it('без пароля сайта пускает всех и куку не выдаёт — её нечем подписывать', async () => {
     delete process.env.SITE_PASSWORD;
     const c = controller();
     const r = res();
-    c.login(req(), r, {});
+    await c.login(req(), r, {});
     expect(r.body).toEqual({ ok: true });
     expect(r.cookies[AUTH_COOKIE]).toBeUndefined();
   });
 
-  it('после восьми неудач адрес получает 429 вместо очередной проверки', () => {
+  it('после восьми неудач адрес получает 429 вместо очередной проверки', async () => {
     const c = controller();
     for (let i = 0; i < 8; i++) {
       const r = res();
-      c.login(req('9.9.9.9'), r, { password: `мимо-${i}` });
+      await c.login(req('9.9.9.9'), r, { password: `мимо-${i}` });
       expect(r.code).toBe(401);
     }
     const blocked = res();
     // Даже верный пароль дальше не проходит.
-    c.login(req('9.9.9.9'), blocked, { password: 'верный-пароль' });
+    await c.login(req('9.9.9.9'), blocked, { password: 'верный-пароль' });
     expect(blocked.code).toBe(429);
     expect(blocked.cookies[AUTH_COOKIE]).toBeUndefined();
   });
 
-  it('счётчик у каждого адреса свой — сосед не страдает', () => {
+  it('счётчик у каждого адреса свой — сосед не страдает', async () => {
     const c = controller();
-    for (let i = 0; i < 8; i++) c.login(req('9.9.9.9'), res(), { password: 'мимо' });
+    for (let i = 0; i < 8; i++) await c.login(req('9.9.9.9'), res(), { password: 'мимо' });
     const neighbour = res();
-    c.login(req('8.8.8.8'), neighbour, { password: 'верный-пароль' });
+    await c.login(req('8.8.8.8'), neighbour, { password: 'верный-пароль' });
     expect(neighbour.body).toEqual({ ok: true });
   });
 
-  it('успешный вход сбрасывает накопленные неудачи', () => {
+  it('успешный вход сбрасывает накопленные неудачи', async () => {
     const c = controller();
-    for (let i = 0; i < 7; i++) c.login(req('7.7.7.7'), res(), { password: 'мимо' });
-    c.login(req('7.7.7.7'), res(), { password: 'верный-пароль' });
+    for (let i = 0; i < 7; i++) await c.login(req('7.7.7.7'), res(), { password: 'мимо' });
+    await c.login(req('7.7.7.7'), res(), { password: 'верный-пароль' });
     // Счётчик обнулён: ещё семь ошибок снова не запирают.
     for (let i = 0; i < 7; i++) {
       const r = res();
-      c.login(req('7.7.7.7'), r, { password: 'мимо' });
+      await c.login(req('7.7.7.7'), r, { password: 'мимо' });
       expect(r.code).toBe(401);
     }
   });
@@ -180,7 +180,7 @@ describe('поток запросов к двери', () => {
     const c = controller();
     for (let i = 0; i < 30; i++) {
       const r = res();
-      c.login(req('5.5.5.5'), r, { password: 'верный-пароль' });
+      await c.login(req('5.5.5.5'), r, { password: 'верный-пароль' });
       expect(r.body).toEqual({ ok: true });
     }
   });
@@ -189,11 +189,11 @@ describe('поток запросов к двери', () => {
     const c = await tunedController('access.loginRatePerMinute', 2);
     for (let i = 0; i < 2; i++) {
       const r = res();
-      c.login(req('5.5.5.5'), r, { password: 'верный-пароль' });
+      await c.login(req('5.5.5.5'), r, { password: 'верный-пароль' });
       expect(r.body).toEqual({ ok: true });
     }
     const blocked = res();
-    c.login(req('5.5.5.5'), blocked, { password: 'верный-пароль' });
+    await c.login(req('5.5.5.5'), blocked, { password: 'верный-пароль' });
     expect(blocked.code).toBe(429);
     // Тело своё: снаружи оба отказа 429, но «подождите минуту» и «вы перебрали
     // пароль» чинятся по-разному, и различать их надо не по логам.
@@ -205,27 +205,27 @@ describe('поток запросов к двери', () => {
     // В этом вся разница с соседним счётчиком: верный пароль, повторённый
     // триста раз в минуту, — тоже не человек, и первый счётчик его не видит.
     const c = await tunedController('access.loginRatePerMinute', 3);
-    for (let i = 0; i < 3; i++) c.login(req('6.6.6.6'), res(), { password: 'верный-пароль' });
+    for (let i = 0; i < 3; i++) await c.login(req('6.6.6.6'), res(), { password: 'верный-пароль' });
     const blocked = res();
-    c.login(req('6.6.6.6'), blocked, { password: 'мимо' });
+    await c.login(req('6.6.6.6'), blocked, { password: 'мимо' });
     expect(blocked.body).toEqual({ error: 'too fast' });
   });
 
   it('скорость считается по адресу — сосед стучит свободно', async () => {
     const c = await tunedController('access.loginRatePerMinute', 1);
-    c.login(req('6.6.6.6'), res(), { password: 'верный-пароль' });
+    await c.login(req('6.6.6.6'), res(), { password: 'верный-пароль' });
     const mine = res();
-    c.login(req('6.6.6.6'), mine, { password: 'верный-пароль' });
+    await c.login(req('6.6.6.6'), mine, { password: 'верный-пароль' });
     expect(mine.code).toBe(429);
 
     const neighbour = res();
-    c.login(req('7.7.7.7'), neighbour, { password: 'верный-пароль' });
+    await c.login(req('7.7.7.7'), neighbour, { password: 'верный-пароль' });
     expect(neighbour.body).toEqual({ ok: true });
   });
 });
 
 describe('POST /api/logout', () => {
-  it('чистит куку и всегда отвечает успехом — выход идемпотентен', () => {
+  it('чистит куку и всегда отвечает успехом — выход идемпотентен', async () => {
     const c = controller();
     const r = res();
     c.logout(r);
