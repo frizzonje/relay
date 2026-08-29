@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
 import { renameChannel } from '@/lib/channels';
 import { useT } from '@/lib/i18n';
+import { useSetting } from '@/stores/config';
 
 export interface RenameChannelTarget {
   id: string;
@@ -35,6 +36,11 @@ export function RenameChannelDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const t = useT();
+  // Потолок имени берём у инсталляции (`spaces.channelNameMaxLength`), а не
+  // числом: те же символы принимает сервер (registry.handlers), и жёсткая
+  // тридцатидвойка здесь делала бы поле в панели обещанием, которого клиент не
+  // держит.
+  const nameMaxLength = useSetting<number>('spaces.channelNameMaxLength');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -92,7 +98,7 @@ export function RenameChannelDialog({
                 id="channel-rename"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                maxLength={32}
+                maxLength={nameMaxLength}
                 autoFocus
                 // Открываем с выделенным именем: заменить целиком — обычный
                 // случай, дописать букву — всё равно один клик.

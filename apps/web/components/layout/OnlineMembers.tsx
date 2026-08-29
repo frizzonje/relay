@@ -6,6 +6,7 @@ import { listItem, springLayout } from '@/lib/motion';
 import { AnimatedCount } from '@/components/ui/AnimatedCount';
 import { useUiStore } from '@/stores/ui';
 import { useChatStore } from '@/stores/chat';
+import { useSetting } from '@/stores/config';
 import { avatarStyle } from '@/lib/avatar';
 import { Identicon } from '@/components/ui/Identicon';
 import { shortFingerprint } from '@/lib/format';
@@ -22,6 +23,7 @@ export function OnlineMembers() {
   const view = useUiStore((s) => s.view);
   const callsign = useUiStore((s) => s.callsign);
   const roster = useChatStore((s) => s.roster);
+  const showFingerprints = useSetting<boolean>('people.showFingerprints');
   if (view !== 'text') return null;
 
   const me = callsign.trim() || t('common.anonymous');
@@ -70,7 +72,7 @@ export function OnlineMembers() {
                 {/* Картинка для узнавания, текст для сверки: лицо запоминают
                     боковым зрением, а спорный случай разбирают по отпечатку —
                     и тогда его надо иметь под рукой, а не в тултипе. */}
-                {fingerprint && (
+                {fingerprint && showFingerprints && (
                   <div className="truncate font-mono text-[10px] tracking-[0.06em] text-text-faint">
                     {shortFingerprint(fingerprint)}
                   </div>

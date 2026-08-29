@@ -16,12 +16,19 @@ import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
 import { useDmStore } from '@/stores/dm';
 import { useUiStore } from '@/stores/ui';
+import { useSetting } from '@/stores/config';
 
 /** Пауза перед запросом при наборе — как в поиске по истории (SearchPanel). */
 const TYPING_PAUSE_MS = 280;
 
 function PersonRow({ person, onOpen }: { person: DmPerson; onOpen: () => void }) {
   const t = useT();
+  const showFingerprints = useSetting<boolean>('people.showFingerprints');
+  // «Был в сети» инсталляция вправе не показывать (`people.lastSeenVisible`):
+  // это не про удобство, а про то, сколько чужой распорядок дня виден
+  // посторонним. Скрыто — строки нет вовсе, а не «никогда»: подделанный ответ
+  // хуже отсутствующего.
+  const showLastSeen = useSetting<boolean>('people.lastSeenVisible');
   // «Когда видели» — то самое поле `lastSeenTs`, ради которого `DmPerson`
   // вообще отличается от `DmPeer` (см. комментарий у типа в packages/shared).
   // 0 не «сегодня в полночь», а «никогда»: presence ещё не заведён (см. README
@@ -47,13 +54,17 @@ function PersonRow({ person, onOpen }: { person: DmPerson; onOpen: () => void })
       <div className="min-w-0 flex-1">
         <div className="truncate text-[14px] font-medium text-text-header">{person.nick}</div>
         <div className="flex items-center gap-1.5 text-[11px] text-text-muted">
-          <span className="shrink-0 font-mono tracking-[0.06em] text-text-faint">
-            {shortFingerprint(person.fingerprint)}
-          </span>
-          <span aria-hidden className="shrink-0 text-text-faint">
-            ·
-          </span>
-          <span className="truncate">{seen}</span>
+          {showFingerprints && (
+            <span className="shrink-0 font-mono tracking-[0.06em] text-text-faint">
+              {shortFingerprint(person.fingerprint)}
+            </span>
+          )}
+          {showFingerprints && showLastSeen && (
+            <span aria-hidden className="shrink-0 text-text-faint">
+              ·
+            </span>
+          )}
+          {showLastSeen && <span className="truncate">{seen}</span>}
         </div>
       </div>
     </div>

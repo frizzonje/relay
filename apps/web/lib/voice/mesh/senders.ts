@@ -1,6 +1,7 @@
 'use client';
 
 import { boostVideoBitrate, boostAudioBitrate } from '@/lib/sdp';
+import { setting } from '@/stores/config';
 import type { TransportHost } from '../types';
 
 /**
@@ -19,13 +20,29 @@ import type { TransportHost } from '../types';
 // Потолки битрейта (SDP задаёт предел кодеку, setParameters — sender'у)
 // ─────────────────────────────────────────────────────────────────────────
 
-const VIDEO_MAX_BITRATE = 2_500_000;
 const SCREEN_MAX_BITRATE = 8_000_000;
 
-// Потолки битрейта аудио-кодировщика по ролям. Голос держим на «discord-уровне»,
-// а звук демонстрации (музыка/фильм) пускаем заметно жирнее — там слышно разницу.
-const MIC_AUDIO_MAX_BITRATE = 128_000;
+// Потолок звука демонстрации (музыка/фильм) — заметно жирнее голоса: там
+// слышно разницу.
 const SCREEN_AUDIO_MAX_BITRATE = 256_000;
+
+/**
+ * Потолки камеры и голоса выбирает владелец инсталляции
+ * (`voice.videoBitrateKbps`, `voice.audioBitrateKbps`); умолчания каталога —
+ * те самые 2500 и 128 кбит/с, с которыми relay жил до этапа C.
+ *
+ * Спрашиваем в момент, когда дорожку настраивают, а не при загрузке модуля:
+ * снимок настроек приезжает после первого кадра, и число, снятое на старте,
+ * осталось бы вчерашним до перезагрузки вкладки. Демонстрацию экрана настройка
+ * не трогает намеренно — она про камеру и голос, а текст в мыле нечитаем.
+ */
+function videoMaxBitrate(): number {
+  return setting<number>('voice.videoBitrateKbps') * 1000;
+}
+
+function micAudioMaxBitrate(): number {
+  return setting<number>('voice.audioBitrateKbps') * 1000;
+}
 
 /**
  * Кто и что отдаёт одному собеседнику. Два слота на соединение: общий видеослот
@@ -106,7 +123,7 @@ export function createSenders(host: TransportHost): Senders {
     try {
       const params = sender.getParameters();
       if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-      params.encodings[0].maxBitrate = isScreen ? SCREEN_MAX_BITRATE : VIDEO_MAX_BITRATE;
+      params.encodings[0].maxBitrate = isScreen ? SCREEN_MAX_BITRATE : videoMaxBitrate();
       // Экран — по выбору пользователя (тумблер Качество/ФПС); камера — сбалансированно
       params.degradationPreference = isScreen ? host.screenDegradation() : 'balanced';
       await sender.setParameters(params);
@@ -166,7 +183,7 @@ export function createSenders(host: TransportHost): Senders {
       const screenAudio = slots.get(peerId)?.screenAudioSender ?? null;
       for (const sender of pc.getSenders()) {
         if (sender.track?.kind !== 'audio') continue;
-        const max = sender === screenAudio ? SCREEN_AUDIO_MAX_BITRATE : MIC_AUDIO_MAX_BITRATE;
+        const max = sender === screenAudio ? SCREEN_AUDIO_MAX_BITRATE : micAudioMaxBitrate();
         await setAudioSenderBitrate(sender, max);
       }
     },

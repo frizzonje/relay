@@ -9,6 +9,7 @@ import { fmtListWhen, shortFingerprint } from '@/lib/format';
 import { listItem, springLayout } from '@/lib/motion';
 import { useT } from '@/lib/i18n';
 import { useDmStore, useUnreadIn } from '@/stores/dm';
+import { useSetting } from '@/stores/config';
 import { sceneTarget, useUiStore } from '@/stores/ui';
 
 function DmRow({
@@ -22,6 +23,7 @@ function DmRow({
 }) {
   const t = useT();
   const unread = useUnreadIn(conversation.slug, active);
+  const showFingerprints = useSetting<boolean>('people.showFingerprints');
   const { peer } = conversation;
   return (
     <div
@@ -58,9 +60,11 @@ function DmRow({
           >
             {peer.nick}
           </span>
-          <span className="shrink-0 font-mono text-[10px] tracking-[0.06em] text-text-faint">
-            {shortFingerprint(peer.fingerprint)}
-          </span>
+          {showFingerprints && (
+            <span className="shrink-0 font-mono text-[10px] tracking-[0.06em] text-text-faint">
+              {shortFingerprint(peer.fingerprint)}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1.5">
           <span className="min-w-0 flex-1 truncate text-[12.5px] text-text-muted">

@@ -18,7 +18,11 @@ import type { DmActivityRelay, DmPeer } from '@relay/shared';
 vi.mock('@/lib/voice', () => ({ initVoice: vi.fn(), relabelSelf: vi.fn() }));
 vi.mock('@/lib/hotkeys', () => ({ initHotkeys: vi.fn() }));
 vi.mock('@/lib/desktop', () => ({ initDesktopBridge: vi.fn(async () => {}) }));
-vi.mock('@/lib/notify', () => ({ notifyMention: vi.fn(), notifyMessage: vi.fn() }));
+vi.mock('@/lib/notify', () => ({
+  notifyDirect: vi.fn(),
+  notifyMention: vi.fn(),
+  notifyMessage: vi.fn(),
+}));
 
 /**
  * Socket.io-клиент — фейковая шина событий: `on` копит обработчики, `_fire`
@@ -47,7 +51,7 @@ const socket = vi.hoisted(() => {
 vi.mock('@/lib/socket', () => ({ getSocket: () => socket }));
 
 import { SocketProvider } from './SocketProvider';
-import { notifyMention } from '@/lib/notify';
+import { notifyDirect } from '@/lib/notify';
 import { useChatStore } from '@/stores/chat';
 import { useDmStore } from '@/stores/dm';
 import { usePinsStore } from '@/stores/pins';
@@ -191,7 +195,7 @@ describe('уведомление о реплике в беседе', () => {
     };
     act(() => socket._fire('dm-activity', relay));
 
-    expect(notifyMention).not.toHaveBeenCalled();
+    expect(notifyDirect).not.toHaveBeenCalled();
     // Смотрят прямо сейчас — значит и прочитано прямо сейчас, тем же временем.
     expect(useUnreadStore.getState().lastRead[slugA]).toBe(999);
   });
@@ -206,7 +210,7 @@ describe('уведомление о реплике в беседе', () => {
     };
     act(() => socket._fire('dm-activity', relay));
 
-    expect(notifyMention).toHaveBeenCalledWith(slugA);
+    expect(notifyDirect).toHaveBeenCalledWith(slugA);
   });
 
   it('своя же реплика с другого устройства не звенит, даже если беседа закрыта', () => {
@@ -219,7 +223,7 @@ describe('уведомление о реплике в беседе', () => {
     };
     act(() => socket._fire('dm-activity', relay));
 
-    expect(notifyMention).not.toHaveBeenCalled();
+    expect(notifyDirect).not.toHaveBeenCalled();
   });
 });
 
@@ -259,7 +263,7 @@ describe('телефон: шаг назад из беседы', () => {
     };
     act(() => socket._fire('dm-activity', relay));
 
-    expect(notifyMention).toHaveBeenCalledWith(slugA);
+    expect(notifyDirect).toHaveBeenCalledWith(slugA);
     expect(useUnreadStore.getState().lastRead[slugA]).not.toBe(999);
   });
 
@@ -277,7 +281,7 @@ describe('телефон: шаг назад из беседы', () => {
       } as DmActivityRelay),
     );
 
-    expect(notifyMention).not.toHaveBeenCalled();
+    expect(notifyDirect).not.toHaveBeenCalled();
     expect(useUnreadStore.getState().lastRead[slugA]).toBe(999);
   });
 });

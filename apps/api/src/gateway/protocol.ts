@@ -1,4 +1,5 @@
 import type { Attachment } from '../uploads';
+import type { SettingValue } from '../settings/catalog';
 
 /**
  * Форма сообщений сигналинга: что приходит от клиента и что уходит ack'ом.
@@ -588,6 +589,18 @@ export type VoiceRefusal = 'video-off' | 'screen-share-off' | 'room-full' | 'gue
 export interface VoiceRefusedRelay {
   reason: VoiceRefusal;
 }
+
+/**
+ * Снимок действующих настроек, каким его видит браузер: то, что отдаёт
+ * `SettingsService.snapshot()`, — без единого секрета (каталог заменяет их
+ * признаком «задано»).
+ *
+ * Тип объявлен здесь, а не выведен из каталога, по общей конвенции контракта:
+ * api не зависит от `@relay/shared`, и совпадение половин держит тест, а не
+ * общий импорт. Уезжает снимок двумя дорогами — полем `settings` в
+ * `GET /api/config` и событием `settings` в сокете.
+ */
+export type SettingsSnapshot = Record<string, SettingValue>;
 
 /**
  * Тебя забанили. Тело появилось у события, у которого его не было: владелец

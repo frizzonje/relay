@@ -18,6 +18,7 @@ import { serverGradient, serverInitials } from '@/lib/server-visual';
 import { useServersStore } from '@/stores/servers';
 import { useUiStore } from '@/stores/ui';
 import { useT } from '@/lib/i18n';
+import { useSetting } from '@/stores/config';
 
 // Быстрый выбор эмодзи-иконки. Пусто → рисуем инициалы.
 // Рендерятся обесцвеченными (grayscale) — фирменный цвет даёт градиент-фон,
@@ -69,6 +70,11 @@ export function CreateServerDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const t = useT();
+  // Потолок имени берём у инсталляции (`spaces.channelNameMaxLength`), а не
+  // числом: те же символы принимает сервер (registry.handlers), и жёсткая
+  // тридцатидвойка здесь делала бы поле в панели обещанием, которого клиент не
+  // держит.
+  const nameMaxLength = useSetting<number>('spaces.channelNameMaxLength');
   const [name, setName] = useState('');
   const [emoji, setEmoji] = useState<string | undefined>(undefined);
   const [password, setPassword] = useState('');
@@ -157,7 +163,7 @@ export function CreateServerDialog({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder={t('createServer.name.placeholder')}
-                maxLength={32}
+                maxLength={nameMaxLength}
                 autoFocus
                 className="w-full rounded-lg border border-black/40 bg-bg-deep/70 px-3 py-2.5 text-[15px] text-text outline-none placeholder:text-text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent/60"
               />

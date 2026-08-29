@@ -6,6 +6,7 @@ import { Identicon } from '@/components/ui/Identicon';
 import { shortFingerprint } from '@/lib/format';
 import { useT } from '@/lib/i18n';
 import { useUiStore } from '@/stores/ui';
+import { useSetting } from '@/stores/config';
 
 /**
  * Правая колонка беседы (232px) — по месту и ширине ровно там, где у
@@ -28,6 +29,7 @@ export function DmPeerCard() {
   const peer = useUiStore((s) => s.dmPeer);
   const nick = useUiStore((s) => s.textLabel);
   const dmSection = useUiStore((s) => s.dmSection);
+  const showFingerprints = useSetting<boolean>('people.showFingerprints');
 
   // Беседа ещё не выбрана (переходный кадр смены сцены) — рисовать чужое
   // лицо или пустую карточку нечем.
@@ -55,9 +57,11 @@ export function DmPeerCard() {
       <Identicon fingerprint={peer} size={64} />
       <div className="flex flex-col items-center gap-1 text-center">
         <span className="max-w-full truncate text-[15px] font-bold text-text-header">{nick}</span>
-        <span className="font-mono text-[11px] tracking-[0.06em] text-text-faint">
-          {shortFingerprint(peer)}
-        </span>
+        {showFingerprints && (
+          <span className="font-mono text-[11px] tracking-[0.06em] text-text-faint">
+            {shortFingerprint(peer)}
+          </span>
+        )}
         <span className="text-[12px] text-text-muted">{t('dm.header.status.unknown')}</span>
       </div>
       <button

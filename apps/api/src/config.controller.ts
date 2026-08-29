@@ -1,6 +1,8 @@
 import { Controller, Get } from '@nestjs/common';
 import { type RetentionMode } from './db/retention.policy';
 import { RetentionService } from './db/retention.service';
+import type { SettingsSnapshot } from './gateway/protocol';
+import { SettingsService } from './settings/settings.service';
 import { issueTurnCredentials, turnSecret } from './turn';
 import { sfuHealthy } from './sfu/sfu-health';
 import { serverVersion } from './version';
@@ -26,7 +28,10 @@ export class ConfigController {
    * вкладка написала бы «тридцать дней», а подметание ходило бы по
    * четырнадцати, и человек поверил бы вкладке.
    */
-  constructor(private readonly retention: RetentionService) {}
+  constructor(
+    private readonly retention: RetentionService,
+    private readonly settings: SettingsService,
+  ) {}
 
   @Get('config')
   async getConfig(): Promise<{
@@ -35,6 +40,7 @@ export class ConfigController {
     retentionDays: number;
     retentionMode: RetentionMode;
     version: string;
+    settings: SettingsSnapshot;
     iceExpiresAt?: number;
   }> {
     const iceServers: IceServer[] = [];
@@ -118,6 +124,17 @@ export class ConfigController {
       // нужен тому, кто уже вошёл (свериться с клиентом), и не нужен
       // никому снаружи — раздавать его всем подряд незачем.
       version: serverVersion(),
+      // Настройки инсталляции — тем же ответом, что и ICE.
+      //
+      // Снимок — `snapshot()`, то есть помеченное в каталоге как нужное
+      // клиенту. Не `public()`: тот показывает владельцу всё, кроме секретов,
+      // и раздать его каждому значило бы вручить список стоп-слов тем, против
+      // кого он заведён. Отбор живёт в каталоге, а не вторым списком здесь.
+      //
+      // Дорога через http нужна отдельно от сокета: конфиг спрашивают до того,
+      // как поднимется сокет, и спрашивает его в том числе гость по инвайту,
+      // которому реестры не положены, а битрейты и порог mesh — положены.
+      settings: this.settings.snapshot(),
       ...(iceExpiresAt ? { iceExpiresAt } : {}),
     };
   }

@@ -13,6 +13,7 @@ import type { RosterPerson } from '@relay/shared';
 import { useUiStore, type MobilePanel } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import { useChatStore } from '@/stores/chat';
+import { useSetting } from '@/stores/config';
 import { usePinsStore } from '@/stores/pins';
 import { useSearchStore } from '@/stores/search';
 import { toggleMic, leaveVoice, showVoiceStage } from '@/lib/voice';
@@ -110,6 +111,7 @@ export function MobileNav() {
   const micOn = useVoiceStore((s) => s.micOn);
   const tiles = useVoiceStore((s) => s.tiles);
   const roster = useChatStore((s) => s.roster);
+  const showFingerprints = useSetting<boolean>('people.showFingerprints');
   const typing = useChatStore((s) => s.typing);
   const pins = usePinsStore((s) => s.count);
 
@@ -222,7 +224,7 @@ export function MobileNav() {
                 {/* Ник один человека не называет — тёзки в реестре не редкость
                     (см. DmList). Отпечаток `shrink-0`, ник `truncate`: длинное
                     имя ужимается, а различитель остаётся на экране. */}
-                {face && (
+                {face && showFingerprints && (
                   <span className="shrink-0 font-mono text-[10px] font-normal tracking-[0.06em] text-text-faint">
                     {shortFingerprint(face)}
                   </span>

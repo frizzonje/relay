@@ -1,5 +1,6 @@
 'use client';
 
+import { setting } from '@/stores/config';
 import type { TransportHost } from '../types';
 
 /**
@@ -17,9 +18,19 @@ import type { TransportHost } from '../types';
  * тикает».
  */
 
-// Окно на каждую ступень: не поднялись за него — идём дальше. Столько же ждёт
-// mesh на своём ICE-restart.
-const RECOVER_WINDOW_MS = 8_000;
+/**
+ * Окно на каждую ступень: не поднялись за него — идём дальше. Столько же ждёт
+ * mesh на своём ICE-restart.
+ *
+ * Длину окна выбирает владелец (`voice.iceRestartSeconds`): на сети, где ICE
+ * собирается медленно, восемь секунд — это лестница, пробегающая мимо связи,
+ * которая вот-вот встанет. Спрашиваем в момент, когда ступень заводится, а не
+ * при загрузке модуля: снимок настроек приезжает позже первого кадра, и
+ * константа, снятая на старте, осталась бы вчерашней навсегда.
+ */
+function recoverWindowMs(): number {
+  return setting<number>('voice.iceRestartSeconds') * 1000;
+}
 
 // Сколько ждём медиасервер на входе: welcome + оба транспорта. Не поднялись —
 // это отказ, а не «ещё чуть-чуть»: дирижёр уведёт звонок в p2p.
@@ -122,7 +133,7 @@ export function createLadder({
       host.setStatus('voice.status.sfuReconnecting');
       host.diag('sfu recover', 'stage 1: restart-ice');
       await restartIce();
-      schedule(RECOVER_WINDOW_MS); // сторож: не помогло — следующая ступень
+      schedule(recoverWindowMs()); // сторож: не помогло — следующая ступень
       return;
     }
     if (stage === 1) {
@@ -130,7 +141,7 @@ export function createLadder({
       host.setStatus('voice.status.sfuRebuilding');
       host.diag('sfu recover', 'stage 2: rebuild transports');
       await rebuild();
-      schedule(RECOVER_WINDOW_MS);
+      schedule(recoverWindowMs());
       return;
     }
     giveUp('lost');
@@ -189,7 +200,7 @@ export function createLadder({
       socketTimer = setTimeout(() => {
         socketTimer = null;
         if (!socketConnected()) giveUp('lost');
-      }, RECOVER_WINDOW_MS);
+      }, recoverWindowMs());
     },
 
     giveUp,

@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { tx as msg } from '@/lib/i18n';
 import { mediaErrorText } from '@/lib/voice/device-error';
 import { useVoiceStore } from '@/stores/voice';
+import { setting } from '@/stores/config';
 import {
   ANALYSER_FFT_SIZE,
   analyserRms,
@@ -84,15 +85,44 @@ export function setMicOn(on: boolean): void {
 // значения запоминаются в localStorage и синхронизируются в стор при загрузке.
 const NS_KEY = 'relay-noise-suppress';
 const PTT_KEY = 'relay-ptt';
-let noiseSuppression =
-  typeof localStorage !== 'undefined' ? localStorage.getItem(NS_KEY) !== '0' : true;
-let pushToTalk =
-  typeof localStorage !== 'undefined' ? localStorage.getItem(PTT_KEY) === '1' : false;
+
+/**
+ * Что человек выбрал в ЭТОМ браузере, или `null` — не выбирал вовсе.
+ *
+ * Разница между «выключил» и «не трогал» здесь и есть вся суть: не трогал —
+ * значит действует умолчание инсталляции, и оно может смениться; выключил —
+ * значит выбор его, и владелец панели ему не указ.
+ */
+function chosen(key: string): string | null {
+  return typeof localStorage === 'undefined' ? null : localStorage.getItem(key);
+}
+
+/**
+ * Шумоподавление и push-to-talk: выбор человека, а без него — умолчание
+ * инсталляции (`voice.noiseSuppressionDefault`, `voice.pushToTalkDefault`).
+ *
+ * Спрашиваем каждый раз, а не запоминаем при загрузке модуля: снимок настроек
+ * приезжает после первого кадра, и значение, снятое на старте, осталось бы
+ * вчерашним до перезагрузки вкладки. Умолчания каталога — сегодняшние «вкл» и
+ * «выкл», поэтому в инсталляции, где панель не открывали, всё как было.
+ */
+function noiseSuppressionOn(): boolean {
+  const raw = chosen(NS_KEY);
+  if (raw !== null) return raw !== '0';
+  return setting<boolean>('voice.noiseSuppressionDefault');
+}
+
+function pushToTalkOn(): boolean {
+  const raw = chosen(PTT_KEY);
+  if (raw !== null) return raw === '1';
+  return setting<boolean>('voice.pushToTalkDefault');
+}
+
 let pttHeld = false;
 
 /** Constraint аудио с учётом тоггла шумоподавления (замена статичного AUDIO_CONSTRAINTS). */
 function audioConstraints(): MediaTrackConstraints {
-  return { echoCancellation: true, noiseSuppression, autoGainControl: true };
+  return { echoCancellation: true, noiseSuppression: noiseSuppressionOn(), autoGainControl: true };
 }
 
 // ─── Порог срабатывания микрофона (шумовой гейт, как в Discord) ───────────
@@ -374,7 +404,6 @@ export async function setMic(deviceId: string) {
  * Меняем constraint и, если уже в звонке, переснимаем дорожку текущего устройства.
  */
 export async function setNoiseSuppression(on: boolean) {
-  noiseSuppression = on;
   if (typeof localStorage !== 'undefined') localStorage.setItem(NS_KEY, on ? '1' : '0');
   useVoiceStore.getState().setNoiseSuppression(on);
   if (around.stream()) await setMic(useVoiceStore.getState().currentMicId ?? '');
@@ -413,6 +442,22 @@ function pttRelease() {
   around.announce();
 }
 
+/**
+ * Подписка на пробел — одна на оба места, где режим включается: тумблер в
+ * настройках и снимок состояния при старте. Повторный вызов безопасен:
+ * `addEventListener` с той же функцией второй подписки не заводит.
+ */
+function listenForPtt(on: boolean) {
+  if (typeof window === 'undefined') return;
+  if (on) {
+    window.addEventListener('keydown', onPttKeyDown);
+    window.addEventListener('keyup', onPttKeyUp);
+  } else {
+    window.removeEventListener('keydown', onPttKeyDown);
+    window.removeEventListener('keyup', onPttKeyUp);
+  }
+}
+
 function onPttKeyDown(e: KeyboardEvent) {
   if (e.code !== 'Space' || e.repeat || pttTargetIsTextInput()) return;
   e.preventDefault();
@@ -430,7 +475,7 @@ function onPttKeyUp(e: KeyboardEvent) {
  * микрофон и так открыт, и отпускание хоткея неожиданно бы его глушило.
  */
 export function desktopPtt(pressed: boolean) {
-  if (!pushToTalk) return;
+  if (!pushToTalkOn()) return;
   if (pressed) pttPress();
   else pttRelease();
 }
@@ -440,14 +485,12 @@ export function desktopPtt(pressed: boolean) {
  * удержании пробела); при выключении возвращаем микрофон в открытое состояние.
  */
 export function setPushToTalk(on: boolean) {
-  if (on === pushToTalk) return;
-  pushToTalk = on;
+  if (on === pushToTalkOn()) return;
   if (typeof localStorage !== 'undefined') localStorage.setItem(PTT_KEY, on ? '1' : '0');
   useVoiceStore.getState().setPushToTalk(on);
   if (typeof window === 'undefined') return;
   if (on) {
-    window.addEventListener('keydown', onPttKeyDown);
-    window.addEventListener('keyup', onPttKeyUp);
+    listenForPtt(true);
     pttHeld = false;
     if (around.stream() && micOn) {
       micOn = false;
@@ -455,8 +498,7 @@ export function setPushToTalk(on: boolean) {
       around.announce();
     }
   } else {
-    window.removeEventListener('keydown', onPttKeyDown);
-    window.removeEventListener('keyup', onPttKeyUp);
+    listenForPtt(false);
     if (around.stream() && !micOn) {
       micOn = true;
       applyMute();
@@ -468,8 +510,15 @@ export function setPushToTalk(on: boolean) {
 /** Синхронизировать тогглы настроек из localStorage в стор (при монтировании модалки). */
 export function loadMediaPrefs() {
   const store = useVoiceStore.getState();
-  store.setNoiseSuppression(noiseSuppression);
-  store.setPushToTalk(pushToTalk);
+  const ptt = pushToTalkOn();
+  store.setNoiseSuppression(noiseSuppressionOn());
+  store.setPushToTalk(ptt);
+  // Пробел слушаем ровно тогда, когда режим включён. До этапа C подписка
+  // заводилась только тумблером, поэтому вкладка, открытая с уже включённым
+  // push-to-talk, оставалась с закрытым микрофоном и мёртвым пробелом. Пока
+  // режим включал сам человек, это было незаметно; умолчание инсталляции
+  // включило бы его всем сразу.
+  listenForPtt(ptt);
 }
 
 /**

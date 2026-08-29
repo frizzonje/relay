@@ -1,6 +1,7 @@
 'use client';
 
 import { getSfx } from '@/lib/sfx';
+import { setting } from '@/stores/config';
 import { isChannelLoud, useNotifyStore } from '@/stores/notify';
 
 /**
@@ -22,11 +23,29 @@ const COOLDOWN_MS = 1500;
 // −∞, а не 0: первый за сеанс тик паузой не связан.
 let lastAt = -Infinity;
 
+/**
+ * Разрешает ли инсталляция этот сигнал.
+ *
+ * Три настройки складываются так: `notifications.soundEnabled` — общий рубильник
+ * над всеми входящими сигналами, остальные две уточняют его для обращения по
+ * имени и для личной реплики. Своё отправленное сообщение (`notifySent`) под
+ * рубильник не попадает намеренно: это не уведомление о чужом, а отклик на
+ * собственное нажатие Enter, и выключать его вместе с чужими сигналами значило
+ * бы выключить не то, о чём просили.
+ *
+ * Умолчания каталога — «всё включено», то есть сегодняшнее поведение relay:
+ * молчат по-прежнему только те каналы, которым человек сам не разрешал звук.
+ */
+function allowed(key?: string): boolean {
+  if (!setting<boolean>('notifications.soundEnabled')) return false;
+  return key === undefined || setting<boolean>(key);
+}
+
 export function notifyMessage(slug: string) {
   if (!slug) return;
   const s = useNotifyStore.getState();
   s.notePing(slug);
-  if (!isChannelLoud(s, slug)) return;
+  if (!isChannelLoud(s, slug) || !allowed()) return;
   const now = Date.now();
   if (now - lastAt < COOLDOWN_MS) return;
   lastAt = now;
@@ -60,6 +79,24 @@ export function notifyMention(slug: string) {
   if (!slug) return;
   useNotifyStore.getState().notePing(slug);
   lastAt = Date.now();
+  if (!allowed('notifications.mentionSound')) return;
+  getSfx().play('message');
+}
+
+/**
+ * Личная реплика. Звучит она так же, как обращение по имени, — и по той же
+ * причине: адресовали лично. Настройка при этом своя (`notifications.directSound`):
+ * инсталляция, выключившая звук личных бесед, не обязана заодно молчать на
+ * упоминания в общем канале.
+ *
+ * Вспышку и паузу двигаем в любом случае — они беззвучны и не спрашивают
+ * разрешения ни у кого.
+ */
+export function notifyDirect(slug: string) {
+  if (!slug) return;
+  useNotifyStore.getState().notePing(slug);
+  lastAt = Date.now();
+  if (!allowed('notifications.directSound')) return;
   getSfx().play('message');
 }
 
@@ -69,5 +106,6 @@ export function notifyMention(slug: string) {
  * система на ноль, — плохая сделка. Мимо канала и паузы: это не уведомление.
  */
 export function previewMessageSound() {
+  if (!allowed()) return;
   getSfx().play('receive');
 }

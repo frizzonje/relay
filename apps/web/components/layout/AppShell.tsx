@@ -24,6 +24,8 @@ import { Members } from '@/components/layout/Members';
 import { OnlineMembers } from '@/components/layout/OnlineMembers';
 import { MobileNav } from '@/components/layout/MobileNav';
 import { Stage } from '@/components/stage/Stage';
+import { InstallAppearance } from '@/components/layout/InstallAppearance';
+import { MaintenanceBanner } from '@/components/layout/MaintenanceBanner';
 
 /**
  * Мягкое проявление панели, ставшей активной на мобиле. Только прозрачность:
@@ -128,18 +130,24 @@ export function AppShell() {
   const shown = (which: MobilePanel) => (mobile ? (effective === which ? 'in' : 'out') : 'in');
 
   return (
-    <div className="flex h-[100dvh] flex-col overflow-hidden md:flex-row">
-      <MobileNav />
+    <div className="flex h-[100dvh] flex-col overflow-hidden">
+      {/* Объявление владельца — над всем и на всю ширину: оно про инсталляцию
+          целиком, а не про открытый канал. Вид инсталляции ничего не рисует —
+          он живёт в заголовке вкладки и в теме документа. */}
+      <InstallAppearance />
+      <MaintenanceBanner />
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
+        <MobileNav />
 
-      {/* Обёртка панелей: ряд на мобиле (одна видимая панель), contents на десктопе */}
-      <div className="flex min-h-0 flex-1 md:contents">
-        {/* Навигация: рейка серверов + тулбар ЛС/звонков + сайдбар */}
-        <Panel
-          className={cn('shrink-0 max-md:w-full', effective !== 'nav' && 'max-md:hidden')}
-          state={shown('nav')}
-        >
-          <ServerRail />
-          {/* `md:flex-row` обязателен и при одном ребёнке: сайдбар тянется в
+        {/* Обёртка панелей: ряд на мобиле (одна видимая панель), contents на десктопе */}
+        <div className="flex min-h-0 flex-1 md:contents">
+          {/* Навигация: рейка серверов + тулбар ЛС/звонков + сайдбар */}
+          <Panel
+            className={cn('shrink-0 max-md:w-full', effective !== 'nav' && 'max-md:hidden')}
+            state={shown('nav')}
+          >
+            <ServerRail />
+            {/* `md:flex-row` обязателен и при одном ребёнке: сайдбар тянется в
               полную высоту не сам по себе, а поперечной осью этой обёртки. В
               колонку она вытягивает по ширине, а по высоте отдаёт содержимому —
               и карточка своей личности отлипает от низа экрана, повисая сразу
@@ -148,49 +156,50 @@ export function AppShell() {
               Полосы тулбара здесь больше нет: на телефоне она стоит ВНУТРИ
               сайдбара, под именем сервера (кадр `2a` референса), и потому не
               появляется над списком переписок, к которому отношения не имеет. */}
-          <div className="flex min-w-0 flex-1 flex-col md:flex-row">
-            {mobile && dmSection ? <DmList /> : <Sidebar />}
-          </div>
-        </Panel>
+            <div className="flex min-w-0 flex-1 flex-col md:flex-row">
+              {mobile && dmSection ? <DmList /> : <Sidebar />}
+            </div>
+          </Panel>
 
-        {/* Сцена. Топбар — только на десктопе: на мобиле имя канала в шапке */}
-        <Panel
-          as="main"
-          className={cn('min-w-0 flex-1 flex-col', effective !== 'stage' && 'max-md:hidden')}
-          state={shown('stage')}
-        >
-          <Topbar />
-          <Stage />
-          <Controls />
-        </Panel>
+          {/* Сцена. Топбар — только на десктопе: на мобиле имя канала в шапке */}
+          <Panel
+            as="main"
+            className={cn('min-w-0 flex-1 flex-col', effective !== 'stage' && 'max-md:hidden')}
+            state={shown('stage')}
+          >
+            <Topbar />
+            <Stage />
+            <Controls />
+          </Panel>
 
-        {/* Состав: голосовой (Members) или текстовый (OnlineMembers) — рендерится
+          {/* Состав: голосовой (Members) или текстовый (OnlineMembers) — рендерится
             один в зависимости от вида; на мобиле занимает всю ширину */}
-        <Panel
-          className={cn(
-            'shrink-0 overflow-hidden max-md:w-full',
-            peopleWidth,
-            effective !== 'people' && 'max-md:hidden',
-          )}
-          state={shown('people')}
-        >
-          <Members />
-          <OnlineMembers />
-        </Panel>
+          <Panel
+            className={cn(
+              'shrink-0 overflow-hidden max-md:w-full',
+              peopleWidth,
+              effective !== 'people' && 'max-md:hidden',
+            )}
+            state={shown('people')}
+          >
+            <Members />
+            <OnlineMembers />
+          </Panel>
 
-        {/* Док ЛС — своя колонка между составом и рейкой (см. DmDrawer): место
+          {/* Док ЛС — своя колонка между составом и рейкой (см. DmDrawer): место
             под него забирает сцена, а не соседняя панель, а свёрнутый он не
             занимает ничего. На мобиле его нет: там список подменяет каналы, и
             второй его экземпляр в разметке означал бы два одинаковых списка
             разом. */}
-        {!mobile && <DmDrawer />}
+          {!mobile && <DmDrawer />}
 
-        {/* Тулбар ЛС/админки — крайняя правая рейка (вариант размещения `1a`
+          {/* Тулбар ЛС/админки — крайняя правая рейка (вариант размещения `1a`
             из референса). Стоит последней в разметке: рейка держится правого
             края экрана, а не уезжает вместе с соседями, которые то схлопываются
             в ноль ширины (состав на лобби), то раздвигаются (док ЛС).
             На мобиле его здесь нет — там он полоса над списком каналов выше. */}
-        {!mobile && <Toolbar />}
+          {!mobile && <Toolbar />}
+        </div>
       </div>
 
       {/* Выбор собеседника — здесь, а не внутри списка переписок: док режет

@@ -348,6 +348,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    * ручается за них не ключ, а токен приглашения.
    */
   afterInit(server: AppServer): void {
+    this.watchSettings(server);
     server.use((socket, next) => {
       // Версия контракта — раньше всего остального: у сокета, говорящего на
       // другом языке, спрашивать личность бессмысленно. До 1.0 версии не было
@@ -378,6 +379,38 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
           return;
         }
         next();
+      });
+    });
+  }
+
+  /**
+   * Настройку поменяли — сказать об этом всем открытым вкладкам.
+   *
+   * Без этой подписки настройка доезжала бы только до тех, кто перезагрузит
+   * страницу, — то есть была бы половиной настройки: владелец выключает
+   * реакции, а человек рядом ещё час жмёт на смайлик и получает отказ.
+   *
+   * Шлём снимок целиком, а не изменившийся ключ: собирать разницу — значит
+   * держать вторую копию состояния и однажды разойтись с первой. Что именно
+   * входит в снимок, решает каталог пометкой `client` (см. `snapshot()`):
+   * браузеру уезжает то, чем он пользуется, а не всё, что знает сервер.
+   *
+   * Правки склеиваем в один оборот цикла. Сброс группы будит подписчиков по
+   * разу на ключ (`resetGroup`), и без склейки один щелчок владельца обернулся
+   * бы сорока рассылками полного снимка каждому сокету.
+   */
+  private watchSettings(server: AppServer): void {
+    let pending = false;
+    this.settings.onChange(() => {
+      if (pending) return;
+      pending = true;
+      // Микрозадача, а не таймер: тесты гейтвея живут на поддельных часах, и
+      // рассылка, отложенная на `setTimeout`, ждала бы в них того, кто её
+      // подтолкнёт.
+      void Promise.resolve().then(() => {
+        pending = false;
+        const snapshot = this.settings.snapshot();
+        for (const sock of server.sockets.sockets.values()) sock.emit('settings', snapshot);
       });
     });
   }
@@ -448,6 +481,10 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
         client.emit('kicked', { room: guest.slug });
         return;
       }
+      // Настройки гостю шлём наравне со всеми, в отличие от реестров: снимок
+      // публичен по построению (секреты вычистил каталог), а без битрейтов и
+      // порога mesh гость звонил бы по чужим числам.
+      client.emit('settings', this.settings.snapshot());
       client.emit('voice-presence', this.voice.snapshotFor(client));
       return;
     }
@@ -462,6 +499,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // Новому клиенту сразу шлём реестры серверов и каналов и кто где в голосовых.
     // Серверы — публичная форма (без хэшей, с флагом locked); каналы — только
     // видимые ему (закрытые серверы скрыты до ввода пароля).
+    // Настройки — первым делом: по ним клиент решает, что показывать и чем
+    // резать ввод, и снимок обязан доехать раньше первой ленты.
+    client.emit('settings', this.settings.snapshot());
     client.emit('servers', this.directory.serversFor(client));
     client.emit('channels', this.directory.channelsFor(client));
     client.emit('voice-presence', this.voice.snapshotFor(client));

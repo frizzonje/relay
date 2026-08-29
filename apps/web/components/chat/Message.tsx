@@ -15,6 +15,7 @@ import { mentions } from '@/lib/mentions';
 import { getSocket } from '@/lib/socket';
 import { useDismiss } from '@/lib/use-dismiss';
 import { MessageAttachment } from '@/components/chat/MessageAttachment';
+import { useSetting } from '@/stores/config';
 import { useT } from '@/lib/i18n';
 
 /**
@@ -507,6 +508,7 @@ export const Message = memo(function Message({
   retentionDays: number;
 }) {
   const t = useT();
+  const showFingerprints = useSetting<boolean>('people.showFingerprints');
   // Счётчик «мышь ушла с сообщения» — по нему AddReaction закрывает свой пикер.
   const [leaveTick, setLeaveTick] = useState(0);
   // Назвали именно тебя — не тёзку: сверяется отпечаток, а не подпись.
@@ -631,7 +633,11 @@ export const Message = memo(function Message({
           <Identicon
             fingerprint={msg.fingerprint}
             size={38}
-            title={msg.fingerprint}
+            // Отпечаток в подсказке — тоже отпечаток: инсталляция, выключившая
+            // их показ (`people.showFingerprints`), не должна отдавать его
+            // наведением мыши. Лицо остаётся: оно рисуется ИЗ отпечатка, но
+            // самого отпечатка не называет.
+            title={showFingerprints ? msg.fingerprint : undefined}
             // Лицо в ленте не дышит — это умолчание, и оно же правило:
             // движение у нас значит «человек здесь сейчас», а под сказанным час
             // назад обещало бы присутствие, которого нет.

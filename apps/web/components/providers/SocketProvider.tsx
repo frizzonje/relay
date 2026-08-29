@@ -15,6 +15,7 @@ import { useChannelsStore } from '@/stores/channels';
 import { useIdentityStore } from '@/stores/identity';
 import { useContractStore } from '@/stores/contract';
 import { useModerationStore } from '@/stores/moderation';
+import { useConfigStore } from '@/stores/config';
 import { usePinsStore } from '@/stores/pins';
 import { useServersStore } from '@/stores/servers';
 import { forgetServerPassword, storedServerPasswords, unlockServer } from '@/lib/servers';
@@ -24,11 +25,12 @@ import {
   saveUnlockToken,
   unlockTokenIds,
 } from '@/lib/unlock-tokens';
-import { notifyMention, notifyMessage } from '@/lib/notify';
+import { notifyDirect, notifyMention, notifyMessage } from '@/lib/notify';
 import { showDmToast } from '@/components/dm/DmToast';
 import { useNotifyStore } from '@/stores/notify';
 import { adoptPrefs, onPref } from '@/lib/prefs';
 import { tx } from '@/lib/i18n';
+import { chatRefusalKey, voiceRefusalKey } from '@/lib/refusals';
 
 /**
  * Поднимает единственный socket.io-клиент и навешивает глобальную логику чата
@@ -244,7 +246,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       // облачко в углу: точка в списке говорит только «где-то непрочитано», а
       // кто написал и о чём, до сих пор приходилось выяснять руками.
       if (!relay.previewMine) {
-        notifyMention(relay.slug);
+        notifyDirect(relay.slug);
         showDmToast(relay);
       }
     });
@@ -263,6 +265,29 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           ? tx('moderation.banned.channel')
           : tx('channels.deleted', { name: label }),
       );
+    });
+
+    // Настройки инсталляции — снимком, на подключении и при каждой правке
+    // владельца. Реактивно: настройка, доезжающая только после перезагрузки
+    // вкладки, — половина настройки.
+    socket.on('settings', (snapshot) => useConfigStore.getState().apply(snapshot));
+
+    // Сказанное не приняли — и человек обязан узнать причину, а не тишину.
+    //
+    // События ленты ответа не ждут, поэтому до этапа C всякий отказ выглядел
+    // одинаково: «нажал, и ничего не произошло». Причины разные намеренно —
+    // «правку выключили» и «правка протухла» человек чинит по-разному.
+    socket.on('chat-refused', ({ reason }) => {
+      if (!reason) return;
+      toast(tx(chatRefusalKey(reason)));
+    });
+
+    // То же в голосе: ни `join`, ни `media-update` ответа не ждут, а `join`
+    // вдобавок неотличим для клиента от удавшегося — без этой строки выключенная
+    // владельцем камера выглядела бы сломанной кнопкой, а полный канал тишиной.
+    socket.on('voice-refused', ({ reason }) => {
+      if (!reason) return;
+      toast(tx(voiceRefusalKey(reason)));
     });
 
     // Реестр серверов — сервер шлёт полный список на connect и при изменениях.

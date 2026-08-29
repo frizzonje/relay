@@ -1,12 +1,23 @@
 'use client';
 
-import { createContext, Fragment, useCallback, useContext, useMemo, type ReactNode } from 'react';
+import {
+  createContext,
+  Fragment,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
+import { useSetting } from '@/stores/config';
 import {
   DEFAULT_LOCALE,
   LOCALE_COOKIE,
   LOCALE_COOKIE_MAX_AGE,
   isLocale,
   matchLocale,
+  resolveLocale,
   type Locale,
 } from './config';
 import { translate, type MessageKey, type Vars } from './translate';
@@ -26,8 +37,31 @@ const LocaleContext = createContext<Locale>(DEFAULT_LOCALE);
  * wrong language and no hydration mismatch.
  */
 export function I18nProvider({ locale, children }: { locale: Locale; children: ReactNode }) {
-  syncCurrentLocale(locale);
-  return <LocaleContext.Provider value={locale}>{children}</LocaleContext.Provider>;
+  const effective = useEffectiveLocale(locale);
+  syncCurrentLocale(effective);
+  return <LocaleContext.Provider value={effective}>{children}</LocaleContext.Provider>;
+}
+
+/**
+ * The server decided cookie → Accept-Language → `en`. The installation replaces
+ * that last step (`appearance.defaultLocale`), and only it: see `resolveLocale`
+ * for why the order matters.
+ *
+ * The server cannot do this itself — the settings snapshot is behind the pass,
+ * and the page renders before anyone is known. So the swap happens after mount,
+ * and only when it actually changes something. Until then the server's answer
+ * stands, which keeps the first paint and the first client render identical.
+ */
+function useEffectiveLocale(fromServer: Locale): Locale {
+  const install = useSetting<string>('appearance.defaultLocale');
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted || typeof navigator === 'undefined') return fromServer;
+  return resolveLocale({
+    chosen: readLocaleCookie(),
+    browser: navigator.languages?.length ? navigator.languages : [navigator.language],
+    install,
+  });
 }
 
 export function useLocale(): Locale {

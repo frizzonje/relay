@@ -9,6 +9,7 @@ import { loadClientId } from '@/lib/identity';
 import { tx as msg } from '@/lib/i18n';
 import type { MessageKey, Vars } from '@/lib/i18n/translate';
 import { useVoiceStore } from '@/stores/voice';
+import { setting } from '@/stores/config';
 import { createMeshTransport } from '@/lib/voice/mesh';
 import { voiceSupport } from '@/lib/voice-support';
 import { diag } from '@/lib/voice/diag';
@@ -31,6 +32,7 @@ import {
   ensureLocalStream,
   initMic,
   isMicOn,
+  loadMediaPrefs,
   loadMicThreshold,
   refreshMicInfo,
   setMicOn,
@@ -59,10 +61,10 @@ export {
   toggleCamera,
   toggleScreen,
 } from '@/lib/voice/camera';
+export { loadMediaPrefs };
 export {
   desktopPtt,
   getMicLevel,
-  loadMediaPrefs,
   refreshMics,
   setMic,
   setMicThreshold,
@@ -285,11 +287,19 @@ async function requestSfuTicket(targetRoom: string): Promise<VoiceTicket | null>
   }
 }
 
-// Порог мягкого переезда в p2p, когда медиасервер умер посреди звонка. Двое-
-// трое собеседников mesh переживёт; на 4+ с видео он даёт ровно ту боль, ради
-// которой SFU и затевался, — там честнее ждать сервер, чем задушить всех
-// аплинком. Считаем собеседников, себя не учитываем.
-const MESH_FALLBACK_MAX_PEERS = 3;
+/**
+ * Порог мягкого переезда в p2p, когда медиасервер умер посреди звонка. Двое-
+ * трое собеседников mesh переживёт; начиная с порога он даёт ровно ту боль,
+ * ради которой SFU и затевался, — там честнее ждать сервер, чем задушить всех
+ * аплинком. Считаем собеседников, себя не учитываем.
+ *
+ * Число выбирает владелец (`voice.sfuThreshold`), и спрашиваем мы его в момент
+ * решения, а не при загрузке модуля: снимок настроек приезжает после первого
+ * кадра, и константа, снятая на старте, осталась бы вчерашней навсегда.
+ */
+function meshFallbackMaxPeers(): number {
+  return setting<number>('voice.sfuThreshold') - 1;
+}
 const SFU_RETRY_MS = 5000;
 let sfuRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -517,7 +527,7 @@ function evaluateSplit() {
   splitHandled = true;
   const names = apart.map((p) => p.name || msg('voice.peer.fallback')).join(', ');
   diag('transport split', `me=${mine} apart=${apart.length} (${names})`);
-  if (mine === 'sfu' && others.length <= MESH_FALLBACK_MAX_PEERS) {
+  if (mine === 'sfu' && others.length <= meshFallbackMaxPeers()) {
     toast(msg('voice.toast.peersDirect', { names }));
     void remigrate('mesh');
     return;
@@ -537,7 +547,7 @@ function evaluateSplit() {
 function onTransportLost(reason: 'setup' | 'lost') {
   if (!room || transport !== sfuTransport) return;
   // На входе — всегда в p2p: человек ещё никого не слышал, ждать ему нечего.
-  if (reason === 'setup' || remoteCount() <= MESH_FALLBACK_MAX_PEERS) {
+  if (reason === 'setup' || remoteCount() <= meshFallbackMaxPeers()) {
     diag('sfu-lost', `${reason} → mesh fallback`);
     toast.error(msg('voice.toast.sfuDownDirect'));
     sfx().play('error');
@@ -757,6 +767,10 @@ export function initVoice() {
   initialized = true;
 
   loadMicThreshold(); // применится при следующем входе в эфир
+  // Шумоподавление и push-to-talk: выбор человека, а без него — умолчание
+  // инсталляции. Раньше это состояние поднимала только модалка настроек, и
+  // включённый push-to-talk оживал лишь после того, как её откроют.
+  loadMediaPrefs();
 
   // Подключили/отключили устройство — обновляем списки в сторе
   navigator.mediaDevices?.addEventListener?.('devicechange', () => {

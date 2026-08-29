@@ -47,6 +47,40 @@ export function matchLocale(accepted: readonly string[]): Locale {
 }
 
 /**
+ * The locale a person actually gets, once the installation has a say.
+ *
+ * The order is deliberate and it is the whole point. An explicit choice (the
+ * cookie) wins over everything — the installation sets a default, it does not
+ * take the picker away. The browser's own languages come next: someone whose
+ * browser asks for a language relay speaks keeps getting it, which is exactly
+ * what happened before the owner had any setting at all. The installation's
+ * default (`appearance.defaultLocale`) is the last resort, replacing the
+ * hard-coded fallback — so at its catalogue default (`en`) nothing changes for
+ * anyone, and an owner who sets `ru` is answering "what do we speak here?" for
+ * visitors relay could not place otherwise.
+ *
+ * Getting that order wrong is not cosmetic: put the installation above the
+ * browser and every Russian-speaking visitor of an English installation would
+ * lose the Russian interface they had yesterday.
+ */
+export function resolveLocale(opts: {
+  /** The cookie: a choice this person made themselves, or null. */
+  chosen: Locale | null;
+  /** What the browser asks for (`navigator.languages`, `Accept-Language`). */
+  browser: readonly string[];
+  /** What the installation speaks by default. Unknown tags are ignored. */
+  install: string;
+}): Locale {
+  if (opts.chosen) return opts.chosen;
+  for (const tag of opts.browser) {
+    const primary = tag.trim().toLowerCase().split('-')[0];
+    const hit = LOCALES.find((l) => l === primary);
+    if (hit) return hit;
+  }
+  return isLocale(opts.install) ? opts.install : DEFAULT_LOCALE;
+}
+
+/**
  * Parses an `Accept-Language` header into tags ordered by quality:
  * `ru-RU,ru;q=0.9,en;q=0.8` → ['ru-RU', 'ru', 'en'].
  */

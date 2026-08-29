@@ -8,6 +8,7 @@ vi.mock('./sfu/sfu-health', () => ({ sfuHealthy }));
 import { ConfigController } from './config.controller';
 import { RetentionService } from './db/retention.service';
 import { resetDatabase, testDatabase } from './db/testing';
+import { SETTINGS } from './settings/catalog';
 import { SettingsService } from './settings/settings.service';
 import { signTurnUsername } from './turn';
 
@@ -58,7 +59,7 @@ afterEach(() => {
 // Ретенцию конфиг спрашивает у того же сервиса, который её и исполняет:
 // собственного разбора настройки у ручки нет, иначе панель и подметание
 // разошлись бы молча.
-const read = () => new ConfigController(new RetentionService(db, settings)).getConfig();
+const read = () => new ConfigController(new RetentionService(db, settings), settings).getConfig();
 
 describe('STUN', () => {
   it('без настроек — публичные Google, чтобы звонок собрался «из коробки»', async () => {
@@ -237,5 +238,48 @@ describe('ретенция наружу', () => {
     expect(await read()).toMatchObject({ retentionDays: 14 });
     await settings.set('messages.retentionDays', 3, owner);
     expect(await read()).toMatchObject({ retentionDays: 3 });
+  });
+});
+
+/**
+ * Настройки инсталляции уезжают клиенту тем же ответом. Проверяем не «поле
+ * есть», а два обещания снимка: секрета в нём нет ни одного, и он показывает
+ * действующее значение, а не то, с которым api когда-то стартовал.
+ */
+describe('снимок настроек наружу', () => {
+  it('отдаёт действующие значения и ни одного секрета', async () => {
+    process.env.TURN_SECRET = 'очень-тайная-строка';
+    const { settings: snapshot } = await read();
+
+    // Ненастроенная инсталляция — умолчания каталога, то есть сегодняшнее
+    // поведение relay: по этим числам клиент режет ввод.
+    expect(snapshot['messages.maxLength']).toBe(500);
+    expect(snapshot['spaces.channelNameMaxLength']).toBe(32);
+    expect(snapshot['appearance.installName']).toBe('relay');
+
+    // Секрета в снимке нет ВОВСЕ — даже признаком «задано». Признак нужен
+    // владельцу в панели, а чужому браузеру он не говорит ничего, кроме того,
+    // заперта ли дверь. Проверяем и по составу, и по всему телу ответа: строка,
+    // попавшая в снимок случайно, прошла бы мимо проверки одного ключа.
+    for (const spec of SETTINGS.filter((item) => item.secret)) {
+      expect(spec.key in snapshot).toBe(false);
+    }
+    expect(JSON.stringify(snapshot)).not.toContain('очень-тайная-строка');
+
+    // Состав снимка — ровно помеченное в каталоге как нужное клиенту. Не весь
+    // каталог: список стоп-слов и пороги блокировки чужому браузеру не уезжают
+    // (см. `SettingsService.snapshot`). Не меньше: ключ, забытый по дороге,
+    // клиент увидел бы как «настройки нет» и молча взял бы умолчание.
+    expect(Object.keys(snapshot).sort()).toEqual(
+      SETTINGS.filter((item) => item.client)
+        .map((item) => item.key)
+        .sort(),
+    );
+    expect('moderation.bannedWords' in snapshot).toBe(false);
+  });
+
+  it('правка видна следующему же запросу, без перезапуска api', async () => {
+    await settings.set('messages.maxLength', 4000, owner);
+    expect((await read()).settings['messages.maxLength']).toBe(4000);
   });
 });

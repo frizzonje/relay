@@ -5,6 +5,7 @@ import { Identicon } from '@/components/ui/Identicon';
 import { shortFingerprint } from '@/lib/format';
 import { useT } from '@/lib/i18n';
 import { useUiStore } from '@/stores/ui';
+import { useOwnerText, useSetting } from '@/stores/config';
 
 /**
  * Обёртка беседы: шапка собеседника (лицо, ник, короткий отпечаток, статус) и
@@ -22,6 +23,12 @@ export function DmThread() {
   const t = useT();
   const peer = useUiStore((s) => s.dmPeer);
   const nick = useUiStore((s) => s.textLabel);
+  const showFingerprints = useSetting<boolean>('people.showFingerprints');
+  // Текст владельца, если он его переписал (`direct.privacyNotice`), и перевод,
+  // пока не переписывал: умолчание каталога написано на языке базы, и
+  // подставить его вместо перевода значило бы ответить по-английски тому, у
+  // кого всё остальное по-русски.
+  const privacy = useOwnerText('direct.privacyNotice', t('dm.privacy'));
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -33,7 +40,7 @@ export function DmThread() {
         <div className="min-w-0 flex-1 leading-tight">
           <div className="flex items-center gap-1.5">
             <span className="truncate text-[14px] font-bold text-text-header">{nick}</span>
-            {peer && (
+            {peer && showFingerprints && (
               <span className="shrink-0 truncate font-mono text-[10px] tracking-[0.06em] text-text-faint">
                 {shortFingerprint(peer)}
               </span>
@@ -51,7 +58,7 @@ export function DmThread() {
           самостоятельная, и владелец сервера читает базу — обещать обратное
           здесь значило бы соврать. */}
       <p className="shrink-0 px-4 pb-3 pt-1 text-center text-[11.5px] leading-snug text-text-faint">
-        {t('dm.privacy')}
+        {privacy}
       </p>
     </div>
   );

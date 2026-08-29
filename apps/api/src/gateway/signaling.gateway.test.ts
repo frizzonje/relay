@@ -13,6 +13,7 @@ import {
   say,
   settle,
   slugOf,
+  tune,
   until,
   useGatewayStand,
   type AnyGw,
@@ -609,5 +610,71 @@ describe('закреплённые', () => {
       error: 'forbidden',
     });
     expect(await gw.handleChatPins(asSocket(guest), { slug: 'болталка' })).toEqual({ ok: false });
+  });
+});
+
+// ── Настройки инсталляции ─────────────────────────────────────────────────
+
+/**
+ * Настройка, доезжающая только до тех, кто перезагрузит страницу, — половина
+ * настройки: владелец выключает реакции, а человек рядом ещё час жмёт на
+ * смайлик и получает отказ. Поэтому снимок уходит дважды — на подключении и
+ * при каждой правке.
+ */
+describe('настройки доезжают до вкладки', () => {
+  it('на входе клиент получает снимок, а гость — тот же самый', async () => {
+    const { gw, server } = await makeGateway();
+    const a = await connectAs(gw, server, (await personCookie('Аня')).cookie, {
+      id: 'a',
+      keep: true,
+    });
+    const snapshot = a.last('settings') as Record<string, unknown>;
+    expect(snapshot['messages.maxLength']).toBe(500);
+    // Снимок здесь тот же, что у http, — и секрета в нём нет вовсе, как и
+    // всего, чем клиент не пользуется.
+    expect('access.sitePasswordSet' in snapshot).toBe(false);
+    expect('moderation.bannedWords' in snapshot).toBe(false);
+
+    // Гостю реестры не положены, а битрейты и порог mesh — положены: без них
+    // он звонил бы по числам, которых инсталляция не выбирала.
+    const { token } = issueGuestToken('voice-obshchii');
+    // Собираем гостя руками: `connect` подчищает журнал сокета, а здесь весь
+    // ответ теста и есть то, что пришло на подключении.
+    const guest = server.connect({ id: 'g', auth: { guest: token } });
+    gw.handleConnection(asSocket(guest));
+    expect(guest.got('servers')).toBe(false);
+    expect((guest.last('settings') as Record<string, unknown>)['voice.sfuThreshold']).toBe(4);
+  });
+
+  it('правка доезжает до всех открытых вкладок, не дожидаясь перезагрузки', async () => {
+    const { gw, server, settings } = await makeGateway();
+    const a = await connectAs(gw, server, (await personCookie('Аня')).cookie, { id: 'a' });
+    const b = await connectAs(gw, server, (await personCookie('Борис')).cookie, { id: 'b' });
+
+    await tune(settings, 'appearance.installName', 'Наш relay');
+    await Promise.resolve();
+
+    for (const sock of [a, b]) {
+      expect((sock.last('settings') as Record<string, unknown>)['appearance.installName']).toBe(
+        'Наш relay',
+      );
+    }
+  });
+
+  it('сброс группы — одна рассылка, а не по одной на каждый ключ', async () => {
+    const { gw, server, settings } = await makeGateway();
+    const a = await connectAs(gw, server, (await personCookie('Аня')).cookie, { id: 'a' });
+    await tune(settings, 'appearance.installName', 'Наш relay');
+    await tune(settings, 'appearance.showVersion', false);
+    await Promise.resolve();
+    a.clear();
+
+    await settings.resetGroup('appearance', randomUUID());
+    await Promise.resolve();
+
+    expect(a.all('settings')).toHaveLength(1);
+    const snapshot = a.last('settings') as Record<string, unknown>;
+    expect(snapshot['appearance.installName']).toBe('relay');
+    expect(snapshot['appearance.showVersion']).toBe(true);
   });
 });

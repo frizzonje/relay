@@ -9,6 +9,7 @@ import { Identicon } from '@/components/ui/Identicon';
 import { randomCallsign } from '@/lib/avatar';
 import type { LoginFailure } from '@/lib/identity-login';
 import { useIdentityStore } from '@/stores/identity';
+import { useSetting } from '@/stores/config';
 import { useT, type MessageKey } from '@/lib/i18n';
 import { LinkDevicePanel } from '@/components/layout/LinkDevicePanel';
 
@@ -53,6 +54,7 @@ function screenFor(failure: LoginFailure) {
 
 export function IdentityGate() {
   const t = useT();
+  const notice = useSetting<string>('appearance.loginNotice').trim();
   const status = useIdentityStore((s) => s.status);
   const me = useIdentityStore((s) => s.me);
   const failure = useIdentityStore((s) => s.failure);
@@ -123,6 +125,18 @@ export function IdentityGate() {
             <DialogDescription className="mx-auto mt-1.5 max-w-[300px] text-[13px] leading-relaxed">
               {t('identity.body')}
             </DialogDescription>
+
+            {/* Объявление владельца на входе (`appearance.loginNotice`).
+                Показываем именно здесь, а не на /login: та дверь стоит ДО
+                любого пропуска, и снимок настроек туда не доедет, не открыв
+                конфигурацию инсталляции кому попало. Пусто — умолчание
+                каталога, и тогда ничего не рисуем. Текст владельца не
+                переводится: на каком языке написан, на таком и висит. */}
+            {notice && (
+              <p className="mt-3 whitespace-pre-line rounded-lg border border-line bg-bg-deep/60 px-3 py-2 text-left text-[12.5px] leading-relaxed text-text-muted">
+                {notice}
+              </p>
+            )}
 
             {/* Отпечаток показан сразу и целиком: это единственное, чем человек
                 сможет проверить себя глазами, и прятать его некуда. */}

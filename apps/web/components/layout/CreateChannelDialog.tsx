@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils';
 import { createChannel } from '@/lib/channels';
 import { useSfuAvailable } from '@/lib/use-sfu';
 import { useT } from '@/lib/i18n';
+import { useSetting } from '@/stores/config';
 import type { MessageKey } from '@/lib/i18n';
 
 const TYPES: { value: ChannelType; label: MessageKey; hint: MessageKey }[] = [
@@ -43,6 +44,11 @@ export function CreateChannelDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const t = useT();
+  // Потолок имени берём у инсталляции (`spaces.channelNameMaxLength`), а не
+  // числом: те же символы принимает сервер (registry.handlers), и жёсткая
+  // тридцатидвойка здесь делала бы поле в панели обещанием, которого клиент не
+  // держит.
+  const nameMaxLength = useSetting<number>('spaces.channelNameMaxLength');
   const [type, setType] = useState<ChannelType>(initialType);
   const [name, setName] = useState('');
   const [mode, setMode] = useState<VoiceMode>('p2p');
@@ -180,7 +186,7 @@ export function CreateChannelDialog({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder={t(isText ? 'createChannel.name.text' : 'createChannel.name.voice')}
-                maxLength={32}
+                maxLength={nameMaxLength}
                 autoFocus
                 className="min-w-0 flex-1 border-0 bg-transparent py-2.5 text-[15px] text-text outline-none placeholder:text-text-muted/60"
               />

@@ -1,4 +1,5 @@
 import type { ConfigResponse, IceServer, RetentionMode } from '@relay/shared';
+import { useConfigStore } from '@/stores/config';
 import { guestTokenFromLocation } from './socket';
 
 /**
@@ -53,6 +54,10 @@ function fetchConfig(): Promise<ConfigResponse> {
     .then(async (res) => {
       if (!res.ok) throw new Error(`config ${res.status}`);
       const data = (await res.json()) as ConfigResponse;
+      // Настройки инсталляции приезжают тем же ответом. Дорога через http нужна
+      // отдельно от сокета: конфиг спрашивают раньше, чем поднимется сокет, — а
+      // у гостя по инвайту это и вовсе первое, что он узнаёт об инсталляции.
+      useConfigStore.getState().apply(data.settings);
       iceValidUntil = typeof data.iceExpiresAt === 'number' ? data.iceExpiresAt : Infinity;
       fetchedAt = Date.now() / 1000;
       return data;

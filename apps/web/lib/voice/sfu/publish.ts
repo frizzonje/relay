@@ -2,6 +2,7 @@
 
 import type { Device, Producer, Transport } from 'mediasoup-client/types';
 import type { UplinkStatus } from '@/stores/voice';
+import { setting } from '@/stores/config';
 import type { TransportHost } from '../types';
 import { readStats, worseUplink } from '../stats';
 import {
@@ -12,6 +13,32 @@ import {
   type Ask,
   type Source,
 } from './protocol';
+
+/**
+ * Лестница simulcast, ужатая под потолок инсталляции (`voice.videoBitrateKbps`).
+ *
+ * Именно потолок, а не замена: слои различаются не только битрейтом, но и
+ * разрешением, и подставить одно число вместо трёх значило бы отдать плитке в
+ * 160px тот же поток, что и полноэкранной. Умолчание каталога (2500 кбит/с)
+ * выше самого жирного слоя, поэтому инсталляция, где панель не открывали,
+ * публикует сегодняшнюю лестницу байт в байт; настройкой её только сжимают.
+ */
+function camEncodings(): typeof CAM_ENCODINGS {
+  const cap = setting<number>('voice.videoBitrateKbps') * 1000;
+  return CAM_ENCODINGS.map((layer) => ({ ...layer, maxBitrate: Math.min(layer.maxBitrate, cap) }));
+}
+
+/**
+ * Голос под потолком инсталляции (`voice.audioBitrateKbps`). Умолчание каталога
+ * — те же 128 кбит/с, что стоят в профиле, поэтому ненастроенная инсталляция
+ * звучит ровно как вчера.
+ */
+function micCodecOptions(): typeof MIC_CODEC_OPTIONS {
+  return {
+    ...MIC_CODEC_OPTIONS,
+    opusMaxAverageBitrate: setting<number>('voice.audioBitrateKbps') * 1000,
+  };
+}
 
 /**
  * Свои дорожки на медиасервере.
@@ -85,12 +112,12 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
         track,
         appData: { source },
         ...(track.kind === 'video'
-          ? { encodings: isScreen ? SCREEN_ENCODINGS : CAM_ENCODINGS }
+          ? { encodings: isScreen ? SCREEN_ENCODINGS : camEncodings() }
           : {}),
         ...(track.kind === 'audio'
           ? {
               codecOptions:
-                source === 'screen-audio' ? SCREEN_AUDIO_CODEC_OPTIONS : MIC_CODEC_OPTIONS,
+                source === 'screen-audio' ? SCREEN_AUDIO_CODEC_OPTIONS : micCodecOptions(),
             }
           : {}),
       });

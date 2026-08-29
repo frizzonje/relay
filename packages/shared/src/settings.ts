@@ -84,6 +84,21 @@ export interface SettingSpec {
   env?: string;
   /** Значение живёт в окружении и в панели только показывается. */
   readOnly?: boolean;
+  /**
+   * Значение уезжает в браузер снимком (`SettingsService.snapshot`).
+   *
+   * Помечены им ровно те параметры, которыми клиент ПОЛЬЗУЕТСЯ: вид
+   * инсталляции, звуки, умолчания микрофона, битрейты, пределы, по которым он
+   * режет ввод. Всё остальное остаётся на сервере — не потому, что секретно
+   * (секрет — это `secret`), а потому, что чужому браузеру незачем знать, как
+   * инсталляция устроена изнутри. Список стоп-слов, розданный всем, — подсказка
+   * тем, против кого он заведён; пороги блокировки, розданные всем, — карта для
+   * подбора пароля.
+   *
+   * Владелец видит ВСЁ — своей дорогой, через панель (`public()`), а не через
+   * этот снимок.
+   */
+  client?: boolean;
 }
 
 export const SETTING_GROUPS: readonly SettingGroup[] = [
@@ -279,6 +294,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     kind: 'boolean',
     fallback: true,
     applies: 'now',
+    client: true,
   },
   {
     key: 'people.lastSeenVisible',
@@ -286,6 +302,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     kind: 'boolean',
     fallback: true,
     applies: 'now',
+    client: true,
   },
   // Ноль — не чистить: сегодня личности не удаляются по бездействию вовсе.
   {
@@ -440,6 +457,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     applies: 'now',
     min: 1,
     max: 8000,
+    client: true,
   },
   {
     key: 'messages.pageSize',
@@ -640,6 +658,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     fallback: DM_PRIVACY_NOTICE,
     applies: 'now',
     max: NOTICE_MAX,
+    client: true,
   },
   {
     key: 'direct.blockFromBanned',
@@ -725,6 +744,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     applies: 'now',
     min: 1,
     max: 64,
+    client: true,
   },
 
   // ── voice — голос и медиа ────────────────────────────────────────────────
@@ -746,6 +766,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     applies: 'new',
     min: 8,
     max: 256,
+    client: true,
   },
   {
     key: 'voice.videoBitrateKbps',
@@ -755,7 +776,13 @@ export const SETTINGS: readonly SettingSpec[] = [
     applies: 'new',
     min: 100,
     max: 8000,
+    client: true,
   },
+  // Сколько собеседников (себя не считаем) — уже повод держаться медиасервера.
+  // Четыре — это MESH_FALLBACK_MAX_PEERS + 1 из apps/web/lib/voice.ts: троих
+  // прямые соединения переживут, а на четвёртом с видео начинается та боль,
+  // ради которой SFU и затевался. Ниже порога упавший медиасервер уводит звонок
+  // в p2p, на пороге и выше — честнее подождать сервер.
   {
     key: 'voice.sfuThreshold',
     group: 'voice',
@@ -764,6 +791,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     applies: 'new',
     min: 2,
     max: 50,
+    client: true,
   },
   {
     key: 'voice.noiseSuppressionDefault',
@@ -771,6 +799,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     kind: 'boolean',
     fallback: true,
     applies: 'new',
+    client: true,
   },
   {
     key: 'voice.pushToTalkDefault',
@@ -778,6 +807,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     kind: 'boolean',
     fallback: false,
     applies: 'new',
+    client: true,
   },
   // Окно восстановления связи — RECOVER_WINDOW_MS в lib/voice/sfu/recovery.ts.
   {
@@ -788,6 +818,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     applies: 'new',
     min: 2,
     max: 60,
+    client: true,
   },
   /**
    * Инфраструктура: адреса и секреты TURN и медиасервера. В панели показаны,
@@ -897,6 +928,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     fallback: 'relay',
     applies: 'now',
     max: 48,
+    client: true,
   },
   {
     key: 'appearance.installEmoji',
@@ -905,6 +937,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     fallback: '',
     applies: 'now',
     max: 8,
+    client: true,
   },
   // Тёмная — историческая тема relay и единственная, которую ставит layout.tsx
   // до первого выбора человека (lib/theme.ts).
@@ -915,6 +948,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     fallback: 'dark',
     applies: 'new',
     options: ['system', 'dark', 'light'],
+    client: true,
   },
   {
     key: 'appearance.defaultLocale',
@@ -923,6 +957,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     fallback: 'en',
     applies: 'new',
     options: ['en', 'ru'],
+    client: true,
   },
   {
     key: 'appearance.loginNotice',
@@ -931,6 +966,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     fallback: '',
     applies: 'now',
     max: NOTICE_MAX,
+    client: true,
   },
   {
     key: 'appearance.rulesText',
@@ -939,6 +975,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     fallback: '',
     applies: 'now',
     max: RULES_MAX,
+    client: true,
   },
   {
     key: 'appearance.showVersion',
@@ -946,22 +983,22 @@ export const SETTINGS: readonly SettingSpec[] = [
     kind: 'boolean',
     fallback: true,
     applies: 'now',
+    client: true,
   },
 
   // ── notifications — уведомления ──────────────────────────────────────────
+  // Системных уведомлений relay не показывает: вызова Notification API в
+  // клиенте нет ни одного. Поэтому переключателя «показывать на рабочем
+  // столе» здесь тоже нет — он не выключал бы ничего, а человек пошёл бы
+  // искать, почему уведомления не приходят. Появится вместе с кодом, который
+  // их шлёт.
   {
     key: 'notifications.soundEnabled',
     group: 'notifications',
     kind: 'boolean',
     fallback: true,
     applies: 'now',
-  },
-  {
-    key: 'notifications.desktopEnabled',
-    group: 'notifications',
-    kind: 'boolean',
-    fallback: true,
-    applies: 'now',
+    client: true,
   },
   {
     key: 'notifications.mentionSound',
@@ -969,6 +1006,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     kind: 'boolean',
     fallback: true,
     applies: 'now',
+    client: true,
   },
   {
     key: 'notifications.directSound',
@@ -976,6 +1014,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     kind: 'boolean',
     fallback: true,
     applies: 'now',
+    client: true,
   },
 
   // ── maintenance — обслуживание ───────────────────────────────────────────
@@ -1002,6 +1041,7 @@ export const SETTINGS: readonly SettingSpec[] = [
     fallback: '',
     applies: 'now',
     max: 500,
+    client: true,
   },
 ];
 

@@ -22,6 +22,7 @@ import { useRetention } from '@/lib/use-sfu';
 import { useUiStore } from '@/stores/ui';
 import { useChannelsStore } from '@/stores/channels';
 import { useChatStore } from '@/stores/chat';
+import { useSetting } from '@/stores/config';
 import { useOwnerStore } from '@/stores/owner';
 import { useServersStore } from '@/stores/servers';
 import { useUnreadStore } from '@/stores/unread';
@@ -128,6 +129,11 @@ function typingText(names: string[]): string {
  */
 export function ChatPanel() {
   const t = useT();
+  // Сколько символов принимает эта инсталляция (`messages.maxLength`). Раньше
+  // здесь стояло 500 числом, и поле в панели предлагало владельцу до восьми
+  // тысяч, которые клиент всё равно резал: потолок, который врёт, — брак. Тем
+  // же числом режет сервер (chat.handlers), так что расхождению взяться неоткуда.
+  const maxLength = useSetting<number>('messages.maxLength');
   const rt = useRichT();
   const textLabel = useUiStore((s) => s.textLabel);
   const textRoom = useUiStore((s) => s.textRoom);
@@ -916,7 +922,7 @@ export function ChatPanel() {
             }}
             onBlur={() => setMentionToken(null)}
             onPaste={onPaste}
-            maxLength={500}
+            maxLength={maxLength}
             autoComplete="off"
             placeholder={
               dmRoom

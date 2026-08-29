@@ -94,7 +94,14 @@ describe('подключение', () => {
     const { gw, server } = await makeGateway();
     const sock = server.connect();
     gw.handleConnection(asSocket(sock));
-    expect(sock.emitted.map((e) => e.event)).toEqual(['servers', 'channels', 'voice-presence']);
+    // `settings` идёт первым и всем, включая гостя: клиент режет ввод по тем же
+    // пределам, что и сервер, и узнать их он обязан до первого нажатия.
+    expect(sock.emitted.map((e) => e.event)).toEqual([
+      'settings',
+      'servers',
+      'channels',
+      'voice-presence',
+    ]);
     expect((sock.last('servers') as { id: string }[]).map((s) => s.id)).toEqual([MAIN]);
     expect((sock.last('channels') as { slug: string }[]).map((c) => c.slug).sort()).toEqual(
       ['obshchii', 'voice-obshchii', 'voice-obshchii-sfu'].sort(),
@@ -120,7 +127,10 @@ describe('подключение', () => {
     const guest = server.connect({ id: 'guest', auth: { guest: token } });
     gw.handleConnection(asSocket(guest));
 
-    expect(guest.emitted.map((e) => e.event)).toEqual(['voice-presence']);
+    // Реестров гостю не показывают, а снимок настроек показывают — в нём только
+    // то, чем пользуется его же браузер (`client` в каталоге), и ничего про
+    // устройство инсталляции.
+    expect(guest.emitted.map((e) => e.event)).toEqual(['settings', 'voice-presence']);
     expect(Object.keys(guest.last('voice-presence') as object)).toEqual(['voice-obshchii']);
     expect(guest.data.guest).toBe(true);
   });
