@@ -1,9 +1,9 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * Провайдер, которого собирает Nest, обязан импортировать свои зависимости
+ * Класс, который собирает Nest, обязан импортировать свои зависимости
  * ЗНАЧЕНИЕМ.
  *
  * Тест заведён по случившемуся, и случившееся стоит записать целиком.
@@ -21,16 +21,60 @@ import { describe, expect, it } from 'vitest';
  * Поднять здесь настоящий контейнер нельзя: vitest транспилирует через esbuild,
  * а тот `emitDecoratorMetadata` не поддерживает вовсе — метаданных не будет ни
  * у кого, и тест «падал» бы всегда и на всём. Поэтому правило проверяется по
- * исходникам, как это уже сделано для дверей панели и для копии каталога:
- * читаем список провайдеров из самого модуля и смотрим, чем они ввозят друг
- * друга.
+ * исходникам, как это уже сделано для дверей панели и для копии каталога.
+ *
+ * Спрашивается оно у ВСЕХ, кого собирает контейнер, а не только у списка
+ * `providers`: первая версия этого теста читала именно список — и пропускала
+ * контроллеры, guard'ы и сам гейтвей, которые Nest создаёт тем же способом и
+ * ломает тем же `import type`. Признак принадлежности — декоратор, а не место
+ * в модуле.
  *
  * `import type` остаётся законным для тех, кого собирают ВРУЧНУЮ, — обработчики
- * гейтвея как раз такие, и им метаданные не нужны.
+ * гейтвея и `PerimeterService` как раз такие, и им метаданные не нужны. Ровно
+ * поэтому проверка смотрит на декоратор: он и есть граница между «создаёт
+ * контейнер» и «создаём мы сами».
  */
 
 const SRC = join(__dirname);
 const read = (path: string) => readFileSync(join(SRC, path), 'utf8');
+
+/** Все исходники api, кроме самих тестов. */
+function sources(dir: string = SRC): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) return sources(path);
+    return /\.ts$/.test(name) && !/\.test\.ts$/.test(name) ? [path] : [];
+  });
+}
+
+/** Имена, ввезённые типом: обе формы одинаково стираются при сборке. */
+function typeOnlyImports(src: string): Set<string> {
+  const names = new Set<string>();
+  for (const m of src.matchAll(/import type \{([^}]*)\}/g)) {
+    for (const raw of m[1].split(','))
+      names.add(
+        raw
+          .trim()
+          .split(/\s+as\s+/)[0]
+          .trim(),
+      );
+  }
+  for (const m of src.matchAll(/import \{([^}]*)\}/g)) {
+    for (const raw of m[1].split(',')) {
+      const name = raw.trim();
+      if (name.startsWith('type '))
+        names.add(
+          name
+            .slice(5)
+            .trim()
+            .split(/\s+as\s+/)[0]
+            .trim(),
+        );
+    }
+  }
+  names.delete('');
+  return names;
+}
 
 /** Где лежит класс провайдера — по строке импорта в самом модуле. */
 function providerFiles(): Map<string, string> {
@@ -53,24 +97,31 @@ function providerFiles(): Map<string, string> {
   return files;
 }
 
-describe('провайдеры собираются контейнером', () => {
-  it('ни один не ввозит другого типом — иначе Nest не разрешит довод', () => {
-    const files = providerFiles();
-    const names = [...files.keys()];
-
+describe('классы, которые собирает контейнер', () => {
+  it('ни один не ввозит довод конструктора типом — иначе Nest его не разрешит', () => {
     const guilty: string[] = [];
-    for (const [name, path] of files) {
-      const source = read(path);
-      for (const other of names) {
-        if (other === name) continue;
-        // `import type { X }` и `import { type X }` — обе формы стираются.
-        const typeOnly = new RegExp(
-          `import type \\{[^}]*\\b${other}\\b[^}]*\\}|import \\{[^}]*\\btype ${other}\\b[^}]*\\}`,
-        );
-        if (typeOnly.test(source)) guilty.push(`${name} (${path}) ввозит ${other} типом`);
+    for (const path of sources()) {
+      const src = readFileSync(path, 'utf8');
+      // Декоратор — единственный надёжный признак «создаёт контейнер».
+      if (!/@(Injectable|Controller|WebSocketGateway)\s*\(/.test(src)) continue;
+      const typeOnly = typeOnlyImports(src);
+      for (const ctor of src.matchAll(/constructor\s*\(([\s\S]*?)\)\s*\{/g)) {
+        for (const param of ctor[1].matchAll(/:\s*([A-Z]\w*)/g)) {
+          if (typeOnly.has(param[1])) {
+            guilty.push(`${path.slice(SRC.length + 1)}: довод ${param[1]} ввезён типом`);
+          }
+        }
       }
     }
     expect(guilty).toEqual([]);
+  });
+
+  it('проверка вообще кого-то нашла — иначе она молча ничего не смотрит', () => {
+    // Сузься регулярка до нуля совпадений, тест выше остался бы зелёным навсегда.
+    const decorated = sources().filter((path) =>
+      /@(Injectable|Controller|WebSocketGateway)\s*\(/.test(readFileSync(path, 'utf8')),
+    );
+    expect(decorated.length).toBeGreaterThan(10);
   });
 
   it('список провайдеров модуля и его импорты не разошлись', () => {
