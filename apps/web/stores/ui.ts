@@ -99,6 +99,15 @@ interface UiState {
   /** Окно настроек. В сторе, а не в рейке: открывается ещё и из ПКМ-меню. */
   settingsOpen: boolean;
   setSettingsOpen: (open: boolean) => void;
+  /**
+   * Панель инсталляции. Открывается только у владельца — но решает это не
+   * флажок: цель в тулбаре видна ему одному, а каждое событие панели сервер
+   * проверяет сам (§9 протокола). Здесь только «показано или нет», рядом с
+   * окном настроек: панель тоже окно поверх всего, и открывается она не из
+   * одного места.
+   */
+  adminOpen: boolean;
+  setAdminOpen: (open: boolean) => void;
   openText: (slug: string, label: string) => void;
   /** Закрыть текстовый канал: уходим к сетке (если в голосе) или в лобби. */
   leaveText: () => void;
@@ -181,6 +190,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   setMobilePanel: (panel) => set({ mobilePanel: panel }),
   settingsOpen: false,
   setSettingsOpen: (open) => set({ settingsOpen: open }),
+  adminOpen: false,
+  setAdminOpen: (open) => set({ adminOpen: open }),
   peoplePickerOpen: false,
   setPeoplePickerOpen: (open) => set({ peoplePickerOpen: open }),
   // mobilePanel здесь же: открыть канал — значит смотреть его. Без этого тап по

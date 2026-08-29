@@ -1,4 +1,4 @@
-import type { ChatRefusal, VoiceRefusal } from '@relay/shared';
+import type { AdminRefusal, ChatRefusal, VoiceRefusal } from '@relay/shared';
 import type { MessageKey } from '@/lib/i18n';
 
 /**
@@ -49,4 +49,42 @@ export function chatRefusalKey(reason: ChatRefusal): MessageKey {
 
 export function voiceRefusalKey(reason: VoiceRefusal): MessageKey {
   return VOICE_REFUSAL_KEYS[reason] ?? 'refused.unknown';
+}
+
+/**
+ * Отказ, который панель показывает подписью под полем.
+ *
+ * Кроме одиннадцати причин сервера здесь есть двенадцатая, своя: `timeout` —
+ * молчание в ответ на правку. Отказом сервера оно не является, но под полем
+ * выглядит так же, и человеку нужен тот же текст: сказать, что значение
+ * осталось прежним. Без него молчащий сервер оставлял бы поле в «сохраняется»
+ * навсегда — ровно то состояние, в котором панель врёт молча.
+ */
+export type AdminFieldError = AdminRefusal | 'timeout';
+
+/**
+ * Причины отказов панели.
+ *
+ * Та же карта, что у ленты и голоса, и по той же причине: панель — место, где
+ * человек двигает поля и обязан узнать, почему поле вернулось на прежнее
+ * значение. Полнота по типу (`Record<AdminFieldError, …>`) держит её честной:
+ * причина, заведённая на сервере завтра, не соберётся здесь молча.
+ */
+export const ADMIN_REFUSAL_KEYS: Record<AdminFieldError, MessageKey> = {
+  forbidden: 'refused.admin.forbidden',
+  'needs-confirm': 'refused.admin.needs-confirm',
+  'unknown-key': 'refused.admin.unknown-key',
+  'read-only': 'refused.admin.read-only',
+  'wrong-type': 'refused.admin.wrong-type',
+  'out-of-range': 'refused.admin.out-of-range',
+  'not-an-option': 'refused.admin.not-an-option',
+  'too-long': 'refused.admin.too-long',
+  'secret-path': 'refused.admin.secret-path',
+  'not-found': 'refused.admin.not-found',
+  unsupported: 'refused.admin.unsupported',
+  timeout: 'refused.admin.timeout',
+};
+
+export function adminRefusalKey(reason: AdminFieldError): MessageKey {
+  return ADMIN_REFUSAL_KEYS[reason] ?? 'refused.unknown';
 }

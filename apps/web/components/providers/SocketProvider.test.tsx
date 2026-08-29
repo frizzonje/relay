@@ -52,6 +52,7 @@ vi.mock('@/lib/socket', () => ({ getSocket: () => socket }));
 
 import { SocketProvider } from './SocketProvider';
 import { notifyDirect } from '@/lib/notify';
+import { useAdminStore } from '@/stores/admin';
 import { useChatStore } from '@/stores/chat';
 import { useDmStore } from '@/stores/dm';
 import { usePinsStore } from '@/stores/pins';
@@ -294,5 +295,23 @@ describe('реконнект', () => {
     act(() => socket._fire('connect'));
 
     expect(socket.emit).toHaveBeenCalledWith('dm-join', { slug: slugA }, expect.any(Function));
+  });
+});
+
+describe('правка настройки из другой сессии владельца', () => {
+  it('доезжает до стора панели', () => {
+    // Панель, открытая на втором устройстве, обязана обновиться — иначе она
+    // сохранит поверх свежей правки то, что показывала минуту назад. Своей
+    // правки вторым эхом не приходит: сервер её себе не шлёт (§9.6).
+    useAdminStore.getState().reset();
+
+    act(() =>
+      socket._fire('admin-changed', {
+        keys: ['direct.enabled'],
+        values: { 'direct.enabled': false },
+      }),
+    );
+
+    expect(useAdminStore.getState().values['direct.enabled']).toBe(false);
   });
 });

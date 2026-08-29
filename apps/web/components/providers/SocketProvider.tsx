@@ -16,6 +16,7 @@ import { useIdentityStore } from '@/stores/identity';
 import { useContractStore } from '@/stores/contract';
 import { useModerationStore } from '@/stores/moderation';
 import { useConfigStore } from '@/stores/config';
+import { useAdminStore } from '@/stores/admin';
 import { usePinsStore } from '@/stores/pins';
 import { useServersStore } from '@/stores/servers';
 import { forgetServerPassword, storedServerPasswords, unlockServer } from '@/lib/servers';
@@ -271,6 +272,12 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // владельца. Реактивно: настройка, доезжающая только после перезагрузки
     // вкладки, — половина настройки.
     socket.on('settings', (snapshot) => useConfigStore.getState().apply(snapshot));
+
+    // Правка из ДРУГОЙ сессии владельца — в открытую здесь панель. Событие не
+    // дублирует `settings`: тот везёт только помеченное в каталоге `client`, а
+    // панели нужно всё, что она показывает. Своей правки вторым эхом не
+    // приходит — сервер её себе не шлёт (§9.6 протокола).
+    socket.on('admin-changed', (relay) => useAdminStore.getState().applyRemote(relay));
 
     // Сказанное не приняли — и человек обязан узнать причину, а не тишину.
     //
@@ -616,6 +623,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('mention');
       socket.off('mentions');
       socket.off('dm-activity');
+      socket.off('admin-changed');
       socket.off('reads');
       socket.off('prefs');
       socket.off('renamed');
