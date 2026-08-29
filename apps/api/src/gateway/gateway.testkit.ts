@@ -11,6 +11,9 @@ import { PrefsService } from '../identity/prefs.service';
 import { ReadsService } from '../identity/reads.service';
 import { RolesService } from '../identity/roles.service';
 import { issueSession } from '../identity/session';
+import { RetentionService } from '../db/retention.service';
+import { AuditService } from '../settings/audit.service';
+import { OverviewService } from '../settings/overview.service';
 import { SettingsService } from '../settings/settings.service';
 import type { Attachment, UploadsService } from '../uploads';
 import type { Channel, PersistedRegistry, ServerEntry } from './registry';
@@ -109,7 +112,20 @@ const uploads = {
     if (!id) return false;
     return (await db.getRepository(AttachmentRow).countBy({ id })) > 0;
   },
+  /**
+   * Подметание сирот. Настоящее живёт в `UploadsService` и проверено своими
+   * тестами вместе с диском; гейтвею от него нужен ровно один ответ — сколько
+   * унесено, — а каталог загрузок здесь ставить незачем: тест панели проверяет,
+   * что кнопка доходит до подметания, а не как оно устроено.
+   */
+  async sweep(): Promise<number> {
+    swept.calls += 1;
+    return swept.removed;
+  },
 };
+
+/** Сколько раз панель попросила подмести файлы и что подметание ей ответило. */
+export const swept = { calls: 0, removed: 0 };
 
 /** Готовая загрузка в базе — то, что оставляет за собой POST /api/upload. */
 export async function putUpload(id: string, att: Partial<Attachment> = {}) {
@@ -185,6 +201,14 @@ export async function makeGateway(saved: PersistedRegistry = {}) {
   const roles = new RolesService(db);
   const reads = new ReadsService(db);
   const prefs = new PrefsService(db);
+  // Ретенция и журнал настоящие: панель зовёт их обоих, и подделка отвечала бы
+  // «удалено ноль» на непустую таблицу. Таймер ретенции при этом не заводим
+  // (`onModuleInit` не зовём) — прогон и так живёт на поддельных часах.
+  const retention = new RetentionService(db, settings);
+  const audit = new AuditService(db);
+  const overview = new OverviewService(db, settings, retention);
+  swept.calls = 0;
+  swept.removed = 0;
   const gw = new SignalingGateway(
     uploads as unknown as UploadsService,
     chat,
@@ -196,6 +220,9 @@ export async function makeGateway(saved: PersistedRegistry = {}) {
     prefs,
     dmService,
     settings,
+    overview,
+    audit,
+    retention,
   );
   gw.server = server.asServer();
   // Узнавание личности вешается миддлварой — заводим её и здесь, иначе тест
@@ -213,6 +240,9 @@ export async function makeGateway(saved: PersistedRegistry = {}) {
     reads,
     prefs,
     settings,
+    overview,
+    audit,
+    retention,
   };
 }
 

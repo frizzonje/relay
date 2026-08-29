@@ -23,6 +23,8 @@ import {
   parseCookies,
   verifyGuestToken,
   verifyToken,
+  type AdminAction,
+  type AdminRefusal,
   type AuditAction,
   type ChatRefusal,
   type VoiceRefusal,
@@ -38,6 +40,21 @@ import {
 
 const apiSource = (rel: string) =>
   readFileSync(fileURLToPath(new URL(`../../../apps/api/src/${rel}`, import.meta.url)), 'utf8');
+
+const sharedSource = (rel: string) =>
+  readFileSync(fileURLToPath(new URL(`./${rel}`, import.meta.url)), 'utf8');
+
+/**
+ * Литералы объединения из исходника — по объявлению, а не по типу: тип к
+ * прогону не доживает, а сравнить половины контракта надо именно текстом.
+ */
+const literals = (source: string, declaration: string): string[] =>
+  (
+    source
+      .slice(source.indexOf(declaration))
+      .split(';')[0]
+      .match(/'[a-z-]+'/g) ?? []
+  ).map((item) => item.slice(1, -1));
 
 describe('реэкспорт пропусков', () => {
   it('всё, чем пользуется middleware Next, доступно из корня пакета', async () => {
@@ -181,6 +198,73 @@ describe('константы совпадают с копией в api', () => {
       'settings-imported',
     ];
     expect(actions.map((a) => a.slice(1, -1))).toEqual(mine);
+  });
+
+  it('события панели — те же, что подписывает сервер', () => {
+    // Событие, объявленное здесь и не заведённое там, — это кнопка, ждущая
+    // ответа, который не придёт. Заведённое там и не объявленное здесь — дверь,
+    // о которой не знает ни один тест двери (а тест этот перебирает подписки
+    // гейтвея, см. `admin.handlers.test.ts`).
+    const gateway = apiSource('gateway/signaling.gateway.ts');
+    const subscribed = [...gateway.matchAll(/@SubscribeMessage\('(admin-[a-z-]+)'\)/g)].map(
+      (m) => m[1],
+    );
+    const contract = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8');
+    const c2s = contract.slice(contract.indexOf('export interface ClientToServerEvents'));
+    const declared = [...c2s.slice(0, c2s.indexOf('\n}')).matchAll(/'(admin-[a-z-]+)':/g)].map(
+      (m) => m[1],
+    );
+    expect(subscribed.length).toBeGreaterThan(0);
+    expect(declared.sort()).toEqual([...subscribed].sort());
+  });
+
+  it('событие «поменяли из другой сессии» сервер шлёт под тем же именем', () => {
+    // Имя события — единственное, что связывает обработчик с клиентом: разъедься
+    // половины, вторая панель владельца молча осталась бы со вчерашним снимком.
+    expect(apiSource('gateway/admin.handlers.ts')).toContain("emit('admin-changed'");
+  });
+
+  it('действия панели — те же, что называет сервер', () => {
+    const actions = literals(apiSource('gateway/protocol.ts'), 'export type AdminAction =');
+    const mine: AdminAction[] = [
+      'owner-link',
+      'retention-run',
+      'files-sweep',
+      'revoke-sessions',
+      'revoke-device',
+      'ban',
+      'unban',
+      'export',
+      'import',
+    ];
+    expect(actions).toEqual(mine);
+    // И то же самое написано в половине клиента — иначе панель послала бы
+    // серверу имя, на которое он ответит `unsupported`.
+    expect(literals(sharedSource('admin.ts'), 'export type AdminAction =')).toEqual(mine);
+  });
+
+  it('причины отказа панели — те же, и причины каталога входят в них целиком', () => {
+    const mine: AdminRefusal[] = [
+      'forbidden',
+      'needs-confirm',
+      'unknown-key',
+      'read-only',
+      'wrong-type',
+      'out-of-range',
+      'not-an-option',
+      'too-long',
+      'secret-path',
+      'not-found',
+      'unsupported',
+    ];
+    expect(literals(apiSource('gateway/protocol.ts'), 'export type AdminRefusal =')).toEqual(mine);
+    expect(literals(sharedSource('admin.ts'), 'export type AdminRefusal =')).toEqual(mine);
+    // Отказ каталога панель возвращает как есть: седьмая причина, добавленная в
+    // `SettingError`, обязана появиться и здесь — иначе панель получит от
+    // сервера строку, которой не знает, и покажет вместо неё пустоту.
+    for (const reason of literals(sharedSource('settings.ts'), 'export type SettingError =')) {
+      expect(mine, reason).toContain(reason);
+    }
   });
 
   it('ник системной записи тот же — по нему её подписывает сервер', () => {

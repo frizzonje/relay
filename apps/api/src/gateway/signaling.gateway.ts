@@ -14,6 +14,7 @@ import { ChatSessions } from './chat-sessions';
 import { Directory } from './directory';
 import { Mentions } from './mentions';
 import { Moderation } from './moderation';
+import { AdminHandlers } from './admin.handlers';
 import { ChatHandlers } from './chat.handlers';
 import { DmHandlers } from './dm.handlers';
 import { GuestHandlers } from './guests.handlers';
@@ -29,13 +30,28 @@ import { OwnerService } from '../identity/owner.service';
 import { PrefsService } from '../identity/prefs.service';
 import { ReadsService } from '../identity/reads.service';
 import { RolesService } from '../identity/roles.service';
+import { AuditService } from '../settings/audit.service';
+import { OverviewService } from '../settings/overview.service';
 import { SettingsService } from '../settings/settings.service';
+import { RetentionService } from '../db/retention.service';
 import { UploadsService } from '../uploads';
 import { ChatService } from './chat.service';
 import { DmService } from './dm.service';
 import { RegistryService } from './registry.service';
 import {
   PROTOCOL_VERSION,
+  type AdminActionPayload,
+  type AdminActionResult,
+  type AdminAuditPayload,
+  type AdminAuditResult,
+  type AdminBansResult,
+  type AdminPeoplePayload,
+  type AdminPeopleResult,
+  type AdminResetPayload,
+  type AdminResetResult,
+  type AdminSetPayload,
+  type AdminSetResult,
+  type AdminStateResult,
   type ChannelCreatePayload,
   type ChannelCreateResult,
   type ChannelDeletePayload,
@@ -170,6 +186,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     private readonly prefs: PrefsService,
     private readonly dm: DmService,
     private readonly settings: SettingsService,
+    private readonly overview: OverviewService,
+    private readonly audit: AuditService,
+    private readonly retention: RetentionService,
   ) {}
 
   private readonly logger = new Logger(SignalingGateway.name);
@@ -321,6 +340,28 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.settings,
     () => this.server,
     this.logger,
+  );
+
+  /**
+   * Панель владельца: настройки, люди, баны, журнал, обслуживание.
+   *
+   * Заводится последней и берёт почти всех соседей — так и должно быть: панель
+   * не заводит своего состояния, она показывает и правит чужое. Дверь у неё
+   * своя и проверяется В КАЖДОМ обработчике (см. `admin.handlers.ts`).
+   */
+  private readonly adminHandlers = new AdminHandlers(
+    this.settings,
+    this.overview,
+    this.audit,
+    this.roles,
+    this.owner,
+    this.identities,
+    this.retention,
+    this.uploads,
+    this.perimeter,
+    this.moderation,
+    (deviceId) => this.dropDevice(deviceId),
+    () => this.server,
   );
 
   /** Обработчики разговора: вход, выход, негоциация, пропуск в медиасервер. */
@@ -824,6 +865,63 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     @MessageBody() payload: DmPeoplePayload,
   ): Promise<DmPeopleResult> {
     return this.dmHandlers.people(client, payload);
+  }
+
+  // ===== Админ-панель =====
+  //
+  // Все события панели — только для владельца, и владение проверяет КАЖДЫЙ
+  // обработчик сам (`AdminHandlers.me`). Здесь, в маршрутизаторе, проверки нет
+  // намеренно: она стояла бы в одном месте на семь событий, и восьмое,
+  // добавленное мимо неё, открыло бы настройки инсталляции молча.
+
+  @SubscribeMessage('admin-state')
+  handleAdminState(@ConnectedSocket() client: AppSocket): Promise<AdminStateResult> {
+    return this.adminHandlers.state(client);
+  }
+
+  @SubscribeMessage('admin-set')
+  handleAdminSet(
+    @ConnectedSocket() client: AppSocket,
+    @MessageBody() payload: AdminSetPayload,
+  ): Promise<AdminSetResult> {
+    return this.adminHandlers.set(client, payload);
+  }
+
+  @SubscribeMessage('admin-reset')
+  handleAdminReset(
+    @ConnectedSocket() client: AppSocket,
+    @MessageBody() payload: AdminResetPayload,
+  ): Promise<AdminResetResult> {
+    return this.adminHandlers.reset(client, payload);
+  }
+
+  @SubscribeMessage('admin-people')
+  handleAdminPeople(
+    @ConnectedSocket() client: AppSocket,
+    @MessageBody() payload: AdminPeoplePayload,
+  ): Promise<AdminPeopleResult> {
+    return this.adminHandlers.people(client, payload);
+  }
+
+  @SubscribeMessage('admin-bans')
+  handleAdminBans(@ConnectedSocket() client: AppSocket): Promise<AdminBansResult> {
+    return this.adminHandlers.bans(client);
+  }
+
+  @SubscribeMessage('admin-audit')
+  handleAdminAudit(
+    @ConnectedSocket() client: AppSocket,
+    @MessageBody() payload: AdminAuditPayload,
+  ): Promise<AdminAuditResult> {
+    return this.adminHandlers.journal(client, payload);
+  }
+
+  @SubscribeMessage('admin-action')
+  handleAdminAction(
+    @ConnectedSocket() client: AppSocket,
+    @MessageBody() payload: AdminActionPayload,
+  ): Promise<AdminActionResult> {
+    return this.adminHandlers.action(client, payload);
   }
 
   handleDisconnect(client: AppSocket) {

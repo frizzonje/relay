@@ -357,8 +357,13 @@ export class UploadsService implements OnModuleInit {
    *
    * Публичный: его зовёт не только собственный таймер — им же начинается
    * работа после старта, и он же нужен тесту, чтобы не ждать час.
+   *
+   * Возвращает, сколько загрузок унесено. Число нужно панели: «подмести файлы»
+   * без ответа выглядит кнопкой, которая ничего не делает, — а чаще всего она и
+   * правда не делает ничего, потому что сирот нет, и сказать об этом честнее,
+   * чем промолчать.
    */
-  async sweep(): Promise<void> {
+  async sweep(): Promise<number> {
     const hours = this.settings.get<number>('files.orphanSweepHours');
     const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
     const orphans = await this.db
@@ -383,6 +388,9 @@ export class UploadsService implements OnModuleInit {
     );
 
     const kept: DiskFile[] = [];
+    // Считаем унесённое: и файл с диска, и строку без файла — это одна уборка,
+    // и делить их в ответе панели не на что.
+    let removed = 0;
     for (const f of this.scan()) {
       // Файла нет в базе вовсе — считаем сиротой по возрасту самого файла.
       const stray = !known.has(f.name) && f.mtimeMs < cutoff.getTime();
@@ -393,18 +401,21 @@ export class UploadsService implements OnModuleInit {
       try {
         await this.remove(f.name);
         doomed.delete(f.name);
+        removed += 1;
       } catch {
         kept.push(f); // не удалилось — значит всё ещё занимает место
       }
     }
     // Строки без файлов на диске (файл унесли руками) — тоже уборка.
     if (doomed.size) {
+      removed += doomed.size;
       await this.db.getRepository(AttachmentRow).delete({ id: In([...doomed]) });
     }
 
     this.total = kept.reduce((sum, f) => sum + f.size, 0);
     const quota = this.quota();
     if (quota > 0 && this.total > quota) await this.evictOldest(undefined, kept);
+    return removed;
   }
 
   /**

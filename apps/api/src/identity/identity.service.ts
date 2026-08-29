@@ -313,6 +313,32 @@ export class IdentityService {
   }
 
   /**
+   * Отозвать чужое устройство — то, чего человеку про себя делать нельзя.
+   *
+   * Дорога отдельная от `revoke`, а не довод к ней, потому что вопросы разные:
+   * там человек распоряжается своим и защищён от «отозвать то, на котором
+   * сижу», здесь владелец инсталляции распоряжается чужим и о том, где сидит
+   * хозяин устройства, не знает вовсе. Своё текущее сторожит панель — ей
+   * известен сокет спрашивающего (см. `admin.handlers.ts`).
+   *
+   * Возвращает, у КОГО отозвали: строку журнала читают глазами через год, и
+   * uuid устройства в ней не говорит ничего. `null` — такого действующего
+   * устройства нет: либо его не было, либо оно уже отозвано, и повторный отзыв
+   * не должен выглядеть как сделанная работа.
+   */
+  async revokeAny(
+    deviceId: string,
+  ): Promise<{ fingerprint: string; nick: string; name: string } | null> {
+    const row = await this.db.getRepository(DeviceRow).findOne({
+      where: { id: deviceId },
+      relations: { identity: true },
+    });
+    if (!row || row.revokedAt || !row.identity) return null;
+    await this.db.getRepository(DeviceRow).update({ id: deviceId }, { revokedAt: new Date() });
+    return { fingerprint: row.identity.fingerprint, nick: row.identity.nick, name: row.name };
+  }
+
+  /**
    * Сменить ник. Он свободный и не уникальный — сверять не с чем, но длина и
    * частота смены теперь чужие: их задаёт владелец инсталляции.
    *

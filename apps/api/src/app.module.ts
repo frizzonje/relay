@@ -22,6 +22,7 @@ import { RegistryService } from './gateway/registry.service';
 import { MetricsService } from './metrics';
 import { RetentionService } from './db/retention.service';
 import { AuditService } from './settings/audit.service';
+import { OverviewService } from './settings/overview.service';
 import { SettingsService } from './settings/settings.service';
 import { UploadsService } from './uploads';
 
@@ -65,6 +66,7 @@ export class AppModule {
         PruneService,
         SettingsService,
         AuditService,
+        OverviewService,
         UploadsService,
       ],
     };

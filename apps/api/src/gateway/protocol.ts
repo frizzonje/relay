@@ -1,5 +1,6 @@
 import type { Attachment } from '../uploads';
-import type { SettingValue } from '../settings/catalog';
+import type { SettingGroup, SettingSpec, SettingValue } from '../settings/catalog';
+import type { RetentionMode } from '../db/retention.policy';
 
 /**
  * Форма сообщений сигналинга: что приходит от клиента и что уходит ack'ом.
@@ -69,6 +70,8 @@ export const LIMIT = {
   diagDetail: 200,
   /** Строка поиска собеседника в `dm-people`: отпечаток и ник короче. */
   dmQuery: 64,
+  /** Поиск человека в панели: ищут и по нику, и по отпечатку целиком. */
+  adminQuery: 64,
 } as const;
 
 /**
@@ -765,4 +768,179 @@ export interface VoicePresenceEntry {
   guest?: boolean;
   /** Гость-слушатель: канал под паролем, право говорить ссылка не раздаёт. */
   listen?: boolean;
+}
+
+// ── Админ-панель ────────────────────────────────────────────────────────────
+
+/**
+ * Протокол панели владельца — половина сервера; половина клиента живёт в
+ * `packages/shared/src/admin.ts`, и совпадение половин держит тест.
+ *
+ * Тела, как и везде здесь, объявлены `unknown`: панель шлёт их тем же
+ * socket.io, что и всё остальное, и «это же наш собственный экран» проверкой
+ * не считается.
+ *
+ * ПАНЕЛЬ ТОЛЬКО ДЛЯ ВЛАДЕЛЬЦА, и владение проверяет каждый обработчик сам —
+ * см. `admin.handlers.ts`.
+ */
+
+/** Действие панели — то, что делают кнопкой, а не полем. */
+export type AdminAction =
+  | 'owner-link'
+  | 'retention-run'
+  | 'files-sweep'
+  | 'revoke-sessions'
+  | 'revoke-device'
+  | 'ban'
+  | 'unban'
+  | 'export'
+  | 'import';
+
+/**
+ * Почему панели отказали. Шесть причин посередине — причины каталога
+ * (`SettingError`), и они обязаны входить сюда целиком: обработчик возвращает
+ * их как есть, и седьмая причина каталога не соберётся, пока её не назовут и
+ * здесь.
+ *
+ * Список общий на все события панели: отказ она показывает одним и тем же
+ * способом, и второй перечень разошёлся бы с первым.
+ */
+export type AdminRefusal =
+  | 'forbidden'
+  | 'needs-confirm'
+  | 'unknown-key'
+  | 'read-only'
+  | 'wrong-type'
+  | 'out-of-range'
+  | 'not-an-option'
+  | 'too-long'
+  | 'secret-path'
+  | 'not-found'
+  | 'unsupported';
+
+export interface AdminSetPayload {
+  key?: unknown;
+  value?: unknown;
+  confirm?: unknown;
+}
+
+export interface AdminResetPayload {
+  group?: unknown;
+  confirm?: unknown;
+}
+
+export interface AdminPeoplePayload {
+  query?: unknown;
+  cursor?: unknown;
+}
+
+export interface AdminAuditPayload {
+  cursor?: unknown;
+}
+
+export interface AdminActionPayload {
+  action?: unknown;
+  target?: unknown;
+  confirm?: unknown;
+  values?: unknown;
+}
+
+/** Политика хранения так, как её показывает сводка. */
+export interface AdminRetention {
+  mode: RetentionMode;
+  days?: number;
+}
+
+/** Сводка: то, что владелец видит первым. Считается запросами, а не счётчиками. */
+export interface AdminOverview {
+  people: number;
+  online: number;
+  bans: number;
+  messages: number;
+  servers: number;
+  channels: number;
+  storageBytes: number;
+  storageQuotaBytes: number;
+  retention: AdminRetention;
+  directRetention: AdminRetention | null;
+  version: string;
+}
+
+/** Устройство человека — так, как его видит владелец в таблице людей. */
+export interface AdminDevice {
+  id: string;
+  name: string;
+  lastSeenAt: number | null;
+  revoked: boolean;
+}
+
+/**
+ * Человек в таблице людей. Id личности наружу не уходит: в протоколе человека
+ * называет отпечаток, он же ручка для бана (см. `gateway/ownership`).
+ */
+export interface AdminPerson {
+  fingerprint: string;
+  nick: string;
+  createdAt: number;
+  lastSeenAt: number | null;
+  devices: AdminDevice[];
+  banned: boolean;
+  owner: boolean;
+}
+
+/** Выгрузка настроек. Секретов в ней нет вовсе — ни значением, ни признаком. */
+export interface AdminExport {
+  protocol: number;
+  at: number;
+  values: SettingsSnapshot;
+}
+
+export interface AdminImportRejection {
+  key: string;
+  reason: AdminRefusal;
+}
+
+export type AdminStateResult =
+  | {
+      ok: true;
+      catalog: SettingSpec[];
+      values: SettingsSnapshot;
+      overview: AdminOverview;
+    }
+  | { ok: false; error: AdminRefusal };
+
+export type AdminSetResult =
+  | { ok: true; key: string; changed: boolean; value: SettingValue }
+  | { ok: false; error: AdminRefusal };
+
+export type AdminResetResult =
+  | { ok: true; group: SettingGroup; changed: string[]; values: SettingsSnapshot }
+  | { ok: false; error: AdminRefusal };
+
+export type AdminPeopleResult =
+  | { ok: true; people: AdminPerson[]; cursor?: string }
+  | { ok: false; error: AdminRefusal };
+
+export type AdminBansResult = { ok: true; bans: BanEntry[] } | { ok: false; error: AdminRefusal };
+
+export type AdminAuditResult =
+  | { ok: true; entries: AuditEntry[]; more: boolean }
+  | { ok: false; error: AdminRefusal };
+
+export type AdminActionResult =
+  | {
+      ok: true;
+      action: AdminAction;
+      /** Ключ владельца — единственный раз, когда он существует в читаемом виде. */
+      link?: { token: string; expiresAt: number };
+      settings?: AdminExport;
+      imported?: { applied: string[]; rejected: AdminImportRejection[] };
+      count?: number;
+    }
+  | { ok: false; error: AdminRefusal };
+
+/** Настройку поменяли из другой сессии владельца — только его собственным сокетам. */
+export interface AdminChangedRelay {
+  keys: string[];
+  values: SettingsSnapshot;
 }

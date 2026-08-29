@@ -63,6 +63,26 @@ export * from './settings';
 // сборкой), поэтому встречный `import type` в settings.ts цикла не заводит.
 import type { SettingValue } from './settings';
 
+// Протокол админ-панели: события владельца, сводка, люди, выгрузка настроек.
+// Отдельным файлом, а не здесь, потому что панель — единственная часть
+// контракта, которой пользуется один экран из всех, — см. ./admin.
+export * from './admin';
+import type {
+  AdminActionPayload,
+  AdminActionResult,
+  AdminAuditPayload,
+  AdminAuditResult,
+  AdminBansResult,
+  AdminChangedRelay,
+  AdminPeoplePayload,
+  AdminPeopleResult,
+  AdminResetPayload,
+  AdminResetResult,
+  AdminSetPayload,
+  AdminSetResult,
+  AdminStateResult,
+} from './admin';
+
 /** Лимит размера загружаемого файла — 25 МБ. */
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
@@ -1291,6 +1311,23 @@ export interface ClientToServerEvents {
   'dm-join': (payload: DmJoinPayload, cb: (res: DmJoinResult) => void) => void;
   /** Кого инсталляция видела — список для выбора собеседника. */
   'dm-people': (payload: DmPeoplePayload, cb: (res: DmPeopleResult) => void) => void;
+  /**
+   * События админ-панели. Все с ack и все только для владельца: каждое
+   * проверяет владение само, и «не владелец» — это `forbidden`, а не молчание.
+   *
+   * Их набор обязан совпадать с тем, что подписывает сервер
+   * (`@SubscribeMessage('admin-…')` в `signaling.gateway.ts`): событие,
+   * объявленное здесь и не заведённое там, — это кнопка, ждущая ответа, который
+   * не придёт; заведённое там и не объявленное здесь — дверь, о которой не
+   * знает ни один тест двери. Совпадение держит контрактный тест.
+   */
+  'admin-state': (cb: (res: AdminStateResult) => void) => void;
+  'admin-set': (payload: AdminSetPayload, cb: (res: AdminSetResult) => void) => void;
+  'admin-reset': (payload: AdminResetPayload, cb: (res: AdminResetResult) => void) => void;
+  'admin-people': (payload: AdminPeoplePayload, cb: (res: AdminPeopleResult) => void) => void;
+  'admin-bans': (cb: (res: AdminBansResult) => void) => void;
+  'admin-audit': (payload: AdminAuditPayload, cb: (res: AdminAuditResult) => void) => void;
+  'admin-action': (payload: AdminActionPayload, cb: (res: AdminActionResult) => void) => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1451,6 +1488,12 @@ export interface ServerToClientEvents {
   'voice-refused': (payload: VoiceRefusedRelay) => void;
   /** В одной из моих переписок написали. Только двоим участникам. */
   'dm-activity': (payload: DmActivityRelay) => void;
+  /**
+   * Настройку поменяли из ДРУГОЙ сессии владельца. Летит только его сокетам:
+   * панель, открытая на втором устройстве, обязана обновиться, иначе она
+   * сохранит поверх свежей правки то, что показывала минуту назад.
+   */
+  'admin-changed': (payload: AdminChangedRelay) => void;
 }
 
 /** Вход в этот голосовой канал закрыт: нужен пароль сервера. */
