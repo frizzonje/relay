@@ -433,6 +433,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         const text = typeof data?.message === 'string' ? data.message : '';
         useContractStore.getState().setMaintenance(text);
       }
+      // Адрес закрыт списком владельца. Слово своё, не банное: попавший под
+      // маску мог не делать ничего, и экран у него тоже свой (см. BlockedGate).
+      if (err?.message === 'blocked') useContractStore.getState().setBlocked(true);
     });
 
     socket.on('connect', () => {
@@ -440,6 +443,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       if (useContractStore.getState().maintenance !== null) {
         useContractStore.setState({ maintenance: null });
       }
+      // И адрес открыт: владелец снял маску, пока клиент переподключался.
+      if (useContractStore.getState().blocked) useContractStore.setState({ blocked: false });
       // Дверь открылась — значит бана уже нет: разбанили, пока мы стучались.
       useModerationStore.getState().setBanned(false);
       // Разблокировки едут в handshake пропусками (см. lib/socket) и успевают

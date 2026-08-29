@@ -79,6 +79,7 @@ export const ADMIN_REFUSAL_KEYS: Record<AdminFieldError, MessageKey> = {
   'out-of-range': 'refused.admin.out-of-range',
   'not-an-option': 'refused.admin.not-an-option',
   'too-long': 'refused.admin.too-long',
+  'bad-item': 'refused.admin.bad-item',
   'secret-path': 'refused.admin.secret-path',
   'not-found': 'refused.admin.not-found',
   unsupported: 'refused.admin.unsupported',

@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { issueGuestToken, issueToken } from './auth/auth';
+import { issueGuestToken, issueToken, resetAddressDoor, useAddressDoor } from './auth/auth';
 import { authGate, flatUploadsOnly, uploadStaticHeaders } from './http-gate';
 
 /**
@@ -35,9 +35,13 @@ function reqres(path: string, headers: Record<string, string> = {}) {
 
 beforeEach(() => {
   delete process.env.SITE_PASSWORD;
+  resetAddressDoor();
 });
 afterEach(() => {
   delete process.env.SITE_PASSWORD;
+  // Дверь по адресу живёт на весь процесс: не вернув её открытой, мы закрыли бы
+  // её всему, что запускается следом.
+  resetAddressDoor();
 });
 
 describe('authGate', () => {
@@ -95,6 +99,101 @@ describe('authGate', () => {
     const t = reqres('/api/config', { authorization: `Bearer ${token}` });
     authGate(t.req, t.res, t.next);
     expect(t.passed()).toBe(false);
+  });
+});
+
+/**
+ * Список закрытых адресов запирает обе двери, и эта — вторая. Только сокет
+ * означал бы, что заблокированный по-прежнему тянет файлы и жжёт диск: за
+ * загрузками стоит именно этот гейт, а не сигналинг.
+ */
+describe('authGate и закрытые адреса', () => {
+  /** Дверь, которая считает, о ком её спросили. */
+  function door(closed: string[], owners: string[] = []) {
+    const asked: string[] = [];
+    useAddressDoor({
+      closed: (ip) => closed.includes(ip),
+      owner: async (cookie) => {
+        asked.push(cookie ?? '');
+        return owners.includes(cookie ?? '');
+      },
+    });
+    return asked;
+  }
+
+  it('с закрытого адреса отвечает 403 и словом «закрыт», а не «забанен»', async () => {
+    door(['10.7.1.2']);
+    const t = reqres('/uploads/кот.png');
+    (t.req as unknown as { ip: string }).ip = '10.7.1.2';
+    authGate(t.req, t.res, t.next);
+    await Promise.resolve();
+    expect(t.passed()).toBe(false);
+    // Не 401: пропуск тут ни при чём, и звать войти заново — звать делать
+    // бессмысленное.
+    expect(t.out.code).toBe(403);
+    expect(t.out.body).toEqual({ error: 'blocked' });
+  });
+
+  it('владельца с того же адреса пропускает', async () => {
+    door(['10.7.1.2'], ['relay_id=босс']);
+    const t = reqres('/uploads/кот.png', { cookie: 'relay_id=босс' });
+    (t.req as unknown as { ip: string }).ip = '10.7.1.2';
+    authGate(t.req, t.res, t.next);
+    await Promise.resolve();
+    expect(t.passed()).toBe(true);
+  });
+
+  it('о владении спрашивают только попавшего под маску', async () => {
+    // Дорогая половина проверки (поход в базу) не должна стоить ничего
+    // обычному запросу: под маску не попал — и спрашивать не о чем.
+    const asked = door(['10.7.1.2']);
+    const t = reqres('/api/metrics');
+    (t.req as unknown as { ip: string }).ip = '10.8.0.1';
+    authGate(t.req, t.res, t.next);
+    expect(t.passed()).toBe(true);
+    expect(asked).toEqual([]);
+  });
+
+  it('адрес берут из последней записи X-Forwarded-For', async () => {
+    // Первую пишет сам клиент; доверяем ровно одному хопу (`trust proxy: 1`).
+    door(['10.7.1.2']);
+    const t = reqres('/api/metrics', { 'x-forwarded-for': '8.8.8.8, 10.7.1.2' });
+    authGate(t.req, t.res, t.next);
+    await Promise.resolve();
+    expect(t.out.code).toBe(403);
+  });
+
+  it('живость спрашивают мимо списка — иначе опечатка в маске крутит контейнер', async () => {
+    // За /api/health стоит docker healthcheck из самого контейнера. Маска,
+    // случайно накрывшая свой же адрес, превращала бы описку в бесконечный
+    // перезапуск, а отдаёт этот путь только «жив ли процесс».
+    door(['10.7.1.2']);
+    const t = reqres('/api/health');
+    (t.req as unknown as { ip: string }).ip = '10.7.1.2';
+    authGate(t.req, t.res, t.next);
+    expect(t.passed()).toBe(true);
+  });
+
+  it('пустой список никого не закрывает — как было до панели', () => {
+    const t = reqres('/api/metrics');
+    (t.req as unknown as { ip: string }).ip = '10.7.1.2';
+    authGate(t.req, t.res, t.next);
+    expect(t.passed()).toBe(true);
+  });
+
+  it('упавший вопрос о владении закрывает дверь, а не открывает её', async () => {
+    useAddressDoor({
+      closed: () => true,
+      owner: async () => {
+        throw new Error('база молчит');
+      },
+    });
+    const t = reqres('/api/metrics');
+    authGate(t.req, t.res, t.next);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(t.passed()).toBe(false);
+    expect(t.out.code).toBe(403);
   });
 });
 

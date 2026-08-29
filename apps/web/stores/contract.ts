@@ -28,6 +28,15 @@ interface ContractState {
    */
   maintenance: string | null;
   setMaintenance: (text: string) => void;
+  /**
+   * Адрес, с которого стучится эта вкладка, закрыт владельцем.
+   *
+   * Флаг, а не текст: объяснять здесь нечего и незачем. За одним адресом сидит
+   * подъезд, институт, оператор — попавший под маску мог не делать ничего, и
+   * подробности о чужом конфликте ему не помогут, а обвинить его они успеют.
+   */
+  blocked: boolean;
+  setBlocked: (blocked: boolean) => void;
 }
 
 export const useContractStore = create<ContractState>((set) => ({
@@ -35,4 +44,6 @@ export const useContractStore = create<ContractState>((set) => ({
   setOutdated: (side) => set({ outdated: side }),
   maintenance: null,
   setMaintenance: (text) => set({ maintenance: text }),
+  blocked: false,
+  setBlocked: (blocked) => set({ blocked }),
 }));

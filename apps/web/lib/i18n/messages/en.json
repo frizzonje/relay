@@ -545,6 +545,7 @@
   "rail.server.create": "Create a server",
   "rail.server.locked": "{name} — password protected",
   "rail.settings": "Settings",
+  "refused.admin.bad-item": "One of the lines is not an address with a mask.",
   "refused.admin.forbidden": "Only the owner of this installation can change that.",
   "refused.admin.needs-confirm": "This one is not reversible, so it needs confirming first.",
   "refused.admin.not-an-option": "The server does not accept that choice for this setting.",
@@ -636,6 +637,8 @@
   "settings.hotkeys.recording": "Press the keys…",
   "settings.inputLevel": "Input level",
   "settings.inputLevel.hint": "The bar comes alive during a call — say something.",
+  "settings.key.access.blockedAddresses.hint": "Addresses and networks turned away at the door: 1.2.3.4, 10.0.0.0/8, 2001:db8::/32. A bare IPv6 address is stored as its /64 block — a single address inside one changes on its own. This is not a defence against load: the request still reaches the server, and a firewall in front of it is the tool for that. And it is not a ban on a person: a VPN or mobile data gets around it in a minute. The owner is never turned away.",
+  "settings.key.access.blockedAddresses.label": "Closed addresses",
   "settings.key.access.guestsEnabled.hint": "The door for guests. Off — a link stops letting anyone in, whoever came by one is turned away at the next connection, and identities are untouched.",
   "settings.key.access.guestsEnabled.label": "Guests by link",
   "settings.key.access.identityCreation.hint": "Closed means nobody gets a new key. Those who already have one keep coming in, and guest links keep working — a guest has no identity to create.",
@@ -1008,6 +1011,8 @@
   "voice.toast.speakerSwitched": "Speakers: {device}",
   "voice.toast.speakerSwitched.fallback": "device switched",
   "voice.toast.youAreDirect": "You are calling directly while the others go through the media server. They cannot hear you: rejoin the channel.",
+  "blocked.title": "This address is closed",
+  "blocked.body": "The owner of this installation has closed the address you are connecting from. If you share it with other people, they are affected too.",
   "maintenance.title": "Closed for maintenance",
   "maintenance.body": "The installation is unavailable for a while. Try again a bit later."
 }

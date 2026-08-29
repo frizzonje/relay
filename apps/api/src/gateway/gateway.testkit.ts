@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from 'vitest';
 import type { DataSource } from 'typeorm';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { resetAddressDoor } from '../auth/auth';
 import { AttachmentRow, ChannelRow, DeviceRow, IdentityRow, ServerRow } from '../db/entities';
 import { resetDatabase, testDatabase } from '../db/testing';
 import { fingerprint as fingerprintOf } from '../identity/crypto';
@@ -99,6 +100,10 @@ export function useGatewayStand() {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    // Дверь по адресу — модульная переменная на весь процесс: её ставит
+    // `afterInit` каждого поднятого гейтвея. Не вернув её открытой, мы оставили
+    // бы следующему файлу дверь от чужой, уже мёртвой базы.
+    resetAddressDoor();
   });
 }
 
@@ -356,9 +361,18 @@ export async function makeOwner(owner: OwnerService, identityId: string): Promis
   await owner.claim(token, identityId);
 }
 
-/** Попытка подключения вместе с тем, чем ответила дверь. */
-export async function knock(gw: SignalingGateway, server: FakeServer, cookie: string, id?: string) {
-  const sock = server.connect({ id, cookie });
+/**
+ * Попытка подключения вместе с тем, чем ответила дверь. `ip` — откуда пришли:
+ * его спрашивает список закрытых адресов, и подставить его иначе нечем.
+ */
+export async function knock(
+  gw: SignalingGateway,
+  server: FakeServer,
+  cookie: string,
+  id?: string,
+  ip?: string,
+) {
+  const sock = server.connect({ id, cookie, ip });
   const refused = await server.run(sock);
   if (!refused) gw.handleConnection(asSocket(sock));
   return { sock, refused };

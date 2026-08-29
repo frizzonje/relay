@@ -1,5 +1,7 @@
+import type { NextFunction, Request, Response } from 'express';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueGuestToken, issueToken } from '../auth/auth';
+import { authGate } from '../http-gate';
 import { asSocket } from './testkit';
 import { PROTOCOL_VERSION } from './protocol';
 import { defaults } from '../settings/catalog';
@@ -772,6 +774,131 @@ describe('режим обслуживания', () => {
     const { gw, server } = await makeGateway();
     const anon = await personCookie('Просто человек');
     expect((await knock(gw, server, anon.cookie)).refused).toBeUndefined();
+  });
+});
+
+describe('закрытые адреса', () => {
+  it('отвергает пришедшего с закрытого адреса — и не банным словом', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'access.blockedAddresses', ['10.7.0.0/16']);
+
+    const outsider = await knock(
+      gw,
+      server,
+      (await personCookie('Гостья')).cookie,
+      'g',
+      '10.7.1.2',
+    );
+    expect(outsider.refused?.message).toBe('blocked');
+    // За одним адресом сидит подъезд, институт, оператор: попавший под маску
+    // мог не делать ничего, и «вас забанили» обвинило бы невиновного.
+    expect(outsider.refused?.message).not.toBe('banned');
+  });
+
+  it('соседний адрес вне маски проходит', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'access.blockedAddresses', ['10.7.0.0/16']);
+    const ok = await knock(gw, server, (await personCookie('Сосед')).cookie, 'n', '10.8.1.2');
+    expect(ok.refused).toBeUndefined();
+  });
+
+  it('владельца с того же адреса пускает', async () => {
+    // Не из почтения: единственный путь назад на своей машине — ssh, и
+    // опечатка в маске иначе стоила бы владельцу доступа к панели, из которой
+    // эту опечатку и надо чинить.
+    const { gw, server, owner, settings } = await makeGateway();
+    const boss = await personCookie('Хозяйка');
+    await makeOwner(owner, boss.identityId);
+    await tune(settings, 'access.blockedAddresses', ['10.7.0.0/16']);
+
+    expect((await knock(gw, server, boss.cookie, 'boss', '10.7.1.2')).refused).toBeUndefined();
+  });
+
+  it('закрытый адрес важнее обслуживания: ждать «позже» ему незачем', async () => {
+    const { gw, server, settings } = await makeGateway();
+    await tune(settings, 'access.blockedAddresses', ['10.7.0.0/16']);
+    await tune(settings, 'maintenance.mode', true);
+    const out = await knock(gw, server, (await personCookie('Гостья')).cookie, 'g2', '10.7.1.2');
+    expect(out.refused?.message).toBe('blocked');
+  });
+
+  it('адрес берётся из последней записи X-Forwarded-For, а не из первой', async () => {
+    // Первую запись пишет сам клиент и пишет что хочет; доверяем ровно одному
+    // хопу (`trust proxy: 1`), то есть той, что добавил наш прокси.
+    const { server, settings } = await makeGateway();
+    await tune(settings, 'access.blockedAddresses', ['10.7.0.0/16']);
+    const sock = server.connect({ id: 'xff', cookie: (await personCookie('Хитрец')).cookie });
+    sock.handshake.headers['x-forwarded-for'] = '8.8.8.8, 10.7.1.2';
+    expect((await server.run(sock))?.message).toBe('blocked');
+  });
+
+  it('без записи в панели дверь открыта всем — как было всегда', async () => {
+    const { gw, server } = await makeGateway();
+    const anon = await personCookie('Просто человек');
+    expect((await knock(gw, server, anon.cookie, undefined, '10.7.1.2')).refused).toBeUndefined();
+  });
+});
+
+/**
+ * Вторая дверь — http. Дверей две, потому что одна означала бы, что
+ * заблокированный по-прежнему тянет файлы и жжёт диск: за загрузками стоит
+ * `authGate`, а не сигналинг. Здесь она проверяется в живой связке — гейтвей
+ * ставит её сам, в `afterInit`, и подделки между ними нет.
+ */
+describe('закрытые адреса на http', () => {
+  /** Минимальный запрос и ответ express — гейту хватает пути, кук и адреса. */
+  function reqres(path: string, ip: string, cookie?: string) {
+    const res = {
+      code: 0,
+      status(code: number) {
+        this.code = code;
+        return this;
+      },
+      json() {
+        return this;
+      },
+    };
+    const next = vi.fn();
+    return {
+      req: { path, ip, headers: cookie ? { cookie } : {} } as unknown as Request,
+      res: res as unknown as Response,
+      next: next as unknown as NextFunction,
+      passed: () => next.mock.calls.length === 1,
+      out: res,
+    };
+  }
+
+  it('пришедшего с закрытого адреса не пускает и к загрузкам', async () => {
+    const { settings } = await makeGateway();
+    await tune(settings, 'access.blockedAddresses', ['10.7.0.0/16']);
+    const t = reqres('/uploads/кот.png', '10.7.1.2');
+    authGate(t.req, t.res, t.next);
+    await vi.waitFor(() => expect(t.out.code).toBe(403));
+    expect(t.passed()).toBe(false);
+  });
+
+  it('владельца с того же адреса пускает обеими дверями', async () => {
+    const { gw, server, owner, settings } = await makeGateway();
+    const boss = await personCookie('Хозяйка');
+    await makeOwner(owner, boss.identityId);
+    await tune(settings, 'access.blockedAddresses', ['10.7.0.0/16']);
+
+    expect((await knock(gw, server, boss.cookie, 'boss', '10.7.1.2')).refused).toBeUndefined();
+    const t = reqres('/uploads/кот.png', '10.7.1.2', boss.cookie);
+    authGate(t.req, t.res, t.next);
+    await vi.waitFor(() => expect(t.passed()).toBe(true));
+  });
+
+  it('незаблокированный не платит за выяснение владения ничего', async () => {
+    // Порядок здесь и есть смысл: сперва маски в памяти, и лишь для попавшего
+    // под маску — поход в базу. Обычный запрос не должен стоить запроса.
+    const { owner, settings } = await makeGateway();
+    await tune(settings, 'access.blockedAddresses', ['10.7.0.0/16']);
+    const asked = vi.spyOn(owner, 'isOwner');
+    const t = reqres('/uploads/кот.png', '10.8.0.1');
+    authGate(t.req, t.res, t.next);
+    await vi.waitFor(() => expect(t.passed()).toBe(true));
+    expect(asked).not.toHaveBeenCalled();
   });
 });
 

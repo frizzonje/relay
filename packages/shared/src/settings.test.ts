@@ -15,7 +15,9 @@ import {
 import {
   SETTINGS,
   SETTING_GROUPS,
+  addressBlocked,
   defaults,
+  normalizeAddressPrefix,
   settingSpec,
   validateSetting,
   type SettingGroup,
@@ -130,8 +132,8 @@ describe('проверка значения', () => {
     expect(validateSetting('files.allowedKinds', [1])).toEqual({ ok: false, error: 'wrong-type' });
   });
 
-  it('знает все 94 параметра каталога', () => {
-    expect(SETTINGS.length).toBe(94);
+  it('знает все 95 параметров каталога', () => {
+    expect(SETTINGS.length).toBe(95);
     expect(settingSpec('maintenance.mode')?.danger).toBe(true);
   });
 });
@@ -144,10 +146,10 @@ describe('проверка значения', () => {
 
 describe('состав групп', () => {
   // Числа — из плана (раздел «Каталог параметров»). Тест ловит не опечатку в
-  // сумме, а потерянную или удвоенную строку: `SETTINGS.length === 94` сходится
+  // сумме, а потерянную или удвоенную строку: `SETTINGS.length === 95` сходится
   // и тогда, когда один параметр забыт, а другой написан дважды.
   const expected: Record<SettingGroup, number> = {
-    access: 10,
+    access: 11,
     people: 6,
     moderation: 12,
     messages: 10,
@@ -478,5 +480,92 @@ describe('копия каталога в api', () => {
       'utf8',
     );
     expect(theirs).toContain("import type { AttachmentKind } from '../uploads';");
+  });
+});
+
+/**
+ * Список закрытых адресов: разбор, каноническая запись и совпадение.
+ *
+ * Проверяется здесь не «функция вернула правду», а три обещания, каждое из
+ * которых ломается тихо. Первое: строка, которая адресом не является, в
+ * таблицу не попадает — иначе она лежала бы там как настройка и не делала бы
+ * ничего. Второе: голый IPv6 разворачивается в /64 и виден развёрнутым — бан
+ * одного /128 перестал бы действовать через несколько минут (RFC 4941), ничего
+ * об этом не сказав. Третье: семьи адресов не смешиваются.
+ */
+describe('закрытые адреса', () => {
+  const check = (items: string[]) => validateSetting('access.blockedAddresses', items);
+
+  it('принимает адрес, сеть и обе версии протокола', () => {
+    expect(check(['1.2.3.4', '10.0.0.0/8', '2001:db8::/32', '::1'])).toEqual({
+      ok: true,
+      value: ['1.2.3.4', '10.0.0.0/8', '2001:db8::/32', '::/64'],
+    });
+  });
+
+  it('строку, которая адресом не является, отвергает с отдельной причиной', () => {
+    // Не `wrong-type`: тип как раз тот, строка. Панель обязана сказать, что
+    // непонятен ПУНКТ, а не весь список.
+    for (const bad of ['1.2.3.4/33', '10.0.0.0/-1', '2001:db8::/129', 'не адрес', '', '1.2.3.4 ']) {
+      expect(check([bad]), bad).toEqual({ ok: false, error: 'bad-item' });
+    }
+  });
+
+  it('голый IPv6 сохраняется своим блоком /64, и это видно на экране', () => {
+    // Жильё раздаётся блоком /64, адрес внутри него меняется сам собой.
+    // Разворачиваем при записи, а не при сравнении: владелец обязан увидеть,
+    // во что превратилась его строка.
+    expect(check(['2001:db8::1'])).toEqual({ ok: true, value: ['2001:db8::/64'] });
+  });
+
+  it('маска обнуляет то, что за ней, — сеть это сеть, а не адрес внутри неё', () => {
+    expect(check(['10.1.2.3/8', '2001:db8:1:2:3::/48'])).toEqual({
+      ok: true,
+      value: ['10.0.0.0/8', '2001:db8:1::/48'],
+    });
+  });
+
+  it('IPv4 в обёртке IPv6 — тот же самый IPv4', () => {
+    // Так Node называет IPv4-клиента на двойном сокете; не разбери мы эту
+    // форму, маска выглядела бы работающей и не работала.
+    expect(check(['::ffff:10.0.0.0/8'])).toEqual({ ok: true, value: ['10.0.0.0/8'] });
+    expect(addressBlocked(['10.0.0.0/8'], '::ffff:10.1.2.3')).toBe(true);
+  });
+
+  it('ловит адрес внутри сети и не ловит вне её', () => {
+    expect(addressBlocked(['10.0.0.0/8'], '10.1.2.3')).toBe(true);
+    expect(addressBlocked(['10.0.0.0/16'], '10.1.2.3')).toBe(false);
+    expect(addressBlocked(['1.2.3.4'], '1.2.3.4')).toBe(true);
+    expect(addressBlocked(['1.2.3.4'], '1.2.3.5')).toBe(false);
+    expect(addressBlocked(['2001:db8::/32'], '2001:db8:1:2::9')).toBe(true);
+    expect(addressBlocked(['2001:db8::/32'], '2001:dba::9')).toBe(false);
+  });
+
+  it('семьи не смешиваются: IPv4 не попадает под IPv6-маску', () => {
+    // `::/0`, написанный ради «закрыть всё шестое», иначе закрыл бы и
+    // четвёртое — то есть инсталляцию целиком.
+    expect(addressBlocked(['::/0'], '10.1.2.3')).toBe(false);
+    expect(addressBlocked(['0.0.0.0/0'], '2001:db8::1')).toBe(false);
+    expect(addressBlocked(['0.0.0.0/0'], '10.1.2.3')).toBe(true);
+  });
+
+  it('пустой список не закрывает никого, а непонятный адрес не ловится', () => {
+    expect(addressBlocked([], '10.1.2.3')).toBe(false);
+    // Так socket.io называет адрес, которого не знает.
+    expect(addressBlocked(['0.0.0.0/0'], 'unknown')).toBe(false);
+  });
+
+  it('каноническая запись годится обратно на вход', () => {
+    // Иначе сохранённое второй раз отвергалось бы собственной проверкой.
+    for (const item of ['1.2.3.4', '10.0.0.0/8', '2001:db8::/32', '::/64', '::ffff:1.2.3.4']) {
+      const first = normalizeAddressPrefix(item);
+      expect(first, item).not.toBeNull();
+      expect(normalizeAddressPrefix(first as string)).toBe(first);
+    }
+  });
+
+  it('клиенту список не уезжает', () => {
+    // С кем воюет владелец — не дело чужого браузера, и уж точно не гостевого.
+    expect(settingSpec('access.blockedAddresses')?.client).toBeUndefined();
   });
 });

@@ -1,5 +1,12 @@
 import type { NextFunction, Request, Response } from 'express';
-import { authEnabled, hasValidGuestBearer, isAuthorized } from './auth/auth';
+import {
+  addressClosed,
+  addressOwner,
+  authEnabled,
+  hasValidGuestBearer,
+  isAuthorized,
+} from './auth/auth';
+import { clientIp } from './gateway/unlock';
 
 /**
  * Две миддлвары, стоящие перед всем остальным http api. Живут отдельно от
@@ -11,6 +18,42 @@ import { authEnabled, hasValidGuestBearer, isAuthorized } from './auth/auth';
 // (иначе войти было бы невозможно). Фронт и его статику раздаёт Next, а
 // редирект неавторизованных на /login делает middleware Next — здесь 401 JSON.
 export function authGate(req: Request, res: Response, next: NextFunction) {
+  // Закрытые адреса — раньше пропуска и мимо него: пропуск у заблокированного
+  // может быть совершенно настоящим, а речь не о том, кто он, а о том, откуда
+  // он пришёл. Проверка дешёвая (маски в памяти) и при пустом списке — а он
+  // пуст, пока владелец не написал ни строчки, — стоит одного сравнения.
+  //
+  // /api/health не спрашиваем вовсе. За ним стоит docker healthcheck из самого
+  // контейнера, и маска, случайно накрывшая свой же адрес, превращала бы
+  // опечатку в бесконечный перезапуск. Отдаёт он только «жив ли процесс».
+  if (
+    req.path !== '/api/health' &&
+    addressClosed(clientIp({ headers: req.headers, address: req.ip }))
+  ) {
+    // Под маску попал и владелец — а его не запирает никогда: единственный путь
+    // назад на своей машине это ssh, и опечатка в маске иначе стоила бы ему
+    // доступа к собственной панели. Здесь и только здесь платим походом в базу.
+    void addressOwner(req.headers.cookie).then(
+      (owner) => (owner ? admit(req, res, next) : refuseAddress(res)),
+      () => refuseAddress(res),
+    );
+    return;
+  }
+  admit(req, res, next);
+}
+
+/**
+ * Отказ по адресу — 403, а не 401. Пропуск тут ни при чём: предъявить нечего,
+ * и предлагать войти заново значит звать человека делать бессмысленное.
+ * Причина названа отдельным словом — за одним адресом сидит подъезд, институт
+ * или оператор, и «вы забанены» обвинило бы того, кто ничего не делал.
+ */
+function refuseAddress(res: Response): void {
+  res.status(403).json({ error: 'blocked' });
+}
+
+/** Всё остальное — пропуск, как было всегда. */
+function admit(req: Request, res: Response, next: NextFunction) {
   if (!authEnabled()) return next();
   // /api/health публичен: по нему стоят docker healthcheck и внешний мониторинг,
   // и оба обязаны работать без куки. Содержимое — только «жив ли процесс»,

@@ -13,6 +13,7 @@ import { AdmitDeviceDialog } from '@/components/layout/AdmitDeviceDialog';
 import { OwnerClaimDialog } from '@/components/layout/OwnerClaimDialog';
 import { BannedGate } from '@/components/layout/BannedGate';
 import { MaintenanceGate } from '@/components/layout/MaintenanceGate';
+import { BlockedGate } from '@/components/layout/BlockedGate';
 import { OutdatedGate } from '@/components/layout/OutdatedGate';
 import { ServerRail } from '@/components/layout/ServerRail';
 import { Toolbar } from '@/components/layout/Toolbar';
@@ -220,6 +221,7 @@ export function AppShell() {
       <BannedGate />
       <OutdatedGate />
       <MaintenanceGate />
+      <BlockedGate />
     </div>
   );
 }

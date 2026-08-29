@@ -60,6 +60,52 @@ export function siteSecret(): SiteSecret {
 }
 
 /**
+ * Дверь по адресу — для тех, у кого нет DI.
+ *
+ * Список закрытых адресов (`access.blockedAddresses`) держит контур доступа:
+ * там же и настройки, и личности, и владение. Но спрашивает его не только
+ * сокет: http-гейт стоит перед загрузками, и закрой мы одну лишь дверь
+ * сигналинга, заблокированный по-прежнему тянул бы файлы и жёг диск. Гейт —
+ * обычная express-миддлвара, контейнера в ней нет, поэтому связь ставится
+ * подстановкой, ровно как у `useSiteSecret` строкой выше.
+ *
+ * Две функции, а не одна, потому что стоят они по-разному дорого, и порядок
+ * между ними — это и есть смысл: `closed` считает маски в памяти и платится за
+ * каждый запрос, `owner` идёт в базу и спрашивается ТОЛЬКО о том, кто уже
+ * попал под маску. Обычный запрос не платит за владение ничего.
+ */
+export interface AddressDoor {
+  /** Попал ли адрес под одну из масок владельца. */
+  closed(ip: string): boolean;
+  /** Владелец ли предъявитель этих кук — его не запирает никогда. */
+  owner(cookie: string | undefined): Promise<boolean>;
+}
+
+const DOOR_OPEN: AddressDoor = { closed: () => false, owner: async () => false };
+
+let addressDoor: AddressDoor = DOOR_OPEN;
+
+/** Гейтвей поднялся — на вопрос «закрыт ли адрес» отвечает контур доступа. */
+export function useAddressDoor(door: AddressDoor): void {
+  addressDoor = door;
+}
+
+/** Вернуть дверь открытой. Нужно тестам: источник живёт на весь процесс. */
+export function resetAddressDoor(): void {
+  addressDoor = DOOR_OPEN;
+}
+
+/** Дешёвая половина: попал ли адрес под маску. */
+export function addressClosed(ip: string): boolean {
+  return addressDoor.closed(ip);
+}
+
+/** Дорогая половина: владелец ли это. Спрашивать только о попавшем под маску. */
+export function addressOwner(cookie: string | undefined): Promise<boolean> {
+  return addressDoor.owner(cookie);
+}
+
+/**
  * Материал ключа подписи. Пустая строка — ворот нет, и подпись в этом случае
  * ни от чего не защищает (её и не спрашивают: `verifyToken` пускает всех).
  *

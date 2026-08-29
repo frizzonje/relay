@@ -3,6 +3,8 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { IdentityService, type Speaker } from '../identity/identity.service';
 import { OwnerService } from '../identity/owner.service';
 import { RolesService } from '../identity/roles.service';
+import type { AddressDoor } from '../auth/auth';
+import { addressBlocked } from '../settings/catalog';
 import type { SettingsService } from '../settings/settings.service';
 import type { AppServer, AppSocket, TokenBucket } from './socket-data';
 import { Channel, ServerEntry } from './registry';
@@ -22,8 +24,13 @@ export interface GuestPass {
  * Причина уезжает клиенту текстом ошибки подключения: другого канала у
  * отвергнутого сокета нет, а «переподключаюсь» вместо объяснения — худший из
  * ответов на «почему меня не пускает».
+ *
+ * Причин три, и разными они сделаны намеренно. `blocked` — не `banned`: за
+ * одним адресом сидит подъезд, институт, оператор, и попавший под маску мог не
+ * делать ничего. Сказать ему «вас забанили» значит обвинить невиновного, а
+ * делать по этим двум новостям надо разное.
  */
-export type DoorRefusal = 'banned' | 'maintenance';
+export type DoorRefusal = 'banned' | 'maintenance' | 'blocked';
 
 /**
  * Общий лимитер действий сокета: всплеск и скорость пополнения.
@@ -152,6 +159,15 @@ export class Perimeter {
       this.logger.error(`не удалось узнать личность сокета: ${e}`);
     }
     if (socket.data.banned === true) return 'banned';
+    // Закрытый адрес — раньше обслуживания. Обслуживание кончится, а адрес
+    // останется закрытым: сказать «загляните позже» тому, кого не пустят и
+    // позже, значит послать его ждать впустую.
+    //
+    // Владельца не запирает никогда, и это тот же порядок, что у обслуживания,
+    // и не из почтения: единственный путь назад на самостоятельной машине —
+    // ssh, а опечатка в маске иначе стоила бы владельцу доступа к собственной
+    // панели, из которой эту опечатку и надо чинить.
+    if (!this.isOwner(socket) && this.addressClosed(clientIp(socket.handshake))) return 'blocked';
     // Обслуживание пускает владельца и отвергает остальных. Владельца называет
     // та же проверка владения, что и везде (`OwnerService`), — она уже
     // отработала строкой выше. Иначе «режим обслуживания» держался бы на том,
@@ -164,6 +180,51 @@ export class Perimeter {
   /** Инсталляция закрыта на обслуживание. */
   maintenance(): boolean {
     return this.settings.get<boolean>('maintenance.mode');
+  }
+
+  /**
+   * Попал ли адрес под одну из масок владельца.
+   *
+   * Не защита от нагрузки: запрос всё равно дошёл до Node, оплатив TLS, — и
+   * инструмент против потока стоит перед приложением, а не здесь. И не запрет
+   * человеку: VPN и мобильный интернет обходят такой список за минуту. Он
+   * делает ровно одно и делает это хорошо: смена адреса стоит дороже, чем
+   * заведение новой личности, и этой разницы хватает, чтобы «прекрати сейчас
+   * же» стало исполнимым.
+   */
+  addressClosed(ip: string): boolean {
+    return addressBlocked(this.settings.get<string[]>('access.blockedAddresses'), ip);
+  }
+
+  /**
+   * Та же дверь для http (`authGate`). Отдана наружу целиком, а не двумя
+   * функциями порознь, потому что порядок в ней и есть смысл: сперва дешёвая
+   * проверка по списку, и лишь для попавшего под маску — поход в базу за
+   * владением. Закрой мы одну лишь дверь сигналинга, заблокированный
+   * по-прежнему тянул бы файлы и жёг диск.
+   */
+  httpDoor(): AddressDoor {
+    return {
+      closed: (ip) => this.addressClosed(ip),
+      owner: (cookie) => this.ownerByCookie(cookie),
+    };
+  }
+
+  /**
+   * Владелец ли предъявитель этих кук. Своя дорога, а не `recognize`: у
+   * http-запроса нет сокета, на котором можно было бы запомнить ответ, — и
+   * именно поэтому спрашивается это только о том, кто уже попал под маску.
+   */
+  private async ownerByCookie(cookie: string | undefined): Promise<boolean> {
+    try {
+      const speaker = await this.identities.fromCookie(cookie);
+      return !!speaker && (await this.owner.isOwner(speaker.id));
+    } catch (e) {
+      // Не узнали — значит не владелец. Молчать нельзя: единственная запись о
+      // том, что база не ответила, была бы здесь.
+      this.logger.error(`не удалось выяснить владение по куке: ${e}`);
+      return false;
+    }
   }
 
   /**

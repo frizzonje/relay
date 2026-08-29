@@ -24,7 +24,7 @@ import { RegistryHandlers } from './registry.handlers';
 import { VoiceHandlers } from './voice.handlers';
 import { Perimeter } from './perimeter';
 import { VoiceSessions } from './voice-sessions';
-import { isAuthorized, verifyGuestToken } from '../auth/auth';
+import { isAuthorized, useAddressDoor, verifyGuestToken } from '../auth/auth';
 import { IdentityService } from '../identity/identity.service';
 import { OwnerService } from '../identity/owner.service';
 import { PrefsService } from '../identity/prefs.service';
@@ -135,6 +135,14 @@ export const SERVER_OUTDATED_ERROR = 'server-outdated';
  * по-разному, и сказать одно вместо другого значит соврать.
  */
 export const MAINTENANCE_ERROR = 'maintenance';
+
+/**
+ * Отказ во входе с закрытого адреса. Слово своё, не банное, и это решение, а не
+ * оформление: за одним адресом сидит подъезд, институт, оператор, и попавший
+ * под маску мог не делать ничего. «Ваш адрес закрыт» и «вас забанили» — разные
+ * новости, и делать по ним надо разное.
+ */
+export const BLOCKED_ERROR = 'blocked';
 
 /**
  * Версия контракта, названная клиентом. `undefined` — не назвал вовсе, то есть
@@ -392,6 +400,11 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    */
   afterInit(server: AppServer): void {
     this.watchSettings(server);
+    // Список закрытых адресов запирает обе двери, а не одну. Http-гейт стоит
+    // перед загрузками и контейнера не знает, поэтому дверь ему передаётся
+    // подстановкой — так же, как настройки передают ему пароль инсталляции.
+    // Только сокет означал бы, что заблокированный по-прежнему тянет файлы.
+    useAddressDoor(this.perimeter.httpDoor());
     server.use((socket, next) => {
       // Версия контракта — раньше всего остального: у сокета, говорящего на
       // другом языке, спрашивать личность бессмысленно. До 1.0 версии не было
@@ -420,6 +433,10 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
         if (refusal) {
           if (refusal === 'banned') {
             next(new Error(BANNED_ERROR));
+            return;
+          }
+          if (refusal === 'blocked') {
+            next(new Error(BLOCKED_ERROR));
             return;
           }
           // Текст обслуживания едет ВМЕСТЕ с отказом, а не снимком настроек:

@@ -253,6 +253,7 @@ describe('константы совпадают с копией в api', () => {
       'out-of-range',
       'not-an-option',
       'too-long',
+      'bad-item',
       'secret-path',
       'not-found',
       'unsupported',
