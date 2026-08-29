@@ -9,6 +9,7 @@ import { springPop } from '@/lib/motion';
 import { useIsMobile } from '@/lib/use-mobile';
 import { useUiStore } from '@/stores/ui';
 import { useDmStore, useUnreadCount, useUnreadIn } from '@/stores/dm';
+import { useOwnerStore } from '@/stores/owner';
 import { useT } from '@/lib/i18n';
 
 /**
@@ -26,7 +27,6 @@ interface Target {
   icon: IconName;
   label: string;
   active?: boolean;
-  disabled?: boolean;
   onClick?: () => void;
   testId?: string;
   /** Непрочитанное на цели. 0 — бейджа нет вовсе (см. `TargetButton`). */
@@ -45,7 +45,11 @@ interface Target {
  * человеку, и кнопка для этого стоит там, где он назван: в шапке беседы и в
  * карточке собеседника. Отдельная цель в рейке вела бы в никуда: выбирать
  * собеседника пришлось бы всё равно, то есть открывать те же ЛС.
- * `Admin` нарисован, но выключен: админка распахнётся этапом C.
+ *
+ * Цель «Админ» видна ОДНОМУ ВЛАДЕЛЬЦУ. Это не проверка прав — их проверяет
+ * сервер на каждом событии панели (§9 протокола): кнопка, которую клиент не
+ * нарисовал, ничего не запрещает. Просто остальным она вела бы в окно, которое
+ * сервер тут же закрыл бы отказом.
  *
  * На `Direct` висит бейдж непрочитанного, под целями — лица тех, с кем говорили
  * последними (`RecentPeers`). Бейдж нужен ровно там, где лиц не хватает: их
@@ -59,6 +63,9 @@ export function Toolbar() {
   const dmSection = useUiStore((s) => s.dmSection);
   const inDm = useUiStore((s) => s.view === 'dm');
   const toggleDmSection = useUiStore((s) => s.toggleDmSection);
+  const adminOpen = useUiStore((s) => s.adminOpen);
+  const setAdminOpen = useUiStore((s) => s.setAdminOpen);
+  const owner = useOwnerStore((s) => s.owner);
   const unread = useUnreadCount();
 
   const targets: Target[] = [
@@ -73,21 +80,29 @@ export function Toolbar() {
       testId: 'toolbar-direct',
       badge: unread,
     },
-    { key: 'admin', icon: 'shield', label: t('toolbar.admin'), disabled: true },
   ];
+
+  if (owner) {
+    targets.push({
+      key: 'admin',
+      icon: 'shield',
+      label: t('toolbar.admin'),
+      active: adminOpen,
+      onClick: () => setAdminOpen(true),
+      testId: 'toolbar-admin',
+    });
+  }
 
   return mobile ? <ToolbarStrip targets={targets} /> : <ToolbarRail targets={targets} />;
 }
 
 /**
- * Кнопка-цель. Выключенные цели не получают HTML `disabled`: этот атрибут
- * заодно глушит наведение мышью и фокус с клавиатуры, а тултип и «скоро» в
- * названии — единственное, что объясняет пустую с виду кнопку, — тогда были
- * бы недоступны ни мышью, ни клавиатурой.
+ * Кнопка-цель.
  *
- * Отсюда два разных места для одного и того же «скоро»: `title` — для наведения
- * мышью (человек видит текст рядом с курсором), `aria-label` — для скринридера
- * (у него нет курсора, и всплывающая подсказка мимо него проходит).
+ * Два разных места для одного и того же названия: `title` — для наведения мышью
+ * (человек видит текст рядом с курсором), `aria-label` — для скринридера (у
+ * него нет курсора, и всплывающая подсказка мимо него проходит). У цели с
+ * бейджем они расходятся: в подсказку идёт название, диктору — со счётом.
  */
 function TargetButton({
   target,
@@ -115,8 +130,7 @@ function TargetButton({
       data-testid={target.testId}
       title={tooltip}
       aria-label={accessibleLabel}
-      aria-disabled={target.disabled || undefined}
-      onClick={target.disabled ? undefined : target.onClick}
+      onClick={target.onClick}
       className={className}
     >
       <Icon name={target.icon} className="text-[20px]" strokeWidth={1.8} />
@@ -147,19 +161,16 @@ function TargetButton({
 }
 
 /**
- * Название, которое озвучит скринридер: у выключенных целей — с пометкой
- * «скоро», у цели с бейджем — со счётом. Бейдж нарисован `aria-hidden`: цифра
- * без своего названия («3») диктору ничего не говорит, а вот «ЛС, 3
- * непрочитанные переписки» — говорит.
+ * Название, которое озвучит скринридер: у цели с бейджем — со счётом. Бейдж
+ * нарисован `aria-hidden`: цифра без своего названия («3») диктору ничего не
+ * говорит, а вот «ЛС, 3 непрочитанные переписки» — говорит.
  */
-function accessibleLabel(target: Target, soon: string, unread: string): string {
-  if (target.disabled) return `${target.label} — ${soon}`;
+function accessibleLabel(target: Target, unread: string): string {
   return target.badge ? `${target.label} — ${unread}` : target.label;
 }
 
 function ToolbarRail({ targets }: { targets: Target[] }) {
   const t = useT();
-  const soon = t('dm.soon');
   return (
     <nav
       aria-label={t('toolbar.label')}
@@ -175,24 +186,20 @@ function ToolbarRail({ targets }: { targets: Target[] }) {
           // разом на странице сделали бы id неоднозначным. Дока на телефоне
           // нет, возвращать фокус там некому.
           id={target.key === 'direct' ? DM_ENTRY_ID : undefined}
-          tooltip={target.disabled ? soon : target.label}
+          tooltip={target.label}
           accessibleLabel={accessibleLabel(
             target,
-            soon,
             t('toolbar.direct.unread', { count: target.badge ?? 0 }),
           )}
           badgeRing="ring-bg-rail"
           className={cn(
-            // focus-visible живёт в базовой строке, а не в одной из веток: цель
-            // остаётся фокусируемой (не получает HTML `disabled`, см. комментарий
-            // TargetButton) во всех трёх состояниях, и кольцо обязано следовать за
-            // ней везде — иначе таб останавливается на невидимой точке экрана.
+            // focus-visible живёт в базовой строке, а не в одной из веток:
+            // кольцо обязано следовать за целью в обоих состояниях, иначе таб
+            // останавливается на невидимой точке экрана.
             'relative grid h-11 w-11 shrink-0 place-items-center rounded-[14px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong',
-            target.disabled
-              ? 'cursor-not-allowed text-text-faint'
-              : target.active
-                ? 'bg-bg-active text-text-header'
-                : 'text-text-muted hover:bg-bg-hover hover:text-text-header',
+            target.active
+              ? 'bg-bg-active text-text-header'
+              : 'text-text-muted hover:bg-bg-hover hover:text-text-header',
           )}
         />
       ))}
@@ -343,7 +350,6 @@ function PeerFace({ conversation, strip }: { conversation: DmConversation; strip
 
 function ToolbarStrip({ targets }: { targets: Target[] }) {
   const t = useT();
-  const soon = t('dm.soon');
   return (
     <nav
       aria-label={t('toolbar.label')}
@@ -354,10 +360,9 @@ function ToolbarStrip({ targets }: { targets: Target[] }) {
           <TargetButton
             key={target.key}
             target={target}
-            tooltip={target.disabled ? soon : target.label}
+            tooltip={target.label}
             accessibleLabel={accessibleLabel(
               target,
-              soon,
               t('toolbar.direct.unread', { count: target.badge ?? 0 }),
             )}
             badgeRing="ring-bg-sidebar"
@@ -365,11 +370,9 @@ function ToolbarStrip({ targets }: { targets: Target[] }) {
             className={cn(
               // Та же логика, что и в рейке: кольцо — в базовой строке, вне веток.
               'relative flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 rounded-[10px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong',
-              target.disabled
-                ? 'cursor-not-allowed text-text-faint'
-                : target.active
-                  ? 'bg-bg-active text-text-header'
-                  : 'text-text-muted hover:bg-bg-hover hover:text-text-header',
+              target.active
+                ? 'bg-bg-active text-text-header'
+                : 'text-text-muted hover:bg-bg-hover hover:text-text-header',
             )}
           />
         ))}

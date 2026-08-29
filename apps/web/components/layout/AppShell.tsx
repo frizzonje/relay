@@ -8,6 +8,7 @@ import { useIsMobile } from '@/lib/use-mobile';
 import { targetView, useUiStore, type MobilePanel } from '@/stores/ui';
 import { useOwnerStore } from '@/stores/owner';
 import { usePairingStore } from '@/stores/pairing';
+import { AdminDialog } from '@/components/admin/AdminDialog';
 import { AdmitDeviceDialog } from '@/components/layout/AdmitDeviceDialog';
 import { OwnerClaimDialog } from '@/components/layout/OwnerClaimDialog';
 import { BannedGate } from '@/components/layout/BannedGate';
@@ -207,6 +208,10 @@ export function AppShell() {
           тот уехал (см. DmDrawer). Палитра, открытая изнутри, оказалась бы
           обрезанной по 232 точки, а закрыть её было бы нечем. */}
       <PeoplePicker open={pickerOpen} onOpenChange={setPickerOpen} />
+
+      {/* Панель инсталляции — окно поверх всего, как и настройки. Рисуется
+          только владельцу и себя же прячет, когда власть уходит. */}
+      <AdminDialog />
 
       {/* Одно на приложение: зовут его и из панели устройств, и из ссылки. */}
       <AdmitDeviceDialog />

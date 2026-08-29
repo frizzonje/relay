@@ -7,6 +7,7 @@ import { Toolbar } from './Toolbar';
 import { useDmStore } from '@/stores/dm';
 import { useUnreadStore } from '@/stores/unread';
 import { useUiStore } from '@/stores/ui';
+import { useOwnerStore } from '@/stores/owner';
 
 /**
  * Полоса тулбара на телефоне. Проверяем то, ради чего лица вообще появились в
@@ -75,9 +76,11 @@ describe('полоса тулбара на телефоне', () => {
       dmSection: false,
       pendingScene: null,
       stageLive: false,
+      adminOpen: false,
     });
     useDmStore.getState().reset();
     useUnreadStore.setState({ lastRead: {} });
+    useOwnerStore.setState({ owner: false });
     useDmStore.getState().setConversations(conversations);
     host = document.createElement('div');
     document.body.appendChild(host);
@@ -152,9 +155,11 @@ describe('цели тулбара', () => {
       dmSection: false,
       pendingScene: null,
       stageLive: false,
+      adminOpen: false,
     });
     useDmStore.getState().reset();
     useUnreadStore.setState({ lastRead: {} });
+    useOwnerStore.setState({ owner: false });
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -165,20 +170,26 @@ describe('цели тулбара', () => {
     host.remove();
   });
 
-  it('выключенные цели остаются доступны мышью и с клавиатуры', () => {
-    // Это конвенция проекта, а не вкус: HTML `disabled` выбрасывает кнопку из
-    // обхода табом и глушит наведение, а тултип и `aria-label` со «скоро» —
-    // единственное, что объясняет нарисованную, но мёртвую кнопку. Регрессия
-    // такого рода в ветке уже случалась (карточка собеседника, f0e4711), и
-    // ревью ветки показало, что здесь, в самом компоненте, где конвенция и
-    // заведена, её не стерёг никто: `disabled` возвращался — 555 тестов
-    // оставались зелёными.
+  it('цель админки видна одному владельцу', () => {
+    // Не проверка прав — их проверяет сервер на каждом событии панели (§9
+    // протокола). Но кнопка, ведущая в окно, которое сервер тут же закроет
+    // отказом, — это обещание, которого интерфейс не выполнит.
     render();
+    expect(target(/Админ|Admin/)).toBeUndefined();
+
+    act(() => useOwnerStore.setState({ owner: true }));
     const button = target(/Админ|Admin/);
+    expect(button).toBeTruthy();
     expect(button.disabled).toBe(false);
     expect(button.tabIndex).toBe(0);
-    expect(button.getAttribute('aria-disabled')).toBe('true');
-    expect(button.getAttribute('aria-label')).toMatch(/скоро|soon/i);
+  });
+
+  it('нажатие на неё открывает панель инсталляции', () => {
+    act(() => useOwnerStore.setState({ owner: true }));
+    render();
+    expect(useUiStore.getState().adminOpen).toBe(false);
+    act(() => target(/Админ|Admin/).click());
+    expect(useUiStore.getState().adminOpen).toBe(true);
   });
 
   it('звонка среди целей нет', () => {
