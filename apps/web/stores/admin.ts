@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type {
   AdminAction,
   AdminActionResult,
+  AdminAuditResult,
   AdminBansResult,
   AdminChangedRelay,
   AdminOverview,
@@ -11,6 +12,8 @@ import type {
   AdminResetResult,
   AdminSetResult,
   AdminStateResult,
+  AuditCursor,
+  AuditEntry,
   BanEntry,
   SettingGroup,
   SettingSpec,
@@ -137,6 +140,26 @@ interface AdminState {
   bans: BanEntry[];
   bansBusy: boolean;
   bansLoaded: boolean;
+
+  /**
+   * Журнал — от свежих строк к старым, страницами.
+   *
+   * Курсора в ответе сервера нет, и это не упущение: страницу продолжают
+   * ВРЕМЕНЕМ И ID ПОСЛЕДНЕЙ ПОКАЗАННОЙ СТРОКИ, а они уже здесь. Курсор из
+   * одного времени терял бы соседку по той же миллисекунде — сброс группы
+   * пишет строки пачкой, — и потеря была бы тихой: в журнале просто не хватало
+   * бы записи, о которой никто не знает.
+   */
+  audit: AuditEntry[];
+  /** Ниже что-то есть. Считает сервер лишней строкой, а не панель на глаз. */
+  auditMore: boolean;
+  auditBusy: boolean;
+  auditLoaded: boolean;
+  /**
+   * Отказ по журналу. Отдельно от `listError` (люди и баны) намеренно: это
+   * разные вкладки, и отказ одной поверх работающей другой был бы враньём.
+   */
+  auditError: AdminFieldError | null;
   /**
    * Отказ на список целиком (людей не отдали, баны не отдали). Отдельно от
    * `error`, который гасит всю панель: список — одна её вкладка, и молчать о
@@ -169,6 +192,25 @@ interface AdminState {
   unban: (fingerprint: string) => Promise<AdminFieldError | null>;
   revokeDevice: (deviceId: string) => Promise<AdminFieldError | null>;
 
+  /** Первая страница журнала. */
+  loadAudit: () => Promise<void>;
+  /** Продолжить журнал с последней показанной строки. */
+  moreAudit: () => Promise<void>;
+
+  /**
+   * Действие обслуживания — то, что делают кнопкой.
+   *
+   * Ответ возвращается ЦЕЛИКОМ и в стор не кладётся: в нём приезжает то, что
+   * существует ровно один раз (ключ владельца) или относится к одному нажатию
+   * (сколько подмели, что отвергнул импорт). Ключу владельца в сторе не место
+   * тем более: стор переживает переключение вкладок, а ключ не должен пережить
+   * даже ухода с экрана.
+   */
+  runAction: (
+    action: AdminAction,
+    opts?: { confirm?: boolean; target?: string; values?: Record<string, unknown> },
+  ) => Promise<Answered<AdminActionResult>>;
+
   reset: () => void;
 }
 
@@ -189,6 +231,11 @@ const initial: Pick<
   | 'bans'
   | 'bansBusy'
   | 'bansLoaded'
+  | 'audit'
+  | 'auditMore'
+  | 'auditBusy'
+  | 'auditLoaded'
+  | 'auditError'
   | 'listError'
 > = {
   loaded: false,
@@ -206,6 +253,11 @@ const initial: Pick<
   bans: [],
   bansBusy: false,
   bansLoaded: false,
+  audit: [],
+  auditMore: false,
+  auditBusy: false,
+  auditLoaded: false,
+  auditError: null,
   listError: null,
 };
 
@@ -460,6 +512,70 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
     return null;
   },
 
+  loadAudit: async () => {
+    patch({ auditBusy: true, auditError: null });
+    // Без курсора — с самого верха: сервер отдаёт от свежих к старым.
+    const res = await ack<AdminAuditResult>((cb) => getSocket().emit('admin-audit', {}, cb));
+    if (!res.ok) {
+      patch({ auditBusy: false, auditError: res.error });
+      return;
+    }
+    patch({ audit: res.entries, auditMore: res.more, auditBusy: false, auditLoaded: true });
+  },
+
+  moreAudit: async () => {
+    const { audit, auditMore, auditBusy } = get();
+    if (!auditMore || auditBusy) return;
+    const last = audit.at(-1);
+    // Продолжать нечего: строк нет вовсе. Спросить без курсора значило бы
+    // показать ту же первую страницу второй раз.
+    if (!last) return;
+    // ВРЕМЯ И ID, а не одно время: в одну миллисекунду попадает несколько
+    // записей (сброс группы пишет их пачкой), и страница по одному времени
+    // теряла бы соседку по этой миллисекунде — молча и навсегда.
+    const cursor: AuditCursor = { at: last.at, id: last.id };
+    patch({ auditBusy: true, auditError: null });
+    const res = await ack<AdminAuditResult>((cb) =>
+      getSocket().emit('admin-audit', { cursor }, cb),
+    );
+    if (!res.ok) {
+      patch({ auditBusy: false, auditError: res.error });
+      return;
+    }
+    patch((s) => ({
+      audit: [...s.audit, ...res.entries],
+      auditMore: res.more,
+      auditBusy: false,
+    }));
+  },
+
+  runAction: async (action, opts) => {
+    const res = await ack<AdminActionResult>((cb) =>
+      getSocket().emit(
+        'admin-action',
+        {
+          action,
+          // Ничего лишнего в запросе: посылать «подтверждения нет» там, где
+          // ничего не спрашивали, — способ однажды послать «да» опечаткой.
+          ...(opts?.confirm ? { confirm: true } : {}),
+          ...(opts?.target ? { target: opts.target } : {}),
+          ...(opts?.values ? { values: opts.values } : {}),
+        },
+        cb,
+      ),
+    );
+    // Импорт меняет разом десятки полей, и снимок в панели после него —
+    // вчерашний. Перечитываем состояние: иначе следующая правка легла бы поверх
+    // значения, которого на сервере уже нет.
+    //
+    // Перечитываем, но НЕ ЖДЁМ. Исход импорта — это ответ на нажатие, и держать
+    // его до конца второго запроса значит молчать в ответ на действие: при
+    // молчащем сервере — все шесть секунд ожидания, после которых человек
+    // успевает нажать второй раз. Снимок догонит сам, он никого не задерживает.
+    if (res.ok && action === 'import') void get().load();
+    return res;
+  },
+
   reset: () => {
     pending.clear();
     confirmed.clear();
@@ -477,9 +593,7 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
  * панель показала диалог, сервер не станет и не должен.
  */
 function act(action: AdminAction, target: string): Promise<Answered<AdminActionResult>> {
-  return ack<AdminActionResult>((cb) =>
-    getSocket().emit('admin-action', { action, target, confirm: true }, cb),
-  );
+  return useAdminStore.getState().runAction(action, { target, confirm: true });
 }
 
 /**

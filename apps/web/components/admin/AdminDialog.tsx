@@ -15,6 +15,9 @@ import { useUiStore } from '@/stores/ui';
 import { SettingField } from '@/components/admin/SettingField';
 import { PeopleTab } from '@/components/admin/PeopleTab';
 import { BansTab } from '@/components/admin/BansTab';
+import { OverviewTab } from '@/components/admin/OverviewTab';
+import { AuditTab } from '@/components/admin/AuditTab';
+import { UpkeepTab } from '@/components/admin/UpkeepTab';
 
 /**
  * Панель инсталляции — окно владельца.
@@ -45,7 +48,16 @@ import { BansTab } from '@/components/admin/BansTab';
  * (длина ника, показывать ли отпечатки), и две вкладки с одним именем спорили
  * бы и на экране, и в разметке.
  */
-const EXTRA_TABS = ['identities', 'bans'] as const;
+const LEAD_TABS = ['overview'] as const;
+
+/**
+ * Обслуживание зовётся `upkeep`, а не `maintenance`, по той же причине, что и
+ * `identities`: `maintenance` — это ГРУППА ПАРАМЕТРОВ (режим обслуживания и
+ * текст к нему). Имя, занятое группой, здесь занять нельзя.
+ */
+const TAIL_TABS = ['identities', 'bans', 'audit', 'upkeep'] as const;
+
+const EXTRA_TABS = [...LEAD_TABS, ...TAIL_TABS] as const;
 
 type ExtraTab = (typeof EXTRA_TABS)[number];
 type AdminTab = SettingGroup | ExtraTab;
@@ -86,7 +98,9 @@ export function AdminDialog() {
   // и вызов ничего не делает). Тот же приём, что в личных настройках.
   const navRef = useRef<HTMLElement>(null);
   const groups = useMemo(() => groupsOf(catalog), [catalog]);
-  const tabs = useMemo<AdminTab[]>(() => [...groups, ...EXTRA_TABS], [groups]);
+  // Сводка первой: панель чаще всего открывают вопросом «жива ли машина и
+  // сколько там всего», и начинать с поля настройки значило бы прятать ответ.
+  const tabs = useMemo<AdminTab[]>(() => [...LEAD_TABS, ...groups, ...TAIL_TABS], [groups]);
   const active = tab && tabs.includes(tab) ? tab : (tabs[0] ?? null);
   useEffect(() => {
     // `scrollIntoView?.` — не перестраховка: в jsdom его нет вовсе, и без
@@ -130,7 +144,7 @@ export function AdminDialog() {
             <Fragment key={item}>
               {/* Черта отделяет параметры от того, что параметрами не правится:
                   на списке людей нечего сбрасывать к умолчаниям. */}
-              {at === groups.length && (
+              {(at === LEAD_TABS.length || at === LEAD_TABS.length + groups.length) && (
                 <div
                   aria-hidden
                   className="my-1.5 border-t border-line max-md:my-0 max-md:ml-1 max-md:mr-1 max-md:border-l max-md:border-t-0"
@@ -208,10 +222,16 @@ export function AdminDialog() {
                   exit="exit"
                   className="flex flex-col gap-2.5"
                 >
-                  {active === 'identities' ? (
+                  {active === 'overview' ? (
+                    <OverviewTab />
+                  ) : active === 'identities' ? (
                     <PeopleTab />
                   ) : active === 'bans' ? (
                     <BansTab />
+                  ) : active === 'audit' ? (
+                    <AuditTab />
+                  ) : active === 'upkeep' ? (
+                    <UpkeepTab />
                   ) : (
                     <>
                       {fields.map((spec) => (
@@ -221,7 +241,7 @@ export function AdminDialog() {
                       {/* «Вернуть к умолчаниям» — только у вкладки параметров:
                           у списка людей умолчаний нет, и кнопка там означала бы
                           неизвестно что. */}
-                      {active && (
+                      {active && !isExtra(active) && (
                         <button
                           type="button"
                           data-testid="admin-reset-group"

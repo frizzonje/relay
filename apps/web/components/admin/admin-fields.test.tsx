@@ -351,6 +351,8 @@ describe('поле рисуется по виду параметра, а не п
 
   it('незнакомый параметр получает контрол по своему виду', async () => {
     await open(invented, Object.fromEntries(invented.map((s) => [s.key, s.fallback])));
+    // Панель открывается на «Обзоре»: до полей надо дойти, как и везде в файле.
+    await showGroupOf(invented[0]);
 
     expect(field('zzz.flag')?.querySelector('[role="switch"]')).toBeTruthy();
     expect(field('zzz.count')?.querySelector('input[type="number"]')).toBeTruthy();
@@ -362,6 +364,7 @@ describe('поле рисуется по виду параметра, а не п
 
   it('незнакомый параметр называется своим ключом, а не пустотой', async () => {
     await open(invented, Object.fromEntries(invented.map((s) => [s.key, s.fallback])));
+    await showGroupOf(invented[0]);
     // Машинное имя хуже подписи, но лучше пустого места, за которое не взяться.
     expect(field('zzz.flag')?.textContent).toContain('zzz.flag');
     // И «когда подействует» у него тоже есть — это свойство каталога.
