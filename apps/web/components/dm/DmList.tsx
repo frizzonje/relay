@@ -4,11 +4,13 @@ import { AnimatePresence, motion } from 'framer-motion';
 import type { DmConversation } from '@relay/shared';
 import { Icon } from '@/components/ui/icon';
 import { Identicon } from '@/components/ui/Identicon';
+import { PresenceDot } from '@/components/ui/PresenceDot';
 import { cn } from '@/lib/utils';
 import { fmtListWhen, shortFingerprint } from '@/lib/format';
 import { listItem, springLayout } from '@/lib/motion';
 import { useT } from '@/lib/i18n';
 import { useDmStore, useUnreadIn } from '@/stores/dm';
+import { usePresence } from '@/stores/presence';
 import { useSetting } from '@/stores/config';
 import { sceneTarget, useUiStore } from '@/stores/ui';
 
@@ -25,6 +27,7 @@ function DmRow({
   const unread = useUnreadIn(conversation.slug, active);
   const showFingerprints = useSetting<boolean>('people.showFingerprints');
   const { peer } = conversation;
+  const presence = usePresence(peer.fingerprint);
   return (
     <div
       role="button"
@@ -43,7 +46,14 @@ function DmRow({
         active && 'bg-bg-active',
       )}
     >
-      <Identicon fingerprint={peer.fingerprint} size={34} className="shrink-0" />
+      <div className="relative h-[34px] w-[34px] shrink-0">
+        <Identicon fingerprint={peer.fingerprint} size={34} />
+        <PresenceDot
+          state={presence}
+          size={11}
+          className="absolute -bottom-0.5 -right-0.5 ring-2 ring-bg-sidebar"
+        />
+      </div>
       {/* Две строки с ясным делением: кто (ник и отпечаток) и что (превью,
           когда, непрочитано). Прежде время и метка стояли отдельным столбцом
           справа, забирая ширину у обоих рядов разом, — на 232 точках панели

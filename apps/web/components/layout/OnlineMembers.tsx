@@ -9,13 +9,21 @@ import { useChatStore } from '@/stores/chat';
 import { useSetting } from '@/stores/config';
 import { avatarStyle } from '@/lib/avatar';
 import { Identicon } from '@/components/ui/Identicon';
+import { PresenceDot } from '@/components/ui/PresenceDot';
 import { shortFingerprint } from '@/lib/format';
 import { useRichT, useT } from '@/lib/i18n';
+import { usePresence } from '@/stores/presence';
 
 /**
  * Правая колонка текстового канала (раздел 05 референса, 232px): «В сети» —
  * просто присутствующие в канале, без микрофон-статусов. Ростер приходит с
  * сервера событием `chat-roster` и лежит в chat-сторе. Видна только в тексте.
+ *
+ * Точка присутствия — из глобального стора (`stores/presence.ts`), а не
+ * буквально `online`: строка в этом списке означает лишь «подписан на канал
+ * прямо сейчас», а человек мог одновременно быть в голосовом канале — и тогда
+ * точке положено показать `in-voice`, а не соврать зелёным. У ростера без
+ * отпечатка (аноним без ключа) точки нет вовсе — presence не знает, кто это.
  */
 export function OnlineMembers() {
   const t = useT();
@@ -40,48 +48,87 @@ export function OnlineMembers() {
       <div className="flex-1 overflow-y-auto px-2 py-3">
         <AnimatePresence initial={false}>
           {roster.map(({ nick, fingerprint }) => (
-            <motion.div
+            <RosterRow
               // Ключ строки — отпечаток: имена не уникальны, и два тёзки
               // делили бы одну строку списка, мигая друг другом при каждом
               // изменении состава.
               key={fingerprint || `nick:${nick}`}
-              layout
-              variants={listItem}
-              initial="hidden"
-              animate="show"
-              exit="exit"
-              transition={springLayout}
-              className="flex items-center gap-2.5 rounded-[8px] px-2 py-1.5 transition-colors hover:bg-bg-hover"
-            >
-              <div className="relative h-8 w-8 shrink-0 after:absolute after:-bottom-0.5 after:-right-0.5 after:h-[11px] after:w-[11px] after:rounded-full after:border-2 after:border-bg-sidebar after:bg-ok after:content-['']">
-                {fingerprint ? (
-                  <Identicon fingerprint={fingerprint} size={32} />
-                ) : (
-                  <div className="h-full w-full rounded-full" style={avatarStyle(nick)} />
-                )}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div
-                  className={cn(
-                    'truncate text-[14px]',
-                    nick === me ? 'font-semibold text-text-header' : 'text-text',
-                  )}
-                >
-                  {nick === me ? t('common.you', { name: nick }) : nick}
-                </div>
-                {/* Картинка для узнавания, текст для сверки: лицо запоминают
-                    боковым зрением, а спорный случай разбирают по отпечатку —
-                    и тогда его надо иметь под рукой, а не в тултипе. */}
-                {fingerprint && showFingerprints && (
-                  <div className="truncate font-mono text-[10px] tracking-[0.06em] text-text-faint">
-                    {shortFingerprint(fingerprint)}
-                  </div>
-                )}
-              </div>
-            </motion.div>
+              nick={nick}
+              fingerprint={fingerprint}
+              me={me}
+              showFingerprints={showFingerprints}
+            />
           ))}
         </AnimatePresence>
       </div>
     </aside>
+  );
+}
+
+/**
+ * Отдельным компонентом, а не строкой прямо в `.map`: `usePresence` — хук, а
+ * число строк ростера меняется от рендера к рендеру. Вызови его прямо внутри
+ * `.map`, и число хуков `OnlineMembers` за один рендер плавало бы вместе с
+ * составом — именно то, что React запрещает.
+ */
+function RosterRow({
+  nick,
+  fingerprint,
+  me,
+  showFingerprints,
+}: {
+  nick: string;
+  fingerprint?: string;
+  me: string;
+  showFingerprints: boolean;
+}) {
+  const t = useT();
+  // Без отпечатка presence спрашивать не о ком — usePresence('') читает
+  // несуществующую запись и просто вернёт 'offline', а рисоваться дальше
+  // всё равно не будет: ветка ниже точку в этом случае не выводит.
+  const presence = usePresence(fingerprint ?? '');
+  return (
+    <motion.div
+      layout
+      variants={listItem}
+      initial="hidden"
+      animate="show"
+      exit="exit"
+      transition={springLayout}
+      className="flex items-center gap-2.5 rounded-[8px] px-2 py-1.5 transition-colors hover:bg-bg-hover"
+    >
+      <div className="relative h-8 w-8 shrink-0">
+        {fingerprint ? (
+          <>
+            <Identicon fingerprint={fingerprint} size={32} />
+            <PresenceDot
+              state={presence}
+              size={11}
+              className="absolute -bottom-0.5 -right-0.5 ring-2 ring-bg-sidebar"
+            />
+          </>
+        ) : (
+          <div className="h-full w-full rounded-full" style={avatarStyle(nick)} />
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div
+          className={cn(
+            'truncate text-[14px]',
+            nick === me ? 'font-semibold text-text-header' : 'text-text',
+          )}
+        >
+          {nick === me ? t('common.you', { name: nick }) : nick}
+        </div>
+        {/* Картинка для узнавания, текст для сверки: лицо запоминают боковым
+            зрением, а спорный случай разбирают по отпечатку — и тогда его
+            надо иметь под рукой, а не в тултипе. */}
+        {fingerprint && showFingerprints && (
+          <div className="truncate font-mono text-[10px] tracking-[0.06em] text-text-faint">
+            {shortFingerprint(fingerprint)}
+          </div>
+        )}
+      </div>
+    </motion.div>
   );
 }

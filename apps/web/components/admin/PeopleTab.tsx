@@ -5,11 +5,13 @@ import type { AdminDevice, AdminPerson } from '@relay/shared';
 import { cn } from '@/lib/utils';
 import { Icon } from '@/components/ui/icon';
 import { Identicon } from '@/components/ui/Identicon';
+import { PresenceDot } from '@/components/ui/PresenceDot';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { fmtSince, shortFingerprint } from '@/lib/format';
 import { useT, type Translate } from '@/lib/i18n';
 import { adminRefusalKey, type AdminFieldError } from '@/lib/refusals';
 import { useAdminStore } from '@/stores/admin';
+import { usePresence } from '@/stores/presence';
 
 /**
  * Вкладка «Личности»: кто заведён в этой инсталляции.
@@ -195,6 +197,7 @@ function PersonRow({
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
+  const presence = usePresence(person.fingerprint);
 
   return (
     <div
@@ -202,7 +205,14 @@ function PersonRow({
       className="rounded-[10px] border border-line bg-bg-elev/60 px-3.5 py-3"
     >
       <div className="flex items-center gap-3">
-        <Identicon fingerprint={person.fingerprint} size={34} className="shrink-0" />
+        <div className="relative h-[34px] w-[34px] shrink-0">
+          <Identicon fingerprint={person.fingerprint} size={34} />
+          <PresenceDot
+            state={presence}
+            size={11}
+            className="absolute -bottom-0.5 -right-0.5 ring-2 ring-bg-elev"
+          />
+        </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate text-[14px] font-medium text-text-header">{person.nick}</span>
@@ -339,9 +349,13 @@ function Tag({ tone, children }: { tone: 'accent' | 'danger'; children: string }
 /**
  * «Когда видели». Слово «в сети» здесь не пишется намеренно: сервер отмечает
  * личность в тот миг, когда она входит, и больше не трогает, — так что свежая
- * отметка означает «недавно входил», а не «сидит сейчас». Признака присутствия
- * в протоколе панели нет вовсе (§9.3), а выдуманный по свежести он врал бы
- * ровно там, где на него посмотрят: у того, кто закрыл вкладку минуту назад.
+ * отметка означает «недавно входил», а не «сидит сейчас». В протоколе панели
+ * (§9.3) признака присутствия по-прежнему нет — эта строка его и не изображает,
+ * выдуманный по свежести отметки он врал бы ровно там, где на него посмотрят:
+ * у того, кто закрыл вкладку минуту назад. Настоящее «сейчас» стоит рядом,
+ * точкой на лице (`PresenceDot`) — оно приезжает отдельным путём, из
+ * глобального стора присутствия (`stores/presence.ts`, задача 2 плана B), а
+ * не из этого списка личностей.
  */
 function seenNote(t: Translate, at: number | null): string {
   if (!at) return t('admin.people.never');

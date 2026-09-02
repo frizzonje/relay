@@ -11,6 +11,7 @@ import { useUiStore, myName } from '@/stores/ui';
 import { useChatStore } from '@/stores/chat';
 import { useUnreadStore, LAST_READ_KEY } from '@/stores/unread';
 import { useDmStore } from '@/stores/dm';
+import { usePresenceStore } from '@/stores/presence';
 import { useChannelsStore } from '@/stores/channels';
 import { useIdentityStore } from '@/stores/identity';
 import { useContractStore } from '@/stores/contract';
@@ -168,6 +169,18 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     socket.on('chat-roster', (people) => {
       if (!openSlug() || !Array.isArray(people)) return;
       chat().setRoster(people);
+    });
+    // Глобальное присутствие личности (не путать с ростером выше — тот про
+    // «кто в этом канале», это про «где вообще этот человек», см.
+    // stores/presence.ts). Снимок приходит один раз на подключение, дельта —
+    // сколько угодно раз за сессию; открытого канала для них не требуется.
+    socket.on('presence', (people) => {
+      if (!Array.isArray(people)) return;
+      usePresenceStore.getState().applySnapshot(people);
+    });
+    socket.on('presence-update', (changed) => {
+      if (!Array.isArray(changed)) return;
+      usePresenceStore.getState().applyDelta(changed);
     });
     socket.on('chat-reaction', ({ id, reactions }) => {
       if (!openSlug() || !id) return;
@@ -629,6 +642,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('chat');
       socket.off('chat-history');
       socket.off('chat-roster');
+      socket.off('presence');
+      socket.off('presence-update');
       socket.off('chat-reaction');
       socket.off('chat-edited');
       socket.off('chat-deleted');

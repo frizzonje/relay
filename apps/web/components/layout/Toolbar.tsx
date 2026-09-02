@@ -4,11 +4,13 @@ import { AnimatePresence, motion } from 'framer-motion';
 import type { DmConversation } from '@relay/shared';
 import { Icon, type IconName } from '@/components/ui/icon';
 import { Identicon } from '@/components/ui/Identicon';
+import { PresenceDot } from '@/components/ui/PresenceDot';
 import { cn } from '@/lib/utils';
 import { springPop } from '@/lib/motion';
 import { useIsMobile } from '@/lib/use-mobile';
 import { useUiStore } from '@/stores/ui';
 import { useDmStore, useUnreadCount, useUnreadIn } from '@/stores/dm';
+import { usePresence } from '@/stores/presence';
 import { useOwnerStore } from '@/stores/owner';
 import { useT } from '@/lib/i18n';
 
@@ -52,10 +54,11 @@ interface Target {
  * сервер тут же закрыл бы отказом.
  *
  * На `Direct` висит бейдж непрочитанного, под целями — лица тех, с кем говорили
- * последними (`RecentPeers`). Бейдж нужен ровно там, где лиц не хватает: их
- * шесть, а бесед может быть больше, и без него непрочитанное в седьмой не видно
- * НИГДЕ, пока раздел свёрнут. Присутствие («кто в сети») по-прежнему ждёт
- * своего стора — этап B.
+ * последними (`RecentPeers`), и на каждом — точка присутствия из глобального
+ * стора (`stores/presence.ts`, задача 2 плана B): по ней сразу видно, кому
+ * дозвониться сейчас, а не только с кем недавно переписывались. Бейдж нужен
+ * ровно там, где лиц не хватает: их шесть, а бесед может быть больше, и без
+ * него непрочитанное в седьмой не видно НИГДЕ, пока раздел свёрнут.
  */
 export function Toolbar() {
   const t = useT();
@@ -275,7 +278,11 @@ function RecentPeers({ strip }: { strip?: boolean }) {
  * пикселей он нечитаем, а само лицо и есть отпечаток, только рисунком (см.
  * lib/identicon.ts).
  *
- * В полосе (`strip`) от этого остаётся только цель и метка непрочитанного:
+ * Точка присутствия садится в НИЖНИЙ правый угол лица (30px) в обеих
+ * раскладках, метка непрочитанного — в ВЕРХНИЙ: два разных сигнала об одном
+ * человеке не должны бороться за один угол.
+ *
+ * В полосе (`strip`) от подсказки остаётся только цель и метка непрочитанного:
  * подсказки на телефоне не бывает — она держится на ховере, — а метку нельзя
  * вешать на внешний край, потому что внешнего края у горизонтальной полосы
  * нет: соседнее лицо стоит вплотную. Поэтому там точка ВНУТРИ цели.
@@ -284,7 +291,11 @@ function PeerFace({ conversation, strip }: { conversation: DmConversation; strip
   const active = useUiStore((s) => s.dmRoom === conversation.slug);
   const openDm = useUiStore((s) => s.openDm);
   const unread = useUnreadIn(conversation.slug, active);
+  const presence = usePresence(conversation.peer.fingerprint);
   const nick = conversation.peer.nick;
+  // Кольцо, отделяющее точку от фона: рейка и полоса стоят на разных панелях
+  // (`bg-rail` против `bg-sidebar`), и одно кольцо на обе выглядело бы швом.
+  const ring = strip ? 'ring-bg-sidebar' : 'ring-bg-rail';
 
   return (
     <div className="group/face relative shrink-0">
@@ -299,14 +310,22 @@ function PeerFace({ conversation, strip }: { conversation: DmConversation; strip
           active && 'bg-bg-active ring-1 ring-inset ring-white/15',
         )}
       >
-        <Identicon fingerprint={conversation.peer.fingerprint} size={30} />
+        <span className="relative block h-[30px] w-[30px]">
+          <Identicon fingerprint={conversation.peer.fingerprint} size={30} />
+          <PresenceDot
+            state={presence}
+            size={10}
+            className={cn('absolute -bottom-0.5 -right-0.5 ring-2', ring)}
+          />
+        </span>
       </button>
 
       {strip ? (
-        // Точка у самого лица, а не в углу цели: цель 44px, лицо в ней 30px, и
-        // метка в углу коробки висела бы в пустоте отдельно от того, к чему
-        // относится. Знак и цвет — те же, что у строки списка переписок
-        // (см. DmList); кольцо по цвету полосы отделяет её от рисунка лица.
+        // Точка непрочитанного у самого лица, а не в углу цели: цель 44px,
+        // лицо в ней 30px, и метка в углу коробки висела бы в пустоте отдельно
+        // от того, к чему относится. Знак и цвет — те же, что у строки списка
+        // переписок (см. DmList); кольцо по цвету полосы отделяет её от
+        // рисунка лица.
         unread && (
           <span
             aria-hidden

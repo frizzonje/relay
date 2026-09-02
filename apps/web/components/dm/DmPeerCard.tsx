@@ -3,9 +3,11 @@
 import { Icon } from '@/components/ui/icon';
 import { cn } from '@/lib/utils';
 import { Identicon } from '@/components/ui/Identicon';
+import { PresenceDot } from '@/components/ui/PresenceDot';
 import { shortFingerprint } from '@/lib/format';
 import { useT } from '@/lib/i18n';
 import { useUiStore } from '@/stores/ui';
+import { PRESENCE_LABEL_KEY, usePresence } from '@/stores/presence';
 import { useSetting } from '@/stores/config';
 
 /**
@@ -14,11 +16,11 @@ import { useSetting } from '@/stores/config';
  * этот компонент встаёт рядом с `DmThread`, а не в колонке состава каркаса —
  * у беседы нет ни ростера, ни списка «в сети», которым та колонка служит).
  *
- * Присутствия для беседы в этапе A нет: живой статус собеседника приедет
- * вместе со звонком 1:1 (план B, docs/plans/relay-2.0-calls.md). До тех пор
- * карточка честно говорит «неизвестно», а не подставляет чужое (голосовое)
- * присутствие или молчит о нём. Кнопка звонка нарисована, но выключена — тем
- * же приёмом, что Call/Admin в Toolbar (задача 8): HTML `disabled` ей НЕ
+ * Присутствие («в сети / в голосе / недавно») теперь берётся из глобального
+ * `stores/presence.ts` (задача 2 плана B) — того же стора, что и точка в
+ * шапке беседы (см. DmThread) и в списке переписок (см. DmList). Кнопка звонка
+ * нарисована, но пока выключена — сам дозвон приедет следующей задачей плана
+ * — тем же приёмом, что Call/Admin в Toolbar (задача 8): HTML `disabled` ей НЕ
  * ставится. Этот атрибут заодно выбрасывает кнопку из обхода табом и глушит
  * наведение мышью, а тултип и `aria-label` — единственное, что объясняет, почему
  * она ничего не делает; с `disabled` объяснение стало бы недоступно ни мышью,
@@ -30,6 +32,9 @@ export function DmPeerCard() {
   const nick = useUiStore((s) => s.textLabel);
   const dmSection = useUiStore((s) => s.dmSection);
   const showFingerprints = useSetting<boolean>('people.showFingerprints');
+  // Хук вызывается безусловно (правило хуков), даже когда peer ещё пуст —
+  // usePresence('') просто читает несуществующую запись и вернёт `offline`.
+  const presence = usePresence(peer ?? '');
 
   // Беседа ещё не выбрана (переходный кадр смены сцены) — рисовать чужое
   // лицо или пустую карточку нечем.
@@ -54,7 +59,14 @@ export function DmPeerCard() {
           размытие каждый кадр (см. lib/identicon.ts), а здесь рядом и так
           написано словами, в сети человек или нет: движение тут ничего не
           добавляет, кроме счёта. */}
-      <Identicon fingerprint={peer} size={64} />
+      <div className="relative h-16 w-16">
+        <Identicon fingerprint={peer} size={64} />
+        <PresenceDot
+          state={presence}
+          size={16}
+          className="absolute -bottom-0.5 -right-0.5 ring-[3px] ring-bg-sidebar"
+        />
+      </div>
       <div className="flex flex-col items-center gap-1 text-center">
         <span className="max-w-full truncate text-[15px] font-bold text-text-header">{nick}</span>
         {showFingerprints && (
@@ -62,7 +74,7 @@ export function DmPeerCard() {
             {shortFingerprint(peer)}
           </span>
         )}
-        <span className="text-[12px] text-text-muted">{t('dm.header.status.unknown')}</span>
+        <span className="text-[12px] text-text-muted">{t(PRESENCE_LABEL_KEY[presence])}</span>
       </div>
       <button
         type="button"

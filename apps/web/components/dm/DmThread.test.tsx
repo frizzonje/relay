@@ -6,6 +6,7 @@ import { DmThread } from './DmThread';
 import { shortFingerprint } from '@/lib/format';
 import { useChatStore } from '@/stores/chat';
 import { useUiStore } from '@/stores/ui';
+import { usePresenceStore } from '@/stores/presence';
 
 /**
  * `ChatPanel` (внутри `DmThread`) спрашивает срок хранения через `/api/config`
@@ -55,6 +56,7 @@ describe('шапка беседы', () => {
       dmSection: true,
     });
     useChatStore.getState().reset();
+    usePresenceStore.getState().reset();
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -77,5 +79,11 @@ describe('шапка беседы', () => {
   it('внизу сказано, что переписку видит владелец сервера', () => {
     const out = markup();
     expect(/владел|owner/i.test(out)).toBe(true);
+  });
+
+  it('статус в шапке — из глобального стора присутствия, а не заглушка', () => {
+    usePresenceStore.getState().applySnapshot([{ fingerprint, state: 'in-voice', since: 1000 }]);
+    const out = markup();
+    expect(/in a call|в голосе/i.test(out)).toBe(true);
   });
 });

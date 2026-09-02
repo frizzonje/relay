@@ -9,14 +9,25 @@ import { useUiStore } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import { avatarStyle } from '@/lib/avatar';
 import { Identicon } from '@/components/ui/Identicon';
+import { PresenceDot } from '@/components/ui/PresenceDot';
 import { useRichT, useT } from '@/lib/i18n';
 
 /**
  * Правая колонка «В канале» (раздел 02 референса, 232px). Смысл имеет только в
  * голосовом канале, поэтому в лобби/тексте скрыта. Состав = плитки голосового
- * менеджера (своя + собеседники). У каждого — аватар с зелёным online-индикатором,
- * имя и строка статуса: «говорит» (зелёным, по speakingIds) либо «в эфире»;
- * у своей заглушённой плитки — перечёркнутый микрофон.
+ * менеджера (своя + собеседники). У каждого — аватар с точкой присутствия
+ * (`PresenceDot`, единая для всего веба, см. её комментарий), имя и строка
+ * статуса: «говорит» (зелёным, по speakingIds) либо «в эфире»; у своей
+ * заглушённой плитки — перечёркнутый микрофон.
+ *
+ * Точка здесь стоит `in-voice` буквально, а не из глобального стора
+ * присутствия: плитка появляется в `tiles` ровно тогда, когда человек уже в
+ * этой самой комнате, — спрашивать про это отдельно у presence значило бы
+ * ждать круговое подтверждение сервера ради факта, который уже виден локально,
+ * и на долю секунды после входа показывать себе устаревшее «в сети» вместо «в
+ * голосе». У гостя (плитка без отпечатка — приглашённый по ссылке) точки нет
+ * вовсе: presence не знает о нём ничего, у него нет личности, и рисовать
+ * что-либо от его имени значило бы придумывать.
  */
 export function Members() {
   const t = useT();
@@ -59,9 +70,16 @@ export function Members() {
                     отзывается само изображение — поле бьётся поясами изнутри
                     наружу. Обводка поверх этого была бы вторым индикатором
                     одного и того же, а слово «говорит» стоит строкой ниже. */}
-                <div className="relative h-8 w-8 shrink-0 after:absolute after:-bottom-0.5 after:-right-0.5 after:h-[11px] after:w-[11px] after:rounded-full after:border-2 after:border-bg-sidebar after:bg-ok after:content-['']">
+                <div className="relative h-8 w-8 shrink-0">
                   {tile.fingerprint ? (
-                    <Identicon fingerprint={tile.fingerprint} size={32} speaking={speaking} />
+                    <>
+                      <Identicon fingerprint={tile.fingerprint} size={32} speaking={speaking} />
+                      <PresenceDot
+                        state="in-voice"
+                        size={11}
+                        className="absolute -bottom-0.5 -right-0.5 ring-2 ring-bg-sidebar"
+                      />
+                    </>
                   ) : (
                     <div className="h-full w-full rounded-full" style={avatarStyle(tile.name)} />
                   )}

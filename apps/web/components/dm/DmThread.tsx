@@ -2,9 +2,11 @@
 
 import { ChatPanel } from '@/components/chat/ChatPanel';
 import { Identicon } from '@/components/ui/Identicon';
+import { PresenceDot } from '@/components/ui/PresenceDot';
 import { shortFingerprint } from '@/lib/format';
 import { useT } from '@/lib/i18n';
 import { useUiStore } from '@/stores/ui';
+import { PRESENCE_LABEL_KEY, usePresence } from '@/stores/presence';
 import { useOwnerText, useSetting } from '@/stores/config';
 
 /**
@@ -24,6 +26,7 @@ export function DmThread() {
   const peer = useUiStore((s) => s.dmPeer);
   const nick = useUiStore((s) => s.textLabel);
   const showFingerprints = useSetting<boolean>('people.showFingerprints');
+  const presence = usePresence(peer ?? '');
   // Текст владельца, если он его переписал (`direct.privacyNotice`), и перевод,
   // пока не переписывал: умолчание каталога написано на языке базы, и
   // подставить его вместо перевода значило бы ответить по-английски тому, у
@@ -36,7 +39,16 @@ export function DmThread() {
           и статус стоят там. Оставить обе значило бы отдать беседе две полосы
           по 52px из 812 точек экрана, повторив в них одно и то же. */}
       <div className="flex h-[52px] shrink-0 items-center gap-2.5 border-b border-line px-4 shadow-[0_1px_2px_rgba(0,0,0,0.2)] max-md:hidden">
-        {peer && <Identicon fingerprint={peer} size={34} className="shrink-0" />}
+        {peer && (
+          <div className="relative h-[34px] w-[34px] shrink-0">
+            <Identicon fingerprint={peer} size={34} />
+            <PresenceDot
+              state={presence}
+              size={11}
+              className="absolute -bottom-0.5 -right-0.5 ring-2 ring-bg-main"
+            />
+          </div>
+        )}
         <div className="min-w-0 flex-1 leading-tight">
           <div className="flex items-center gap-1.5">
             <span className="truncate text-[14px] font-bold text-text-header">{nick}</span>
@@ -46,9 +58,10 @@ export function DmThread() {
               </span>
             )}
           </div>
-          {/* Присутствия у беседы в этапе A нет (см. DmPeerCard) — статус в
-              шапке говорит то же самое, а не молчит об этом. */}
-          <span className="text-[11.5px] text-text-muted">{t('dm.header.status.unknown')}</span>
+          {/* Присутствие — из глобального стора (stores/presence.ts), той же
+              картины, что и точка на лице выше и в списке переписок (DmList):
+              одно состояние, названное словом и цветом одинаково всюду. */}
+          <span className="text-[11.5px] text-text-muted">{t(PRESENCE_LABEL_KEY[presence])}</span>
         </div>
       </div>
 
