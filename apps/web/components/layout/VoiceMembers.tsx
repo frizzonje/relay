@@ -3,6 +3,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { avatarStyle } from '@/lib/avatar';
 import { Identicon } from '@/components/ui/Identicon';
+import { PresenceDot } from '@/components/ui/PresenceDot';
 import { cn } from '@/lib/utils';
 import { listItem, springLayout } from '@/lib/motion';
 import { Icon } from '@/components/ui/icon';
@@ -15,7 +16,12 @@ import { useT } from '@/lib/i18n';
  * Кто сидит в голосовом канале — как в Discord.
  * Состав приходит с сервера событием `voice-presence` и лежит в сторе
  * (`presence[room]`); своя строка помечается «(вы)» по socket-id (`myId`).
- * Аватар — тот же стабильный бейдж по хэшу имени + зелёная точка статуса.
+ * Аватар — тот же стабильный бейдж по хэшу имени + точка присутствия
+ * (`PresenceDot`, единая для всего веба). Она стоит `in-voice` буквально, как
+ * и в `Members.tsx` (правая колонка с теми же людьми в той же комнате):
+ * список этот и есть источник истины «кто в эфире», спрашивать про это ещё
+ * и у глобального стора присутствия значило бы завести две картины одного и
+ * того же факта, которые могут разойтись на долю секунды после входа.
  * Справа — индикаторы: перечёркнутый микрофон (мут) и наушники (глушилка,
  * участник не слышит канал); состояние раздаёт сервер в том же presence.
  *
@@ -60,9 +66,16 @@ export function VoiceMembers({ room }: { room: string }) {
               className="group flex cursor-default items-center gap-2 rounded py-1 pl-[26px] pr-2 text-sm text-text-muted transition-colors hover:bg-bg-hover"
             >
               {/* Лицо ключа, если участник — личность (см. Message.tsx). */}
-              <div className="relative h-[22px] w-[22px] shrink-0 after:absolute after:-bottom-px after:-right-px after:h-2 after:w-2 after:rounded-full after:border-2 after:border-bg-sidebar after:bg-ok after:content-['']">
+              <div className="relative h-[22px] w-[22px] shrink-0">
                 {m.fingerprint ? (
-                  <Identicon fingerprint={m.fingerprint} size={22} speaking={speaking} />
+                  <>
+                    <Identicon fingerprint={m.fingerprint} size={22} speaking={speaking} />
+                    <PresenceDot
+                      state="in-voice"
+                      size={8}
+                      className="absolute -bottom-px -right-px ring-2 ring-bg-sidebar"
+                    />
+                  </>
                 ) : (
                   <div className="h-full w-full rounded-full" style={avatarStyle(name)} />
                 )}

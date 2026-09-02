@@ -182,6 +182,18 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       if (!Array.isArray(changed)) return;
       usePresenceStore.getState().applyDelta(changed);
     });
+    // Обрыв сокета — самая частая причина, по которой присутствие может
+    // соврать: сервер разошлёт честный `offline` про НАС остальным, а вот
+    // КОМУ ЭТОТ КЛИЕНТ доверял секунду назад — остаётся висеть в сторе как
+    // было, и зелёная точка «в сети» продолжает утверждать то, что уже могло
+    // перестать быть правдой. План резервирует зелёный ровно под «дозвон
+    // возможен» — врущая зелёная точка посреди обрыва прямо этому противоречит.
+    // Сервер шлёт полный снимок заново на каждом подключении (см. `presence`
+    // выше), так что сброс здесь не теряет данные навсегда — только держит
+    // немой промежуток честным, а не оптимистичным.
+    socket.on('disconnect', () => {
+      usePresenceStore.getState().reset();
+    });
     socket.on('chat-reaction', ({ id, reactions }) => {
       if (!openSlug() || !id) return;
       chat().applyReaction(id, reactions ?? {});
@@ -644,6 +656,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('chat-roster');
       socket.off('presence');
       socket.off('presence-update');
+      socket.off('disconnect');
       socket.off('chat-reaction');
       socket.off('chat-edited');
       socket.off('chat-deleted');

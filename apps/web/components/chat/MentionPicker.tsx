@@ -5,7 +5,9 @@ import type { MentionSuggestResult } from '@relay/shared';
 import { cn } from '@/lib/utils';
 import { ask } from '@/lib/channels';
 import { Identicon } from '@/components/ui/Identicon';
+import { PresenceDot } from '@/components/ui/PresenceDot';
 import { useT } from '@/lib/i18n';
+import { usePresence } from '@/stores/presence';
 
 /**
  * Подсказка после набранного `@`: кого можно позвать.
@@ -86,37 +88,67 @@ export function MentionPicker({
         <p className="px-3 py-2.5 text-[13px] text-text-muted">{t('mention.empty')}</p>
       ) : (
         people.map((person, i) => (
-          <button
+          <Candidate
             key={person.fingerprint}
-            type="button"
-            role="option"
-            aria-selected={i === active}
-            // mousedown, а не click: клик приходит после blur, а blur у поля
-            // ввода закрывает подсказку — выбор мышью так не срабатывал бы.
-            onMouseDown={(e) => {
-              e.preventDefault();
-              onPick(person);
-            }}
-            onMouseEnter={() => onHover(i)}
-            className={cn(
-              'flex w-full items-center gap-2 rounded-[8px] px-2 py-1.5 text-left transition-colors',
-              i === active ? 'bg-bg-hover' : 'hover:bg-bg-hover/60',
-            )}
-          >
-            <Identicon fingerprint={person.fingerprint} size={22} />
-            <span className="min-w-0 flex-1 truncate text-[13.5px] text-text-header">
-              {person.nick}
-            </span>
-            {person.online && (
-              <span
-                aria-hidden
-                title={t('mention.online')}
-                className="h-1.5 w-1.5 shrink-0 rounded-full bg-ok"
-              />
-            )}
-          </button>
+            person={person}
+            active={i === active}
+            onPick={() => onPick(person)}
+            onHover={() => onHover(i)}
+          />
         ))
       )}
     </div>
+  );
+}
+
+/**
+ * Отдельным компонентом, а не строкой внутри `.map`: `usePresence` — хук, а
+ * число подсказок меняется с каждым нажатием клавиши. Позови его прямо внутри
+ * `people.map(...)`, и число хуков `MentionPicker` за один рендер плавало бы
+ * вместе со списком — то же самое, что уже чинилось в `OnlineMembers.tsx`
+ * (см. `RosterRow` там).
+ *
+ * Точка рисуется БЕЗУСЛОВНО, а не только у online-людей, как было раньше
+ * (`person.online && <span .../>`, да ещё и `aria-hidden`, то есть цветом без
+ * слова): `offline` — честное пустое состояние `PresenceDot`, ровно для этого
+ * он и обводка, а не дыра в разметке. Источник — глобальный стор присутствия
+ * (`stores/presence.ts`), а не поле `online` из ответа `mention-suggest`: то
+ * поле не различает «в сети» и «в голосе», и человек, ушедший в разговор,
+ * здесь показался бы просто зелёным, разъехавшись с точкой на том же человеке
+ * в `OnlineMembers`/`Members` на соседней панели.
+ */
+function Candidate({
+  person,
+  active,
+  onPick,
+  onHover,
+}: {
+  person: MentionCandidate;
+  active: boolean;
+  onPick: () => void;
+  onHover: () => void;
+}) {
+  const presence = usePresence(person.fingerprint);
+  return (
+    <button
+      type="button"
+      role="option"
+      aria-selected={active}
+      // mousedown, а не click: клик приходит после blur, а blur у поля
+      // ввода закрывает подсказку — выбор мышью так не срабатывал бы.
+      onMouseDown={(e) => {
+        e.preventDefault();
+        onPick();
+      }}
+      onMouseEnter={onHover}
+      className={cn(
+        'flex w-full items-center gap-2 rounded-[8px] px-2 py-1.5 text-left transition-colors',
+        active ? 'bg-bg-hover' : 'hover:bg-bg-hover/60',
+      )}
+    >
+      <Identicon fingerprint={person.fingerprint} size={22} />
+      <span className="min-w-0 flex-1 truncate text-[13.5px] text-text-header">{person.nick}</span>
+      <PresenceDot state={presence} size={8} className="shrink-0" />
+    </button>
   );
 }

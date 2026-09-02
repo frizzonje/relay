@@ -10,7 +10,7 @@ import { springPop } from '@/lib/motion';
 import { useIsMobile } from '@/lib/use-mobile';
 import { useUiStore } from '@/stores/ui';
 import { useDmStore, useUnreadCount, useUnreadIn } from '@/stores/dm';
-import { usePresence } from '@/stores/presence';
+import { PRESENCE_LABEL_KEY, usePresence } from '@/stores/presence';
 import { useOwnerStore } from '@/stores/owner';
 import { useT } from '@/lib/i18n';
 
@@ -288,6 +288,7 @@ function RecentPeers({ strip }: { strip?: boolean }) {
  * нет: соседнее лицо стоит вплотную. Поэтому там точка ВНУТРИ цели.
  */
 function PeerFace({ conversation, strip }: { conversation: DmConversation; strip?: boolean }) {
+  const t = useT();
   const active = useUiStore((s) => s.dmRoom === conversation.slug);
   const openDm = useUiStore((s) => s.openDm);
   const unread = useUnreadIn(conversation.slug, active);
@@ -296,13 +297,18 @@ function PeerFace({ conversation, strip }: { conversation: DmConversation; strip
   // Кольцо, отделяющее точку от фона: рейка и полоса стоят на разных панелях
   // (`bg-rail` против `bg-sidebar`), и одно кольцо на обе выглядело бы швом.
   const ring = strip ? 'ring-bg-sidebar' : 'ring-bg-rail';
+  // Явный `aria-label` кнопки побеждает её содержимое целиком — точка внутри
+  // (пусть и с собственным `aria-label`) для скринридера пропадает без следа.
+  // Слово присутствия обязано доехать сюда же, а не остаться цветом, который
+  // не слышно: план прямо запрещает «статус одним цветом».
+  const label = `${nick} — ${t(PRESENCE_LABEL_KEY[presence])}`;
 
   return (
     <div className="group/face relative shrink-0">
       <button
         type="button"
         onClick={() => openDm(conversation.slug, conversation.peer.fingerprint, nick)}
-        aria-label={nick}
+        aria-label={label}
         aria-current={active || undefined}
         className={cn(
           'grid h-11 w-11 place-items-center rounded-[14px] outline-none transition-[background-color,box-shadow,transform] duration-200',

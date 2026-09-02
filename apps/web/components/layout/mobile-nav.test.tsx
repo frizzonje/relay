@@ -5,17 +5,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MobileNav } from './MobileNav';
 import { shortFingerprint } from '@/lib/format';
 import { useUiStore } from '@/stores/ui';
+import { usePresenceStore } from '@/stores/presence';
 
 /**
  * Мобильная шапка в беседе. До этой задачи вида `dm` она не знала вовсе: ветки
  * заголовка кончались на `else`, и над личной перепиской стояла подпись
  * «состояние сервера» — из лобби.
  *
- * Проверяем три вещи, которые ловятся в jsdom и которые ломались бы молча:
- * заголовок называет собеседника, кнопка звонка остаётся достижимой (её
- * НЕЛЬЗЯ выключать HTML-атрибутом `disabled` — см. Toolbar и DmPeerCard: он
- * уносит кнопку из обхода табом вместе с единственным объяснением, почему она
- * мертва), и шаг назад ведёт в список переписок, а не к каналам.
+ * Проверяем то, что ловится в jsdom и ломается молча: заголовок называет
+ * собеседника, статус под ним берётся из того же глобального стора
+ * присутствия, что и десктопная шапка `DmThread`/карточка `DmPeerCard` (эта
+ * шапка их заменяет на узком экране — см. комментарий у `MobileNav`, и до
+ * ревью плана B они успели разъехаться: десктоп уже показывал живое
+ * присутствие, а здесь всё ещё стояла заглушка «неизвестно»), кнопка звонка
+ * остаётся достижимой (её НЕЛЬЗЯ выключать HTML-атрибутом `disabled` — см.
+ * Toolbar и DmPeerCard: он уносит кнопку из обхода табом вместе с
+ * единственным объяснением, почему она мертва), и шаг назад ведёт в список
+ * переписок, а не к каналам.
  */
 
 // Шапка тянет дирижёра звонка ради кнопок мини-бара. В беседе мини-бара нет
@@ -55,6 +61,7 @@ describe('мобильная шапка беседы', () => {
       pendingScene: null,
       voiceRoom: null,
     });
+    usePresenceStore.getState().reset();
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -71,9 +78,18 @@ describe('мобильная шапка беседы', () => {
     // Отпечаток рядом с ником: карточки собеседника на телефоне нет, и это
     // единственное место, где два тёзки различимы.
     expect(host.textContent).toContain(shortFingerprint(fingerprint));
-    expect(/неизвестно|unknown/i.test(host.textContent || '')).toBe(true);
+    // Без записи в сторе присутствия собеседник честно «не в сети» — как в
+    // DmPeerCard/DmThread, не заглушка «неизвестно».
+    expect(/не в сети|offline/i.test(host.textContent || '')).toBe(true);
     // Ровно тот заголовок, который стоял здесь до правки, — из лобби.
     expect(/состояние сервера|server status/i.test(host.textContent || '')).toBe(false);
+  });
+
+  it('живая запись в сторе присутствия меняет статус в шапке', () => {
+    usePresenceStore.getState().applySnapshot([{ fingerprint, state: 'online', since: 1000 }]);
+    render();
+    expect(/в сети|online/i.test(host.textContent || '')).toBe(true);
+    expect(/не в сети/i.test(host.textContent || '')).toBe(false);
   });
 
   it('кнопка звонка выключена, но достижима и объясняет себя', () => {

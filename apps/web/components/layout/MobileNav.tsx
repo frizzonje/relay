@@ -8,6 +8,7 @@ import { Icon } from '@/components/ui/icon';
 import { AnimatedCount } from '@/components/ui/AnimatedCount';
 import { avatarStyle } from '@/lib/avatar';
 import { Identicon } from '@/components/ui/Identicon';
+import { PresenceDot } from '@/components/ui/PresenceDot';
 import { shortFingerprint } from '@/lib/format';
 import type { RosterPerson } from '@relay/shared';
 import { useUiStore, type MobilePanel } from '@/stores/ui';
@@ -16,6 +17,7 @@ import { useChatStore } from '@/stores/chat';
 import { useSetting } from '@/stores/config';
 import { usePinsStore } from '@/stores/pins';
 import { useSearchStore } from '@/stores/search';
+import { PRESENCE_LABEL_KEY, usePresence } from '@/stores/presence';
 import { toggleMic, leaveVoice, showVoiceStage } from '@/lib/voice';
 import { useT } from '@/lib/i18n';
 
@@ -107,6 +109,11 @@ export function MobileNav() {
   const voiceLabel = useUiStore((s) => s.voiceLabel);
   const textLabel = useUiStore((s) => s.textLabel);
   const dmPeer = useUiStore((s) => s.dmPeer);
+  // Присутствие собеседника — тот же глобальный стор, что и у десктопной
+  // шапки `DmThread` (эта шапка её и заменяет на узком экране, см.
+  // комментарий к компоненту): статус обязан совпасть, а не разъехаться
+  // между вариантами разметки одного и того же экрана.
+  const dmPresence = usePresence(dmPeer ?? '');
   const showDmList = useUiStore((s) => s.showDmList);
   const micOn = useVoiceStore((s) => s.micOn);
   const tiles = useVoiceStore((s) => s.tiles);
@@ -162,9 +169,7 @@ export function MobileNav() {
     key = `dm:${textLabel}`;
     title = textLabel;
     face = dmPeer;
-    // Присутствия у беседы в этапе A нет (см. DmPeerCard) — подпись говорит это
-    // прямо, а не молчит, притворяясь, что человек только что был в сети.
-    sub = t('dm.header.status.unknown');
+    sub = t(PRESENCE_LABEL_KEY[dmPresence]);
   } else if (view === 'voice') {
     key = `voice:${voiceLabel}`;
     title = voiceLabel;
@@ -219,7 +224,16 @@ export function MobileNav() {
                 {icon === 'voice' && (
                   <Icon name="volume-2" className="shrink-0 text-[16px] text-text-muted" />
                 )}
-                {face && <Identicon fingerprint={face} size={24} className="shrink-0" />}
+                {face && (
+                  <span className="relative inline-block h-6 w-6 shrink-0">
+                    <Identicon fingerprint={face} size={24} />
+                    <PresenceDot
+                      state={dmPresence}
+                      size={9}
+                      className="absolute -bottom-px -right-px ring-2 ring-bg-sidebar"
+                    />
+                  </span>
+                )}
                 <span className="truncate">{title}</span>
                 {/* Ник один человека не называет — тёзки в реестре не редкость
                     (см. DmList). Отпечаток `shrink-0`, ник `truncate`: длинное

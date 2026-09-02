@@ -16,6 +16,8 @@ import { useNotifyStore, isChannelLoud } from '@/stores/notify';
 import { MAIN_SERVER_ID } from '@/lib/constants';
 import { useRichT, useT } from '@/lib/i18n';
 import { Identicon } from '@/components/ui/Identicon';
+import { PresenceDot } from '@/components/ui/PresenceDot';
+import { PRESENCE_LABEL_KEY, usePresence } from '@/stores/presence';
 import { serverGradient, serverInitials } from '@/lib/server-visual';
 import { useIdentityStore } from '@/stores/identity';
 import { useIsMobile } from '@/lib/use-mobile';
@@ -379,6 +381,11 @@ export function Sidebar() {
   const callsign = useUiStore((s) => s.callsign);
   const setCallsign = useUiStore((s) => s.setCallsign);
   const fingerprint = useIdentityStore((s) => s.me?.fingerprint ?? '');
+  // Своё присутствие — из того же глобального стора, что и у всех: сервер
+  // видит собственный сокет так же, как чужие, и отдельно спрашивать себя
+  // «я в голосе?» тут незачем — `stores/presence.ts` уже знает ответ, и он же
+  // красит эту точку тем же способом, что и лица собеседников.
+  const ownPresence = usePresence(fingerprint);
   // Полоса тулбара рисуется только на телефоне: на десктопе тулбар — рейка у
   // правого края экрана, и вторая его копия внутри сайдбара была бы вторым
   // тулбаром на одном экране (см. AppShell).
@@ -748,8 +755,13 @@ export function Sidebar() {
       <div className="flex h-16 items-center gap-2 border-t border-line bg-bg-deep/80 px-2">
         {/* Лицо своего ключа, а не картинка по имени: имена не уникальны, и
             узнавать себя по тому, что можно занять, незачем. */}
-        <div className="relative h-[34px] w-[34px] shrink-0 after:absolute after:-bottom-0.5 after:-right-0.5 after:h-3 after:w-3 after:rounded-full after:border-[3px] after:border-bg-deep after:bg-ok after:content-['']">
+        <div className="relative h-[34px] w-[34px] shrink-0">
           <Identicon fingerprint={fingerprint} size={34} title={fingerprint} alive />
+          <PresenceDot
+            state={ownPresence}
+            size={12}
+            className="absolute -bottom-0.5 -right-0.5 ring-[3px] ring-bg-deep"
+          />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center">
@@ -766,7 +778,9 @@ export function Sidebar() {
               className="w-full border-0 border-b border-transparent bg-transparent p-0 text-sm font-semibold text-text-header outline-none focus:border-accent"
             />
           </div>
-          <div className="truncate text-[11px] text-text-muted">{t('user.status.online')}</div>
+          <div className="truncate text-[11px] text-text-muted">
+            {t(PRESENCE_LABEL_KEY[ownPresence])}
+          </div>
         </div>
       </div>
 

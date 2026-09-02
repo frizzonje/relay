@@ -374,7 +374,6 @@
   "dm.composer.placeholder": "Message",
   "dm.empty.body": "There's no one here yet — open a new conversation with the + button above.",
   "dm.empty.title": "No conversations yet",
-  "dm.header.status.unknown": "Presence unknown",
   "dm.join.forbidden": "This conversation isn't open to you anymore.",
   "dm.list.failed": "Could not load the conversations.",
   "dm.list.loading": "Loading the conversations…",
@@ -506,7 +505,6 @@
     "other": "{count} mentions"
   },
   "mention.empty": "Nobody by that name here.",
-  "mention.online": "Here right now",
   "mention.title": "Who to mention",
   "menu.clipboardBlocked.copy": "The engine will not copy from a menu — the keyboard works ({shortcut}).",
   "menu.clipboardBlocked.paste": "The engine will not paste from a menu — the keyboard works ({shortcut}).",
@@ -1071,7 +1069,6 @@
   "uplink.cpu.short": "CPU overload",
   "uplink.cpu.title": "The machine cannot keep up with encoding — your video quality is being cut. Closing heavy tabs and apps, or turning video off, helps.",
   "user.nick.hint": "Name — press Enter or click away to apply. It travels with your identity, not with this browser.",
-  "user.status.online": "Online",
   "voice.leave": "Disconnect",
   "voice.leave.aria": "Leave the voice channel",
   "voice.mic": "Microphone",

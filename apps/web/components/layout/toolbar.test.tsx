@@ -8,6 +8,7 @@ import { useDmStore } from '@/stores/dm';
 import { useUnreadStore } from '@/stores/unread';
 import { useUiStore } from '@/stores/ui';
 import { useOwnerStore } from '@/stores/owner';
+import { usePresenceStore } from '@/stores/presence';
 
 /**
  * Полоса тулбара на телефоне. Проверяем то, ради чего лица вообще появились в
@@ -59,8 +60,11 @@ function render(): void {
 }
 
 function faces(): HTMLButtonElement[] {
+  // aria-label теперь «ник — статус» (задача 2, находка 5 ревью): явный
+  // aria-label кнопки перекрывает точку присутствия внутри для скринридера,
+  // и слово статуса обязано доехать сюда же, а не остаться цветом без имени.
   return [...host.querySelectorAll('button')].filter((b) =>
-    conversations.some((c) => c.peer.nick === b.getAttribute('aria-label')),
+    conversations.some((c) => (b.getAttribute('aria-label') ?? '').startsWith(c.peer.nick)),
   );
 }
 
@@ -81,6 +85,7 @@ describe('полоса тулбара на телефоне', () => {
     useDmStore.getState().reset();
     useUnreadStore.setState({ lastRead: {} });
     useOwnerStore.setState({ owner: false });
+    usePresenceStore.getState().reset();
     useDmStore.getState().setConversations(conversations);
     host = document.createElement('div');
     document.body.appendChild(host);
@@ -94,8 +99,23 @@ describe('полоса тулбара на телефоне', () => {
 
   it('под целями стоят лица, и каждое — цель не меньше 44px', () => {
     render();
-    expect(faces().map((b) => b.getAttribute('aria-label'))).toEqual(['Марта', 'Игорь']);
+    const labels = faces().map((b) => b.getAttribute('aria-label'));
+    // Ник — первое слово подписи; статус (по умолчанию никто не в сторе
+    // присутствия — все честно «не в сети») — второе, а не цвет без имени.
+    expect(labels.map((l) => l?.split(' — ')[0])).toEqual(['Марта', 'Игорь']);
+    for (const label of labels) expect(/не в сети|offline/i.test(label ?? '')).toBe(true);
     for (const face of faces()) expect(face.className).toContain('h-11');
+  });
+
+  it('в подписи лица — не только ник, но и статус присутствия', () => {
+    usePresenceStore
+      .getState()
+      .applySnapshot([
+        { fingerprint: conversations[0].peer.fingerprint, state: 'online', since: 1000 },
+      ]);
+    render();
+    const [online] = faces();
+    expect(/в сети|online/i.test(online.getAttribute('aria-label') ?? '')).toBe(true);
   });
 
   it('тап по лицу открывает беседу', () => {
@@ -160,6 +180,7 @@ describe('цели тулбара', () => {
     useDmStore.getState().reset();
     useUnreadStore.setState({ lastRead: {} });
     useOwnerStore.setState({ owner: false });
+    usePresenceStore.getState().reset();
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
