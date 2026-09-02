@@ -235,10 +235,10 @@ CI (`.github/workflows/ci.yml`) runs the same three groups on pushes to `main`/`
 
 | Variable | Default | Description |
 |---|---|---|
-| `SITE_PASSWORD` | _(empty)_ | Login password. Shared by api and web. Empty → auth disabled |
+| `SITE_PASSWORD` | _(empty)_ | Login password. Shared by api and web. Empty → auth disabled. A fallback, not the only place: a password set in [the owner panel](#the-owner-panel) wins, and this line then stops mattering |
 | `POSTGRES_PASSWORD` | — | **Required.** Between api and Postgres, never typed by a person — `install.sh` and `relay update` generate it. `initdb` reads it once, when the volume is created: changing it later only breaks api's login |
 | `DATABASE_URL` | assembled from `POSTGRES_PASSWORD` | Set it whole only for a database outside this stack, or for a hand-picked password containing `@ / : ?` |
-| `RETENTION_DAYS` | `14` | How long messages and their attachments live. `0` (or `forever`) keeps everything with no limit; `ephemeral` keeps nothing at all |
+| `RETENTION_DAYS` | `14` | How long messages and their attachments live. `0` (or `forever`) keeps everything with no limit; `ephemeral` keeps nothing at all. Read once, on the first start with an empty settings table — after that the term lives in [the owner panel](#the-owner-panel) |
 | `DOMAIN` | `localhost` | Host for Caddy. `localhost` → self-signed CA, real domain → Let's Encrypt. A public IP also gets a Let's Encrypt certificate, but needs the issuer block `install.sh` writes into `tls-mode.caddy` |
 | `SERVER_HOST` | `localhost` | Host for the ICE config and coturn realm |
 | `TURN_SECRET` | _(empty)_ | Signing key shared by api and coturn. Required with `--profile turn`. Nobody types it and it never leaves the server: api signs a one-day credential per browser with it, coturn checks the signature |
@@ -267,6 +267,34 @@ CI (`.github/workflows/ci.yml`) runs the same three groups on pushes to `main`/`
 | `40000–40100` | udp + tcp | SFU media range (`--profile sfu`) |
 
 The installer opens these for you. The SFU's signaling port (`3100`) stays internal — Caddy proxies it at `/sfu/`.
+
+## The owner panel
+
+Most of what an installation does day to day is not set in a file at all. One identity is its **owner**, and only that person sees a shield in the toolbar. Behind it is the panel where the installation is set up while it runs — no editor, no restart.
+
+Ownership comes from the machine, not from a password. On an installed relay:
+
+```bash
+relay owner-link     # prints a one-time link, good for 24 hours
+```
+
+From source, without the CLI:
+
+```bash
+docker compose exec api node dist/owner-link.js
+```
+
+Whoever opens that link becomes the owner, and the previous owner stops being one. That is how you take an installation back when a key is lost — and the reason not to pass the link around.
+
+What is inside:
+
+- **95 settings** across twelve tabs: access, people, moderation, messages, files, direct messages, servers, voice, invites, appearance, notifications, maintenance. Every field says under itself when the change lands. Almost all of them land at once — retention, upload limits, the rate limiter, the DM policy, maintenance mode — and the rest only affect connections made after them. Four fields live in `.env` and always will (the TURN and SFU addresses and keys): the panel shows them and says where to edit them.
+- **Identities** — everyone who ever signed in, with their devices and fingerprints. Revoke a device, or ban the person across the whole installation.
+- **Bans** — installation-wide bans and the only place they are lifted. Blocking by address is a setting rather than a tab: `access.blockedAddresses` takes IPs and CIDR masks and closes the door before anything else is asked. It is not a wall — a new address gets around it — but changing addresses costs more than making a new identity, and that difference is the point.
+- **Upkeep** — export and import the settings as a file, run the retention sweep by hand without waiting for the hourly timer, sign every device out, issue a fresh owner link.
+- **Overview and the log** — how much CPU, memory and disk the machine is using, how many people and messages there are; and next to it every change and every action with its author and time.
+
+Secrets never leave the server. The login password and the TURN/SFU keys are shown as "set" or "not set" and nothing more — not in the panel, not in the log, not in the settings export.
 
 ## Data and persistence
 

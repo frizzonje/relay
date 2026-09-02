@@ -71,6 +71,26 @@ describe('message dictionaries', () => {
     }
   });
 
+  /**
+   * The owner panel names its tabs from two dictionaries at once: the catalogue
+   * groups (`settings.group.*`) and the tabs that carry no settings
+   * (`admin.tab.*`). Two of them holding the same word is not a translation
+   * nicety — the panel then shows two tabs called the same thing, and the only
+   * way to tell them apart is to press one. That is exactly what happened to
+   * "Обслуживание": the maintenance-mode group and the Upkeep tab shared it,
+   * while English kept them apart as "Maintenance" and "Upkeep".
+   */
+  it.each(LOCALES)('%s gives every panel tab its own name', (locale) => {
+    const dict = load(locale);
+    const seen = new Map<string, string>();
+    for (const [key, entry] of Object.entries(dict)) {
+      if (!key.startsWith('admin.tab.') && !key.startsWith('settings.group.')) continue;
+      const name = String(entry);
+      expect([name, seen.get(name) ?? key]).toEqual([name, key]);
+      seen.set(name, key);
+    }
+  });
+
   it.each(LOCALES)('%s has no empty strings', (locale) => {
     for (const [key, entry] of Object.entries(load(locale))) {
       const texts = typeof entry === 'string' ? [entry] : Object.values(entry);
