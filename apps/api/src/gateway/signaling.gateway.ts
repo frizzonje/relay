@@ -23,6 +23,7 @@ import { PersonalHandlers } from './personal.handlers';
 import { RegistryHandlers } from './registry.handlers';
 import { VoiceHandlers } from './voice.handlers';
 import { Perimeter } from './perimeter';
+import { Presence } from './presence';
 import { VoiceSessions } from './voice-sessions';
 import { isAuthorized, useAddressDoor, verifyGuestToken } from '../auth/auth';
 import { IdentityService } from '../identity/identity.service';
@@ -252,6 +253,17 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     },
     this.logger,
   );
+
+  /**
+   * Глобальное присутствие личности: где человек вообще, а не кто в этой
+   * комнате. Заводится следом за голосовой сессией — «в голосе» оно спрашивает
+   * у неё, а больше ни у кого ничего не спрашивает: присутствие глобально по
+   * построению, и ни права, ни видимость каналов его не касаются.
+   */
+  private readonly presence = new Presence(() => this.server, {
+    identityOf: (sock) => this.perimeter.speaker(sock),
+    inVoice: (sock) => this.voice.roomOf(sock) !== undefined,
+  });
 
   /** Упоминания: кого назвали, кому сказать, сколько накопилось. */
   private readonly mentions = new Mentions(
@@ -576,10 +588,28 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     client.emit('servers', this.directory.serversFor(client));
     client.emit('channels', this.directory.channelsFor(client));
     client.emit('voice-presence', this.voice.snapshotFor(client));
+    // Глобальное присутствие — только тому, кто предъявил личность: гостю по
+    // инвайту и клиенту без ключа звонить некуда, состав инсталляции им не
+    // положен (правило — в ./presence), а пустой список им не событие. Свой
+    // приход человек увидит дельтой следом.
+    if (this.perimeter.speaker(client)) {
+      client.emit('presence', this.presence.snapshot(client));
+    }
+    this.notePresence(client);
     // Своё личное — отметки чтения и настройки. Отдельно от реестра и позже
     // него: за ними надо в базу, а реестр уже здесь, и задерживать первый кадр
     // приложения ради громкостей незачем.
     void this.personalHandlers.send(client);
+  }
+
+  /**
+   * Сокет появился или сменил голосовое состояние — сказать об этом
+   * присутствию. У сокета без личности присутствия нет вовсе, и звать тут
+   * некого (см. ./presence).
+   */
+  private notePresence(client: AppSocket): void {
+    const me = this.perimeter.speaker(client)?.id;
+    if (me) this.presence.touch(me);
   }
 
   // ===== Реестр: серверы и каналы =====
@@ -739,11 +769,13 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   @SubscribeMessage('join')
   handleJoin(@ConnectedSocket() client: AppSocket, @MessageBody() payload: JoinPayload) {
     this.voiceHandlers.join(client, payload);
+    this.notePresence(client);
   }
 
   @SubscribeMessage('leave')
   handleLeave(@ConnectedSocket() client: AppSocket) {
     this.voiceHandlers.leave(client);
+    this.notePresence(client);
   }
 
   @SubscribeMessage('offer')
@@ -968,5 +1000,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // id, те же комнаты). Если за грейс-период клиент не вернулся — тогда уже
     // выходим и уведомляем остальных. Так моргание сети не обрывает живой звонок.
     this.voice.hold(client);
+    // Присутствие, в отличие от эфира, ждать грейса не может: «недавно» — это и
+    // есть его собственный грейс, и начаться он обязан в момент обрыва.
+    const me = this.perimeter.speaker(client)?.id;
+    if (me) this.presence.drop(me);
   }
 }

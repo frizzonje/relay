@@ -344,6 +344,19 @@ export function connect(
   return sock;
 }
 
+/**
+ * Обрыв связи — так, как его видит гейтвей.
+ *
+ * Порядок здесь не косметический: socket.io убирает сокет из своей карты ДО
+ * того, как позовёт обработчик отключения, и всё, что считает живых по этой
+ * карте (присутствие), обязано видеть его уже ушедшим. Позови мы обработчик
+ * первым — тест доказывал бы поведение, которого в жизни не бывает.
+ */
+export function disconnect(gw: SignalingGateway, server: FakeServer, sock: FakeSocket) {
+  server.remove(sock.id);
+  gw.handleDisconnect(asSocket(sock));
+}
+
 /** Прокрутить дебаунсы (presence, реестр каналов, активность чата). */
 export function settle() {
   vi.advanceTimersByTime(200);
