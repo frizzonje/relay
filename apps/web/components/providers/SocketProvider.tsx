@@ -4,6 +4,7 @@ import { useEffect, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import { getSocket } from '@/lib/socket';
 import { initVoice, relabelSelf } from '@/lib/voice';
+import { initCall } from '@/lib/call';
 import { initHotkeys } from '@/lib/hotkeys';
 import { initDesktopBridge } from '@/lib/desktop';
 import { isNarrowNow } from '@/lib/use-mobile';
@@ -138,6 +139,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // Навешиваем mesh-WebRTC обработчики (peers/offer/answer/ice/voice-presence,
     // reconnect, замер пинга) — один раз на приложение, до connect().
     initVoice();
+    // Голосовая жизнь вызова: принятый вызов сажает эту вкладку в комнату
+    // беседы, уход собеседника её оттуда выводит. Вешается тем же порядком и по
+    // той же причине — до connect(), один раз на приложение.
+    initCall();
     // Глобальные горячие клавиши канала (по умолчанию пусто — всё выключено).
     initHotkeys();
     // Десктоп-оболочка (Tauri): глобальный PTT-хоткей ↔ микрофон, статус в трее.

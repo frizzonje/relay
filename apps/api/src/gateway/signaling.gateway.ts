@@ -26,7 +26,7 @@ import { VoiceHandlers } from './voice.handlers';
 import { Perimeter } from './perimeter';
 import { Presence } from './presence';
 import { Rings } from './ring';
-import { VoiceSessions } from './voice-sessions';
+import { VoiceSessions, callRoom } from './voice-sessions';
 import { isAuthorized, useAddressDoor, verifyGuestToken } from '../auth/auth';
 import { IdentityService } from '../identity/identity.service';
 import { OwnerService } from '../identity/owner.service';
@@ -251,6 +251,11 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     () => this.server,
     {
       fingerprintOf: (sock) => this.perimeter.speaker(sock)?.fingerprint,
+      // То же правило личности, что у присутствия и дозвона: вкладка с кукой,
+      // открывшая инвайт-ссылку, — гость, и одним из двоих в беседе быть не
+      // может. Разъедься эти три ответа, гость входил бы в чужой разговор.
+      identityOf: (sock) =>
+        this.perimeter.isGuest(sock) ? undefined : this.perimeter.speaker(sock)?.id,
       isGuest: (sock) => this.perimeter.isGuest(sock),
       guestRoomOf: (sock) => this.perimeter.guestRoom(sock),
       isListener: (sock) => this.perimeter.isListener(sock),
@@ -295,6 +300,13 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     ringTimeoutMs: () => this.settings.get<number>('calls.ringTimeoutSeconds') * 1000,
     busyWhenInVoice: () => this.settings.get<boolean>('calls.busyWhenInVoice'),
     marksMissed: () => this.settings.get<boolean>('calls.missedMarkEnabled'),
+    // Принятый вызов открывает комнату беседы — и на этом дозвон кончается.
+    // Адрес у неё тот же, что у переписки этих двоих (он считается из их id и
+    // только из них), с приставкой `voice:`: комнаты socket.io у ленты и у
+    // эфира общие, и без приставки сигналинг звонка уезжал бы всякому, кто
+    // просто открыл переписку.
+    openRoom: (from, to) =>
+      this.voice.openCallRoom(callRoom(DmService.address(from, to)), [from, to]),
   });
 
   /** Упоминания: кого назвали, кому сказать, сколько накопилось. */

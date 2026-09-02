@@ -6,6 +6,7 @@ import {
   AUTH_COOKIE,
   CHAT_PAGE_SIZE,
   CHAT_PREFIX,
+  CALL_ROOM_PREFIX,
   DM_PEOPLE_LIMIT,
   DM_PREFIX,
   DM_PREVIEW_LIMIT,
@@ -115,6 +116,14 @@ describe('константы совпадают с копией в api', () => {
     );
   });
 
+  it('приставка комнаты беседы та же — по ней обе стороны находят один разговор', () => {
+    // Разъехавшись, половины посадили бы двоих в разные комнаты: принятый
+    // вызов кончался бы тишиной, в которой обоим «всё в порядке».
+    expect(apiSource('gateway/voice-sessions.ts')).toContain(
+      `export const CALL_ROOM_PREFIX = '${CALL_ROOM_PREFIX}';`,
+    );
+  });
+
   it('обрезка превью последней реплики та же — иначе список переписок и dm-activity разойдутся', () => {
     expect(apiSource('gateway/dm.service.ts')).toContain(
       `export const DM_PREVIEW_LIMIT = ${DM_PREVIEW_LIMIT};`,
@@ -171,7 +180,13 @@ describe('константы совпадают с копией в api', () => {
       .slice(protocol.indexOf('export type VoiceRefusal ='))
       .split(';')[0]
       .match(/'[a-z-]+'/g)!;
-    const mine: VoiceRefusal[] = ['video-off', 'screen-share-off', 'room-full', 'guests-full'];
+    const mine: VoiceRefusal[] = [
+      'video-off',
+      'screen-share-off',
+      'room-full',
+      'guests-full',
+      'not-in-call',
+    ];
     expect(reasons.map((r) => r.slice(1, -1))).toEqual(mine);
   });
 

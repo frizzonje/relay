@@ -36,6 +36,7 @@ export const VOICE_REFUSAL_KEYS: Record<VoiceRefusal, MessageKey> = {
   'screen-share-off': 'refused.voice.screen-share-off',
   'room-full': 'refused.voice.room-full',
   'guests-full': 'refused.voice.guests-full',
+  'not-in-call': 'refused.voice.not-in-call',
 };
 
 /**

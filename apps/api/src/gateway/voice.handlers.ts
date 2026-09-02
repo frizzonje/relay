@@ -4,7 +4,7 @@ import type { Directory } from './directory';
 import type { Perimeter } from './perimeter';
 import type { RegistryService } from './registry.service';
 import type { SettingsService } from '../settings/settings.service';
-import type { VoiceSessions } from './voice-sessions';
+import { isCallRoom, type VoiceSessions } from './voice-sessions';
 import { sfuHealthy } from '../sfu/sfu-health';
 import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
 import {
@@ -95,7 +95,7 @@ export class VoiceHandlers {
     // иначе он пропустит ответный `peers`. Секрета в ней нет — войти в любой
     // голосовой канал он и так вправе, а `peerId` по-прежнему берётся из
     // сокета, так что назваться чужим id нельзя.
-    const asked = trimmed(payload?.room, LIMIT.slug);
+    const asked = trimmed(payload?.room, LIMIT.room);
     const room = asked || this.voice.roomOf(client) || '';
     if (!room) {
       forget();
@@ -156,7 +156,7 @@ export class VoiceHandlers {
 
   join(client: AppSocket, payload: JoinPayload) {
     if (!this.perimeter.allow(client)) return;
-    const room = trimmed(payload?.room, LIMIT.slug);
+    const room = trimmed(payload?.room, LIMIT.room);
     if (!room) return;
     // Гость «пришит» к каналу из своего токена — другие комнаты недоступны.
     if (this.perimeter.isGuest(client) && room !== this.perimeter.guestRoom(client)) return;
@@ -165,6 +165,19 @@ export class VoiceHandlers {
     // того, как его выгнали, — тогда `join` был бы дверью с другой стороны.
     if (this.perimeter.isGuest(client) && this.perimeter.guestBanned(client, room)) {
       client.emit('kicked', { room });
+      return;
+    }
+    // Комната беседы — единственная, которой в реестре нет и запирать которую
+    // есть за что: в разговоре двоих третьему делать нечего, а имя комнаты
+    // защитой не является. Спрашиваем ДО замка закрытого сервера и мимо
+    // гостевой ветки: гость личности не предъявлял, и «одним из двоих» быть не
+    // может, чей бы инвайт ему ни выписали.
+    if (!this.voice.mayEnterCallRoom(client, room)) {
+      this.logger.warn(`voice: join to call room "${room}" refused for ${client.id}`);
+      // Слышно, как и всякий отказ в голосе: молчащий `return` клиент не
+      // отличает от удавшегося входа — он считает себя в разговоре, которого
+      // для остальных нет (тот же урок, что у `voice-locked` ниже).
+      this.refuse(client, 'not-in-call');
       return;
     }
     // Канал закрытого сервера — только для тех, кто ввёл пароль. Комнату, которой
@@ -248,6 +261,11 @@ export class VoiceHandlers {
    * файлы), и это сегодняшнее поведение: до этапа C в голос пускали всех.
    */
   private tooCrowded(client: AppSocket, room: string): VoiceRefusal | undefined {
+    // Комната беседы пределов канала не знает: их считают «сколько человек в
+    // канале», а разговор двоих каналом не является. Инсталляция, где предел
+    // выставлен единицей, иначе впускала бы в принятый вызов одного из двоих —
+    // и второй получал бы «канал полон» на звонок, который сам же и принял.
+    if (isCallRoom(room)) return undefined;
     if (this.perimeter.isGuest(client)) {
       const guests = this.settings.get<number>('invites.maxGuestsPerChannel');
       if (guests > 0 && this.voice.occupants(room, client, 'guests') >= guests) {

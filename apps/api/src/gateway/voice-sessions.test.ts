@@ -1,10 +1,13 @@
 import { Logger } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueGuestToken } from '../auth/auth';
-import { asSocket } from './testkit';
+import { asSocket, type FakeSocket } from './testkit';
+import { DmService } from './dm.service';
+import { callRoom } from './voice-sessions';
 import {
   connect,
   connectAs,
+  disconnect,
   makeGateway,
   personCookie,
   settle,
@@ -12,6 +15,7 @@ import {
   tune,
   useGatewayStand,
 } from './gateway.testkit';
+import type { SignalingGateway } from './signaling.gateway';
 
 /**
  * Голосовая сессия: кто в эфире, что о нём знают остальные и как между
@@ -55,7 +59,9 @@ describe('join / leave', () => {
     gw.handleJoin(asSocket(a), { room: '   ' });
     expect(a.data.room).toBeUndefined();
     gw.handleJoin(asSocket(a), { room: 'к'.repeat(100) });
-    expect((a.data.room as string).length).toBe(32);
+    // Потолок имени комнаты (`LIMIT.room`) шире слага канала: в него обязан
+    // помещаться адрес комнаты беседы — он длиннее слага на приставку.
+    expect((a.data.room as string).length).toBe(40);
   });
 
   it('повторный join выводит из прежней комнаты', async () => {
@@ -660,5 +666,201 @@ describe('настройки голоса', () => {
     a.clear();
     gw.handleMediaUpdate(asSocket(a), { micOn: false });
     expect(a.got('voice-refused')).toBe(false);
+  });
+});
+
+// ── Комната беседы ────────────────────────────────────────────────────────
+
+/**
+ * Разговор двоих: комната, которую открыл принятый вызов.
+ *
+ * От обычного голосового канала она отличается тремя вещами, и все три —
+ * заслоны, а не украшения: войти в неё могут только двое, названные её
+ * адресом; уход любого из них кончает разговор для второго; медиасервера для
+ * двоих не бывает никогда. Первое проверяется тем, что третьему отказано
+ * СЛЫШНО: молчащий отказ клиент не отличает от удавшегося входа.
+ */
+describe('комната беседы', () => {
+  /** Двое приняли вызов: сокеты обоих и адрес открывшейся комнаты. */
+  async function talk() {
+    const stand = await makeGateway();
+    const { gw, server, settings } = stand;
+    // Умолчание каталога — «звонить тому, с кем есть переписка»; заводить её
+    // здесь значило бы проверять ЛС, а не комнату.
+    await tune(settings, 'calls.whoCanCall', 'everyone');
+    const anya = await personCookie('Аня');
+    const boris = await personCookie('Боря');
+    const hers = await connectAs(gw, server, anya.cookie, { id: 'аня' });
+    const his = await connectAs(gw, server, boris.cookie, { id: 'боря' });
+    settle();
+    const room = callRoom(DmService.address(anya.identityId, boris.identityId));
+    const ring = await gw.handleCallStart(asSocket(hers), { fingerprint: boris.fingerprint });
+    const ringId = ring.ok ? ring.ringId : '';
+    return { ...stand, anya, boris, hers, his, room, ringId };
+  }
+
+  /** Ответить на вызов — с этого мгновения комната и существует. */
+  function accept(gw: SignalingGateway, sock: FakeSocket, ringId: string) {
+    expect(gw.handleCallAccept(asSocket(sock), { ringId })).toEqual({ ok: true });
+  }
+
+  it('вход — по принятию: до ответа собеседника не входит и сам звонящий', async () => {
+    const { gw, hers, room } = await talk();
+    hers.clear();
+
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+
+    expect(hers.data.room).toBeUndefined();
+    expect(hers.last('voice-refused')).toEqual({ reason: 'not-in-call' });
+  });
+
+  it('принятый вызов открывает дверь обоим', async () => {
+    const { gw, server, anya, hers, his, room, ringId } = await talk();
+    accept(gw, his, ringId);
+    server.clearAll();
+
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+    gw.handleJoin(asSocket(his), { room, name: 'Боря' });
+
+    expect([hers.data.room, his.data.room]).toEqual([room, room]);
+    expect(his.last('peers')).toEqual([{ id: 'аня', name: 'Аня', fingerprint: anya.fingerprint }]);
+    expect(hers.last('peer-joined')).toMatchObject({ id: 'боря', name: 'Боря' });
+  });
+
+  it('третий в комнату беседы не входит, и ему говорят почему', async () => {
+    const { gw, server, hers, his, room, ringId } = await talk();
+    accept(gw, his, ringId);
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+    gw.handleJoin(asSocket(his), { room, name: 'Боря' });
+
+    // Трое посторонних, и каждый — своя дверь: чужая личность, клиент без
+    // личности вовсе и гость по инвайту, у которого личность в куке есть.
+    const vera = await personCookie('Вера');
+    const hers3 = await connectAs(gw, server, vera.cookie, { id: 'вера' });
+    const nameless = connect(gw, server, { id: 'без-личности' });
+    const guest = await connectAs(gw, server, vera.cookie, {
+      id: 'вера-по-ссылке',
+      guest: issueGuestToken(room).token,
+    });
+    server.clearAll();
+
+    gw.handleJoin(asSocket(hers3), { room, name: 'Вера' });
+    gw.handleJoin(asSocket(nameless), { room, name: 'Никто' });
+    gw.handleJoin(asSocket(guest), { room, name: 'Вера' });
+
+    // Перечислены поимённо, а не отобраны условием: отбор по id фикстуры
+    // позеленел бы впустую в тот день, когда id поменяются.
+    for (const sock of [hers3, nameless, guest]) {
+      expect([sock.id, sock.data.room, sock.last('voice-refused')]).toEqual([
+        sock.id,
+        undefined,
+        { reason: 'not-in-call' },
+      ]);
+    }
+    // И разговор этого даже не заметил.
+    expect([hers.got('peer-joined'), his.got('peer-joined')]).toEqual([false, false]);
+  });
+
+  it('комнату беседы, которой не открывали, не угадать', async () => {
+    const { gw, hers } = await talk();
+    hers.clear();
+
+    // Адрес правильной формы, но такого разговора нет. Дверь в него заперта не
+    // тем, что имя трудно угадать, а тем, что комнаты без принятого вызова не
+    // существует вовсе.
+    gw.handleJoin(asSocket(hers), { room: callRoom('dm-0123456789abcdef01234567') });
+
+    expect(hers.data.room).toBeUndefined();
+    expect(hers.last('voice-refused')).toEqual({ reason: 'not-in-call' });
+  });
+
+  it('уход одного кончает разговор у второго', async () => {
+    const { gw, server, hers, his, room, ringId } = await talk();
+    accept(gw, his, ringId);
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+    gw.handleJoin(asSocket(his), { room, name: 'Боря' });
+    server.clearAll();
+
+    gw.handleLeave(asSocket(hers));
+
+    // Оставшийся не сидит в комнате на одного: его выводит сам сервер — и
+    // говорит ему об этом, иначе вкладка держала бы экран звонка и микрофон.
+    expect(his.data.room).toBeUndefined();
+    expect(his.last('call-over')).toEqual({ room });
+    // Разговора больше нет: вернуться в него нельзя даже участнику.
+    his.clear();
+    gw.handleJoin(asSocket(his), { room, name: 'Боря' });
+    expect([his.data.room, his.last('voice-refused')]).toEqual([
+      undefined,
+      { reason: 'not-in-call' },
+    ]);
+  });
+
+  it('моргание сети разговор не кончает — грейс тот же, что у канала', async () => {
+    const { gw, server, hers, his, room, ringId } = await talk();
+    accept(gw, his, ringId);
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+    gw.handleJoin(asSocket(his), { room, name: 'Боря' });
+    server.clearAll();
+
+    disconnect(gw, server, hers);
+    expect([his.data.room, his.got('call-over')]).toEqual([room, false]);
+
+    vi.advanceTimersByTime(30_000);
+    expect([his.data.room, his.last('call-over')]).toEqual([undefined, { room }]);
+  });
+
+  it('пределы канала комнаты беседы не касаются', async () => {
+    const { gw, settings, hers, his, room, ringId } = await talk();
+    // Предел считает «сколько человек в канале»; разговор двоих каналом не
+    // является, и выставленная единица не должна оставлять снаружи того, кто
+    // вызов принял.
+    await tune(settings, 'spaces.maxVoiceOccupants', 1);
+    accept(gw, his, ringId);
+
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+    gw.handleJoin(asSocket(his), { room, name: 'Боря' });
+
+    expect([hers.data.room, his.data.room]).toEqual([room, room]);
+    expect(his.got('voice-refused')).toBe(false);
+  });
+
+  it('второе устройство того же человека перехватывает разговор, а не входит третьим', async () => {
+    const { gw, server, anya, hers, his, room, ringId } = await talk();
+    accept(gw, his, ringId);
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+    gw.handleJoin(asSocket(his), { room, name: 'Боря' });
+    const phone = await connectAs(gw, server, anya.cookie, { id: 'аня-телефон' });
+    settle();
+    server.clearAll();
+
+    gw.handleJoin(asSocket(phone), { room, name: 'Аня' });
+
+    // Разговор переехал: в комнате по-прежнему двое, а не трое — иначе Аню
+    // было бы слышно дважды, и себя саму она слышала бы эхом.
+    expect([phone.data.room, hers.data.room, his.data.room]).toEqual([room, undefined, room]);
+    // Прошлому устройству сказано то же, что говорят оставшемуся при уходе
+    // собеседника: этот разговор для него кончился.
+    expect(hers.last('call-over')).toEqual({ room });
+    // А сам разговор жив: собеседника из него никто не выводил.
+    expect(his.got('call-over')).toBe(false);
+  });
+
+  it('SFU для комнаты беседы не выдают, о чём бы клиент ни просил', async () => {
+    process.env.SFU_URL = 'https://relay.example/sfu';
+    process.env.SFU_SECRET = 'секрет';
+    const { gw, hers, his, room, ringId } = await talk();
+    accept(gw, his, ringId);
+
+    // Пропуска нет: за комнатой беседы не стоит канала реестра, а режим `sfu`
+    // — свойство канала.
+    expect(await gw.handleSfuToken(asSocket(hers), { room, name: 'Аня' })).toMatchObject({
+      ok: false,
+      error: 'not-sfu',
+    });
+    // И названный клиентом транспорт комнату беседы не касается: двоим
+    // медиасервер не нужен никогда, а спросить его клиент волен.
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня', transport: 'sfu' });
+    expect([hers.data.room, hers.data.transport]).toEqual([room, 'p2p']);
   });
 });

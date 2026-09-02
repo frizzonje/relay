@@ -684,6 +684,7 @@
   "refused.chat.too-new": "Your key is brand new. You can read now and write in a little while.",
   "refused.unknown": "The server refused, and this version does not know why. Try updating the app.",
   "refused.voice.guests-full": "This channel takes no more guests by link.",
+  "refused.voice.not-in-call": "This conversation is between two other people.",
   "refused.voice.room-full": "The channel is full — there is no free seat right now.",
   "refused.voice.screen-share-off": "Screen sharing is turned off in this installation.",
   "refused.voice.video-off": "The camera is turned off in this installation.",

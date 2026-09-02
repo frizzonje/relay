@@ -16,6 +16,7 @@ import type { DmActivityRelay, DmPeer } from '@relay/shared';
  * WebRTC/хоткеи/десктоп-мост и не шумело сетевыми звонками, которых здесь нет.
  */
 vi.mock('@/lib/voice', () => ({ initVoice: vi.fn(), relabelSelf: vi.fn() }));
+vi.mock('@/lib/call', () => ({ initCall: vi.fn() }));
 vi.mock('@/lib/hotkeys', () => ({ initHotkeys: vi.fn() }));
 vi.mock('@/lib/desktop', () => ({ initDesktopBridge: vi.fn(async () => {}) }));
 vi.mock('@/lib/notify', () => ({

@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueGuestToken } from '../auth/auth';
 import { asSocket, type FakeServer, type FakeSocket } from './testkit';
+import { DmService } from './dm.service';
+import { callRoom } from './voice-sessions';
 import {
   connect,
   connectAs,
@@ -364,5 +366,44 @@ describe('дозвон', () => {
     // Час скользящий: он проходит — и звонить снова можно.
     vi.advanceTimersByTime(60 * 60_000 + 1);
     expect((await call(hers, boris.fingerprint)).ok).toBe(true);
+  });
+});
+
+describe('принятый вызов становится разговором', () => {
+  it('принятие называет обоим комнату беседы — вывести её клиент не может', async () => {
+    const { anya, boris, hers, his } = await pair();
+    const res = await call(hers, boris.fingerprint);
+    const ringId = res.ok ? res.ringId : '';
+    hers.clear();
+    his.clear();
+
+    expect(gw.handleCallAccept(asSocket(his), { ringId })).toEqual({ ok: true });
+
+    // Адрес беседы считается из id двух личностей, а id в протоколе не
+    // появляется вовсе (§9.3): назвать комнату обязан сервер. Не назови он —
+    // клиенту неоткуда узнать, куда садиться, и «принято» не стало бы
+    // разговором ни у одного из двоих.
+    const room = callRoom(DmService.address(anya.identityId, boris.identityId));
+    for (const sock of [hers, his]) {
+      expect([sock.id, last(sock, 'call-state')]).toEqual([
+        sock.id,
+        expect.objectContaining({ ringId, state: 'accepted', room }),
+      ]);
+    }
+  });
+
+  it('комната беседы не приезжает с тем, что разговором не стало', async () => {
+    const { boris, hers, his } = await pair();
+    const res = await call(hers, boris.fingerprint);
+    const ringId = res.ok ? res.ringId : '';
+
+    // «Звонит» — ещё не разговор: комнаты в этот момент нет, и обещать её
+    // клиенту значило бы дать ему войти туда до ответа собеседника.
+    expect(last(hers, 'call-state')).toMatchObject({ state: 'ringing' });
+    expect((last(hers, 'call-state') as { room?: string }).room).toBeUndefined();
+
+    hers.clear();
+    gw.handleCallDecline(asSocket(his), { ringId });
+    expect((last(hers, 'call-ended') as { room?: string }).room).toBeUndefined();
   });
 });

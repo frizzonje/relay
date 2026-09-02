@@ -4,6 +4,36 @@ import type { VoicePresenceEntry } from './protocol';
 import { ANON_NAME } from './protocol';
 
 /**
+ * С этого начинается имя голосовой комнаты беседы.
+ *
+ * Префикс здесь не украшение. Адрес беседы — это ещё и слаг её текстовой
+ * ленты, а комнаты socket.io у ленты и у эфира общие: назови мы комнату
+ * разговора самим адресом, `peer-left` и весь сигналинг звонка уезжали бы
+ * каждому, кто просто открыл переписку.
+ *
+ * Двойник строки живёт в `@relay/shared` (`CALL_ROOM_PREFIX`), а совпадение
+ * стережёт контрактный тест: разъехавшись, половины посадили бы двоих в разные
+ * комнаты — и принятый вызов кончался бы тишиной.
+ */
+export const CALL_ROOM_PREFIX = 'voice:';
+
+/** Комната беседы по её адресу (`DmService.address`). */
+export function callRoom(address: string): string {
+  return CALL_ROOM_PREFIX + address;
+}
+
+/**
+ * Комната беседы это или обычный голосовой канал.
+ *
+ * Проверяется форма целиком, а не один префикс: «voice:болталка» — законное
+ * имя комнаты, и пустив его за ту же дверь, мы заперли бы обычный эфир
+ * правилами разговора двоих (тот же довод, что у `isDmSlug`).
+ */
+export function isCallRoom(room: string): boolean {
+  return /^voice:dm-[0-9a-f]{24}$/.test(room);
+}
+
+/**
  * Что голосовая сессия спрашивает у того, чем не владеет.
  *
  * Список короткий намеренно: это и есть граница. Личность, гостевой контур и
@@ -14,6 +44,14 @@ import { ANON_NAME } from './protocol';
 export interface VoiceSurroundings {
   /** Отпечаток ключа — если сокет предъявил личность. Едет в presence. */
   fingerprintOf(sock: AppSocket): string | undefined;
+  /**
+   * Id личности за сокетом — тот же ответ, что у присутствия и у дозвона:
+   * гость по инвайту личности не предъявлял, даже если в его вкладке лежит
+   * кука. По нему и только по нему решается, кто из двоих вошёл в комнату
+   * беседы: сокет, устройство и вкладка тут ни при чём — вызов принадлежал
+   * человеку.
+   */
+  identityOf(sock: AppSocket): string | undefined;
   /** Гость ли: пришёл по инвайту, без личности и без реестра. */
   isGuest(sock: AppSocket): boolean;
   /** Комната гостя — или `undefined`, если сокет пришёл не по инвайту. */
@@ -58,6 +96,12 @@ export interface VoiceSurroundings {
  * 3. **Прошлый сокет того же устройства уходит сам.** Перезагрузка страницы —
  *    это новый socket.id, старый висел бы весь грейс, и всё это время человека
  *    двоило бы у остальных (см. `evictGhost`).
+ * 4. **Комната беседы держит ровно двоих, названных её адресом.** Она не канал
+ *    реестра, и запирать её нечем, кроме этого списка: без него в разговор
+ *    двоих входил бы всякий, кто угадал имя комнаты. Открывает её принятый
+ *    вызов, кончает — уход любого из двоих, и медиасервера у неё не бывает
+ *    никогда (см. `openCallRoom`, `mayEnterCallRoom`, `endCall`,
+ *    `transportFor`).
  */
 export class VoiceSessions {
   /**
@@ -66,6 +110,17 @@ export class VoiceSessions {
    * восстанавливает сессию, а комнату мы уже распустили.
    */
   static readonly LEAVE_GRACE_MS = 24_000;
+
+  /**
+   * Сколько открытая комната беседы ждёт, пока в неё войдут.
+   *
+   * Не грейс и не таймаут разговора: это срок жизни ОТКРЫТОЙ, но так и не
+   * занятой комнаты — обе вкладки закрыли в ту же секунду, в которую нажали
+   * «принять». Без него запись о такой беседе лежала бы в памяти до
+   * перезапуска процесса. Занятую комнату он не трогает: её убирает `endCall`,
+   * а подметание пропускает всё, где ещё кто-то есть (см. `openCallRoom`).
+   */
+  static readonly CALL_ROOM_OPEN_MS = 60_000;
 
   /** Пачка событий за окно = один emit с итоговым состоянием. */
   private static readonly PRESENCE_DEBOUNCE_MS = 80;
@@ -78,6 +133,13 @@ export class VoiceSessions {
    * карте и выгоняется «призрак» прошлой вкладки.
    */
   private readonly members = new Map<string, { id: string; room: string }>();
+
+  /**
+   * Открытые комнаты бесед: имя комнаты → две личности, которым она открыта, и
+   * когда её открыли. Эта карта и есть замок разговора (инвариант 4): нет
+   * записи — нет и комнаты, кто бы её ни назвал.
+   */
+  private readonly talks = new Map<string, { members: [string, string]; at: number }>();
 
   private presenceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -119,6 +181,11 @@ export class VoiceSessions {
    * ним уже по-настоящему.
    */
   transportFor(client: AppSocket, asked: unknown, room: string): 'p2p' | 'sfu' {
+    // Кроме комнаты беседы: двоим медиасервер не нужен никогда, и спрашивать
+    // об этом клиента незачем. Слово ему здесь не дают вовсе — попроси он
+    // `sfu`, и получил бы пропуск в комнату, которой в реестре нет, а с ним и
+    // расщепление на ровном месте.
+    if (isCallRoom(room)) return 'p2p';
     if (asked === 'sfu' || asked === 'p2p') return asked;
     return this.passRoom(client) === room ? 'sfu' : 'p2p';
   }
@@ -205,6 +272,10 @@ export class VoiceSessions {
 
     this.leave(client);
     if (clientId) this.evictGhost(clientId, client.id);
+    // Второе устройство того же человека — не третий в комнате: разговор
+    // переезжает к нему, а прошлое устройство уходит из комнаты. Без этого
+    // «двое» в беседе держались бы на честном слове клиента (инвариант 4).
+    if (isCallRoom(room)) this.evictTwin(client, room);
 
     const peers = this.peersIn(room);
 
@@ -228,7 +299,7 @@ export class VoiceSessions {
    * тогда это ничего не делает: `leave` зовут и вслепую (бан, кик, повторный
    * `join`), и вслепую он обязан быть безопасным.
    */
-  leave(client: AppSocket): void {
+  leave(client: AppSocket, opts: { endsCall?: boolean } = {}): void {
     const room = client.data.room;
     if (!room) return;
 
@@ -246,6 +317,10 @@ export class VoiceSessions {
     }
     this.broadcast();
     this.around.onVoiceChanged(client);
+    // Ушёл один — разговора больше нет. `endsCall: false` говорят те два
+    // выхода, которые уходом человека не являются: прошлая вкладка того же
+    // устройства и его же второе устройство (см. `evictGhost`, `evictTwin`).
+    if (opts.endsCall !== false) this.endCall(room);
   }
 
   /**
@@ -265,14 +340,111 @@ export class VoiceSessions {
     }
     const sock = this.server.sockets.sockets.get(ghost.id);
     if (sock) {
-      // Живой сокет: штатный выход сам снимет запись из members.
-      this.leave(sock);
+      // Живой сокет: штатный выход сам снимет запись из members. Разговора он
+      // не кончает — это прошлая вкладка ТОГО ЖЕ устройства, а не второй
+      // участник, который ушёл.
+      this.leave(sock, { endsCall: false });
     } else {
       // Отвалившийся: сокета уже нет — сами уведомляем комнату и чистим карту.
       this.server.to(ghost.room).emit('peer-left', { id: ghost.id });
       this.members.delete(clientId);
       this.broadcast();
     }
+  }
+
+  // ── Комната беседы ────────────────────────────────────────────────────────
+
+  /**
+   * Принятый вызов открыл комнату беседы. Возвращает её имя — тем же, кто её
+   * открыл, оно и уезжает обеим сторонам.
+   *
+   * Открывает её дозвон и тут же о ней забывает: дальше двоими владеет
+   * комната, а не вызов. Дверь обязана открыться РАНЬШЕ, чем оба узнают адрес,
+   * — иначе первый же вошедший упрётся в «такой беседы нет».
+   *
+   * Заодно подметаем открытые, но так и не занятые: обе вкладки закрыли сразу
+   * после «принять», и запись о такой беседе иначе лежала бы до перезапуска
+   * процесса. Занятых подметание не касается — разговор длиной в час законен, а
+   * пустоту комнаты считаем по живым сокетам: id отвалившегося висит в
+   * `adapter.rooms` ещё окно `connectionStateRecovery`, и по нему комната
+   * выглядела бы занятой (тот же довод, что в `peersIn`).
+   */
+  openCallRoom(room: string, members: [string, string]): string {
+    const stale = Date.now() - VoiceSessions.CALL_ROOM_OPEN_MS;
+    for (const [name, open] of this.talks) {
+      if (open.at > stale || !this.emptyRoom(name)) continue;
+      this.talks.delete(name);
+    }
+    this.talks.set(room, { members, at: Date.now() });
+    return room;
+  }
+
+  /**
+   * Вправе ли сокет войти в эту комнату — вопрос, который задают только
+   * комнате беседы (инвариант 4). Обычный голосовой канал отвечает «да»: его
+   * дверь стережёт контур (`mayEnter`), и двух замков на ней не нужно.
+   *
+   * Отказов ровно два и они разные по смыслу, но один по ответу: комнаты нет
+   * (её не открывали, либо разговор уже кончился) — и спрашивающий не один из
+   * двоих. Разбирать их по-разному значило бы подтверждать постороннему, что
+   * беседа с таким адресом существует.
+   */
+  mayEnterCallRoom(client: AppSocket, room: string): boolean {
+    if (!isCallRoom(room)) return true;
+    const open = this.talks.get(room);
+    if (!open) return false;
+    const me = this.around.identityOf(client);
+    return !!me && (open.members[0] === me || open.members[1] === me);
+  }
+
+  /**
+   * Разговор кончился: ушёл один — значит и второй. Комната на одного это не
+   * звонок на удержании, а человек, слушающий тишину.
+   *
+   * Запись снимаем ПЕРВОЙ, и это не уборка ради порядка: `leave` ниже позовёт
+   * этот же метод, и без снятой записи два участника кончали бы разговор друг
+   * другу по кругу. Она же и запирает комнату обратно — вернуться в кончившийся
+   * разговор нельзя даже тому, кто в нём был.
+   *
+   * Сказать и вывести — оба обязательны. Один вывод для вкладки не событие: она
+   * осталась бы с экраном звонка и открытым микрофоном. Одно событие без вывода
+   * оставило бы в комнате того, кто его не разобрал (старый клиент, нативка), —
+   * и присутствие честно докладывало бы «в голосе» про человека, с которым уже
+   * некому говорить.
+   */
+  private endCall(room: string): void {
+    if (!this.talks.delete(room)) return;
+    for (const id of [...(this.server.sockets.adapter.rooms.get(room) ?? [])]) {
+      const sock = this.server.sockets.sockets.get(id);
+      if (!sock) continue;
+      sock.emit('call-over', { room });
+      this.leave(sock, { endsCall: false });
+    }
+  }
+
+  /**
+   * Другое устройство той же личности уходит из комнаты беседы: разговор
+   * переехал к новому, а не стал разговором троих. Прошлому говорим то же, что
+   * и оставшемуся при уходе собеседника, — для него этот разговор кончился.
+   */
+  private evictTwin(client: AppSocket, room: string): void {
+    const me = this.around.identityOf(client);
+    if (!me) return;
+    for (const id of [...(this.server.sockets.adapter.rooms.get(room) ?? [])]) {
+      if (id === client.id) continue;
+      const sock = this.server.sockets.sockets.get(id);
+      if (!sock || this.around.identityOf(sock) !== me) continue;
+      sock.emit('call-over', { room });
+      this.leave(sock, { endsCall: false });
+    }
+  }
+
+  /** Пуста ли комната: id отвалившегося сокета за жильца не считаем. */
+  private emptyRoom(room: string): boolean {
+    for (const id of this.server.sockets.adapter.rooms.get(room) ?? []) {
+      if (this.server.sockets.sockets.has(id)) return false;
+    }
+    return true;
   }
 
   // ── Обрыв и возвращение ───────────────────────────────────────────────────
