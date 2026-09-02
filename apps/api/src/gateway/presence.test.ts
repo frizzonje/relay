@@ -155,6 +155,35 @@ describe('присутствие личности', () => {
     expect(delta(h)).toEqual({ [guest.fingerprint]: 'online' });
   });
 
+  it('гость с кукой личности в присутствии тоже не появляется', async () => {
+    const { gw, server } = await makeGateway();
+    const anya = await personCookie('Аня');
+    const boris = await personCookie('Боря');
+    const watcher = await connectAs(gw, server, anya.cookie, { id: 'аня' });
+    settle();
+    server.clearAll();
+
+    // Гость — это про сокет, а не про человека: `admit` не требует, чтобы
+    // личности не было, и вкладка с кукой личности, открывшая инвайт-ссылку,
+    // это гость С личностью. Прежний тест этот случай не ловил вовсе — его
+    // гость приходил без куки, то есть без личности и предъявлять было нечего.
+    const { token } = issueGuestToken('voice-obshchii');
+    const invited = await connectAs(gw, server, boris.cookie, {
+      id: 'боря-инвайт',
+      guest: token,
+      keep: true,
+    });
+    gw.handleJoin(asSocket(invited), { room: 'voice-obshchii', name: 'Боря' });
+    settle();
+
+    // Ни своего присутствия ему, ни его — чужому: состав инсталляции за инвайт
+    // утекать не должен, даже если в той же вкладке лежит чужая кука.
+    expect(invited.got('presence')).toBe(false);
+    expect(invited.all('presence-update')).toEqual([]);
+    expect(watcher.all('presence-update')).toEqual([]);
+    expect(Object.keys(await seen(gw, server, anya.cookie, 'ещё-аня'))).toEqual([anya.fingerprint]);
+  });
+
   it('гость по инвайту в присутствии не появляется', async () => {
     const { gw, server } = await makeGateway();
     const anya = await personCookie('Аня');

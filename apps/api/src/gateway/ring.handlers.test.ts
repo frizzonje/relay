@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { issueGuestToken } from '../auth/auth';
 import { asSocket, type FakeServer, type FakeSocket } from './testkit';
 import {
   connect,
@@ -61,7 +62,7 @@ function last(sock: FakeSocket, event: string): Record<string, unknown> | undefi
 
 describe('дозвон', () => {
   it('звонок доходит до всех устройств собеседника', async () => {
-    const { anya, boris, hers } = await pair();
+    const { anya, boris, hers, his: laptop } = await pair();
     // Второе устройство Бори: звонят человеку, а не выбранной вкладке.
     const phone = await connectAs(gw, server, boris.cookie, { id: 'боря-телефон' });
     settle();
@@ -71,18 +72,19 @@ describe('дозвон', () => {
     expect(res.ok).toBe(true);
     const ringId = res.ok ? res.ringId : '';
 
-    for (const sock of server.all.values()) {
-      if (sock.id.startsWith('боря')) {
-        expect([sock.id, last(sock, 'call-incoming')]).toEqual([
-          sock.id,
-          {
-            ringId,
-            from: { fingerprint: anya.fingerprint, nick: 'Аня' },
-            at: Date.now(),
-            video: true,
-          },
-        ]);
-      }
+    // Оба устройства перечислены поимённо, а не отобраны условием: отбор по id
+    // фикстуры позеленел бы впустую в тот день, когда id поменяются, — тело
+    // цикла просто не выполнилось бы ни разу.
+    for (const sock of [laptop, phone]) {
+      expect([sock.id, last(sock, 'call-incoming')]).toEqual([
+        sock.id,
+        {
+          ringId,
+          from: { fingerprint: anya.fingerprint, nick: 'Аня' },
+          at: Date.now(),
+          video: true,
+        },
+      ]);
     }
     // Звонящему — свой же дозвон, и тоже на все его устройства.
     expect(last(hers, 'call-state')).toMatchObject({
@@ -275,6 +277,66 @@ describe('дозвон', () => {
     expect(await call(guest, boris.fingerprint)).toEqual({ ok: false, error: 'forbidden' });
     const anon = connect(gw, server, { clientId: 'устройство' });
     expect(await call(anon, boris.fingerprint)).toEqual({ ok: false, error: 'forbidden' });
+  });
+
+  it('видео зажимается настройкой, а отметка о пропущенном — своей', async () => {
+    const { boris, hers, his } = await pair();
+    await tune(settings, 'calls.videoAllowed', false);
+
+    // Не отказ, а звонок без камеры: инсталляция без видео не должна оставлять
+    // человека вовсе без связи — она лишь снимает камеру.
+    const res = await call(hers, boris.fingerprint, true);
+    expect(res.ok).toBe(true);
+    expect(last(his, 'call-incoming')).toMatchObject({ video: false });
+    expect(last(hers, 'call-state')).toMatchObject({ state: 'ringing', video: false });
+
+    // А выключенная отметка гасит флаг, не трогая самого исхода: «не ответили»
+    // остаётся «не ответили», просто следа в переписке не будет.
+    await tune(settings, 'calls.missedMarkEnabled', false);
+    await tune(settings, 'calls.ringTimeoutSeconds', 10);
+    gw.handleCallCancel(asSocket(hers), { ringId: res.ok ? res.ringId : '' });
+    const second = await call(hers, boris.fingerprint);
+    vi.advanceTimersByTime(11_000);
+
+    expect(last(hers, 'call-ended')).toMatchObject({
+      ringId: second.ok ? second.ringId : '',
+      state: 'no-answer',
+      missed: false,
+    });
+  });
+
+  it('гость с кукой личности не становится ни целью звонка, ни её устройством', async () => {
+    const { anya, boris, hers, his } = await pair();
+    // Вкладка, в которой Боря открыл чужую инвайт-ссылку: кука личности при нём,
+    // но контур пускает его гостем. Личности у такого сокета нет ни для дозвона,
+    // ни для присутствия — иначе состав инсталляции утекал бы за приглашение.
+    const { token } = issueGuestToken('voice-obshchii');
+    const invited = await connectAs(gw, server, boris.cookie, {
+      id: 'боря-инвайт',
+      guest: token,
+    });
+    settle();
+    server.clearAll();
+
+    // Сам он звонить не может: личности у него нет.
+    expect(await call(invited, anya.fingerprint)).toEqual({ ok: false, error: 'forbidden' });
+
+    // Пока живо настоящее устройство, вызов до Бори доходит — но НЕ на вкладку
+    // приглашения.
+    const res = await call(hers, boris.fingerprint);
+    expect(res.ok).toBe(true);
+    expect(his.got('call-incoming')).toBe(true);
+    expect(invited.got('call-incoming')).toBe(false);
+
+    // И вкладка приглашения не держит вызов живым за ушедшего хозяина: ушло его
+    // настоящее устройство — вызов сорвался.
+    disconnect(gw, server, his);
+    expect(last(hers, 'call-ended')).toMatchObject({
+      ringId: res.ok ? res.ringId : '',
+      state: 'failed',
+    });
+    // И целью звонка он больше не считается, хотя вкладка с его кукой открыта.
+    expect(await call(hers, boris.fingerprint)).toEqual({ ok: false, error: 'offline' });
   });
 
   it('лимит звонков в час срабатывает и не мешает принимать входящие', async () => {

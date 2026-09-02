@@ -268,7 +268,12 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    * построению, и ни права, ни видимость каналов его не касаются.
    */
   private readonly presence = new Presence(() => this.server, {
-    identityOf: (sock) => this.perimeter.speaker(sock),
+    // Гость по инвайту личности не предъявляет — но предъявить её может САМ
+    // СОКЕТ: вкладка с кукой личности, открывшая инвайт-ссылку, это гость С
+    // личностью (`admit` отсутствия личности не требует). Такому отвечаем
+    // «личности нет»: иначе состав инсталляции утекал бы за приглашение, а
+    // доккомментарий класса обещает обратное как факт.
+    identityOf: (sock) => (this.perimeter.isGuest(sock) ? undefined : this.perimeter.speaker(sock)),
     inVoice: (sock) => this.voice.roomOf(sock) !== undefined,
   });
 
@@ -282,7 +287,10 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    * перезапуска процесса.
    */
   private readonly rings = new Rings(() => this.server, {
-    identityOf: (sock) => this.perimeter.speaker(sock),
+    // То же правило, что и у присутствия, и по той же причине: гость с кукой
+    // личности иначе стал бы и целью звонка, и живым устройством своего
+    // хозяина — вызов держался бы на вкладке приглашения.
+    identityOf: (sock) => (this.perimeter.isGuest(sock) ? undefined : this.perimeter.speaker(sock)),
     stateOf: (id) => this.presence.stateOf(id),
     ringTimeoutMs: () => this.settings.get<number>('calls.ringTimeoutSeconds') * 1000,
     busyWhenInVoice: () => this.settings.get<boolean>('calls.busyWhenInVoice'),

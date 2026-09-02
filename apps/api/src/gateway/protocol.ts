@@ -305,6 +305,10 @@ export interface InviteCreatePayload {
 }
 
 /** Кого выгоняем: socket-id гостя (он же его id в presence и на плитке). */
+export interface GuestKickPayload {
+  id?: unknown;
+}
+
 export interface CallStartPayload {
   fingerprint?: unknown;
   video?: unknown;
@@ -313,10 +317,6 @@ export interface CallStartPayload {
 /** Ответ на уже идущий вызов: принять, отклонить или дать отбой. */
 export interface CallRingPayload {
   ringId?: unknown;
-}
-
-export interface GuestKickPayload {
-  id?: unknown;
 }
 
 export interface SfuTokenPayload {
@@ -596,6 +596,15 @@ export interface ChatRefusedRelay {
  * `room-full` и `guests-full` разделены намеренно: первое человек переждёт,
  * второе значит, что ссылка своё отработала и звать надо иначе.
  */
+export type VoiceRefusal = 'video-off' | 'screen-share-off' | 'room-full' | 'guests-full';
+
+/** Отказ в голосе — тому, кому отказали. */
+export interface VoiceRefusedRelay {
+  reason: VoiceRefusal;
+}
+
+// ── Дозвон ───────────────────────────────────────────────────────────────────
+
 /**
  * Почему позвонить не вышло. Пять причин, и разными они сделаны намеренно:
  * «выключено», «нельзя», «не в сети», «занято» и «слишком часто» объясняют
@@ -623,8 +632,6 @@ export type CallStartResult = { ok: true; ringId: string } | { ok: false; error:
  * незачем.
  */
 export type CallReplyResult = { ok: true } | { ok: false; error: 'unknown' };
-
-export type VoiceRefusal = 'video-off' | 'screen-share-off' | 'room-full' | 'guests-full';
 
 /** Участник вызова так, как его показывают собеседнику: лицо и подпись. */
 export interface CallPerson {
@@ -670,11 +677,6 @@ export interface CallEndedRelay {
   at: number;
   /** Оставит ли этот исход отметку в переписке (`calls.missedMarkEnabled`). */
   missed: boolean;
-}
-
-/** Отказ в голосе — тому, кому отказали. */
-export interface VoiceRefusedRelay {
-  reason: VoiceRefusal;
 }
 
 /**

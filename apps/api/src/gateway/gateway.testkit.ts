@@ -303,12 +303,19 @@ export async function connectAs(
   gw: SignalingGateway,
   server: FakeServer,
   cookie: string,
-  opts: { id?: string; clientId?: string; keep?: boolean } = {},
+  opts: { id?: string; clientId?: string; keep?: boolean; guest?: string } = {},
 ) {
   const sock = server.connect({
     id: opts.id,
     cookie,
-    auth: { ...(opts.clientId ? { clientId: opts.clientId } : {}) },
+    auth: {
+      ...(opts.clientId ? { clientId: opts.clientId } : {}),
+      // Кука личности И токен приглашения разом — не выдумка теста, а обычная
+      // вкладка, в которой человек открыл чужую инвайт-ссылку. Гость С
+      // личностью: контур пускает его гостем, и ни присутствие, ни дозвон не
+      // должны считать эту вкладку устройством его личности.
+      ...(opts.guest ? { guest: opts.guest } : {}),
+    },
   });
   await server.run(sock);
   gw.handleConnection(asSocket(sock));
