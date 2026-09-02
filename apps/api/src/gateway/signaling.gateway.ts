@@ -21,9 +21,11 @@ import { GuestHandlers } from './guests.handlers';
 import { ModerationHandlers } from './moderation.handlers';
 import { PersonalHandlers } from './personal.handlers';
 import { RegistryHandlers } from './registry.handlers';
+import { RingHandlers } from './ring.handlers';
 import { VoiceHandlers } from './voice.handlers';
 import { Perimeter } from './perimeter';
 import { Presence } from './presence';
+import { Rings } from './ring';
 import { VoiceSessions } from './voice-sessions';
 import { isAuthorized, useAddressDoor, verifyGuestToken } from '../auth/auth';
 import { IdentityService } from '../identity/identity.service';
@@ -55,6 +57,10 @@ import {
   type AdminSetPayload,
   type AdminSetResult,
   type AdminStateResult,
+  type CallReplyResult,
+  type CallRingPayload,
+  type CallStartPayload,
+  type CallStartResult,
   type ChannelCreatePayload,
   type ChannelCreateResult,
   type ChannelDeletePayload,
@@ -266,6 +272,23 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     inVoice: (sock) => this.voice.roomOf(sock) !== undefined,
   });
 
+  /**
+   * Владелец живых вызовов: дозвон между двумя людьми — до ответа и не дальше.
+   * Заводится следом за присутствием, потому что «занят разговором» спрашивает
+   * у него: звонят человеку, а не комнате, и где он сейчас, знает только оно.
+   *
+   * Все четыре настройки читаются функциями, а не числами: у группы `calls`
+   * стоит `applies: 'now'`, и снятая при сборке копия действовала бы до
+   * перезапуска процесса.
+   */
+  private readonly rings = new Rings(() => this.server, {
+    identityOf: (sock) => this.perimeter.speaker(sock),
+    stateOf: (id) => this.presence.stateOf(id),
+    ringTimeoutMs: () => this.settings.get<number>('calls.ringTimeoutSeconds') * 1000,
+    busyWhenInVoice: () => this.settings.get<boolean>('calls.busyWhenInVoice'),
+    marksMissed: () => this.settings.get<boolean>('calls.missedMarkEnabled'),
+  });
+
   /** Упоминания: кого назвали, кому сказать, сколько накопилось. */
   private readonly mentions = new Mentions(
     this.registry,
@@ -310,6 +333,14 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     this.dm,
     this.chat,
     this.chats,
+    this.perimeter,
+    this.settings,
+  );
+
+  /** Четыре события дозвона: позвонить, принять, отклонить, дать отбой. */
+  private readonly ringHandlers = new RingHandlers(
+    this.rings,
+    this.dm,
     this.perimeter,
     this.settings,
   );
@@ -933,6 +964,40 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     return this.dmHandlers.people(client, payload);
   }
 
+  // ===== Дозвон =====
+
+  @SubscribeMessage('call-start')
+  handleCallStart(
+    @ConnectedSocket() client: AppSocket,
+    @MessageBody() payload: CallStartPayload,
+  ): CallStartResult {
+    return this.ringHandlers.start(client, payload);
+  }
+
+  @SubscribeMessage('call-accept')
+  handleCallAccept(
+    @ConnectedSocket() client: AppSocket,
+    @MessageBody() payload: CallRingPayload,
+  ): CallReplyResult {
+    return this.ringHandlers.accept(client, payload);
+  }
+
+  @SubscribeMessage('call-decline')
+  handleCallDecline(
+    @ConnectedSocket() client: AppSocket,
+    @MessageBody() payload: CallRingPayload,
+  ): CallReplyResult {
+    return this.ringHandlers.decline(client, payload);
+  }
+
+  @SubscribeMessage('call-cancel')
+  handleCallCancel(
+    @ConnectedSocket() client: AppSocket,
+    @MessageBody() payload: CallRingPayload,
+  ): CallReplyResult {
+    return this.ringHandlers.cancel(client, payload);
+  }
+
   // ===== Админ-панель =====
   //
   // Все события панели — только для владельца, и владение проверяет КАЖДЫЙ
@@ -1008,5 +1073,9 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // есть его собственный грейс, и начаться он обязан в момент обрыва.
     const me = this.perimeter.speaker(client)?.id;
     if (me) this.presence.drop(me);
+    // Дозвон грейса не имеет вовсе: оба конца смотрят на экран прямо сейчас, а
+    // ушедшее устройство могло быть не последним — кого именно потеряли, решает
+    // сам владелец вызовов.
+    this.rings.dropSocket(client);
   }
 }

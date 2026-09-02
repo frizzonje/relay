@@ -1290,6 +1290,14 @@ export interface ClientToServerEvents {
   /** Поиск по истории — канала или всего сервера, в котором открыт канал. */
   'chat-search': (payload: ChatSearchPayload, cb: (res: ChatSearchResult) => void) => void;
   'media-update': (payload: MediaUpdatePayload) => void;
+  /** Позвонить человеку. Ack называет id вызова либо причину отказа. */
+  'call-start': (payload: CallStartPayload, cb: (res: CallStartResult) => void) => void;
+  /** Принять входящий — право только у того, кому звонят. */
+  'call-accept': (payload: CallRingPayload, cb: (res: CallReplyResult) => void) => void;
+  /** Отклонить входящий. */
+  'call-decline': (payload: CallRingPayload, cb: (res: CallReplyResult) => void) => void;
+  /** Отбой звонящего — передумал, не дождавшись ответа. */
+  'call-cancel': (payload: CallRingPayload, cb: (res: CallReplyResult) => void) => void;
   rename: (payload: RenamePayload) => void;
   'server-create': (payload: ServerCreatePayload, cb: (res: ServerCreateResult) => void) => void;
   'server-delete': (payload: ServerDeletePayload, cb: (res: ServerDeleteResult) => void) => void;
@@ -1397,6 +1405,81 @@ export interface IceRelay {
   candidate: IceCandidatePayload;
 }
 
+// ── Дозвон ──────────────────────────────────────────────────────────────────
+
+/** Участник вызова так, как его показывают собеседнику: лицо и подпись. */
+export interface CallPerson {
+  fingerprint: string;
+  nick: string;
+}
+
+/**
+ * Почему позвонить не вышло. Пять причин, и разными они сделаны намеренно:
+ * «выключено», «нельзя», «не в сети», «занято» и «слишком часто» объясняют
+ * человеку совершенно разные вещи.
+ *
+ * `busy` покрывает два случая сразу — собеседник уже в вызове и собеседник
+ * говорит в голосовом канале. Различать их клиенту незачем: ответ один и тот
+ * же, «перезвони позже», — а рассказывать звонящему, ГДЕ именно занят
+ * собеседник, значит рассказывать о нём больше, чем тот показал сам.
+ *
+ * `offline` — отказ ДО вызова: набирать оказалось некуда. Исход `failed` из
+ * машины состояний (см. ./ring) — другое: там собеседник пропал, когда у него
+ * уже звонило.
+ */
+export type CallRefusal = 'disabled' | 'forbidden' | 'offline' | 'busy' | 'rate';
+
+export interface CallStartPayload {
+  /** Кому звоним: отпечаток ключа, тот же адрес, что и у ЛС. */
+  fingerprint: string;
+  /** Звоним с камерой. Сервер зажмёт по `calls.videoAllowed`. */
+  video?: boolean;
+}
+
+/** Тело трёх кнопок: принять, отклонить, дать отбой. */
+export interface CallRingPayload {
+  ringId: string;
+}
+
+export type CallStartResult = { ok: true; ringId: string } | { ok: false; error: CallRefusal };
+
+/**
+ * Ответ на `call-accept` / `call-decline` / `call-cancel`. `unknown` — такого
+ * живого вызова нет: не ошибка клиента, а проигранная гонка (успели отменить,
+ * вышел таймаут, ответили с другого устройства). Экран по нему просто
+ * закрывается.
+ */
+export type CallReplyResult = { ok: true } | { ok: false; error: 'unknown' };
+
+/** Входящий вызов — приходит на ВСЕ устройства: звонят человеку, а не вкладке. */
+export interface CallIncomingRelay {
+  ringId: string;
+  from: CallPerson;
+  /** Когда начался дозвон, мс Unix по часам сервера. */
+  at: number;
+  video: boolean;
+}
+
+/** Вызов жив: звонит либо принят. */
+export interface CallStateRelay {
+  ringId: string;
+  state: 'ringing' | 'accepted';
+  /** Вторая сторона — глазами того, кому событие адресовано. */
+  peer: CallPerson;
+  at: number;
+  video: boolean;
+}
+
+/** Вызов кончился, не став разговором. */
+export interface CallEndedRelay {
+  ringId: string;
+  state: 'declined' | 'no-answer' | 'busy' | 'cancelled' | 'failed';
+  peer: CallPerson;
+  at: number;
+  /** Оставит ли этот исход отметку в переписке. */
+  missed: boolean;
+}
+
 /** Карта событий, отправляемых сервером клиенту. */
 export interface ServerToClientEvents {
   peers: (peers: VoicePeer[]) => void;
@@ -1419,6 +1502,22 @@ export interface ServerToClientEvents {
    * пачка.
    */
   'presence-update': (changed: PresenceEntry[]) => void;
+  /**
+   * Тебе звонят — на все твои устройства сразу. Тост, а не модалка: вызов
+   * должно быть можно проигнорировать, не бросая того, чем занят.
+   */
+  'call-incoming': (payload: CallIncomingRelay) => void;
+  /**
+   * Вызов жив: звонит (у звонящего) либо принят (у обоих). Принятие им же
+   * гасит входящий на тех устройствах собеседника, которые не отвечали.
+   */
+  'call-state': (payload: CallStateRelay) => void;
+  /**
+   * Вызов кончился, не став разговором. Уходит ОБЕИМ сторонам: «не ответили»
+   * собеседник обязан узнать не меньше звонившего — иначе у него просто молча
+   * пропадает входящий.
+   */
+  'call-ended': (payload: CallEndedRelay) => void;
   chat: (message: ChatMessage) => void;
   'chat-history': (page: ChatHistoryPage) => void;
   'chat-roster': (people: RosterPerson[]) => void;

@@ -132,8 +132,8 @@ describe('проверка значения', () => {
     expect(validateSetting('files.allowedKinds', [1])).toEqual({ ok: false, error: 'wrong-type' });
   });
 
-  it('знает все 95 параметров каталога', () => {
-    expect(SETTINGS.length).toBe(95);
+  it('знает все 102 параметра каталога', () => {
+    expect(SETTINGS.length).toBe(102);
     expect(settingSpec('maintenance.mode')?.danger).toBe(true);
   });
 });
@@ -146,7 +146,7 @@ describe('проверка значения', () => {
 
 describe('состав групп', () => {
   // Числа — из плана (раздел «Каталог параметров»). Тест ловит не опечатку в
-  // сумме, а потерянную или удвоенную строку: `SETTINGS.length === 95` сходится
+  // сумме, а потерянную или удвоенную строку: `SETTINGS.length === 102` сходится
   // и тогда, когда один параметр забыт, а другой написан дважды.
   const expected: Record<SettingGroup, number> = {
     access: 11,
@@ -157,6 +157,7 @@ describe('состав групп', () => {
     direct: 8,
     spaces: 8,
     voice: 12,
+    calls: 7,
     invites: 6,
     appearance: 7,
     notifications: 3,
@@ -169,8 +170,8 @@ describe('состав групп', () => {
     }
   });
 
-  it('групп двенадцать и других групп в каталоге нет', () => {
-    expect(SETTING_GROUPS).toHaveLength(12);
+  it('групп тринадцать и других групп в каталоге нет', () => {
+    expect(SETTING_GROUPS).toHaveLength(13);
     expect(new Set(SETTINGS.map((s) => s.group)).size).toBe(SETTING_GROUPS.length);
   });
 });

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { missed, settled, step, type Ring, type RingEvent, type RingState } from './ring';
 
@@ -198,5 +200,45 @@ describe('исходы', () => {
     // передумал, и метка о собственной секундной ошибке была бы шумом;
     // «занято» — собеседник в разговоре, а не мимо.
     expect(ALL_STATES.filter(missed)).toEqual(['no-answer', 'failed']);
+  });
+});
+
+/**
+ * Машина существует в двух экземплярах: этот и `apps/api/src/gateway/ring-machine.ts`.
+ * Так вышло не от лени — api намеренно не зависит от этого пакета (см.
+ * `gateway/protocol.ts` и близнеца каталога настроек), а собирается он в
+ * commonjs из своего `src`, куда исходник на ESM попросту не доедет ни
+ * компиляцией, ни `require`. Вебу же машина нужна именно отсюда: по её
+ * состояниям он рисует и экран исходящего, и тост входящего.
+ *
+ * Цена копии — расхождение, и оно было бы худшего сорта. Чем кончился дозвон,
+ * обязаны считать одинаково владелец вызовов на сервере и оба экрана; разъедься
+ * половины — и человек увидит «у него звонок ещё идёт, а у меня уже
+ * пропущенный», то есть ровно ту рассинхронизацию, ради которой весь разбор и
+ * вынесен в чистую функцию. Поэтому копия сверяется не по духу, а по букве.
+ */
+describe('копия машины в api', () => {
+  /** Всё, начиная с первого объявления: до него у файлов своя шапка. */
+  const body = (src: string) => {
+    const at = src.indexOf('export type RingState');
+    expect(at).toBeGreaterThan(0);
+    return src.slice(at);
+  };
+
+  it('совпадает с этим файлом слово в слово', () => {
+    const mine = readFileSync(fileURLToPath(new URL('./ring.ts', import.meta.url)), 'utf8');
+    const theirs = readFileSync(
+      fileURLToPath(new URL('../../../apps/api/src/gateway/ring-machine.ts', import.meta.url)),
+      'utf8',
+    );
+    expect(body(theirs)).toBe(body(mine));
+  });
+
+  it('живёт без единого импорта — иначе копия не собралась бы в api', () => {
+    const theirs = readFileSync(
+      fileURLToPath(new URL('../../../apps/api/src/gateway/ring-machine.ts', import.meta.url)),
+      'utf8',
+    );
+    expect(theirs).not.toMatch(/^import /m);
   });
 });

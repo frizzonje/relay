@@ -305,6 +305,16 @@ export interface InviteCreatePayload {
 }
 
 /** Кого выгоняем: socket-id гостя (он же его id в presence и на плитке). */
+export interface CallStartPayload {
+  fingerprint?: unknown;
+  video?: unknown;
+}
+
+/** Ответ на уже идущий вызов: принять, отклонить или дать отбой. */
+export interface CallRingPayload {
+  ringId?: unknown;
+}
+
 export interface GuestKickPayload {
   id?: unknown;
 }
@@ -586,7 +596,81 @@ export interface ChatRefusedRelay {
  * `room-full` и `guests-full` разделены намеренно: первое человек переждёт,
  * второе значит, что ссылка своё отработала и звать надо иначе.
  */
+/**
+ * Почему позвонить не вышло. Пять причин, и разными они сделаны намеренно:
+ * «выключено», «нельзя», «не в сети», «занято» и «слишком часто» объясняют
+ * человеку совершенно разные вещи, и делать по ним надо тоже разное.
+ *
+ * `busy` покрывает два случая сразу — собеседник уже в вызове и собеседник
+ * говорит в голосовом канале (`calls.busyWhenInVoice`). Различать их клиенту
+ * незачем: ответ один и тот же, «перезвони позже», — а рассказывать звонящему,
+ * ГДЕ именно занят собеседник, значит рассказывать о нём больше, чем тот
+ * показал сам.
+ *
+ * `offline` — это не исход вызова, а отказ ДО него: собеседника не было на
+ * связи в момент набора, и звонить оказалось некуда. Исход `failed` из машины
+ * состояний — другое: там собеседник пропал, когда у него уже звонило.
+ */
+export type CallRefusal = 'disabled' | 'forbidden' | 'offline' | 'busy' | 'rate';
+
+export type CallStartResult = { ok: true; ringId: string } | { ok: false; error: CallRefusal };
+
+/**
+ * Ответ на `call-accept` / `call-decline` / `call-cancel`. `unknown` — такого
+ * живого вызова нет: не ошибка клиента, а проигранная гонка (успели отменить,
+ * вышел таймаут, собеседник уже ответил с другого устройства). Тем же ответом
+ * отвечает и чужой `ringId` — знать, что такой вызов вообще есть, постороннему
+ * незачем.
+ */
+export type CallReplyResult = { ok: true } | { ok: false; error: 'unknown' };
+
 export type VoiceRefusal = 'video-off' | 'screen-share-off' | 'room-full' | 'guests-full';
+
+/** Участник вызова так, как его показывают собеседнику: лицо и подпись. */
+export interface CallPerson {
+  fingerprint: string;
+  nick: string;
+}
+
+/**
+ * Входящий вызов — на ВСЕ устройства собеседника: звонят человеку, а не
+ * вкладке, и угадывать, за какой из них он сидит, сервер не должен.
+ */
+export interface CallIncomingRelay {
+  ringId: string;
+  from: CallPerson;
+  /** Когда начался дозвон, мс Unix по часам сервера. */
+  at: number;
+  /** Звонят с камерой. Уже зажато `calls.videoAllowed`. */
+  video: boolean;
+}
+
+/**
+ * Вызов жив: звонит либо принят. Уходит на все сокеты обеих сторон — по нему
+ * же гаснет входящий на тех устройствах собеседника, которые не отвечали.
+ */
+export interface CallStateRelay {
+  ringId: string;
+  state: 'ringing' | 'accepted';
+  /** Вторая сторона — глазами того, кому событие адресовано. */
+  peer: CallPerson;
+  at: number;
+  video: boolean;
+}
+
+/**
+ * Вызов кончился, не став разговором. Пять исходов, и все пять уходят ОБЕИМ
+ * сторонам: «не ответили» собеседник обязан узнать не меньше звонившего —
+ * иначе у него просто молча пропадает входящий.
+ */
+export interface CallEndedRelay {
+  ringId: string;
+  state: 'declined' | 'no-answer' | 'busy' | 'cancelled' | 'failed';
+  peer: CallPerson;
+  at: number;
+  /** Оставит ли этот исход отметку в переписке (`calls.missedMarkEnabled`). */
+  missed: boolean;
+}
 
 /** Отказ в голосе — тому, кому отказали. */
 export interface VoiceRefusedRelay {

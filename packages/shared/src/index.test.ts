@@ -26,6 +26,7 @@ import {
   type AdminAction,
   type AdminRefusal,
   type AuditAction,
+  type CallRefusal,
   type ChatRefusal,
   type VoiceRefusal,
 } from './index';
@@ -172,6 +173,17 @@ describe('константы совпадают с копией в api', () => {
       .match(/'[a-z-]+'/g)!;
     const mine: VoiceRefusal[] = ['video-off', 'screen-share-off', 'room-full', 'guests-full'];
     expect(reasons.map((r) => r.slice(1, -1))).toEqual(mine);
+  });
+
+  it('причины отказа в дозвоне — те же, что называет сервер', () => {
+    // Единственный ответ на «позвонить»: у `call-start` ack, и незнакомая
+    // строка отказа означала бы экран, застрявший на «дозваниваемся» ровно там,
+    // где сервер уже сказал «нельзя». Машина состояний вызова живёт в двух
+    // копиях по той же причине (см. ./ring и близнеца в api) — а вот причины
+    // отказа копией не покрыты: вызова в этот момент ещё нет.
+    const reasons = literals(apiSource('gateway/protocol.ts'), 'export type CallRefusal =');
+    const mine: CallRefusal[] = ['disabled', 'forbidden', 'offline', 'busy', 'rate'];
+    expect(reasons).toEqual(mine);
   });
 
   it('действия журнала — те же, что называет сервер', () => {

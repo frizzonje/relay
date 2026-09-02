@@ -311,6 +311,18 @@ export class DmService implements OnModuleInit {
     return rows.length > 0;
   }
 
+  /**
+   * Есть ли между этими двумя заведённая беседа — по памяти, без базы.
+   *
+   * Отвечает на «кому можно позвонить» при `calls.whoCanCall: conversation`.
+   * Это НЕ `seenTogether`: там вопрос «говорили ли оба в одном канале», и он
+   * решает, можно ли написать первым. Спутав их, инсталляция разрешила бы
+   * звонить любому, кто когда-либо написал в общий канал.
+   */
+  hasConversation(aId: string, bId: string): boolean {
+    return this.known.has(DmService.address(aId, bId));
+  }
+
   /** Адреса моих бесед — по памяти, без базы (нужно отметкам чтения). */
   slugsOf(identityId: string): string[] {
     const slugs: string[] = [];
