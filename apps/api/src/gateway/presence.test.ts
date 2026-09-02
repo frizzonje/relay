@@ -6,8 +6,11 @@ import {
   connectAs,
   disconnect,
   makeGateway,
+  ownServer,
   personCookie,
+  say,
   settle,
+  slugOf,
   useGatewayStand,
 } from './gateway.testkit';
 import type { SignalingGateway } from './signaling.gateway';
@@ -126,6 +129,30 @@ describe('присутствие личности', () => {
       [vera.fingerprint]: 'online',
       [gleb.fingerprint]: 'online',
     });
+  });
+
+  it('вынутый из голоса баном перестаёт быть «в голосе» сам', async () => {
+    const { gw, server } = await makeGateway();
+    const host = await personCookie('Хозяйка');
+    const guest = await personCookie('Гость');
+    const h = await connectAs(gw, server, host.cookie, { id: 'хозяйка' });
+    await ownServer(gw, h);
+    const g = await connectAs(gw, server, guest.cookie, { id: 'гость' });
+    const id = await say(gw, g, slugOf('болталка'), 'привет');
+    await gw.handleChatJoin(asSocket(h), { room: slugOf('болталка') });
+    gw.handleJoin(asSocket(g), { room: slugOf('эфир') });
+    settle();
+    expect(delta(h)).toMatchObject({ [guest.fingerprint]: 'in-voice' });
+
+    server.clearAll();
+    expect(await gw.handleModerationBan(asSocket(h), { id })).toEqual({ ok: true });
+    settle();
+
+    // Бан вынимает человека из эфира при живом сокете, и «в голосе» обязано
+    // погаснуть само — а не дожидаться, пока в инсталляции случайно кто-нибудь
+    // войдёт или выйдет. В тихой инсталляции ждать пришлось бы до утра.
+    expect(g.data.room).toBeUndefined();
+    expect(delta(h)).toEqual({ [guest.fingerprint]: 'online' });
   });
 
   it('гость по инвайту в присутствии не появляется', async () => {

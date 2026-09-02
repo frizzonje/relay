@@ -250,6 +250,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
       isListener: (sock) => this.perimeter.isListener(sock),
       visibleVoiceSlugs: (sock) => this.perimeter.visibleVoiceSlugs(sock),
       onGraceExpired: (sock) => this.chats.leave(sock),
+      onVoiceChanged: (sock) => this.notePresence(sock),
     },
     this.logger,
   );
@@ -606,6 +607,11 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
    * Сокет появился или сменил голосовое состояние — сказать об этом
    * присутствию. У сокета без личности присутствия нет вовсе, и звать тут
    * некого (см. ./presence).
+   *
+   * Из эфира зовётся не отсюда, а из самой голосовой сессии
+   * (`onVoiceChanged`): вынимают оттуда не только `leave`, но и бан с сервера,
+   * и истёкший грейс, — а перечисляй мы эти пути здесь поимённо, забытый
+   * означал бы человека, вечно «звонящего» в глазах остальных.
    */
   private notePresence(client: AppSocket): void {
     const me = this.perimeter.speaker(client)?.id;
@@ -769,13 +775,11 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   @SubscribeMessage('join')
   handleJoin(@ConnectedSocket() client: AppSocket, @MessageBody() payload: JoinPayload) {
     this.voiceHandlers.join(client, payload);
-    this.notePresence(client);
   }
 
   @SubscribeMessage('leave')
   handleLeave(@ConnectedSocket() client: AppSocket) {
     this.voiceHandlers.leave(client);
-    this.notePresence(client);
   }
 
   @SubscribeMessage('offer')

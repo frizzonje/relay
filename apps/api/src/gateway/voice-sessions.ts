@@ -24,6 +24,17 @@ export interface VoiceSurroundings {
   visibleVoiceSlugs(sock: AppSocket): Set<string>;
   /** Грейс истёк — что ещё закрыть за этим сокетом (лента и её ростер). */
   onGraceExpired(sock: AppSocket): void;
+  /**
+   * Сокет вошёл в эфир или вышел из него.
+   *
+   * За голосом следит не только этот класс: глобальное присутствие личности
+   * («в голосе») считается по тем же комнатам. Уведомляем отсюда, а не из
+   * обработчиков `join`/`leave`, потому что выходов больше, чем событий: из
+   * эфира вынимают ещё и бан с сервера, и истёкший грейс, — и присутствие,
+   * знающее только про два события из четырёх, докладывало бы «в голосе» про
+   * человека, которого оттуда только что вынесли.
+   */
+  onVoiceChanged(sock: AppSocket): void;
 }
 
 /**
@@ -207,6 +218,7 @@ export class VoiceSessions {
     // Медиасостояние прошлого захода не тащим: клиент пришлёт своё сразу после join.
     client.data.micOn = undefined;
     client.data.deafened = undefined;
+    this.around.onVoiceChanged(client);
 
     return peers;
   }
@@ -233,6 +245,7 @@ export class VoiceSessions {
       this.members.delete(clientId);
     }
     this.broadcast();
+    this.around.onVoiceChanged(client);
   }
 
   /**
