@@ -846,6 +846,115 @@ describe('комната беседы', () => {
     expect(his.got('call-over')).toBe(false);
   });
 
+  it('конец разговора догоняет того, у кого моргнула сеть', async () => {
+    const { gw, server, hers, his, room, ringId } = await talk();
+    accept(gw, his, ringId);
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+    gw.handleJoin(asSocket(his), { room, name: 'Боря' });
+    server.clearAll();
+
+    // У Ани моргнула сеть: сокета уже нет, а id его ещё висит в комнате — то
+    // самое окно восстановления, ради которого в этом файле живёт грейс.
+    gw.handleDisconnect(asSocket(hers));
+    server.all.delete('аня');
+
+    gw.handleLeave(asSocket(his));
+
+    // Комната не переживает разговор: зависший id вытолкнут силой, иначе она
+    // числилась бы занятой и следующая беседа тех же двоих началась бы с
+    // призраком.
+    expect([...(server.rooms.get(room) ?? [])]).toEqual([]);
+
+    // Сессия вернулась — и первым делом узнаёт, что разговора больше нет.
+    // Иначе Аня сидела бы в комнате, которой нет: микрофон открыт, присутствие
+    // считает её «в голосе», а для новых звонков она занята.
+    server.all.set('аня', hers);
+    gw.handleConnection(asSocket(hers));
+    expect([hers.data.room, hers.last('call-over')]).toEqual([undefined, { room }]);
+  });
+
+  it('вытесненное устройство, вернувшись, в чужой уже разговор не садится', async () => {
+    const { gw, server, anya, hers, his, room, ringId } = await talk();
+    accept(gw, his, ringId);
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+    gw.handleJoin(asSocket(his), { room, name: 'Боря' });
+
+    // У ноутбука моргнула сеть, и Аня взяла телефон.
+    gw.handleDisconnect(asSocket(hers));
+    server.all.delete('аня');
+    const phone = await connectAs(gw, server, anya.cookie, { id: 'аня-телефон' });
+    settle();
+    gw.handleJoin(asSocket(phone), { room, name: 'Аня' });
+    server.clearAll();
+
+    // Ноутбук вернулся: место уже не его — в комнате его не ждут, а разговор
+    // на телефоне идёт.
+    server.all.set('аня', hers);
+    gw.handleConnection(asSocket(hers));
+    expect([hers.data.room, hers.last('call-over')]).toEqual([undefined, { room }]);
+    expect([phone.data.room, his.data.room, his.got('call-over')]).toEqual([room, room, false]);
+  });
+
+  it('грейс вытесненного устройства разговор на новом не кончает', async () => {
+    const { gw, server, anya, hers, his, room, ringId } = await talk();
+    accept(gw, his, ringId);
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+    gw.handleJoin(asSocket(his), { room, name: 'Боря' });
+
+    // Ноутбук моргнул и больше не вернулся — Аня договорила с телефона.
+    gw.handleDisconnect(asSocket(hers));
+    server.all.delete('аня');
+    const phone = await connectAs(gw, server, anya.cookie, { id: 'аня-телефон' });
+    settle();
+    gw.handleJoin(asSocket(phone), { room, name: 'Аня' });
+    server.clearAll();
+
+    // Грейс ноутбука истекает — и это уход СОКЕТА, а не человека: место его
+    // уже занято его же телефоном. Кончи он этим разговор, звонок обрывался бы
+    // ровно через двадцать четыре секунды после переезда на другое устройство.
+    vi.advanceTimersByTime(60_000);
+
+    expect([phone.data.room, his.data.room]).toEqual([room, room]);
+    expect([phone.got('call-over'), his.got('call-over')]).toEqual([false, false]);
+  });
+
+  it('повторный join в ту же комнату разговора не рушит', async () => {
+    const { gw, server, hers, his, room, ringId } = await talk();
+    accept(gw, his, ringId);
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+    gw.handleJoin(asSocket(his), { room, name: 'Боря' });
+    server.clearAll();
+
+    // Клиент, не знающий протокола (нативка, обрыв), повторяет `join` — и это
+    // возвращение, а не уход: кончать им разговор собеседнику нельзя.
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+
+    expect([hers.data.room, his.data.room]).toEqual([room, room]);
+    expect([hers.got('call-over'), his.got('call-over')]).toEqual([false, false]);
+  });
+
+  it('комната, в которой так и не стало двоих, кончается сама', async () => {
+    const { gw, server, hers, his, room, ringId } = await talk();
+    accept(gw, his, ringId);
+    // Боря вошёл, Аня — нет: у неё не вышло сесть (нет WebRTC, не дали
+    // микрофон, закрыли вкладку). Сервер об этой неудаче не узнаёт ничем,
+    // кроме того, что второй так и не пришёл.
+    gw.handleJoin(asSocket(his), { room, name: 'Боря' });
+    server.clearAll();
+
+    vi.advanceTimersByTime(31_000);
+
+    // Боря не сидит в живой комнате один: одному в ней слушать нечего, а
+    // числился бы он в ней разговором — и «занят» для новых звонков.
+    expect([his.data.room, his.last('call-over')]).toEqual([undefined, { room }]);
+    // Комнаты больше нет вовсе — опоздавшая Аня входит уже в никуда.
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+    expect([hers.data.room, hers.last('voice-refused')]).toEqual([
+      undefined,
+      { reason: 'not-in-call' },
+    ]);
+  });
+
   it('SFU для комнаты беседы не выдают, о чём бы клиент ни просил', async () => {
     process.env.SFU_URL = 'https://relay.example/sfu';
     process.env.SFU_SECRET = 'секрет';

@@ -22,7 +22,10 @@ socket.on = vi.fn((event: string, h: (payload: never) => void) => {
 });
 
 vi.mock('@/lib/socket', () => ({ getSocket: () => socket }));
-vi.mock('@/lib/voice', () => ({ joinVoice: vi.fn(async () => {}), leaveVoice: vi.fn() }));
+// `joinVoice` отвечает, СОСТОЯЛСЯ ли вход, и подделка обязана уметь оба
+// ответа: всегда-успешная прячет ровно тот случай, ради которого ответ и
+// заведён (движок без WebRTC, отказ в микрофоне).
+vi.mock('@/lib/voice', () => ({ joinVoice: vi.fn(async () => true), leaveVoice: vi.fn() }));
 vi.mock('@/lib/voice/camera', () => ({
   toggleCamera: vi.fn(async () => {}),
   isCamOn: () => false,
@@ -124,6 +127,23 @@ describe('вход в комнату беседы', () => {
     handlers['call-state'](accepted('r1') as never);
     await Promise.resolve();
     expect(voice.joinVoice).not.toHaveBeenCalled();
+  });
+
+  it('не вошли — и не считаем себя в разговоре', async () => {
+    const { call, voice, camera } = await fresh();
+    // Движок без WebRTC или отказ в микрофоне: `joinVoice` выходит, не отправив
+    // `join`. Считай вкладка себя в комнате — экран звонка стоял бы над
+    // разговором, в который она не вошла, а `hangUp` не отправил бы ничего:
+    // выходить неоткуда.
+    vi.mocked(voice.joinVoice).mockResolvedValueOnce(false);
+    void call.dialCall('ff');
+    reply({ ok: true, ringId: 'r1' });
+    await Promise.resolve();
+
+    handlers['call-state'](accepted('r1', { video: true }) as never);
+    await vi.waitFor(() => expect(voice.joinVoice).toHaveBeenCalled());
+    expect(call.callRoom()).toBeNull();
+    expect(camera.toggleCamera).not.toHaveBeenCalled();
   });
 
   it('голосовой звонок камеры не открывает, видеозвонок открывает', async () => {

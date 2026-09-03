@@ -575,11 +575,21 @@ export function setListenOnly(on: boolean) {
   syncMediaState();
 }
 
-export async function joinVoice(newRoom: string, label: string) {
+/**
+ * Войти в голосовую комнату. Возвращает `true`, если вход СОСТОЯЛСЯ.
+ *
+ * Ответ здесь не для красоты. Заход бросает на трёх законных развилках —
+ * движок без WebRTC, отказ в микрофоне, обгон следующим заходом, — и все три
+ * выходят молча, не отправив `join`. Пока функция ничего не возвращала, они
+ * были неотличимы от удавшегося входа для того, кто её ждал: разговор,
+ * который зовёт её по принятому вызову, считал бы себя собранным, а второй
+ * сидел бы в комнате один (см. `@/lib/call`).
+ */
+export async function joinVoice(newRoom: string, label: string): Promise<boolean> {
   // Уже на связи в этой комнате — значит, мы просто смотрели текст: показываем сетку
   if (newRoom === room) {
     useUiStore.getState().openVoice(room, label);
-    return;
+    return true;
   }
 
   // Возможности движка проверяем ДО микрофона: в WebKitGTK без WebRTC
@@ -590,7 +600,7 @@ export async function joinVoice(newRoom: string, label: string) {
     toast.error(msg('voice.toast.joinFailed', { reason: support.message }));
     setStatus('voice.status.unsupported');
     sfx().play('error');
-    return;
+    return false;
   }
 
   // Заход — не одно действие: впереди два ожидания подряд (устройство, пропуск
@@ -619,9 +629,9 @@ export async function joinVoice(newRoom: string, label: string) {
       setStatus('voice.status.micDenied');
       toast.error(msg('voice.toast.joinFailedMic', { reason: mediaErrorText(err) }));
       sfx().play('error'); // отказано в доступе к устройству
-      return;
+      return false;
     }
-    if (gen !== migration) return; // пока ждали микрофон, ушли в другой канал
+    if (gen !== migration) return false; // пока ждали микрофон, ушли в другой канал
   }
 
   room = newRoom;
@@ -637,9 +647,9 @@ export async function joinVoice(newRoom: string, label: string) {
   // у своего реестра каналов: гость по инвайту реестра не получает вовсе, а
   // разъехавшись с остальными в транспорте, он останется без звука.
   const ticket = await requestSfuTicket(newRoom);
-  if (room !== newRoom || gen !== migration) return; // нас обогнал следующий заход
+  if (room !== newRoom || gen !== migration) return false; // нас обогнал следующий заход
   await enterRoom(newRoom, ticket, gen);
-  if (room !== newRoom || gen !== migration) return;
+  if (room !== newRoom || gen !== migration) return false;
   sfx().play('join'); // вышли на связь
 
   // Подсказка про смену микрофона — один раз, чтобы знали, где переключить.
@@ -653,6 +663,7 @@ export async function joinVoice(newRoom: string, label: string) {
     localStorage.setItem('relay-mic-hint', '1');
     toast(msg('voice.toast.micHint'), { duration: 7000 });
   }
+  return true;
 }
 
 // hard=true — полная демобилизация (освобождаем камеру/микрофон, меняем вид).
