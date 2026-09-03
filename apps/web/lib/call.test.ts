@@ -236,6 +236,34 @@ describe('конец разговора', () => {
     expect(call.callRoom()).toBe(ROOM);
   });
 
+  it('конец разговора посреди посадки не оставляет микрофон открытым', async () => {
+    const { call, voice } = await fresh();
+    // Посадка, которая не доезжает, пока тест её не отпустит: ровно так висит
+    // на экране первый в жизни запрос доступа к микрофону.
+    let land = (_ok: boolean) => {};
+    vi.mocked(voice.joinVoice).mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        land = resolve;
+      }),
+    );
+    void call.dialCall('ff');
+    reply({ ok: true, ringId: 'r1' });
+    await Promise.resolve();
+    handlers['call-state'](accepted('r1') as never);
+    await vi.waitFor(() => expect(voice.joinVoice).toHaveBeenCalled());
+
+    // Собеседник кладёт трубку, пока мы ещё садимся.
+    handlers['call-over']({ room: ROOM } as never);
+    expect(call.callRoom()).toBeNull();
+    expect(voice.leaveVoice).toHaveBeenCalledTimes(1);
+
+    // …и посадка всё-таки доезжает. Микрофон, взятый по дороге, обязан быть
+    // отпущен: без этого экран звонка погашен, а человека слышно.
+    land(true);
+    await vi.waitFor(() => expect(voice.leaveVoice).toHaveBeenCalledTimes(2));
+    expect(call.callRoom()).toBeNull();
+  });
+
   it('трубку кладут отсюда же: сервер кончит разговор обоим', async () => {
     const { call, voice } = await talking();
     call.hangUp();

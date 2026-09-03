@@ -917,12 +917,14 @@ describe('комната беседы', () => {
     gw.handleJoin(asSocket(his), { room, name: 'Боря' });
     server.clearAll();
 
-    // Обрыв на десятой секунде: к тридцатой, когда просыпается сторож, живых
-    // сокетов в комнате один. Считай он живых — уничтожил бы разговор, который
-    // и окно восстановления (20 с), и грейс (24 с) вернули бы целым.
-    vi.advanceTimersByTime(10_000);
+    // Обрыв на пятнадцатой секунде: к тридцатой, когда просыпается сторож,
+    // живых сокетов в комнате один. Считай он живых — уничтожил бы разговор,
+    // который и окно восстановления (20 с), и грейс (24 с) вернули бы целым.
+    // Возвращаемся внутри окна: за его пределом socket.io подключился бы новым
+    // сокетом, и проверялось бы уже не восстановление.
+    vi.advanceTimersByTime(15_000);
     disconnect(gw, server, hers);
-    vi.advanceTimersByTime(20_500);
+    vi.advanceTimersByTime(16_000);
 
     expect([his.data.room, his.got('call-over')]).toEqual([room, false]);
     recover(gw, server, hers, room);
@@ -1029,6 +1031,40 @@ describe('комната беседы', () => {
       undefined,
       { reason: 'not-in-call' },
     ]);
+  });
+
+  it('перезагрузка с уходом в обычный канал кончает разговор второму', async () => {
+    const { gw, server, anya, boris, hers, his, room, ringId } = await talk();
+    accept(gw, his, ringId);
+    // Аня говорит с ноутбука — устройство названо, по нему и узнают призрака.
+    const laptop = await connectAs(gw, server, anya.cookie, {
+      id: 'аня-ноут',
+      clientId: 'устройство-ани',
+    });
+    settle();
+    gw.handleJoin(asSocket(laptop), { room, name: 'Аня' });
+    gw.handleJoin(asSocket(his), { room, name: 'Боря' });
+    server.clearAll();
+
+    // Вкладку перезагрузили — и она вернулась не в разговор, а в обычный
+    // канал, не дожидаясь конца грейса. Грейс, который кончил бы разговор сам,
+    // снимает выселение призрака: место мёртвого сокета освободить больше
+    // некому, и без этого Боря остался бы в комнате навсегда.
+    disconnect(gw, server, laptop);
+    const reloaded = await connectAs(gw, server, anya.cookie, {
+      id: 'аня-ноут-2',
+      clientId: 'устройство-ани',
+    });
+    settle();
+    gw.handleJoin(asSocket(reloaded), { room: 'voice-obshchii', name: 'Аня' });
+
+    expect([his.data.room, his.last('call-over')]).toEqual([undefined, { room }]);
+    // И «занят» с него снялось: комната была последним, что держало его в
+    // голосе, — иначе дозвониться до него было бы нельзя до конца дня.
+    settle();
+    expect(await gw.handleCallStart(asSocket(hers), { fingerprint: boris.fingerprint })).toEqual(
+      expect.objectContaining({ ok: true }),
+    );
   });
 
   it('SFU для комнаты беседы не выдают, о чём бы клиент ни просил', async () => {

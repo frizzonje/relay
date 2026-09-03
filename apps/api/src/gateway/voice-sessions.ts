@@ -299,7 +299,7 @@ export class VoiceSessions {
     // (обрыв, нативка, не знающая протокола), иначе кончал бы разговор
     // собеседнику ровно тем, что в него возвращается.
     this.leave(client, { endsCall: client.data.room !== room });
-    if (clientId) this.evictGhost(clientId, client.id);
+    if (clientId) this.evictGhost(clientId, client.id, room);
     // Второе устройство того же человека — не третий в комнате: разговор
     // переезжает к нему, а прошлое устройство уходит из комнаты. Без этого
     // «двое» в беседе держались бы на честном слове клиента (инвариант 4).
@@ -348,7 +348,7 @@ export class VoiceSessions {
     // Ушёл один — разговора больше нет. `endsCall: false` говорят те выходы,
     // которые уходом человека не являются: прошлая вкладка того же устройства
     // и пере-вход в ту же комнату (см. `evictGhost`, `enter`).
-    if (opts.endsCall !== false && this.freeSeat(client, room)) this.endCall(room);
+    if (opts.endsCall !== false && this.freeSeat(room, client.id)) this.endCall(room);
   }
 
   /**
@@ -357,8 +357,19 @@ export class VoiceSessions {
    * — сокет уже отвалился (перезагрузка) — шлём `peer-left` по его id в ЕГО
    *   комнату, чтобы плитку сняли сразу, не дожидаясь грейса.
    * В обоих отменяем отложенный выход.
+   *
+   * Кончает ли это разговор, решает КУДА пошёл новый сокет. Вернулся в ту же
+   * комнату — это возвращение: место тут же займёт он сам (`takeSeat`). Ушёл в
+   * другой канал — человек из разговора вышел, и второму там больше делать
+   * нечего.
+   *
+   * Место освобождаем здесь и в отвалившемся случае тоже. Сделал бы это за нас
+   * грейс — но его мы строкой выше сняли, а больше `leave` для этого сокета не
+   * позовёт уже никто: собеседник остался бы в комнате с местом сокета,
+   * которого не существует, — без `call-over`, «в голосе» и «занят» для новых
+   * звонков, пока сам не положит трубку.
    */
-  private evictGhost(clientId: string, keepId: string): void {
+  private evictGhost(clientId: string, keepId: string, room: string): void {
     const ghost = this.members.get(clientId);
     if (!ghost || ghost.id === keepId) return;
     const timer = this.pendingLeave.get(ghost.id);
@@ -366,18 +377,18 @@ export class VoiceSessions {
       clearTimeout(timer);
       this.pendingLeave.delete(ghost.id);
     }
+    const endsCall = ghost.room !== room;
     const sock = this.server.sockets.sockets.get(ghost.id);
     if (sock) {
-      // Живой сокет: штатный выход сам снимет запись из members. Разговора он
-      // не кончает — это прошлая вкладка ТОГО ЖЕ устройства, а не второй
-      // участник, который ушёл.
-      this.leave(sock, { endsCall: false });
-    } else {
-      // Отвалившийся: сокета уже нет — сами уведомляем комнату и чистим карту.
-      this.server.to(ghost.room).emit('peer-left', { id: ghost.id });
-      this.members.delete(clientId);
-      this.broadcast();
+      // Живой сокет: штатный выход сам снимет запись из members.
+      this.leave(sock, { endsCall });
+      return;
     }
+    // Отвалившийся: сокета уже нет — сами уведомляем комнату и чистим карту.
+    this.server.to(ghost.room).emit('peer-left', { id: ghost.id });
+    this.members.delete(clientId);
+    this.broadcast();
+    if (endsCall && this.freeSeat(ghost.room, ghost.id)) this.endCall(ghost.room);
   }
 
   // ── Комната беседы ────────────────────────────────────────────────────────
@@ -483,21 +494,25 @@ export class VoiceSessions {
   }
 
   /**
-   * Уходящий освобождает своё место. Возвращает `true`, если ушёл ДЕЙСТВУЮЩИЙ
-   * участник, — только такой уход кончает разговор.
+   * Освободить место этого СОКЕТА. Возвращает `true`, если место и правда было
+   * его, — только такой уход кончает разговор.
    *
-   * Ложь здесь — про вытесненное устройство: его место занял телефон того же
-   * человека, оно доживает свой грейс и, уходя, кончило бы разговор, который на
-   * телефоне идёт прямо сейчас.
+   * Ищем по сокету, а не по личности, и это не мелочь: место приходится
+   * освобождать и за тем, чьего сокета уже нет (перезагруженная вкладка, см.
+   * `evictGhost`), — спросить у него личность не у кого, а id его места
+   * известен. Заодно отпадает и ложный ответ «да» для того, чьё место занял
+   * его же телефон: тот доживает свой грейс и, уходя, кончил бы разговор,
+   * который на телефоне идёт прямо сейчас.
    */
-  private freeSeat(client: AppSocket, room: string): boolean {
+  private freeSeat(room: string, socketId: string): boolean {
     const open = this.talks.get(room);
-    if (!open) return true;
-    const me = this.around.identityOf(client);
-    if (!me) return true;
-    if (open.seats.get(me) !== client.id) return false;
-    open.seats.delete(me);
-    return true;
+    if (!open) return false;
+    for (const [identityId, seated] of open.seats) {
+      if (seated !== socketId) continue;
+      open.seats.delete(identityId);
+      return true;
+    }
+    return false;
   }
 
   /**
