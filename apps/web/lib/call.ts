@@ -95,9 +95,7 @@ export function answerCall(ringId: string): Promise<CallReplyResult> {
  */
 export function hangUp(): void {
   if (!room) return;
-  room = null;
-  mine = null;
-  leaveVoice(true);
+  drop();
 }
 
 /** Подписка на события вызова. Зовётся один раз на приложение. */
@@ -114,13 +112,31 @@ export function initCall() {
   // экран звонка.
   socket.on('call-over', ({ room: over }) => {
     if (over !== room) return;
-    room = null;
-    mine = null;
-    leaveVoice(true);
+    drop();
   });
   // Вызов кончился, не став разговором. Опоздавшее «принято» по нему в комнату
   // уже не посадит.
   socket.on('call-ended', ({ ringId }) => forget(ringId));
+  // В комнату беседы не пустили. Для законного участника это один случай:
+  // садиться было слишком долго (первый в жизни запрос доступа к микрофону
+  // висит на экране минуту), и комнату успел закрыть сторож. Тост тут — не
+  // ответ: вкладка в комнату не вошла, а значит и `call-over` до неё не
+  // доедет никогда, и экран звонка с открытым микрофоном стоял бы над
+  // разговором, которого нет.
+  socket.on('voice-refused', ({ reason }) => {
+    if (reason !== 'not-in-call' || !room) return;
+    drop();
+  });
+}
+
+/**
+ * Выйти из разговора у себя: отпустить микрофон, снять экран звонка и забыть
+ * вызов. Собеседника кончает сервер — своим уходом мы ему об этом и говорим.
+ */
+function drop(): void {
+  room = null;
+  mine = null;
+  leaveVoice(true);
 }
 
 /** Забыть свой вызов, если речь о нём же. */

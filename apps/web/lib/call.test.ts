@@ -212,6 +212,30 @@ describe('конец разговора', () => {
     expect(voice.joinVoice).not.toHaveBeenCalled();
   });
 
+  it('«это разговор двоих, и он не ваш» кончает звонок у себя, а не тостом', async () => {
+    const { call, voice } = await talking();
+    // Достижимо законным участником: пока висел системный запрос доступа к
+    // микрофону, комнату закрыл серверный сторож, и `join` пришёл в никуда.
+    // Вкладка в комнату не вошла — значит `call-over` до неё не доедет
+    // никогда, и без этого разбора экран звонка стоял бы с открытым микрофоном
+    // над разговором, которого нет.
+    handlers['voice-refused']({ reason: 'not-in-call' } as never);
+
+    expect(voice.leaveVoice).toHaveBeenCalledWith(true);
+    expect(call.callRoom()).toBeNull();
+  });
+
+  it('прочие отказы в голосе звонок не трогают', async () => {
+    const { call, voice } = await talking();
+    // «Канал полон» и «камера выключена» приезжают из совсем других мест и
+    // разговора не касаются: разобрать их как конец звонка значило бы гасить
+    // его на ровном месте.
+    handlers['voice-refused']({ reason: 'room-full' } as never);
+
+    expect(voice.leaveVoice).not.toHaveBeenCalled();
+    expect(call.callRoom()).toBe(ROOM);
+  });
+
   it('трубку кладут отсюда же: сервер кончит разговор обоим', async () => {
     const { call, voice } = await talking();
     call.hangUp();

@@ -699,6 +699,18 @@ describe('комната беседы', () => {
     return { ...stand, anya, boris, hers, his, room, ringId };
   }
 
+  /**
+   * Сессия вернулась после обрыва: socket.io восстанавливает и карту сокетов,
+   * и комнаты (их снимок лежит в сохранённой сессии), и только потом зовёт
+   * `handleConnection` с тем же id.
+   */
+  function recover(gw: SignalingGateway, server: FakeServer, sock: FakeSocket, room: string) {
+    server.all.set(sock.id, sock);
+    sock.join(sock.id);
+    sock.join(room);
+    gw.handleConnection(asSocket(sock));
+  }
+
   /** Ответить на вызов — с этого мгновения комната и существует. */
   function accept(gw: SignalingGateway, sock: FakeSocket, ringId: string) {
     expect(gw.handleCallAccept(asSocket(sock), { ringId })).toEqual({ ok: true });
@@ -853,24 +865,91 @@ describe('комната беседы', () => {
     gw.handleJoin(asSocket(his), { room, name: 'Боря' });
     server.clearAll();
 
-    // У Ани моргнула сеть: сокета уже нет, а id его ещё висит в комнате — то
-    // самое окно восстановления, ради которого в этом файле живёт грейс.
-    gw.handleDisconnect(asSocket(hers));
-    server.all.delete('аня');
+    // У Ани моргнула сеть. Сокет уходит из комнаты вместе с картой сокетов —
+    // адаптер снимает его сам (`leaveAll` раньше `nsp._remove`), — поэтому
+    // сказать ей поимённо в этот миг нечем: адресата не существует. Работает
+    // только рассылка В КОМНАТУ, которую адаптер переигрывает по комнатам
+    // сохранённой сессии (у поддельного сервера буфера восстановления нет,
+    // поэтому здесь виден второй заслон — `resumeCall`).
+    disconnect(gw, server, hers);
 
     gw.handleLeave(asSocket(his));
-
-    // Комната не переживает разговор: зависший id вытолкнут силой, иначе она
-    // числилась бы занятой и следующая беседа тех же двоих началась бы с
-    // призраком.
-    expect([...(server.rooms.get(room) ?? [])]).toEqual([]);
 
     // Сессия вернулась — и первым делом узнаёт, что разговора больше нет.
     // Иначе Аня сидела бы в комнате, которой нет: микрофон открыт, присутствие
     // считает её «в голосе», а для новых звонков она занята.
-    server.all.set('аня', hers);
-    gw.handleConnection(asSocket(hers));
+    recover(gw, server, hers, room);
     expect([hers.data.room, hers.last('call-over')]).toEqual([undefined, { room }]);
+    // И войти обратно уже некуда: разговор кончился, а не «висит».
+    hers.clear();
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+    expect([hers.data.room, hers.last('voice-refused')]).toEqual([
+      undefined,
+      { reason: 'not-in-call' },
+    ]);
+  });
+
+  it('моргнул и вернулся в свой же разговор — остаётся в нём', async () => {
+    const { gw, server, hers, his, room, ringId } = await talk();
+    accept(gw, his, ringId);
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+    gw.handleJoin(asSocket(his), { room, name: 'Боря' });
+    server.clearAll();
+
+    // Обрыв внутри грейса — и возвращение. Это тот самый случай, который
+    // проверка вернувшейся сессии не имеет права испортить: место всё ещё её.
+    disconnect(gw, server, hers);
+    vi.advanceTimersByTime(10_000);
+    recover(gw, server, hers, room);
+
+    expect([hers.data.room, his.data.room]).toEqual([room, room]);
+    expect([hers.got('call-over'), his.got('call-over')]).toEqual([false, false]);
+
+    // И отложенный выход снят: грейс истекает, разговор продолжается.
+    vi.advanceTimersByTime(60_000);
+    expect([hers.data.room, his.data.room]).toEqual([room, room]);
+  });
+
+  it('сторож считает места, а не живые сокеты: моргание разговор не рвёт', async () => {
+    const { gw, server, hers, his, room, ringId } = await talk();
+    accept(gw, his, ringId);
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+    gw.handleJoin(asSocket(his), { room, name: 'Боря' });
+    server.clearAll();
+
+    // Обрыв на десятой секунде: к тридцатой, когда просыпается сторож, живых
+    // сокетов в комнате один. Считай он живых — уничтожил бы разговор, который
+    // и окно восстановления (20 с), и грейс (24 с) вернули бы целым.
+    vi.advanceTimersByTime(10_000);
+    disconnect(gw, server, hers);
+    vi.advanceTimersByTime(20_500);
+
+    expect([his.data.room, his.got('call-over')]).toEqual([room, false]);
+    recover(gw, server, hers, room);
+    expect([hers.data.room, hers.got('call-over')]).toEqual([room, false]);
+  });
+
+  it('переоткрытая комната не теряет мест уже идущего разговора', async () => {
+    const { gw, server, settings, anya, boris, hers, his, room, ringId } = await talk();
+    accept(gw, his, ringId);
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+    gw.handleJoin(asSocket(his), { room, name: 'Боря' });
+    // Инсталляция, где сидящий в голосе не считается занятым (каталог такое
+    // выключение прямо описывает), — те же двое могут набрать друг друга
+    // прямо посреди своего разговора.
+    await tune(settings, 'calls.busyWhenInVoice', false);
+    server.clearAll();
+
+    const again = await gw.handleCallStart(asSocket(hers), { fingerprint: boris.fingerprint });
+    accept(gw, his, again.ok ? again.ringId : '');
+
+    // Комната та же — адрес считается из двух id, — и заново её открыли поверх
+    // живого разговора. Места обязаны уцелеть: обнулись они, `freeSeat` отвечал
+    // бы «ушёл не участник» обоим, разговор стало бы нечем кончить, а
+    // оставшийся навсегда числился бы «в голосе».
+    expect(callRoom(DmService.address(anya.identityId, boris.identityId))).toBe(room);
+    gw.handleLeave(asSocket(hers));
+    expect([his.data.room, his.last('call-over')]).toEqual([undefined, { room }]);
   });
 
   it('вытесненное устройство, вернувшись, в чужой уже разговор не садится', async () => {
@@ -880,8 +959,7 @@ describe('комната беседы', () => {
     gw.handleJoin(asSocket(his), { room, name: 'Боря' });
 
     // У ноутбука моргнула сеть, и Аня взяла телефон.
-    gw.handleDisconnect(asSocket(hers));
-    server.all.delete('аня');
+    disconnect(gw, server, hers);
     const phone = await connectAs(gw, server, anya.cookie, { id: 'аня-телефон' });
     settle();
     gw.handleJoin(asSocket(phone), { room, name: 'Аня' });
@@ -889,8 +967,7 @@ describe('комната беседы', () => {
 
     // Ноутбук вернулся: место уже не его — в комнате его не ждут, а разговор
     // на телефоне идёт.
-    server.all.set('аня', hers);
-    gw.handleConnection(asSocket(hers));
+    recover(gw, server, hers, room);
     expect([hers.data.room, hers.last('call-over')]).toEqual([undefined, { room }]);
     expect([phone.data.room, his.data.room, his.got('call-over')]).toEqual([room, room, false]);
   });
@@ -902,8 +979,7 @@ describe('комната беседы', () => {
     gw.handleJoin(asSocket(his), { room, name: 'Боря' });
 
     // Ноутбук моргнул и больше не вернулся — Аня договорила с телефона.
-    gw.handleDisconnect(asSocket(hers));
-    server.all.delete('аня');
+    disconnect(gw, server, hers);
     const phone = await connectAs(gw, server, anya.cookie, { id: 'аня-телефон' });
     settle();
     gw.handleJoin(asSocket(phone), { room, name: 'Аня' });
