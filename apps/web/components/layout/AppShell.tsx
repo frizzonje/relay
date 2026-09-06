@@ -10,6 +10,7 @@ import { useOwnerStore } from '@/stores/owner';
 import { usePairingStore } from '@/stores/pairing';
 import { AdminDialog } from '@/components/admin/AdminDialog';
 import { OutgoingCall } from '@/components/call/OutgoingCall';
+import { IncomingToast } from '@/components/call/IncomingToast';
 import { AdmitDeviceDialog } from '@/components/layout/AdmitDeviceDialog';
 import { OwnerClaimDialog } from '@/components/layout/OwnerClaimDialog';
 import { BannedGate } from '@/components/layout/BannedGate';
@@ -219,6 +220,14 @@ export function AppShell() {
           назад. Себя гасит сам, когда вызов принят, кончился или его закрыли
           явно (см. `OutgoingCall`). */}
       <OutgoingCall />
+
+      {/* Тост входящего (задача 7 плана B) — угол экрана, НЕ поверх всего:
+          в отличие от `OutgoingCall`, этот компонент рисует свой собственный
+          `fixed`-угол и не перехватывает фокус, так что порядок с соседями в
+          разметке не имеет значения. Себя гасит стор на любом исходе (принят,
+          отклонён, отбой звонящего, не ответили, обрыв сокета) — см.
+          `IncomingToast`. */}
+      <IncomingToast />
 
       {/* Панель инсталляции — окно поверх всего, как и настройки. Рисуется
           только владельцу и себя же прячет, когда власть уходит. */}

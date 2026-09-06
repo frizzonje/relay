@@ -10,6 +10,15 @@
  * volumedetect по пику): send −16,5 дБ, receive −14,0 дБ, message −10,5 дБ.
  * Свой Enter человек и так заметил, чужая реплика — новость, а обращение по
  * имени должно пробиться сквозь оба.
+ *
+ * `ring` — единственный сигнал набора этого пула, а не колокольчик: остальные
+ * девять звучат один раз и гаснут сами, а входящий звонок обязан звонить,
+ * пока вызов жив, и не мгновением дольше (задача 7 плана B). `LOOPING` внизу
+ * ставит `el.loop = true` только этому имени — `stop('ring')` останавливает
+ * его явно (см. `IncomingToast.tsx`: играет на монтировании тоста, глушится
+ * на его размонтировании, которое стор `ring.ts` вызывает на КАЖДОМ исходе
+ * вызова, а не только на «принято»). Естественного `ended` у зацикленного
+ * элемента не бывает — ждать его для остановки было бы ждать вечно.
  */
 
 export type SfxName =
@@ -22,7 +31,11 @@ export type SfxName =
   | 'reconnect'
   | 'message'
   | 'send'
-  | 'receive';
+  | 'receive'
+  | 'ring';
+
+/** Имена, которым `play()` ставит `loop = true` (см. комментарий выше про `ring`). */
+const LOOPING = new Set<SfxName>(['ring']);
 
 export interface SfxHandle {
   onended: (() => void) | null;
@@ -52,6 +65,7 @@ const FILES: Record<SfxName, string> = {
   message: '/sfx/message.mp3',
   send: '/sfx/send.mp3',
   receive: '/sfx/receive.mp3',
+  ring: '/sfx/ring.mp3',
 };
 
 /** Общая громкость sfx (звуки эфира должны быть ненавязчивыми). */
@@ -106,6 +120,7 @@ function createBrowser(): SfxApi {
       if (muted || allMuted) return null;
       const el: SinkAudio = new Audio(FILES[name]);
       el.volume = MASTER_VOLUME;
+      el.loop = LOOPING.has(name);
       applySink(el);
 
       const handle: SfxHandle = { onended: null };

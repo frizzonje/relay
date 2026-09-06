@@ -2,7 +2,7 @@
 
 import { useEffect, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import type { CallEndedRelay, CallStateRelay } from '@relay/shared';
+import type { CallEndedRelay, CallIncomingRelay, CallStateRelay } from '@relay/shared';
 import { getSocket } from '@/lib/socket';
 import { initVoice, relabelSelf } from '@/lib/voice';
 import { initCall } from '@/lib/call';
@@ -30,7 +30,7 @@ import {
   saveUnlockToken,
   unlockTokenIds,
 } from '@/lib/unlock-tokens';
-import { notifyDirect, notifyMention, notifyMessage } from '@/lib/notify';
+import { notifyCall, notifyDirect, notifyMention, notifyMessage } from '@/lib/notify';
 import { showDmToast } from '@/components/dm/DmToast';
 import { useNotifyStore } from '@/stores/notify';
 import { adoptPrefs, onPref } from '@/lib/prefs';
@@ -286,6 +286,21 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     const onCallEnded = (payload: CallEndedRelay) => ring().applyEnded(payload);
     socket.on('call-state', onCallState);
     socket.on('call-ended', onCallEnded);
+    // Тост входящего (задача 7 плана B): открывает `incoming` в том же сторе
+    // и, если окно/вкладка сейчас свёрнуты, добавляет системное окошко поверх
+    // остальных — тем же приёмом, что и `notifyMention`/`notifyDirect` ниже
+    // (звонят стору напрямую, а звук/уведомление зовут отдельно, не пряча их
+    // внутрь стора, который ничего не знает ни о `Notification`, ни об
+    // `lib/sfx.ts`). Второй входящий во время разговора сюда не доедет вовсе:
+    // сервер отвечает на такой `call-start` отказом `busy` раньше, чем
+    // что-либо зазвонит (§4.2, доказано в `ring.handlers.test.ts` → «второй
+    // входящий во время разговора»), так что городить здесь счётчик «уже
+    // показываем один тост» незачем — второго не бывает.
+    const onCallIncoming = (payload: CallIncomingRelay) => {
+      ring().applyIncoming(payload);
+      notifyCall(payload.from, payload.video);
+    };
+    socket.on('call-incoming', onCallIncoming);
 
     // В беседе написали. Летит обоим участникам (см. DmActivityRelay), поэтому
     // своя же реплика — не повод звенеть самому себе.
@@ -713,6 +728,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('mentions');
       socket.off('call-state', onCallState);
       socket.off('call-ended', onCallEnded);
+      socket.off('call-incoming', onCallIncoming);
       socket.off('dm-activity');
       socket.off('admin-changed');
       socket.off('reads');

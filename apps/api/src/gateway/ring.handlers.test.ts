@@ -407,3 +407,51 @@ describe('принятый вызов становится разговором'
     expect((last(hers, 'call-ended') as { room?: string }).room).toBeUndefined();
   });
 });
+
+/**
+ * Задача 7 плана B (веб — входящий) требует, чтобы второй входящий во время
+ * разговора отвечал «занято» САМ, без клиентской машины, которая бы это
+ * перепроверяла. Утверждение из протокола (§4.2): личность занята, если она
+ * говорит в голосовом канале, а разговор двоих — обычный голосовой канал
+ * (`voice:<адрес>`), в который клиент садится сам, приняв вызов (см. `Задача
+ * 5`, `voice-sessions.test.ts` → «комната беседы»). Значит присутствие видит
+ * их «в голосе» тем же путём, что и обычный канал, и `Rings.busy` (через
+ * `calls.busyWhenInVoice`, умолчание true) откажет третьему до того, как
+ * `call-incoming` вообще возникнет.
+ *
+ * Тест ничего не чинит — он ДОКАЗЫВАЕТ существующую гарантию, соединяя
+ * `Rings`, `Presence` и `VoiceSessions` так, как их соединяет живой разговор,
+ * а не заглушкой. Обратный случай (выключенный `calls.busyWhenInVoice`
+ * разрешает звонить поверх разговора) уже покрыт в `voice-sessions.test.ts`
+ * («переоткрытая комната не теряет мест уже идущего разговора») — здесь
+ * проверяется умолчание, а не исключение.
+ */
+describe('второй входящий во время разговора', () => {
+  it('отвечает занятостью сам — client-side машина ему не нужна', async () => {
+    const { anya, boris, hers, his } = await pair();
+    const vera = await personCookie('Вера');
+    const third = await connectAs(gw, server, vera.cookie, { id: 'вера' });
+    settle();
+
+    // Дозвон Ани до Бори принят и стал разговором — оба сели в его комнату
+    // ровно так же, как в voice-sessions.test.ts (`talk()`/`accept()`).
+    const res = await call(hers, boris.fingerprint);
+    const ringId = res.ok ? res.ringId : '';
+    expect(gw.handleCallAccept(asSocket(his), { ringId })).toEqual({ ok: true });
+    const room = callRoom(DmService.address(anya.identityId, boris.identityId));
+    gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
+    gw.handleJoin(asSocket(his), { room, name: 'Боря' });
+    settle();
+    server.clearAll();
+
+    // Третья звонит собеседнику Бори — тому, кому трубку не поднимали,
+    // список присутствия видит его «в голосе» через тот же голосовой канал.
+    expect(await call(third, boris.fingerprint)).toEqual({ ok: false, error: 'busy' });
+    expect(his.got('call-incoming')).toBe(false);
+
+    // И симметрично — со стороны позвонившей: занята и она, хотя это она
+    // набирала, а не отвечала.
+    expect(await call(third, anya.fingerprint)).toEqual({ ok: false, error: 'busy' });
+    expect(hers.got('call-incoming')).toBe(false);
+  });
+});

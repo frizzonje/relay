@@ -21,6 +21,8 @@ vi.mock('@/lib/call', () => ({
   dialCall: vi.fn(),
   hangUp: vi.fn(),
   cancelCall: vi.fn(),
+  answerCall: vi.fn(),
+  declineCall: vi.fn(),
   ownedCall: vi.fn(() => null),
 }));
 vi.mock('@/lib/hotkeys', () => ({ initHotkeys: vi.fn() }));
@@ -29,6 +31,7 @@ vi.mock('@/lib/notify', () => ({
   notifyDirect: vi.fn(),
   notifyMention: vi.fn(),
   notifyMessage: vi.fn(),
+  notifyCall: vi.fn(),
 }));
 
 /**
@@ -74,7 +77,7 @@ const socket = vi.hoisted(() => {
 vi.mock('@/lib/socket', () => ({ getSocket: () => socket }));
 
 import { SocketProvider } from './SocketProvider';
-import { notifyDirect } from '@/lib/notify';
+import { notifyCall, notifyDirect } from '@/lib/notify';
 import { useAdminStore } from '@/stores/admin';
 import { useChatStore } from '@/stores/chat';
 import { useDmStore } from '@/stores/dm';
@@ -352,6 +355,28 @@ describe('дозвон: call-state/call-ended доезжают до стора �
     expect(useRingStore.getState().outgoing?.ring.state).toBe('declined');
   });
 
+  it('call-incoming открывает тост и просит системное уведомление (задача 7)', () => {
+    act(() =>
+      socket._fire('call-incoming', {
+        ringId: 'r1',
+        from: peerA,
+        at: Date.now(),
+        video: true,
+      }),
+    );
+
+    expect(useRingStore.getState().incoming).toEqual({
+      ringId: 'r1',
+      from: peerA,
+      video: true,
+      at: expect.any(Number),
+    });
+    // `notifyCall` сама решает, показывать ли системное окошко (свёрнуто ли
+    // окно, есть ли разрешение, включена ли настройка) — здесь важно только
+    // то, что провайдер её ЗОВЁТ с теми же лицом и видео-флагом, что и тост.
+    expect(notifyCall).toHaveBeenCalledWith(peerA, true);
+  });
+
   it('обрыв сокета гасит экран дозвона: эха о конце вызова не будет', () => {
     act(() =>
       socket._fire('call-state', {
@@ -381,10 +406,12 @@ describe('дозвон: call-state/call-ended доезжают до стора �
     // трогает.
     const foreignState = vi.fn();
     const foreignEnded = vi.fn();
+    const foreignIncoming = vi.fn();
     const foreignDisconnect = vi.fn();
     const foreignConnect = vi.fn();
     socket.on('call-state', foreignState);
     socket.on('call-ended', foreignEnded);
+    socket.on('call-incoming', foreignIncoming);
     socket.on('disconnect', foreignDisconnect);
     socket.on('connect', foreignConnect);
 
@@ -415,15 +442,20 @@ describe('дозвон: call-state/call-ended доезжают до стора �
         video: false,
       }),
     );
+    act(() =>
+      socket._fire('call-incoming', { ringId: 'r2', from: peerA, at: Date.now(), video: false }),
+    );
     act(() => socket._fire('connect'));
     act(() => socket._fire('disconnect'));
 
     expect(foreignState).toHaveBeenCalledTimes(1);
+    expect(foreignIncoming).toHaveBeenCalledTimes(1);
     expect(foreignConnect).toHaveBeenCalledTimes(1);
     expect(foreignDisconnect).toHaveBeenCalledTimes(1);
     // И свой слушатель жив ровно один: уборка снимает своё, а не копит его.
     expect(socket._handlers.get('call-state')).toHaveLength(2);
     expect(socket._handlers.get('call-ended')).toHaveLength(2);
+    expect(socket._handlers.get('call-incoming')).toHaveLength(2);
     expect(socket._handlers.get('disconnect')).toHaveLength(2);
     expect(socket._handlers.get('connect')).toHaveLength(2);
 

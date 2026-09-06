@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { CallEndedRelay, CallPerson, CallStartResult, DmOpenResult } from '@relay/shared';
+import type {
+  CallEndedRelay,
+  CallIncomingRelay,
+  CallPerson,
+  CallStartResult,
+  DmOpenResult,
+} from '@relay/shared';
 
 /**
  * Экран исходящего вызова (задача 6 плана B).
@@ -14,6 +20,11 @@ vi.mock('@/lib/call', () => ({
   dialCall: vi.fn(),
   hangUp: vi.fn(),
   cancelCall: vi.fn(),
+  // Задача 7: принять/отклонить входящий. Тот же приём, что и у исходящих
+  // emit'ов выше — настоящие живут в lib/call.ts (задача 5) и lib/call.test.ts,
+  // здесь важно только то, что этот стор их ЗОВЁТ, а не как они устроены.
+  answerCall: vi.fn(),
+  declineCall: vi.fn(),
   // Вызов, которым владеет ЭТА вкладка. По умолчанию пусто — то есть экран
   // открыт рассылкой с соседнего устройства; тесты своего набора говорят
   // обратное явно (см. `owning()`).
@@ -342,5 +353,175 @@ describe('обрыв сокета', () => {
     // Слать некуда: сокета нет, а вызов уже закрыт сервером.
     expect(call.hangUp).not.toHaveBeenCalled();
     expect(call.cancelCall).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Тост входящего (задача 7 плана B). Тот же стор, что и у экрана исходящего —
+ * бриф задачи 6 прямо называет это требованием («один ринг-автомат, не два»):
+ * `applyState`/`applyEnded` уже читают `ringId` из одной и той же рассылки,
+ * и им незачем знать, какая из двух сторон её получила.
+ */
+function incomingOf(ringId: string, extra: Partial<CallIncomingRelay> = {}): CallIncomingRelay {
+  return { ringId, from: PEER, at: Date.now(), video: false, ...extra };
+}
+
+describe('входящий: тост', () => {
+  it('call-incoming открывает тост', async () => {
+    const { ring } = await fresh();
+
+    ring.useRingStore.getState().applyIncoming(incomingOf('r1', { video: true }));
+
+    expect(ring.useRingStore.getState().incoming).toEqual({
+      ringId: 'r1',
+      from: PEER,
+      video: true,
+      at: expect.any(Number),
+    });
+  });
+
+  it('«Принять» зовёт answerCall и гасит тост немедленно, не дожидаясь ack', async () => {
+    const { ring, call } = await fresh();
+    ring.useRingStore.getState().applyIncoming(incomingOf('r1'));
+
+    ring.useRingStore.getState().acceptIncoming();
+
+    expect(call.answerCall).toHaveBeenCalledWith('r1');
+    expect(ring.useRingStore.getState().incoming).toBeNull();
+  });
+
+  it('«Принять» без входящего не зовёт answerCall — нечего принимать', async () => {
+    const { ring, call } = await fresh();
+    ring.useRingStore.getState().acceptIncoming();
+    expect(call.answerCall).not.toHaveBeenCalled();
+  });
+
+  it('«Отклонить» зовёт declineCall и гасит тост немедленно', async () => {
+    const { ring, call } = await fresh();
+    ring.useRingStore.getState().applyIncoming(incomingOf('r1'));
+
+    ring.useRingStore.getState().declineIncoming();
+
+    expect(call.declineCall).toHaveBeenCalledWith('r1');
+    expect(ring.useRingStore.getState().incoming).toBeNull();
+  });
+
+  it('«Отклонить» без входящего не зовёт declineCall', async () => {
+    const { ring, call } = await fresh();
+    ring.useRingStore.getState().declineIncoming();
+    expect(call.declineCall).not.toHaveBeenCalled();
+  });
+
+  it('«принято» гасит тост на устройстве, где трубку не брали', async () => {
+    // §4.2 протокола: `call-state{accepted}` уходит ОБЕИМ сторонам — и
+    // отвечавшему (это его ответ), и всем остальным устройствам собеседника
+    // (это сигнал погасить входящий там, где трубку не брали).
+    const { ring } = await fresh();
+    ring.useRingStore.getState().applyIncoming(incomingOf('r1'));
+
+    ring.useRingStore.getState().applyState({
+      ringId: 'r1',
+      state: 'accepted',
+      peer: PEER,
+      at: Date.now(),
+      video: false,
+      room: 'voice:dm-0123456789abcdef01234567',
+    });
+
+    expect(ring.useRingStore.getState().incoming).toBeNull();
+  });
+
+  it('«принято» по ЧУЖОМУ ringId тост не трогает', async () => {
+    const { ring } = await fresh();
+    ring.useRingStore.getState().applyIncoming(incomingOf('r1'));
+
+    ring.useRingStore.getState().applyState({
+      ringId: 'чужой',
+      state: 'accepted',
+      peer: PEER,
+      at: Date.now(),
+      video: false,
+      room: 'voice:чужой',
+    });
+
+    expect(ring.useRingStore.getState().incoming).not.toBeNull();
+  });
+
+  it.each(['declined', 'no-answer', 'busy', 'failed', 'cancelled'] as const)(
+    'call-ended{%s} гасит тост — ни разу не зависит от того, есть ли ещё и исходящий экран',
+    async (state) => {
+      // Это и есть регрессия, из-за которой тост раньше не гас никогда:
+      // `applyEnded` до задачи 7 выходила первой же строкой, если `outgoing`
+      // пуст, — а у ЭТОЙ вкладки исходящего экрана нет и не было, только
+      // входящий тост. Проверяем именно эту вкладку, а не вкладку звонящего.
+      const { ring } = await fresh();
+      expect(ring.useRingStore.getState().outgoing).toBeNull();
+      ring.useRingStore.getState().applyIncoming(incomingOf('r1'));
+
+      ring.useRingStore.getState().applyEnded({
+        ringId: 'r1',
+        state,
+        peer: PEER,
+        at: Date.now(),
+        missed: state !== 'declined' && state !== 'cancelled',
+      });
+
+      expect(ring.useRingStore.getState().incoming).toBeNull();
+    },
+  );
+
+  it('call-ended по ЧУЖОМУ ringId тост не трогает', async () => {
+    const { ring } = await fresh();
+    ring.useRingStore.getState().applyIncoming(incomingOf('r1'));
+
+    ring.useRingStore.getState().applyEnded({
+      ringId: 'чужой',
+      state: 'declined',
+      peer: PEER,
+      at: Date.now(),
+      missed: false,
+    });
+
+    expect(ring.useRingStore.getState().incoming).not.toBeNull();
+  });
+
+  it('исходящий и входящий гасятся НЕЗАВИСИМО — общий ringId у двух своих вызовов не бывает, но стор не должен их путать', async () => {
+    const { ring, call } = await fresh();
+    // Свой набор — исходящий экран с id 'out'.
+    answers(call, { ok: true, ringId: 'out' });
+    await ring.useRingStore.getState().start(PEER);
+    // Кто-то другой звонит этой же личности параллельно — входящий тост с id 'in'.
+    ring.useRingStore.getState().applyIncoming(incomingOf('in'));
+
+    ring.useRingStore.getState().applyEnded({
+      ringId: 'in',
+      state: 'declined',
+      peer: PEER,
+      at: Date.now(),
+      missed: false,
+    });
+
+    // Погас только тост — исходящий экран этой рассылки не касался.
+    expect(ring.useRingStore.getState().incoming).toBeNull();
+    expect(ring.useRingStore.getState().outgoing).not.toBeNull();
+  });
+
+  it('обрыв сокета гасит и тост тоже — слать отбой некуда, как и у исходящего', async () => {
+    const { ring, call } = await fresh();
+    ring.useRingStore.getState().applyIncoming(incomingOf('r1'));
+
+    ring.useRingStore.getState().lost();
+
+    expect(ring.useRingStore.getState().incoming).toBeNull();
+    expect(call.declineCall).not.toHaveBeenCalled();
+  });
+
+  it('reset() гасит тост вместе с экраном исходящего', async () => {
+    const { ring } = await fresh();
+    ring.useRingStore.getState().applyIncoming(incomingOf('r1'));
+
+    ring.useRingStore.getState().reset();
+
+    expect(ring.useRingStore.getState().incoming).toBeNull();
   });
 });

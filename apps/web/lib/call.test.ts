@@ -372,3 +372,21 @@ describe('конец разговора', () => {
     expect(voice.joinVoice).not.toHaveBeenCalled();
   });
 });
+
+describe('отклонить входящий', () => {
+  it('шлёт call-decline и ничего не трогает у себя', async () => {
+    // Отклоняющая вкладка не звонила и не отвечала — `mine` у неё и так пуст
+    // (владение заявляют только `dialCall`/`answerCall`), так что отклонение
+    // не обязано его снимать: снимать нечего.
+    const { call } = await fresh();
+
+    call.declineCall('r1');
+
+    expect(socket.emit).toHaveBeenLastCalledWith(
+      'call-decline',
+      { ringId: 'r1' },
+      expect.any(Function),
+    );
+    expect(call.ownedCall()).toBeNull();
+  });
+});

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type {
   CallEndedRelay,
+  CallIncomingRelay,
   CallPerson,
   CallRefusal,
   CallStateRelay,
@@ -8,7 +9,14 @@ import type {
 } from '@relay/shared';
 import { settled as ringSettled, step, type Ring, type RingState } from '@relay/shared';
 import { ask } from '@/lib/channels';
-import { cancelCall, dialCall, hangUp as hangUpCall, ownedCall } from '@/lib/call';
+import {
+  answerCall,
+  cancelCall,
+  declineCall,
+  dialCall,
+  hangUp as hangUpCall,
+  ownedCall,
+} from '@/lib/call';
 import { useSetting } from '@/stores/config';
 import { useUiStore } from '@/stores/ui';
 import type { MessageKey } from '@/lib/i18n';
@@ -56,14 +64,63 @@ export interface OutgoingScreen {
   refusal: RingRefusal | null;
 }
 
+/**
+ * Тост входящего (задача 7 плана B). Куда легче `OutgoingScreen` — тосту не
+ * нужна своя машина состояний: он живёт от `call-incoming` до ЛЮБОГО исхода
+ * (принят, отклонён, отбой звонящего, не ответили, обрыв сокета) и решать
+ * ему нечего — только звонить и ждать нажатия одной из двух кнопок, либо
+ * погаснуть по чужой команде. Состояние экрана исходящего это как раз то,
+ * ЧЕМ вызов кончился; тосту это не нужно вовсе, потому что кончившись он
+ * просто исчезает.
+ */
+export interface IncomingScreen {
+  ringId: string;
+  from: CallPerson;
+  video: boolean;
+  at: number;
+}
+
 interface RingStoreState {
   /** Пусто — экран дозвона не открыт. */
   outgoing: OutgoingScreen | null;
+  /** Пусто — тоста входящего сейчас нет. */
+  incoming: IncomingScreen | null;
+  /** `call-incoming`: открыть тост. Второй входящий во время разговора сюда не доходит —
+   * сервер отвечает на него `busy` раньше, чем что-либо зазвонит (§4.2, `Rings.busy`
+   * через `calls.busyWhenInVoice`); см. отчёт задачи 7 про то, где это доказано. */
+  applyIncoming: (payload: CallIncomingRelay) => void;
+  /**
+   * «Принять». Тост гасим ДО ответа сервера — как и у исходящего, ждать ack,
+   * чтобы убрать кнопки, которые уже нажали, незачем: посадкой в комнату
+   * беседы владеет `lib/call.ts` (`answerCall` → `seat()`, задача 5), а этот
+   * стор с этого мгновения вызовом больше не интересуется.
+   */
+  acceptIncoming: () => void;
+  /** «Отклонить» — тем же немедленным закрытием, отбой шлёт `lib/call.ts` (`declineCall`). */
+  declineIncoming: () => void;
   /** Позвонить: открывает экран, шлёт `call-start` через `lib/call.ts`. */
   start: (peer: CallPerson, video?: boolean) => Promise<void>;
-  /** Рассылка `call-state`: живой вызов (у ДРУГОГО устройства той же личности) либо разговор начался. */
+  /**
+   * Рассылка `call-state`. Смотрит на ОБА экрана разом и трогает то, чей
+   * `ringId` совпал, — не выбирая заранее, кто её получатель: `ringing`
+   * приходит только звонящему (значит только `outgoing`), а `accepted`
+   * приходит и звонящему (гасит его `outgoing` — это его ответ), и
+   * собеседнику на устройствах, где трубку не брали (гасит их `incoming`).
+   * Оба совпадения проверяются независимо: у одной и той же вкладки не
+   * бывает разом своего исходящего и постороннего входящего с ОДНИМ ringId
+   * (личность живёт не более чем в одном вызове), но раздельная проверка —
+   * не на этот случай, а чтобы код не утверждал обратное неявно.
+   */
   applyState: (payload: CallStateRelay) => void;
-  /** Вызов кончился, не став разговором. */
+  /**
+   * Вызов кончился, не став разговором — тем же приёмом: `ringId` может
+   * совпасть с `outgoing`, с `incoming`, с обоими или ни с одним, и каждое
+   * совпадение гасится само по себе. Раньше эта функция выходила первой
+   * строкой, если `outgoing` был пуст, — то есть вкладка с ОДНИМ только
+   * тостом (без своего исходящего вообще) не гасила его никогда ни на какой
+   * `call-ended`: висел бы вечно тот самый «звонок, который не заметил, что
+   * кончился», ради которого и пишется этот файл.
+   */
   applyEnded: (payload: CallEndedRelay) => void;
   /**
    * Отбой самим звонящим. Тот же путь, что и «Закрыть» на уже завершённом
@@ -89,6 +146,11 @@ interface RingStoreState {
    * заново не рассылаются. Оставь экран как есть — и он будет пульсировать
    * «дозваниваемся» на вызове, которого больше нет, ровно в том состоянии,
    * ради честности которого он и заведён. Ничего не шлём: слать некуда.
+   *
+   * Тост входящего гасим тем же движением и по той же причине: звонок
+   * звонящего сервер обрывает без грейса на уходе ЕГО последнего устройства,
+   * но у ЭТОЙ вкладки, показывающей тост, оборвался СВОЙ сокет — и что бы ни
+   * случилось с вызовом на сервере, здесь ему больше некому ответить.
    */
   lost: () => void;
   /** Сброс между тестами / выходом из инсталляции. */
@@ -146,6 +208,32 @@ const END_EVENT: Record<
 
 export const useRingStore = create<RingStoreState>((set, get) => ({
   outgoing: null,
+  incoming: null,
+
+  applyIncoming: (payload) => {
+    set({
+      incoming: {
+        ringId: payload.ringId,
+        from: payload.from,
+        video: payload.video,
+        at: payload.at,
+      },
+    });
+  },
+
+  acceptIncoming: () => {
+    const current = get().incoming;
+    if (!current) return;
+    set({ incoming: null });
+    void answerCall(current.ringId);
+  },
+
+  declineIncoming: () => {
+    const current = get().incoming;
+    if (!current) return;
+    set({ incoming: null });
+    declineCall(current.ringId);
+  },
 
   start: async (peer, video = false) => {
     const now = Date.now();
@@ -172,10 +260,17 @@ export const useRingStore = create<RingStoreState>((set, get) => ({
 
   applyState: (payload) => {
     const current = get().outgoing;
+    const shownIncoming = get().incoming;
     if (payload.state === 'accepted') {
       // Разговор начался — эту вкладку сажает `lib/call.ts` (`seat()`).
       // Экран дозвона про ожидание ответа, а не про сам разговор.
+      //
+      // Оба совпадения проверяются НЕЗАВИСИМО (см. док-комментарий типа):
+      // `accepted` приезжает и звонящему (гасит его `outgoing` — дождался
+      // ответа), и собеседнику на устройствах, где трубку не брали (гасит их
+      // `incoming` — входящий отвечен уже в другом месте).
       if (current?.ring.id === payload.ringId) set({ outgoing: null });
+      if (shownIncoming?.ringId === payload.ringId) set({ incoming: null });
       return;
     }
     // `ringing` уходит на ВСЕ устройства звонящего (протокол §4.2). Свою же
@@ -197,8 +292,14 @@ export const useRingStore = create<RingStoreState>((set, get) => ({
   },
 
   applyEnded: (payload) => {
-    const current = get().outgoing;
-    if (!current || current.ring.id !== payload.ringId) return;
+    // Каждое из двух полей гасится САМО ПО СЕБЕ, по своему совпадению
+    // `ringId` — вкладка с одним только тостом (без исходящего экрана
+    // вообще) не должна ждать, пока в ней заведётся исходящий, чтобы
+    // `call-ended` наконец её заметил (см. док-комментарий типа).
+    const outgoing = get().outgoing;
+    const incoming = get().incoming;
+    if (incoming?.ringId === payload.ringId) set({ incoming: null });
+    if (!outgoing || outgoing.ring.id !== payload.ringId) return;
     if (payload.state === 'cancelled') {
       // Свой же отбой эхом с сервера (см. `CallEndedRelay`: уходит обеим
       // сторонам) — либо тот же исход на другом нашем устройстве. Экран уже
@@ -209,8 +310,8 @@ export const useRingStore = create<RingStoreState>((set, get) => ({
     }
     set({
       outgoing: {
-        ...current,
-        ring: step(current.ring, { type: END_EVENT[payload.state], at: payload.at }),
+        ...outgoing,
+        ring: step(outgoing.ring, { type: END_EVENT[payload.state], at: payload.at }),
       },
     });
   },
@@ -234,9 +335,9 @@ export const useRingStore = create<RingStoreState>((set, get) => ({
     });
   },
 
-  lost: () => set({ outgoing: null }),
+  lost: () => set({ outgoing: null, incoming: null }),
 
-  reset: () => set({ outgoing: null }),
+  reset: () => set({ outgoing: null, incoming: null }),
 }));
 
 /** Отказ ДО дозвона переводит машину в её терминальный исход — тем же `step`, что и настоящий конец. */

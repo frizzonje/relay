@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CallPerson } from '@relay/shared';
 
 /**
  * Уведомление о входящем. У звука проверяем два правила, из-за которых он либо
@@ -19,9 +20,18 @@ vi.mock('@/lib/sfx', () => ({ getSfx: () => ({ play }) }));
 async function boot() {
   vi.resetModules();
   const { useNotifyStore } = await import('@/stores/notify');
-  const { notifyMessage, notifyMention, notifySent, previewMessageSound } =
+  const { useConfigStore } = await import('@/stores/config');
+  const { notifyMessage, notifyMention, notifySent, previewMessageSound, notifyCall } =
     await import('./notify');
-  return { useNotifyStore, notifyMessage, notifyMention, notifySent, previewMessageSound };
+  return {
+    useNotifyStore,
+    useConfigStore,
+    notifyMessage,
+    notifyMention,
+    notifySent,
+    previewMessageSound,
+    notifyCall,
+  };
 }
 
 beforeEach(() => {
@@ -137,5 +147,142 @@ describe('какой из трёх сигналов звучит', () => {
     const { previewMessageSound } = await boot();
     previewMessageSound();
     expect(play).toHaveBeenCalledWith('receive');
+  });
+});
+
+/**
+ * Системное окошко о входящем звонке (задача 7 плана B) — единственный вызов
+ * `Notification` API во всём клиенте (см. каталог, `notifications.desktopEnabled`).
+ * Тост на видимой вкладке уже всё сказал, окошко — только для свёрнутого окна,
+ * и только с разрешения, которого само же и добивается по ходу дела: отдельной
+ * кнопки «включить уведомления» без звонка, который её оправдывает, в relay нет.
+ */
+describe('системное уведомление о звонке', () => {
+  const person: CallPerson = { fingerprint: 'ff', nick: 'Аня' };
+
+  /** Достаточно `Notification`, чтобы notify.ts было с чем работать — не EventTarget. */
+  class FakeNotification {
+    static permission: NotificationPermission = 'granted';
+    static requestPermission = vi.fn(async (): Promise<NotificationPermission> => 'granted');
+    onclick: (() => void) | null = null;
+    close = vi.fn();
+    title: string;
+    options?: NotificationOptions;
+    constructor(title: string, options?: NotificationOptions) {
+      this.title = title;
+      this.options = options;
+      instances.push(this);
+    }
+  }
+
+  let instances: FakeNotification[] = [];
+
+  function setHidden(hidden: boolean) {
+    Object.defineProperty(document, 'visibilityState', {
+      value: hidden ? 'hidden' : 'visible',
+      configurable: true,
+    });
+  }
+
+  /** Разрешение ещё не спрошено — возвращает функцию, которой тест решает исход сам. */
+  function deferPermission(): (permission: NotificationPermission) => void {
+    let settle!: (permission: NotificationPermission) => void;
+    FakeNotification.requestPermission = vi.fn(
+      () => new Promise<NotificationPermission>((resolve) => (settle = resolve)),
+    );
+    return (permission) => settle(permission);
+  }
+
+  beforeEach(() => {
+    instances = [];
+    FakeNotification.permission = 'granted';
+    FakeNotification.requestPermission = vi.fn(async () => 'granted');
+    vi.stubGlobal('Notification', FakeNotification);
+    setHidden(true);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setHidden(false);
+  });
+
+  it('на видимой вкладке молчит — тост и так на экране', async () => {
+    const { notifyCall } = await boot();
+    setHidden(false);
+    notifyCall(person, false);
+    expect(instances).toHaveLength(0);
+    expect(FakeNotification.requestPermission).not.toHaveBeenCalled();
+  });
+
+  it('свёрнутое окно и разрешение уже есть — окошко выходит сразу, лицом звонящего', async () => {
+    const { notifyCall } = await boot();
+    notifyCall(person, false);
+    expect(instances).toHaveLength(1);
+    expect(instances[0].title).toBe('Аня');
+    expect(instances[0].options?.body).toBe('is calling you');
+  });
+
+  it('видеозвонок называет себя в теле окошка, а не «звонит вам»', async () => {
+    const { notifyCall } = await boot();
+    notifyCall(person, true);
+    expect(instances[0].options?.body).toBe('Video call');
+  });
+
+  it('запрещённое разрешение молчит и не переспрашивает', async () => {
+    FakeNotification.permission = 'denied';
+    const { notifyCall } = await boot();
+    notifyCall(person, false);
+    expect(instances).toHaveLength(0);
+    expect(FakeNotification.requestPermission).not.toHaveBeenCalled();
+  });
+
+  it('разрешение ещё не спрошено — спрашивает и показывает окошко по «да»', async () => {
+    FakeNotification.permission = 'default';
+    const settle = deferPermission();
+    const { notifyCall } = await boot();
+    notifyCall(person, false);
+    expect(instances).toHaveLength(0);
+    settle('granted');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(instances).toHaveLength(1);
+  });
+
+  it('спрошено и отказано — окошко так и не выходит', async () => {
+    FakeNotification.permission = 'default';
+    const settle = deferPermission();
+    const { notifyCall } = await boot();
+    notifyCall(person, false);
+    settle('denied');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(instances).toHaveLength(0);
+  });
+
+  it('выключенная настройка молчит совсем — не спрашивает даже разрешение', async () => {
+    const { notifyCall, useConfigStore } = await boot();
+    useConfigStore.getState().apply({ 'notifications.desktopEnabled': false });
+    notifyCall(person, false);
+    expect(instances).toHaveLength(0);
+    expect(FakeNotification.requestPermission).not.toHaveBeenCalled();
+  });
+
+  it('close() убирает уже показанное окошко', async () => {
+    const { notifyCall } = await boot();
+    const handle = notifyCall(person, false);
+    handle.close();
+    expect(instances[0].close).toHaveBeenCalledTimes(1);
+  });
+
+  it('close() до ответа на разрешение отменяет показ — вызов кончился раньше, чем спросили', async () => {
+    FakeNotification.permission = 'default';
+    const settle = deferPermission();
+    const { notifyCall } = await boot();
+    const handle = notifyCall(person, false);
+    handle.close();
+    settle('granted');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(instances).toHaveLength(0);
   });
 });

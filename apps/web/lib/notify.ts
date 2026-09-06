@@ -1,6 +1,8 @@
 'use client';
 
+import type { CallPerson } from '@relay/shared';
 import { getSfx } from '@/lib/sfx';
+import { tx } from '@/lib/i18n';
 import { setting } from '@/stores/config';
 import { isChannelLoud, useNotifyStore } from '@/stores/notify';
 
@@ -108,4 +110,76 @@ export function notifyDirect(slug: string) {
 export function previewMessageSound() {
   if (!allowed()) return;
   getSfx().play('receive');
+}
+
+/** Отменяемое системное уведомление — см. `notifyCall`. */
+export interface CallNotification {
+  /** Убрать уже показанное окошко либо отменить ещё не показанное. */
+  close: () => void;
+}
+
+/** Ничего не показывал и нечего закрывать — общий ранний выход `notifyCall`. */
+const NOTHING: CallNotification = { close: () => {} };
+
+/**
+ * Входящий звонок при свёрнутом окне — единственный во всём клиенте вызов
+ * `Notification` API (см. `notifications.desktopEnabled` в каталоге, где это
+ * написано явно). Тост (`IncomingToast.tsx`) виден и так, пока вкладка
+ * открыта на экране, — это окошко для случая, ради которого честное
+ * ограничение и стоит на экране исходящего: relay не пуш-сервис, и без вкладки
+ * в фокусе входящий иначе остаётся замеченным только звуком.
+ *
+ * Показываем, только когда `document.visibilityState === 'hidden'`: на
+ * видимой вкладке тост уже на экране, и системное окошко поверх него не
+ * рассказало бы ничего нового — только продублировало бы то, что и так видно.
+ *
+ * Разрешение спрашиваем здесь же, а не заранее отдельной кнопкой: отдельная
+ * кнопка «разрешить уведомления» без звонка, который их оправдывает, — это
+ * запрос в пустоту, на который человек отвечает бездумным «нет». Плата за
+ * это честная: первый в жизни звонок, пришедший в свёрнутое окно, может не
+ * показать окошко (пока браузер спрашивает разрешение, вызов успевает
+ * кончиться) — зато все следующие, если разрешили, покажут его сразу.
+ *
+ * Возвращает ручку закрытия, а не ничего: тост обязан убрать своё окошко
+ * ровно тогда, когда убирает себя (принят, отклонён, отбой, не ответили,
+ * обрыв сокета — общий список `stores/ring.ts`), а не ждать, пока оно
+ * истечёт само. `close()` безопасен и до того, как окошко реально возникло:
+ * если разрешение спрашивается асинхронно и вызов кончился раньше ответа,
+ * флаг `cancelled` не даёт показать окошко о вызове, которого уже нет.
+ */
+export function notifyCall(from: CallPerson, video: boolean): CallNotification {
+  if (typeof Notification === 'undefined') return NOTHING;
+  if (document.visibilityState !== 'hidden') return NOTHING;
+  if (!setting<boolean>('notifications.desktopEnabled')) return NOTHING;
+
+  let cancelled = false;
+  let shown: Notification | null = null;
+  const show = () => {
+    if (cancelled) return;
+    shown = new Notification(from.nick, {
+      body: tx(video ? 'call.videoCall' : 'call.incoming.ringing'),
+      tag: 'relay-call',
+    });
+    // Клик по системному окошку возвращает к вкладке, где и лежит тост с
+    // настоящими «принять»/«отклонить» — окошко само эти кнопки не несёт.
+    shown.onclick = () => {
+      window.focus();
+      shown?.close();
+    };
+  };
+
+  if (Notification.permission === 'granted') {
+    show();
+  } else if (Notification.permission === 'default') {
+    void Notification.requestPermission().then((permission) => {
+      if (permission === 'granted') show();
+    });
+  }
+
+  return {
+    close: () => {
+      cancelled = true;
+      shown?.close();
+    },
+  };
 }
