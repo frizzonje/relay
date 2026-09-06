@@ -1,16 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueGuestToken } from '../auth/auth';
 import { asSocket, type FakeServer, type FakeSocket } from './testkit';
+import { MessageRow } from '../db/entities';
 import { DmService } from './dm.service';
 import { callRoom } from './voice-sessions';
 import {
   connect,
   connectAs,
+  database,
   disconnect,
   makeGateway,
   personCookie,
   settle,
   tune,
+  until,
   useGatewayStand,
 } from './gateway.testkit';
 import type { SignalingGateway } from './signaling.gateway';
@@ -453,5 +456,110 @@ describe('второй входящий во время разговора', () 
     // набирала, а не отвечала.
     expect(await call(third, anya.fingerprint)).toEqual({ ok: false, error: 'busy' });
     expect(hers.got('call-incoming')).toBe(false);
+  });
+});
+
+/**
+ * Отметка о пропущенном (задача 8 плана B).
+ *
+ * Проверяется здесь, а не в чате, потому что доказывать надо СТЫК: флаг
+ * `missed` в `call-ended` и строка в переписке обязаны быть одним решением, а
+ * не двумя похожими. Форму самой строки (что она переживает рестарт, что её не
+ * находит поиск) проверяет `chat.service.test.ts` — там она пишется напрямую и
+ * без сокетов.
+ *
+ * Отсутствие строки доказывается не паузой, а СЛЕДУЮЩИМ вызовом, который
+ * отметку оставляет: «подождали и ничего не приехало» зеленело бы и на
+ * сломанной записи, просто не дождавшись её.
+ */
+describe('отметка о пропущенном', () => {
+  /** Строки в переписке этих двоих — прямо из базы, как их увидит перезагрузка. */
+  async function marks(a: string, b: string): Promise<MessageRow[]> {
+    return database()
+      .getRepository(MessageRow)
+      .find({ where: { channelId: DmService.address(a, b) }, order: { createdAt: 'ASC' } });
+  }
+
+  it('«не ответили» оставляет в переписке отметку с длительностью дозвона', async () => {
+    const { anya, boris, hers, his } = await pair();
+    await tune(settings, 'calls.ringTimeoutSeconds', 10);
+
+    await call(hers, boris.fingerprint);
+    vi.advanceTimersByTime(11_000);
+
+    // Ждём не строку в базе, а её доставку: список переписок обеих сторон
+    // обязан узнать о пропущенном — иначе человек с закрытой вкладкой беседы
+    // так и не поймёт, что ему звонили.
+    await until(() => hers.got('dm-activity'), 'отметка доехала до списка переписок');
+    expect(his.got('dm-activity')).toBe(true);
+
+    const rows = await marks(anya.identityId, boris.identityId);
+    expect(rows.map((r) => [r.system, r.call, r.authorIdentityId])).toEqual([
+      // Длительность — ровно таймаут дозвона, а не время до срабатывания
+      // будильника: часы события ставит машина, а не тот, кто её разбудил.
+      [true, { state: 'no-answer', ms: 10_000 }, anya.identityId],
+    ]);
+  });
+
+  it('отклонённый вызов отметки не оставляет', async () => {
+    const { anya, boris, hers, his } = await pair();
+    await tune(settings, 'calls.ringTimeoutSeconds', 10);
+
+    const declined = await call(hers, boris.fingerprint);
+    expect(
+      gw.handleCallDecline(asSocket(his), { ringId: declined.ok ? declined.ringId : '' }),
+    ).toEqual({ ok: true });
+
+    // Второй вызов — тот, что отметку оставляет: по его приезду видно, что
+    // запись вообще работает, а значит единственная строка в переписке
+    // принадлежит ему, и от отклонённого не осталось ничего.
+    await call(hers, boris.fingerprint);
+    vi.advanceTimersByTime(11_000);
+    await until(() => hers.got('dm-activity'), 'отметка второго вызова');
+
+    const rows = await marks(anya.identityId, boris.identityId);
+    expect(rows.map((r) => r.call)).toEqual([{ state: 'no-answer', ms: 10_000 }]);
+  });
+
+  it('живёт по своей настройке, а не по выключателю системных строк', async () => {
+    const { anya, boris, hers, his } = await pair();
+    await tune(settings, 'calls.ringTimeoutSeconds', 10);
+    // Выключатель join/leave-уведомлений. Отметку о пропущенном он не касается:
+    // «Аня вошла в канал» и «вам звонили» — разные обещания, и владелец,
+    // убравший болтовню из ленты, не отказывался узнавать о звонках.
+    await tune(settings, 'messages.systemMessages', false);
+
+    await call(hers, boris.fingerprint);
+    vi.advanceTimersByTime(11_000);
+    await until(() => hers.got('dm-activity'), 'отметка при выключенных системных строках');
+    expect((await marks(anya.identityId, boris.identityId)).length).toBe(1);
+
+    // А своя настройка её гасит — и целиком: ни строки, ни рассылки.
+    await tune(settings, 'calls.missedMarkEnabled', false);
+    hers.clear();
+    his.clear();
+    await call(hers, boris.fingerprint);
+    vi.advanceTimersByTime(11_000);
+    // Решение «писать ли» принимается в тот же миг, что и рассылка `call-ended`
+    // (одно и то же вычисление, см. `Rings.announce`), — дождавшись её, мы
+    // дождались и записи, если бы она была.
+    await until(() => hers.got('call-ended'), 'конец второго вызова');
+    expect(hers.got('dm-activity')).toBe(false);
+    expect((await marks(anya.identityId, boris.identityId)).length).toBe(1);
+  });
+
+  it('заводит переписку, если её ещё не было: звонок был позволен, а следа иначе не останется', async () => {
+    const { anya, boris, hers } = await pair();
+    await tune(settings, 'calls.ringTimeoutSeconds', 10);
+    // `everyone` (его ставит `pair`) — звонить можно и тому, с кем не переписывались.
+    expect(await marks(anya.identityId, boris.identityId)).toEqual([]);
+
+    await call(hers, boris.fingerprint);
+    vi.advanceTimersByTime(11_000);
+    await until(() => hers.got('dm-activity'), 'отметка в только что заведённой переписке');
+
+    expect((await marks(anya.identityId, boris.identityId)).map((r) => r.call)).toEqual([
+      { state: 'no-answer', ms: 10_000 },
+    ]);
   });
 });

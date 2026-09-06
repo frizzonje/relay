@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AppServer, AppSocket } from './socket-data';
 import type { PresenceState } from './presence';
-import type { CallPerson, CallReplyResult, CallStartResult } from './protocol';
+import type { CallMark, CallPerson, CallReplyResult, CallStartResult } from './protocol';
 import {
   settled as ringSettled,
   step as ringStep,
@@ -34,6 +34,21 @@ export interface RingSurroundings {
   busyWhenInVoice(): boolean;
   /** Оставляют ли пропущенные след в переписке. */
   marksMissed(): boolean;
+  /**
+   * Записать отметку о пропущенном в переписку этих двоих.
+   *
+   * Зовётся ровно тогда, когда в `call-ended` уехало `missed: true`, — из
+   * ОДНОГО вычисления (см. `announce`): флаг протокола и строка в ленте не
+   * должны решаться дважды, иначе однажды у одного «пропущенный» будет, а у
+   * другого нет. И ровно один раз на вызов: терминальное состояние объявляется
+   * единожды, дальше машина не двигается (`step` из конечного состояния
+   * возвращает тот же объект), а сам вызов уже забыт.
+   *
+   * Ничего не возвращает и ничего не ждёт: запись идёт в базу, а владелец
+   * вызовов не должен ждать её, чтобы сказать двоим, чем кончился звонок.
+   * Ошибку записи разбирает тот, кто её делает, — здесь её некому показать.
+   */
+  markMissed(from: RingPerson, to: RingPerson, mark: CallMark): void;
   /**
    * Принятый вызов открывает голосовую комнату беседы; вернуть её адрес.
    *
@@ -365,16 +380,28 @@ export class Rings {
       }));
       return;
     }
-    // Отметку в переписке пишет не этот класс — он лишь считает, будет ли она:
-    // `missed` из машины (только «не ответили» и «не в сети») плюс настройка.
-    const missed = ringMissed(ring.state) && this.around.marksMissed();
+    // Саму строку в переписке этот класс не пишет — он считает, будет ли она
+    // (`missed` из машины: только «не ответили» и «не в сети», плюс настройка),
+    // и просит записать того, кто владеет лентой.
+    // Вычисление ОДНО на две вещи: и флаг в протоколе, и запись строки. Посчитай
+    // мы их порознь, они однажды разошлись бы — и у звонившего «пропущенный» на
+    // экране был бы, а в переписке нет (или наоборот).
+    const mark: CallMark | null =
+      this.around.marksMissed() && ringMissed(ring.state)
+        ? // Длительность — «сколько звонило»: обе точки по часам сервера, а
+          // `endedAt` ставит сама машина в тот же переход, что и это состояние.
+          { state: ring.state, ms: Math.max(0, (ring.endedAt ?? at) - ring.startedAt) }
+        : null;
     this.send(live, 'call-ended', (peer) => ({
       ringId: ring.id,
       state: ring.state,
       peer,
       at,
-      missed,
+      missed: mark !== null,
     }));
+    // После рассылки, а не до: конец вызова оба конца ждут прямо сейчас, а
+    // отметка — это след для того, кто вернётся позже.
+    if (mark) this.around.markMissed(live.from, live.to, mark);
   }
 
   /**

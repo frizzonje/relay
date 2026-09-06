@@ -10,6 +10,7 @@ import type { Attachment } from '../uploads';
 import { SettingsService } from '../settings/settings.service';
 import {
   LIMIT,
+  type CallMark,
   type ChatMessage,
   type MentionRef,
   type ReactionMap,
@@ -264,6 +265,7 @@ function toMessage(row: MessageRow): ChatMessage {
     ts: row.createdAt.getTime(),
     ...(row.attachment ? { attachment: toAttachment(row.attachment, row.spoiler) } : {}),
     ...(row.system ? { system: true } : {}),
+    ...(row.call ? { call: row.call } : {}),
     ...(Object.keys(reactions).length ? { reactions } : {}),
     ...(row.replyTo ? { replyTo: row.replyTo } : {}),
     ...(row.editedAt ? { editedTs: row.editedAt.getTime() } : {}),
@@ -551,6 +553,68 @@ export class ChatService implements OnModuleInit {
         editedAt: null,
         // Личности у системной строки нет — и лица рядом с ней тоже.
         authorIdentityId: null,
+      })
+      .execute();
+
+    const saved = await this.one(slug, id, true);
+    if (saved) this.lastActivity.set(channelId, saved.ts);
+    return saved;
+  }
+
+  /**
+   * Отметка о пропущенном звонке — «системная строка особого вида».
+   *
+   * Своя дверь, а не `addSystem`, и это не удобство, а разные обещания.
+   * `addSystem` первой строкой спрашивает `messages.systemMessages` — выключатель
+   * болтовни про входы-выходы. Отметкой о пропущенном распоряжается
+   * `calls.missedMarkEnabled`, и решает это ЗВОНОК (см. `Rings.announce`: одним
+   * вычислением и флаг `missed` в `call-ended`, и эта запись). Пройди отметка
+   * через ту дверь — владелец, убравший «Аня вошла в канал», молча перестал бы
+   * узнавать, что ему звонили, а панель продолжала бы показывать отметку
+   * включённой.
+   *
+   * Строка при этом системная (`system: true`) по всем остальным признакам:
+   * её никто не говорил, её не правят (`find` системные не отдаёт), её не
+   * находит поиск (`search` идёт по `m.system = false` — искать в чате можно
+   * только сказанное людьми, а «missed call» тут не фраза, а запаска для
+   * клиента, который поля `call` ещё не знает).
+   *
+   * Автор — ЗВОНИВШИЙ, и это единственное, чем отметка отличается от прочих
+   * системных строк, у которых личности нет вовсе. По нему обе стороны
+   * понимают, кто кому не дозвонился (лицо рядом с отметкой — то же, что и в
+   * ленте), и по нему же список переписок пишет «вы: …» тому, кто звонил.
+   */
+  async addCallMark(
+    slug: string,
+    mark: CallMark & { name: string; identityId: string },
+  ): Promise<ChatMessage | undefined> {
+    const channelId = this.channelId(slug);
+    if (!channelId) return undefined;
+
+    const id = randomUUID();
+    await this.db
+      .getRepository(MessageRow)
+      .createQueryBuilder()
+      .insert()
+      .values({
+        id,
+        channelId,
+        authorName: mark.name,
+        // Текст словами — на случай клиента, который поля `call` не знает: он
+        // покажет обычную системную строку и не соврёт. Он же едет превью в
+        // список переписок. Не переведён намеренно и ровно как «X was banned»:
+        // язык читающего сервер не знает, а собрать «21:04 · 38 с дозвона» на
+        // своём языке клиенту всё равно предстоит самому — из `call`.
+        text: 'missed call',
+        system: true,
+        call: { state: mark.state, ms: mark.ms },
+        spoiler: false,
+        reactions: {},
+        attachmentId: null,
+        replyTo: null,
+        mentions: [],
+        editedAt: null,
+        authorIdentityId: mark.identityId,
       })
       .execute();
 

@@ -150,6 +150,76 @@ describe('беседа тоже канал', () => {
     expect(page.messages.map((m) => m.text)).toEqual(['привет']);
     expect(chat.lastTs(slug)).toBe(msg?.ts);
   });
+
+  /**
+   * Отметка о пропущенном звонке (задача 8 плана B) — «системная строка особого
+   * вида»: её никто не писал, но и join/leave-уведомлением она не является.
+   * Отсюда две проверки, которые легко потерять: она не должна гаснуть вместе с
+   * болтовнёй про входы-выходы и обязана переживать рестарт, как всякая другая
+   * строка ленты. Кто её пишет по живому звонку — `ring.handlers.test.ts`.
+   */
+  describe('отметка о пропущенном', () => {
+    async function conversation(): Promise<{ slug: string; me: string }> {
+      const me = await person('звонивший');
+      const you = await person('не ответивший');
+      const opened = await dm.open(me.id, you.fingerprint);
+      return { slug: opened.ok ? opened.view.slug : '', me: me.id };
+    }
+
+    it('переживает рестарт и несёт длительность дозвона', async () => {
+      const { slug, me } = await conversation();
+      const written = await chat.addCallMark(slug, {
+        name: 'звонивший',
+        identityId: me,
+        state: 'no-answer',
+        ms: 38_000,
+      });
+      expect(written).toMatchObject({ system: true, call: { state: 'no-answer', ms: 38_000 } });
+
+      const [restored] = (await (await restart()).history(slug)).messages;
+      expect(restored).toMatchObject({
+        system: true,
+        call: { state: 'no-answer', ms: 38_000 },
+        // Автор — звонивший: по нему обе стороны понимают, кто кому не
+        // дозвонился, и по нему же список переписок пишет «вы: …».
+        fingerprint: (await db.getRepository(IdentityRow).findOneByOrFail({ id: me })).fingerprint,
+      });
+      expect(restored.ts).toBe(written?.ts);
+    });
+
+    it('не гаснет от выключенных системных строк — у неё своя настройка', async () => {
+      const { slug, me } = await conversation();
+      // Выключатель join/leave-уведомлений: «Аня вошла в канал» и «вам звонили»
+      // — разные обещания, и одно не должно уносить другое.
+      await tune(settings, 'messages.systemMessages', false);
+
+      expect(
+        await chat.addCallMark(slug, {
+          name: 'звонивший',
+          identityId: me,
+          state: 'failed',
+          ms: 0,
+        }),
+      ).toMatchObject({ call: { state: 'failed', ms: 0 } });
+      expect((await chat.history(slug)).messages).toHaveLength(1);
+    });
+
+    it('не находится поиском: искать в чате можно только сказанное людьми', async () => {
+      const { slug, me } = await conversation();
+      await chat.add(slug, { name: 'звонивший', identityId: me, text: 'missed you' });
+      await chat.addCallMark(slug, {
+        name: 'звонивший',
+        identityId: me,
+        state: 'no-answer',
+        ms: 1_000,
+      });
+
+      // Запрос нарочно совпадает с текстом-запаской самой отметки — находится
+      // только реплика человека.
+      const { hits } = await chat.search([slug], 'missed');
+      expect(hits.map((h) => h.message.text)).toEqual(['missed you']);
+    });
+  });
 });
 
 describe('страницы ленты', () => {

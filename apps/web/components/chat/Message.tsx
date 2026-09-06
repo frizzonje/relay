@@ -15,6 +15,7 @@ import { mentions } from '@/lib/mentions';
 import { getSocket } from '@/lib/socket';
 import { useDismiss } from '@/lib/use-dismiss';
 import { MessageAttachment } from '@/components/chat/MessageAttachment';
+import { MissedCallMark } from '@/components/call/MissedCallMark';
 import { useSetting } from '@/stores/config';
 import { useT } from '@/lib/i18n';
 
@@ -518,6 +519,26 @@ export const Message = memo(function Message({
     initial: enter ? ('hidden' as const) : false,
     animate: 'show' as const,
   };
+  // Отметка о пропущенном — раньше системной ветки и раньше пузыря: это не
+  // реплика и не курсивная строка «Аня вошла в канал», а плашка своего вида
+  // (см. `MissedCallMark`). Проверяется именно поле `call`, а не `system`:
+  // системными остаются обе, но рисуются они по-разному, и решает это наличие
+  // отметки, а не флаг, общий у них с уведомлениями о входах.
+  if (msg.call) {
+    return (
+      <motion.div {...anim}>
+        {/* «Мой ли это звонок» решает отпечаток, а не подпись: `mine` у
+            системной строки всегда ложно (ChatPanel сравнивает имена и
+            системные исключает), а отметку писал звонивший — по его лицу обе
+            стороны и понимают, кто кому не дозвонился. */}
+        <MissedCallMark
+          call={msg.call}
+          ts={msg.ts}
+          byMe={!!myFingerprint && msg.fingerprint === myFingerprint}
+        />
+      </motion.div>
+    );
+  }
   if (msg.system) {
     return (
       <motion.div

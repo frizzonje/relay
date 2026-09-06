@@ -211,6 +211,17 @@
   "call.incoming.accept": "Принять",
   "call.incoming.decline": "Отклонить",
   "call.incoming.ringing": "звонит вам",
+  "call.mark.callBack": "Перезвонить",
+  "call.mark.missed": "Пропущенный звонок",
+  "call.mark.noAnswer": "не ответили",
+  "call.mark.offline": "не в сети",
+  "call.mark.outgoing": "Вы звонили",
+  "call.mark.ringing": {
+    "one": "{count} секунда дозвона",
+    "few": "{count} секунды дозвона",
+    "many": "{count} секунд дозвона",
+    "other": "{count} секунды дозвона"
+  },
   "call.outgoing.title": "Звонок: {nick}",
   "call.refusal.disabled": "Звонки выключены на этой инсталляции",
   "call.refusal.forbidden": "Этому человеку нельзя позвонить",

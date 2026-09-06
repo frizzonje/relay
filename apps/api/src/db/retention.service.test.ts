@@ -374,6 +374,43 @@ describe('срок личной переписки', () => {
     expect(await texts()).toEqual(['вчерашнее в беседе']);
   });
 
+  /**
+   * Отметка о пропущенном звонке — строка ленты, а не запись особого хранения,
+   * и ретенции подчиняется наравне со сказанным. Проверяется отдельно, потому
+   * что соблазн сделать её вечной («это же не переписка») велик: тогда
+   * инсталляция с «не хранить» продолжала бы копить, кто кому звонил.
+   */
+  it('уносит и отметку о пропущенном: она такая же строка ленты', async () => {
+    const settings = await settingsWith();
+    const service = new RetentionService(db, settings);
+    await makeDm();
+    const id = randomUUID();
+    await db.getRepository(MessageRow).insert({
+      id,
+      channelId: 'dm-000000000000000000000000',
+      authorName: 'А',
+      text: 'missed call',
+      system: true,
+      spoiler: false,
+      attachmentId: null,
+      replyTo: null,
+      reactions: {},
+      editedAt: null,
+      authorIdentityId: null,
+      call: { state: 'no-answer', ms: 38_000 },
+    });
+    await db.query(
+      "UPDATE messages SET created_at = date_trunc('milliseconds', now() - ($1 || ' days')::interval) WHERE id = $2",
+      [3, id],
+    );
+    await whisper('трёхдневное в беседе', 3);
+
+    await tune(settings, 'direct.retentionMode', 'days');
+    await tune(settings, 'direct.retentionDays', 2);
+    expect(await service.sweep()).toBe(2);
+    expect(await texts()).toEqual([]);
+  });
+
   it('свой срок короче общего: личное уходит, канальное остаётся', async () => {
     const settings = await settingsWith();
     const service = new RetentionService(db, settings);

@@ -8,6 +8,7 @@ import { Mentions1759200000000 } from './1759200000000-Mentions';
 import { ReactionIdentity1759300000000 } from './1759300000000-ReactionIdentity';
 import { DirectMessages1760000000000 } from './1760000000000-DirectMessages';
 import { Settings1761000000000 } from './1761000000000-Settings';
+import { CallMark1762000000000 } from './1762000000000-CallMark';
 
 /**
  * Миграции по порядку. Список руками, а не `migrations: ['dist/**']` по маске:
@@ -25,4 +26,5 @@ export const MIGRATIONS = [
   ReactionIdentity1759300000000,
   DirectMessages1760000000000,
   Settings1761000000000,
+  CallMark1762000000000,
 ];

@@ -15,6 +15,7 @@ import {
   LIMIT,
   str,
   trimmed,
+  type CallMark,
   type ChatRefusal,
   type ChatAroundPayload,
   type ChatDeletePayload,
@@ -501,6 +502,49 @@ export class ChatHandlers {
         });
       }
     }
+  }
+
+  /**
+   * Пропущенный звонок оставил след — записать его в переписку двоих и
+   * разослать так же, как реплику.
+   *
+   * Живёт здесь, а не у владельца вызовов, потому что вызов ничего не знает о
+   * ленте, и не в `ChatService`, потому что рассылка «в твоей переписке
+   * написали» уже написана рядом (`dmActivity`): вторая её копия ради одной
+   * строки разошлась бы с первой в первый же день.
+   *
+   * Беседа при надобности ЗАВОДИТСЯ. Звонок уже был позволен правилами дома
+   * (`calls.whoCanCall`, `calls.maxRingsPerHour` — их спросил `RingHandlers`
+   * ещё на наборе), и отказ записать отметку из-за того, что эти двое друг
+   * другу пока не писали, означал бы ровно ту дыру, ради которой отметка и
+   * заведена: собеседнику звонили, а узнать об этом ему негде. Правило первого
+   * сообщения (`direct.whoCanStart`) сюда не спрашивается намеренно — оно про
+   * то, кому можно НАПИСАТЬ, а написать отметкой нельзя ничего.
+   *
+   * `blockBanned: false` — по той же причине: собеседника успели забанить, пока
+   * у него звонило, и потерять из-за этой гонки уже случившийся звонок хуже,
+   * чем завести строку в беседе с забаненным.
+   */
+  async noteMissedCall(
+    caller: { id: string; nick: string },
+    peerFingerprint: string,
+    mark: CallMark,
+  ): Promise<void> {
+    const opened = await this.dm.open(caller.id, peerFingerprint, { blockBanned: false });
+    if (!opened.ok) return;
+    const slug = opened.view.slug;
+    const msg = await this.chat.addCallMark(slug, {
+      ...mark,
+      name: caller.nick,
+      identityId: caller.id,
+    });
+    // Беседу снесли, пока звонок шёл, — писать отметку некуда.
+    if (!msg) return;
+    this.server.to(this.chat.room(slug)).emit('chat', msg);
+    // Тем же путём, что и реплика: у обоих беседа может быть закрыта, и без
+    // этого пропущенный не всплыл бы в списке переписок вовсе — то есть
+    // остался бы ровно так же незамеченным, как сам звонок.
+    this.dmActivity(slug, msg, caller.id);
   }
 
   /**

@@ -300,6 +300,16 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     ringTimeoutMs: () => this.settings.get<number>('calls.ringTimeoutSeconds') * 1000,
     busyWhenInVoice: () => this.settings.get<boolean>('calls.busyWhenInVoice'),
     marksMissed: () => this.settings.get<boolean>('calls.missedMarkEnabled'),
+    // Саму строку пишет лента (`ChatHandlers`), а не владелец вызовов: тот про
+    // переписку не знает вовсе и ждать записи в базу не должен — оба конца
+    // ждут «чем кончилось» прямо сейчас. Поэтому и `void` с обработанным
+    // отказом: упавшая запись — это потерянная отметка, а не потерянный
+    // процесс, и молчать о ней всё равно нельзя.
+    markMissed: (from, to, mark) => {
+      void this.chatHandlers
+        .noteMissedCall({ id: from.id, nick: from.nick }, to.fingerprint, mark)
+        .catch((err) => this.logger.error(`отметка о пропущенном не записана: ${err}`));
+    },
     // Принятый вызов открывает комнату беседы — и на этом дозвон кончается.
     // Адрес у неё тот же, что у переписки этих двоих (он считается из их id и
     // только из них), с приставкой `voice:`: комнаты socket.io у ленты и у

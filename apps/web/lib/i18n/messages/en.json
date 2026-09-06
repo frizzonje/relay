@@ -189,6 +189,15 @@
   "call.incoming.accept": "Accept",
   "call.incoming.decline": "Decline",
   "call.incoming.ringing": "is calling you",
+  "call.mark.callBack": "Call back",
+  "call.mark.missed": "Missed call",
+  "call.mark.noAnswer": "no answer",
+  "call.mark.offline": "not online",
+  "call.mark.outgoing": "You called",
+  "call.mark.ringing": {
+    "one": "{count} s ringing",
+    "other": "{count} s ringing"
+  },
   "call.outgoing.title": "Calling {nick}",
   "call.refusal.disabled": "Calls are turned off on this installation",
   "call.refusal.forbidden": "You can't call this person",
