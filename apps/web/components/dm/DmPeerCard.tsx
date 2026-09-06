@@ -9,6 +9,7 @@ import { useT } from '@/lib/i18n';
 import { useUiStore } from '@/stores/ui';
 import { PRESENCE_LABEL_KEY, usePresence } from '@/stores/presence';
 import { useSetting } from '@/stores/config';
+import { useCallGate, useCallVideoAllowed, useRingStore } from '@/stores/ring';
 
 /**
  * Правая колонка беседы (232px) — по месту и ширине ровно там, где у
@@ -16,15 +17,27 @@ import { useSetting } from '@/stores/config';
  * этот компонент встаёт рядом с `DmThread`, а не в колонке состава каркаса —
  * у беседы нет ни ростера, ни списка «в сети», которым та колонка служит).
  *
- * Присутствие («в сети / в голосе / недавно») теперь берётся из глобального
- * `stores/presence.ts` (задача 2 плана B) — того же стора, что и точка в
- * шапке беседы (см. DmThread) и в списке переписок (см. DmList). Кнопка звонка
- * нарисована, но пока выключена — сам дозвон приедет следующей задачей плана
- * — тем же приёмом, что Call/Admin в Toolbar (задача 8): HTML `disabled` ей НЕ
- * ставится. Этот атрибут заодно выбрасывает кнопку из обхода табом и глушит
- * наведение мышью, а тултип и `aria-label` — единственное, что объясняет, почему
- * она ничего не делает; с `disabled` объяснение стало бы недоступно ни мышью,
- * ни с клавиатуры. Отсюда `aria-disabled` вместо него и кольцо фокуса на месте.
+ * Присутствие («в сети / в голосе / недавно») — из глобального
+ * `stores/presence.ts` (задача 2 плана B), тот же стор, что и точка в шапке
+ * беседы (см. DmThread) и в списке переписок (см. DmList).
+ *
+ * Кнопка звонка теперь живая (задача 6 плана B: раньше она была нарисована,
+ * но выключена насовсем — «скоро»). Выключить её всё ещё может инсталляция:
+ * `useCallGate` (stores/ring.ts) гасит её при `calls.enabled: false` или
+ * `calls.whoCanCall: 'nobody'`, и тем же приёмом, что раньше был здесь и
+ * остался в Toolbar/MobileNav — HTML `disabled` кнопке НЕ ставится. Этот
+ * атрибут заодно выбрасывает кнопку из обхода табом и глушит наведение
+ * мышью, а тултип и `aria-label` — единственное, что объясняет, почему она
+ * ничего не делает; с `disabled` объяснение стало бы недоступно ни мышью, ни
+ * с клавиатуры. Отсюда `aria-disabled` вместо него и кольцо фокуса на месте.
+ * `calls.whoCanCall: 'conversation'` здесь не проверяется отдельно: карточка
+ * стоит внутри уже открытой переписки, и условие «есть беседа» этим самим
+ * фактом уже выполнено (см. комментарий у `useCallGate`).
+ *
+ * Видеозвонок — вторая, узкая кнопка рядом, и только когда инсталляция его
+ * пускает (`calls.videoAllowed`, тот же `useCallVideoAllowed`): предлагать
+ * камеру, которую сервер всё равно снимет с вызова, значило бы обещать не то,
+ * что случится.
  */
 export function DmPeerCard() {
   const t = useT();
@@ -35,13 +48,20 @@ export function DmPeerCard() {
   // Хук вызывается безусловно (правило хуков), даже когда peer ещё пуст —
   // usePresence('') просто читает несуществующую запись и вернёт `offline`.
   const presence = usePresence(peer ?? '');
+  const gate = useCallGate();
+  const videoAllowed = useCallVideoAllowed();
 
   // Беседа ещё не выбрана (переходный кадр смены сцены) — рисовать чужое
   // лицо или пустую карточку нечем.
   if (!peer) return null;
 
-  const soon = t('dm.soon');
   const call = t('toolbar.call');
+  const reason = !gate.allowed ? t(gate.reasonKey) : '';
+
+  function dial(video: boolean) {
+    if (!gate.allowed || !peer) return;
+    void useRingStore.getState().start({ fingerprint: peer, nick }, video);
+  }
 
   return (
     <aside
@@ -76,16 +96,33 @@ export function DmPeerCard() {
         )}
         <span className="text-[12px] text-text-muted">{t(PRESENCE_LABEL_KEY[presence])}</span>
       </div>
-      <button
-        type="button"
-        aria-disabled
-        title={soon}
-        aria-label={`${call} — ${soon}`}
-        className="mt-2 flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-full border border-line px-3 py-2 text-[13px] font-medium text-text-faint outline-none focus-visible:ring-2 focus-visible:ring-line-strong"
-      >
-        <Icon name="phone" className="text-[15px]" strokeWidth={1.8} />
-        {call}
-      </button>
+      <div className="mt-2 flex w-full items-center gap-2">
+        <button
+          type="button"
+          aria-disabled={gate.allowed ? undefined : true}
+          title={gate.allowed ? undefined : reason}
+          aria-label={gate.allowed ? call : `${call} — ${reason}`}
+          onClick={gate.allowed ? () => dial(false) : undefined}
+          className={cn(
+            'flex flex-1 items-center justify-center gap-2 rounded-full border border-line px-3 py-2 text-[13px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong',
+            gate.allowed ? 'text-ok hover:bg-ok/10' : 'cursor-not-allowed text-text-faint',
+          )}
+        >
+          <Icon name="phone" className="text-[15px]" strokeWidth={1.8} />
+          {call}
+        </button>
+        {gate.allowed && videoAllowed && (
+          <button
+            type="button"
+            onClick={() => dial(true)}
+            title={t('call.videoCall')}
+            aria-label={t('call.videoCall')}
+            className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full border border-line text-ok outline-none transition-colors hover:bg-ok/10 focus-visible:ring-2 focus-visible:ring-line-strong"
+          >
+            <Icon name="video" className="text-[15px]" strokeWidth={1.8} />
+          </button>
+        )}
+      </div>
     </aside>
   );
 }

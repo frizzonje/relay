@@ -1,13 +1,16 @@
 'use client';
 
 import { ChatPanel } from '@/components/chat/ChatPanel';
+import { Icon } from '@/components/ui/icon';
 import { Identicon } from '@/components/ui/Identicon';
 import { PresenceDot } from '@/components/ui/PresenceDot';
+import { cn } from '@/lib/utils';
 import { shortFingerprint } from '@/lib/format';
 import { useT } from '@/lib/i18n';
 import { useUiStore } from '@/stores/ui';
 import { PRESENCE_LABEL_KEY, usePresence } from '@/stores/presence';
 import { useOwnerText, useSetting } from '@/stores/config';
+import { useCallGate, useRingStore } from '@/stores/ring';
 
 /**
  * Обёртка беседы: шапка собеседника (лицо, ник, короткий отпечаток, статус) и
@@ -20,6 +23,15 @@ import { useOwnerText, useSetting } from '@/stores/config';
  * добавляет ровно то, чего у канала нет и не может быть по смыслу: лицо
  * собеседника сверху и напоминание, что переписку видит владелец инсталляции,
  * снизу.
+ *
+ * Кнопка звонка в шапке (задача 6 плана B) — не дубль карточки собеседника
+ * (`DmPeerCard`), а подстраховка от дыры в раскладке: карточка несжимаема и
+ * гаснет на узком десктопе, пока раскрыт док ЛС (`max-lg:hidden` при
+ * `dmSection`, см. её комментарий), а эта шапка — нет. Без своей кнопки здесь
+ * позвонить в этом окне было бы нечем. `useCallGate` — тот же источник
+ * правды, что у карточки и мобильной шапки (MobileNav): развести проверку
+ * «можно ли звонить» по трём местам значило бы однажды погасить кнопку тут, а
+ * там забыть.
  */
 export function DmThread() {
   const t = useT();
@@ -27,6 +39,7 @@ export function DmThread() {
   const nick = useUiStore((s) => s.textLabel);
   const showFingerprints = useSetting<boolean>('people.showFingerprints');
   const presence = usePresence(peer ?? '');
+  const gate = useCallGate();
   // Текст владельца, если он его переписал (`direct.privacyNotice`), и перевод,
   // пока не переписывал: умолчание каталога написано на языке базы, и
   // подставить его вместо перевода значило бы ответить по-английски тому, у
@@ -63,6 +76,27 @@ export function DmThread() {
               одно состояние, названное словом и цветом одинаково всюду. */}
           <span className="text-[11.5px] text-text-muted">{t(PRESENCE_LABEL_KEY[presence])}</span>
         </div>
+        {peer && (
+          <button
+            type="button"
+            aria-disabled={gate.allowed ? undefined : true}
+            title={gate.allowed ? t('toolbar.call') : t(gate.reasonKey)}
+            aria-label={
+              gate.allowed ? t('toolbar.call') : `${t('toolbar.call')} — ${t(gate.reasonKey)}`
+            }
+            onClick={
+              gate.allowed
+                ? () => void useRingStore.getState().start({ fingerprint: peer, nick }, false)
+                : undefined
+            }
+            className={cn(
+              'grid h-8 w-8 shrink-0 place-items-center rounded-full outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong',
+              gate.allowed ? 'text-ok hover:bg-ok/10' : 'cursor-not-allowed text-text-faint',
+            )}
+          >
+            <Icon name="phone" className="text-[16px]" strokeWidth={1.8} />
+          </button>
+        )}
       </div>
 
       <ChatPanel />

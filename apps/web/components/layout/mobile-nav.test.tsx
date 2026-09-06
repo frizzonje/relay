@@ -2,10 +2,19 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { defaults } from '@relay/shared';
+import { dialCall } from '@/lib/call';
 import { MobileNav } from './MobileNav';
 import { shortFingerprint } from '@/lib/format';
 import { useUiStore } from '@/stores/ui';
 import { usePresenceStore } from '@/stores/presence';
+import { useConfigStore } from '@/stores/config';
+
+/** Тот же приём, что у `DmPeerCard.test.tsx`/`DmThread.test.tsx`. */
+vi.mock('@/lib/call', () => ({
+  dialCall: vi.fn(async () => ({ ok: true, ringId: 'r1' })),
+  hangUp: vi.fn(),
+}));
 
 /**
  * Мобильная шапка в беседе. До этой задачи вида `dm` она не знала вовсе: ветки
@@ -62,6 +71,8 @@ describe('мобильная шапка беседы', () => {
       voiceRoom: null,
     });
     usePresenceStore.getState().reset();
+    useConfigStore.setState({ settings: defaults() });
+    vi.mocked(dialCall).mockClear();
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -92,16 +103,28 @@ describe('мобильная шапка беседы', () => {
     expect(/не в сети/i.test(host.textContent || '')).toBe(false);
   });
 
-  it('кнопка звонка выключена, но достижима и объясняет себя', () => {
+  it('кнопка звонка живая (44px) и набирает номер', () => {
+    render();
+    const call = buttons().find((b) => b.getAttribute('aria-label') === 'Call');
+    expect(call).toBeTruthy();
+    expect(call!.getAttribute('aria-disabled')).toBeNull();
+    expect(call!.disabled).toBe(false);
+    act(() => call!.click());
+    expect(dialCall).toHaveBeenCalledWith(fingerprint, false);
+  });
+
+  it('`calls.enabled: false` гасит кнопку звонка, но не роняет её из обхода табом', () => {
+    useConfigStore.setState({ settings: { ...defaults(), 'calls.enabled': false } });
     render();
     const call = buttons().find((b) => b.getAttribute('aria-disabled') === 'true');
     expect(call).toBeTruthy();
     // То, чего делать нельзя: с HTML `disabled` кнопка выпадает из обхода
-    // табом, и «скоро» до человека с клавиатурой не доходит вовсе.
+    // табом, и причина до человека с клавиатурой не доходит вовсе.
     expect(call!.disabled).toBe(false);
     expect(call!.tabIndex).toBe(0);
-    expect(call!.title).toMatch(/скоро|soon/i);
-    expect(call!.getAttribute('aria-label')).toMatch(/скоро|soon/i);
+    expect(call!.title).toMatch(/выключен|turned off/i);
+    act(() => call!.click());
+    expect(dialCall).not.toHaveBeenCalled();
   });
 
   it('шаг назад возвращает в список переписок, а не к каналам', () => {

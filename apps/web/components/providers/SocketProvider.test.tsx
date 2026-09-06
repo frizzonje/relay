@@ -59,6 +59,7 @@ import { useDmStore } from '@/stores/dm';
 import { usePinsStore } from '@/stores/pins';
 import { useUiStore } from '@/stores/ui';
 import { useUnreadStore } from '@/stores/unread';
+import { useRingStore } from '@/stores/ring';
 
 const slugA = 'dm-aaaaaaaaaaaaaaaaaaaaaaaa';
 const slugB = 'dm-bbbbbbbbbbbbbbbbbbbbbbbb';
@@ -101,6 +102,7 @@ beforeEach(() => {
   });
   usePinsStore.getState().reset();
   useChatStore.getState().reset();
+  useRingStore.getState().reset();
 
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -296,6 +298,36 @@ describe('реконнект', () => {
     act(() => socket._fire('connect'));
 
     expect(socket.emit).toHaveBeenCalledWith('dm-join', { slug: slugA }, expect.any(Function));
+  });
+});
+
+describe('дозвон: call-state/call-ended доезжают до стора вызова', () => {
+  // `initCall` (комната беседы) замокан выше — здесь проверяется только
+  // соседний слушатель, заведённый этой же задачей (6 плана B) для ЭКРАНА
+  // дозвона (`stores/ring.ts`), а не для комнаты. Оба независимы, и подделка
+  // одного не должна прятать отсутствие другого.
+  it('call-state{ringing} открывает экран, call-ended переключает подпись', () => {
+    act(() =>
+      socket._fire('call-state', {
+        ringId: 'r1',
+        state: 'ringing',
+        peer: peerA,
+        at: Date.now(),
+        video: false,
+      }),
+    );
+    expect(useRingStore.getState().outgoing?.ring.state).toBe('ringing');
+
+    act(() =>
+      socket._fire('call-ended', {
+        ringId: 'r1',
+        state: 'declined',
+        peer: peerA,
+        at: Date.now(),
+        missed: false,
+      }),
+    );
+    expect(useRingStore.getState().outgoing?.ring.state).toBe('declined');
   });
 });
 

@@ -9,6 +9,7 @@ import { targetView, useUiStore, type MobilePanel } from '@/stores/ui';
 import { useOwnerStore } from '@/stores/owner';
 import { usePairingStore } from '@/stores/pairing';
 import { AdminDialog } from '@/components/admin/AdminDialog';
+import { OutgoingCall } from '@/components/call/OutgoingCall';
 import { AdmitDeviceDialog } from '@/components/layout/AdmitDeviceDialog';
 import { OwnerClaimDialog } from '@/components/layout/OwnerClaimDialog';
 import { BannedGate } from '@/components/layout/BannedGate';
@@ -210,6 +211,14 @@ export function AppShell() {
           тот уехал (см. DmDrawer). Палитра, открытая изнутри, оказалась бы
           обрезанной по 232 точки, а закрыть её было бы нечем. */}
       <PeoplePicker open={pickerOpen} onOpenChange={setPickerOpen} />
+
+      {/* Экран исходящего вызова (задача 6 плана B) — во весь экран поверх
+          всего, как и панель инсталляции: набор номера, начатый кнопкой в
+          `DmPeerCard`/`DmThread`/`MobileNav`, живёт в общем сторе
+          (`stores/ring.ts`), а не в сцене, которую можно закрыть шагом
+          назад. Себя гасит сам, когда вызов принят, кончился или его закрыли
+          явно (см. `OutgoingCall`). */}
+      <OutgoingCall />
 
       {/* Панель инсталляции — окно поверх всего, как и настройки. Рисуется
           только владельцу и себя же прячет, когда власть уходит. */}

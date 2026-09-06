@@ -13,6 +13,7 @@ import { useChatStore } from '@/stores/chat';
 import { useUnreadStore, LAST_READ_KEY } from '@/stores/unread';
 import { useDmStore } from '@/stores/dm';
 import { usePresenceStore } from '@/stores/presence';
+import { useRingStore } from '@/stores/ring';
 import { useChannelsStore } from '@/stores/channels';
 import { useIdentityStore } from '@/stores/identity';
 import { useContractStore } from '@/stores/contract';
@@ -50,6 +51,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     const chat = useChatStore.getState;
     const ui = useUiStore.getState;
     const unread = useUnreadStore.getState;
+    const ring = useRingStore.getState;
     const pins = usePinsStore.getState;
     const dm = useDmStore.getState;
 
@@ -254,6 +256,16 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     socket.on('mentions', ({ counts }) => {
       if (counts && typeof counts === 'object') unread().seedMentions(counts);
     });
+
+    // Экран исходящего вызова (задача 6 плана B, `stores/ring.ts`): `initCall`
+    // выше вешает свою пару обработчиков этих же событий для КОМНАТЫ разговора
+    // — здесь то же самое для ВЫЗОВА, до ответа. Оба слушателя независимы, у
+    // каждого свой вопрос («сесть ли в комнату» и «что написать на экране
+    // дозвона») и оба фильтруют события по своему `ringId`/`room`, так что
+    // держать их в одном месте незачем и негде: `lib/call.ts` не знает про
+    // экран, а этот стор не трогает ни микрофон, ни сокет напрямую.
+    socket.on('call-state', (payload) => ring().applyState(payload));
+    socket.on('call-ended', (payload) => ring().applyEnded(payload));
 
     // В беседе написали. Летит обоим участникам (см. DmActivityRelay), поэтому
     // своя же реплика — не повод звенеть самому себе.
@@ -671,6 +683,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('chat-closed');
       socket.off('mention');
       socket.off('mentions');
+      socket.off('call-state');
+      socket.off('call-ended');
       socket.off('dm-activity');
       socket.off('admin-changed');
       socket.off('reads');

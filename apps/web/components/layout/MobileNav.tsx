@@ -18,6 +18,7 @@ import { useSetting } from '@/stores/config';
 import { usePinsStore } from '@/stores/pins';
 import { useSearchStore } from '@/stores/search';
 import { PRESENCE_LABEL_KEY, usePresence } from '@/stores/presence';
+import { useCallGate, useRingStore } from '@/stores/ring';
 import { toggleMic, leaveVoice, showVoiceStage } from '@/lib/voice';
 import { useT } from '@/lib/i18n';
 
@@ -121,6 +122,7 @@ export function MobileNav() {
   const showFingerprints = useSetting<boolean>('people.showFingerprints');
   const typing = useChatStore((s) => s.typing);
   const pins = usePinsStore((s) => s.count);
+  const gate = useCallGate();
 
   // Состав осмыслен только в канале (голос/текст). В лобби вкладку прячем, а
   // если она была активной — считаем активной сцену (иначе пустой экран).
@@ -284,18 +286,34 @@ export function MobileNav() {
           </button>
         )}
 
-        {/* Контекстное действие беседы — звонок. Нарисован, но выключен: экран
-            1:1-звонка распахнётся этапом B (docs/plans/relay-2.0-calls.md).
-            HTML `disabled` ему НЕ ставится — тем же приёмом, что в Toolbar и
-            DmPeerCard: атрибут выбросил бы кнопку из обхода с клавиатуры вместе
-            с единственным объяснением, почему она ничего не делает. */}
-        {inDm && (
+        {/* Контекстное действие беседы — звонок (задача 6 плана B). Живой:
+            раньше был нарисован, но выключен насовсем («скоро»). Инсталляция
+            всё ещё может его погасить (`useCallGate`, тот же источник правды,
+            что у `DmPeerCard` и `DmThread`) — и тем же приёмом: HTML
+            `disabled` ему НЕ ставится, атрибут выбросил бы кнопку из обхода с
+            клавиатуры вместе с единственным объяснением, почему она ничего не
+            делает. 44px — минимум для цели с пальца (кадры `2a`-`2h`
+            референса). */}
+        {inDm && dmPeer && (
           <button
             type="button"
-            aria-disabled
-            title={t('dm.soon')}
-            aria-label={`${t('toolbar.call')} — ${t('dm.soon')}`}
-            className="grid h-11 w-11 shrink-0 cursor-not-allowed place-items-center rounded-full text-text-faint outline-none focus-visible:ring-2 focus-visible:ring-line-strong"
+            aria-disabled={gate.allowed ? undefined : true}
+            title={gate.allowed ? t('toolbar.call') : t(gate.reasonKey)}
+            aria-label={
+              gate.allowed ? t('toolbar.call') : `${t('toolbar.call')} — ${t(gate.reasonKey)}`
+            }
+            onClick={
+              gate.allowed
+                ? () =>
+                    void useRingStore
+                      .getState()
+                      .start({ fingerprint: dmPeer, nick: textLabel }, false)
+                : undefined
+            }
+            className={cn(
+              'grid h-11 w-11 shrink-0 place-items-center rounded-full outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong',
+              gate.allowed ? 'text-ok active:bg-ok/10' : 'cursor-not-allowed text-text-faint',
+            )}
           >
             <Icon name="phone" className="text-[19px]" strokeWidth={1.8} />
           </button>

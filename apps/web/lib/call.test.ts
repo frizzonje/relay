@@ -309,4 +309,33 @@ describe('конец разговора', () => {
     expect(voice.leaveVoice).toHaveBeenCalledWith(true);
     expect(call.callRoom()).toBeNull();
   });
+
+  it('отбой вызова, который ещё не стал разговором, шлёт call-cancel', async () => {
+    // Раньше `hangUp` выходила по одному лишь `!room` и в этом случае не
+    // делала ничего: кнопка «отбой» экрана дозвона (задача 6) не могла
+    // бросить вызов, который ещё звонит или ждёт посадки. `mine` при этом уже
+    // стоит (см. `dialCall`), комнаты ещё нет.
+    const { call } = await fresh();
+    void call.dialCall('ff');
+    reply({ ok: true, ringId: 'r1' });
+    await Promise.resolve();
+
+    call.hangUp();
+
+    expect(socket.emit).toHaveBeenLastCalledWith(
+      'call-cancel',
+      { ringId: 'r1' },
+      expect.any(Function),
+    );
+    // Забытый вызов: опоздавшее «принято» по нему в комнату уже не сажает.
+    handlers['call-state'](accepted('r1') as never);
+    await Promise.resolve();
+    expect(call.callRoom()).toBeNull();
+  });
+
+  it('без своего вызова и без комнаты отбой не шлёт ничего', async () => {
+    const { call } = await fresh();
+    call.hangUp();
+    expect(socket.emit).not.toHaveBeenCalled();
+  });
 });

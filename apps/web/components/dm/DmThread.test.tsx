@@ -2,11 +2,20 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { defaults } from '@relay/shared';
+import { dialCall } from '@/lib/call';
 import { DmThread } from './DmThread';
 import { shortFingerprint } from '@/lib/format';
 import { useChatStore } from '@/stores/chat';
 import { useUiStore } from '@/stores/ui';
 import { usePresenceStore } from '@/stores/presence';
+import { useConfigStore } from '@/stores/config';
+
+/** Тот же приём, что у `DmPeerCard.test.tsx`: подделан `lib/call.ts`, не `stores/ring.ts`. */
+vi.mock('@/lib/call', () => ({
+  dialCall: vi.fn(async () => ({ ok: true, ringId: 'r1' })),
+  hangUp: vi.fn(),
+}));
 
 /**
  * `ChatPanel` (внутри `DmThread`) спрашивает срок хранения через `/api/config`
@@ -57,6 +66,8 @@ describe('шапка беседы', () => {
     });
     useChatStore.getState().reset();
     usePresenceStore.getState().reset();
+    useConfigStore.setState({ settings: defaults() });
+    vi.mocked(dialCall).mockClear();
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -85,5 +96,27 @@ describe('шапка беседы', () => {
     usePresenceStore.getState().applySnapshot([{ fingerprint, state: 'in-voice', since: 1000 }]);
     const out = markup();
     expect(/in a call|в голосе/i.test(out)).toBe(true);
+  });
+
+  it('своя кнопка звонка в шапке — подстраховка на случай, когда карточка собеседника скрыта', () => {
+    // Задача 6: карточка справа (`DmPeerCard`) гаснет на узком десктопе, пока
+    // раскрыт док ЛС, а эта шапка — нет (см. её собственный комментарий).
+    markup();
+    const button = host.querySelector('button') as HTMLButtonElement;
+    expect(button).toBeTruthy();
+    expect(button.getAttribute('aria-disabled')).toBeNull();
+    act(() => button.click());
+    expect(dialCall).toHaveBeenCalledWith(fingerprint, false);
+  });
+
+  it('`calls.enabled: false` гасит кнопку звонка честной причиной, не HTML `disabled`', () => {
+    useConfigStore.setState({ settings: { ...defaults(), 'calls.enabled': false } });
+    const out = markup();
+    const button = host.querySelector('button') as HTMLButtonElement;
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(button.disabled).toBe(false);
+    expect(out).toMatch(/выключен|turned off/i);
+    act(() => button.click());
+    expect(dialCall).not.toHaveBeenCalled();
   });
 });
