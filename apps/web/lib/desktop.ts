@@ -9,7 +9,9 @@
 //     `desktop-settings` → текущие настройки оболочки (хоткей, автозапуск);
 //   • сюда → Rust: `voice-status` ({ in_call, muted }) → статус в трее,
 //     `call-ringing` ({ ringing, nick, video, notify }) → входящий вызов:
-//     окно поверх всего, звонок в трее и системное окошко (шлёт lib/notify.ts),
+//     окно поверх всего, звонок в трее и системное окошко (функции — в
+//     lib/shell-bridge.ts, шлёт их в основном lib/notify.ts; сам этот файл
+//     шлёт только гашение при старте моста, см. initDesktopBridge),
 //     `desktop-settings-get` → запрос настроек, `set-ptt-shortcut` /
 //     `set-autostart` → их правка, `switch-server` → экран выбора сервера.
 //
@@ -24,9 +26,12 @@ import { useDesktopStore, type ShellSettings, type UpdateStatus } from '@/stores
 import { useUiStore } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import { tx } from '@/lib/i18n';
-// Отправка живёт в самом мосте: о звонке оболочке говорит ещё и `lib/notify.ts`
-// (см. `shellSend` там же про то, почему не отсюда).
-import { inShell, shellBridge, shellSend as send } from '@/lib/shell-bridge';
+// `shellSend` и звонок оболочке (`shellRingStart`/`shellRingStop`) живут в
+// самом мосте, а не здесь: `lib/notify.ts` тоже зовёт звонок, и тащить ради
+// этого в её импорты весь этот граф (голос, сокет, сторы) было бы плохим
+// разменом (см. комментарии в lib/shell-bridge.ts). Здесь `shellRingStop`
+// нужен только на старте — см. `initDesktopBridge` ниже.
+import { inShell, shellBridge, shellSend as send, shellRingStop } from '@/lib/shell-bridge';
 
 /** Сырой статус обновления от Rust (событие `update-status`). */
 interface UpdateStatusPayload {
@@ -167,45 +172,6 @@ export async function initDesktopBridge() {
   useUiStore.subscribe((s, p) => {
     if (s.voiceRoom !== p.voiceRoom) pushStatus();
   });
-}
-
-/** Кто и как звонит — то, что оболочке нужно знать о входящем вызове. */
-export interface ShellRing {
-  /** Имя звонящего: заголовок системного окошка. */
-  nick: string;
-  /** Видеозвонок — сказано ДО ответа, как и в тосте (см. `IncomingToast`). */
-  video: boolean;
-  /**
-   * Показать системное окошко — решение уже принято за оболочку, и это
-   * намеренно: иначе его принимали бы двое (вкладка и оболочка) независимо, и
-   * на десктопе об одном звонке приходило бы два уведомления. Правило одно на
-   * всех и живёт в `lib/notify.ts`: окно свёрнуто и окошки разрешены
-   * настройкой `notifications.desktopEnabled`.
-   */
-  notify: boolean;
-}
-
-/**
- * Входящий вызов — оболочке (задача 9 плана B). Она умеет то, чего вкладка не
- * может: поднять своё окно поверх всего, написать «входящий вызов» в трее и
- * показать системное окошко там, где у движка нет `Notification` API (macOS
- * WKWebView).
- *
- * Зовём НЕ спрашивая, есть ли оболочка: вне её `shellSend` молчит сам, и
- * второе место, знающее про `window.__TAURI__`, тут ни к чему.
- */
-export function shellRingStart(ring: ShellRing) {
-  send('call-ringing', { ringing: true, ...ring });
-}
-
-/**
- * Вызов кончился — чем угодно (принят, отклонён, отбой, не ответили, обрыв
- * сокета). То же событие, а не своё собственное: трей обязан вернуться к
- * обычному статусу на ЛЮБОМ исходе, а два события однажды разъехались бы —
- * одно послали, второе забыли, и в трее навсегда остался бы звонок.
- */
-export function shellRingStop() {
-  send('call-ringing', { ringing: false });
 }
 
 /**

@@ -12,13 +12,20 @@ import type { CallPerson } from '@relay/shared';
 const play = vi.fn();
 vi.mock('@/lib/sfx', () => ({ getSfx: () => ({ play }) }));
 
-// Мост к нативной оболочке подделан целиком: здесь проверяем, ЧТО и КОГДА ему
-// говорят, а не как он это отправляет (это дело `lib/desktop.test.ts`, где
-// зафиксированы имя события и форма payload'а). Настоящий модуль тянет за
-// собой голос и сокет — весь этот граф ради двух функций.
+// Звонок оболочке подделан: здесь проверяем, ЧТО и КОГДА ему говорят, а не как
+// он это отправляет (это дело `lib/shell-bridge.test.ts`, где зафиксированы
+// имя события и форма payload'а). `inShell`/`shellBridge`/`shellKind` из того
+// же модуля оставляем настоящими — они здесь и нужны по-настоящему (тест ниже
+// переключает `window.__TAURI__` и ждёт, что notify.ts увидит оболочку), а
+// сам shell-bridge.ts лёгкий: в отличие от `lib/desktop.ts` (голос, сокет,
+// сторы), тянуть за собой ему нечего.
 const shellRingStart = vi.fn();
 const shellRingStop = vi.fn();
-vi.mock('@/lib/desktop', () => ({ shellRingStart, shellRingStop }));
+vi.mock('@/lib/shell-bridge', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/shell-bridge')>()),
+  shellRingStart,
+  shellRingStop,
+}));
 
 /**
  * Свежая пара «модуль звука + стор». Модуль помнит время прошлого тика в
@@ -393,6 +400,33 @@ describe('входящий и нативная оболочка', () => {
     expect(shellRingStop).not.toHaveBeenCalled();
     handle.close();
     expect(shellRingStop).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Регресс ревью задачи 9: `notify.ts` тянул `shellRingStart`/`shellRingStop`
+ * прямо из `lib/desktop.ts`, хотя `lib/shell-bridge.ts` был заведён ровно
+ * затем, чтобы этот модуль (голос, сокет, все сторы — половина чата и так его
+ * импортирует) не оказался в графе `notify.ts`. Мок в начале файла на такую
+ * ошибку не укажет: `@/lib/shell-bridge` подделан целиком, и notify.ts мог бы
+ * тайком получать обе функции откуда угодно ещё. Единственный надёжный
+ * способ поймать регресс — не дать `lib/desktop.ts` вообще загрузиться при
+ * импорте `notify.ts`.
+ */
+describe('импорт-граф', () => {
+  it('не загружает lib/desktop.ts — вся связь с оболочкой у notify.ts идёт через shell-bridge.ts', async () => {
+    vi.resetModules();
+    vi.doMock('@/lib/desktop', () => {
+      throw new Error(
+        'lib/notify.ts не должен импортировать lib/desktop.ts — только lib/shell-bridge.ts',
+      );
+    });
+    try {
+      await expect(import('./notify')).resolves.toBeDefined();
+    } finally {
+      vi.doUnmock('@/lib/desktop');
+      vi.resetModules();
+    }
   });
 });
 

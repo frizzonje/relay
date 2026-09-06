@@ -2,8 +2,7 @@
 
 import type { CallPerson } from '@relay/shared';
 import { getSfx } from '@/lib/sfx';
-import { shellRingStart, shellRingStop } from '@/lib/desktop';
-import { inShell } from '@/lib/shell-bridge';
+import { inShell, shellRingStart, shellRingStop } from '@/lib/shell-bridge';
 import { tx } from '@/lib/i18n';
 import { setting } from '@/stores/config';
 import { isChannelLoud, useNotifyStore } from '@/stores/notify';
