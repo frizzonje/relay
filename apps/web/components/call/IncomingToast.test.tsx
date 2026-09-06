@@ -99,6 +99,22 @@ describe('тост входящего', () => {
     expect(markup()).not.toMatch(/video call/i);
   });
 
+  it('декоративное кольцо пульса нейтрального цвета — ok/danger значат только «дозвон» и «отбой» (ревью)', () => {
+    // Глобальное ограничение плана 2.0 буквальным текстом: ok/danger красят
+    // только «дозвон возможен» и «отбой/отклонён/пропущен», и НИЧЕГО
+    // декоративного этими цветами не красим. Пульсирующее кольцо вокруг
+    // Identicon — чистая декорация (сам смысл «дозвон возможен» уже несёт
+    // кнопка accept), поэтому оно обязано быть нейтральным, как то же кольцо
+    // у `OutgoingCall.tsx` (`border-text-muted/50`), а не зелёным.
+    ring();
+    markup();
+    const pulse = host.querySelector('.animate-ping') as HTMLElement;
+    expect(pulse).not.toBeNull();
+    expect(pulse.className).toMatch(/\bborder-text-muted\/50\b/);
+    expect(pulse.className).not.toMatch(/\bborder-ok\b/);
+    expect(pulse.className).not.toMatch(/\bborder-danger\b/);
+  });
+
   it('не растягивается на весь экран — это карточка в углу, а не оверлей', () => {
     // Не единственная проверка «не модалка» (см. тест выше про role/aria-modal
     // и тест ниже про клик по интерфейсу под тостом) — но структурный признак

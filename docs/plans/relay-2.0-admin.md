@@ -287,7 +287,7 @@
 moderation 12, messages 10, files 9, direct 8, spaces 8, voice 12, invites 6, appearance 7,
 notifications 3, maintenance 3.
 
-Этап B добавит тринадцатую группу `calls` (7 параметров) — тогда же в тесте станет 102.
+Этап B добавит тринадцатую группу `calls` (7 параметров) — тогда же в тесте станет 103.
 
 ---
 

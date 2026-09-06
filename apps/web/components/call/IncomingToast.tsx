@@ -76,9 +76,13 @@ export function IncomingToast() {
       className="fixed inset-x-3 top-[calc(52px+env(safe-area-inset-top))] z-40 flex items-center gap-3.5 rounded-[15px] border border-line bg-bg-elev p-4 shadow-[0_20px_60px_rgba(0,0,0,0.5)] md:inset-x-auto md:top-auto md:bottom-6 md:right-6 md:w-[322px]"
     >
       <span className="relative grid h-[52px] w-[52px] shrink-0 place-items-center">
-        {/* Кольцо — тот же приём, что у `OutgoingCall`: пульс сам по себе
-            говорит «сейчас звонит», раньше, чем прочитана подпись. */}
-        <span className="absolute inset-0 animate-ping rounded-full border border-ok/60 [animation-duration:1.8s]" />
+        {/* Кольцо декоративное — не «дозвон возможен» и не «отбой», а просто
+            пульс, говорящий «сейчас звонит», раньше, чем прочитана подпись.
+            Поэтому цвет нейтральный, как у `OutgoingCall.tsx`, который для
+            того же кольца сознательно взял `text-muted`, а не `ok`: правило
+            плана 2.0 красит `ok`/`danger` только смысл (дозвон возможен /
+            отбой-отклонён-пропущен), ничего декоративного ими не красим. */}
+        <span className="absolute inset-0 animate-ping rounded-full border border-text-muted/50 [animation-duration:1.8s]" />
         <Identicon fingerprint={incoming.from.fingerprint} size={52} />
       </span>
 

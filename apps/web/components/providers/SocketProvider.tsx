@@ -30,7 +30,7 @@ import {
   saveUnlockToken,
   unlockTokenIds,
 } from '@/lib/unlock-tokens';
-import { notifyCall, notifyDirect, notifyMention, notifyMessage } from '@/lib/notify';
+import { notifyDirect, notifyMention, notifyMessage } from '@/lib/notify';
 import { showDmToast } from '@/components/dm/DmToast';
 import { useNotifyStore } from '@/stores/notify';
 import { adoptPrefs, onPref } from '@/lib/prefs';
@@ -286,20 +286,20 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     const onCallEnded = (payload: CallEndedRelay) => ring().applyEnded(payload);
     socket.on('call-state', onCallState);
     socket.on('call-ended', onCallEnded);
-    // Тост входящего (задача 7 плана B): открывает `incoming` в том же сторе
-    // и, если окно/вкладка сейчас свёрнуты, добавляет системное окошко поверх
-    // остальных — тем же приёмом, что и `notifyMention`/`notifyDirect` ниже
-    // (звонят стору напрямую, а звук/уведомление зовут отдельно, не пряча их
-    // внутрь стора, который ничего не знает ни о `Notification`, ни об
-    // `lib/sfx.ts`). Второй входящий во время разговора сюда не доедет вовсе:
-    // сервер отвечает на такой `call-start` отказом `busy` раньше, чем
-    // что-либо зазвонит (§4.2, доказано в `ring.handlers.test.ts` → «второй
-    // входящий во время разговора»), так что городить здесь счётчик «уже
-    // показываем один тост» незачем — второго не бывает.
-    const onCallIncoming = (payload: CallIncomingRelay) => {
-      ring().applyIncoming(payload);
-      notifyCall(payload.from, payload.video);
-    };
+    // Тост входящего (задача 7 плана B): открывает `incoming` в том же сторе,
+    // а системное окошко (`notifyCall`) зовёт ТОЛЬКО `IncomingToast.tsx` —
+    // это единственный владелец, потому что только он знает момент, когда
+    // вызов закончился, и может закрыть своё же окошко (`cancelled` в
+    // `lib/notify.ts` иначе никогда не взводится: вызванный здесь и
+    // отброшенный хэндл не даёт закрыть то, что он мог успеть показать).
+    // Второй `notifyCall` на тот же вызов был обнаружен ревью как
+    // непреднамеренное дублирование, а не подстраховка. Второй входящий во
+    // время разговора сюда не доедет вовсе: сервер отвечает на такой
+    // `call-start` отказом `busy` раньше, чем что-либо зазвонит (§4.2,
+    // доказано в `ring.handlers.test.ts` → «второй входящий во время
+    // разговора»), так что городить здесь счётчик «уже показываем один тост»
+    // незачем — второго не бывает.
+    const onCallIncoming = (payload: CallIncomingRelay) => ring().applyIncoming(payload);
     socket.on('call-incoming', onCallIncoming);
 
     // В беседе написали. Летит обоим участникам (см. DmActivityRelay), поэтому
