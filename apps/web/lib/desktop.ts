@@ -8,6 +8,8 @@
 //   • Rust → сюда: `ptt` (bool) от глобального хоткея → микрофон (desktopPtt),
 //     `desktop-settings` → текущие настройки оболочки (хоткей, автозапуск);
 //   • сюда → Rust: `voice-status` ({ in_call, muted }) → статус в трее,
+//     `call-ringing` ({ ringing, nick, video, notify }) → входящий вызов:
+//     окно поверх всего, звонок в трее и системное окошко (шлёт lib/notify.ts),
 //     `desktop-settings-get` → запрос настроек, `set-ptt-shortcut` /
 //     `set-autostart` → их правка, `switch-server` → экран выбора сервера.
 //
@@ -22,7 +24,9 @@ import { useDesktopStore, type ShellSettings, type UpdateStatus } from '@/stores
 import { useUiStore } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import { tx } from '@/lib/i18n';
-import { inShell, shellBridge } from '@/lib/shell-bridge';
+// Отправка живёт в самом мосте: о звонке оболочке говорит ещё и `lib/notify.ts`
+// (см. `shellSend` там же про то, почему не отсюда).
+import { inShell, shellBridge, shellSend as send } from '@/lib/shell-bridge';
 
 /** Сырой статус обновления от Rust (событие `update-status`). */
 interface UpdateStatusPayload {
@@ -48,25 +52,6 @@ function toUpdateStatus(p: UpdateStatusPayload): UpdateStatus {
 }
 
 let initialized = false;
-
-/**
- * Отправить событие оболочке, не проглотив отказ. Оболочка вправе отказать:
- * у Tauri origin может не подойти под capabilities/remote.json, у Electron
- * события нет в списке моста (clients/desktop-linux/src/events.js). `void
- * emit(...)` делал это молча, и снаружи выглядело так, будто оболочка просто
- * ничего не умеет: нативные настройки не появляются, ошибки нет. Теперь
- * причина видна в консоли.
- */
-function send(event: string, payload?: unknown) {
-  const ev = shellBridge();
-  if (!ev) return;
-  // Без payload'а зовём emit одним аргументом: у события-запроса (например
-  // `desktop-settings-get`) payload'а нет вовсе, и подсовывать undefined незачем.
-  const sent = payload === undefined ? ev.emit(event) : ev.emit(event, payload);
-  sent.catch((err: unknown) => {
-    console.error(`[desktop] оболочка отклонила событие «${event}»:`, err);
-  });
-}
 
 /**
  * Сторож «зависшей» проверки. UI-состояние `checking`/`installing` снимается
@@ -170,12 +155,57 @@ export async function initDesktopBridge() {
   };
 
   pushStatus(); // стартовое состояние (обычно «не в эфире»)
+
+  // Свежезагруженная страница ни о каком входящем не знает: `call-incoming`
+  // при переподключении заново не рассылается (§4.2). А трей оболочки пережил
+  // перезагрузку вкладки — и, застав её посреди вызова, остался бы звонить
+  // навсегда: сказать «отзвонило» было бы уже некому.
+  shellRingStop();
   useVoiceStore.subscribe((s, p) => {
     if (s.micOn !== p.micOn) pushStatus();
   });
   useUiStore.subscribe((s, p) => {
     if (s.voiceRoom !== p.voiceRoom) pushStatus();
   });
+}
+
+/** Кто и как звонит — то, что оболочке нужно знать о входящем вызове. */
+export interface ShellRing {
+  /** Имя звонящего: заголовок системного окошка. */
+  nick: string;
+  /** Видеозвонок — сказано ДО ответа, как и в тосте (см. `IncomingToast`). */
+  video: boolean;
+  /**
+   * Показать системное окошко — решение уже принято за оболочку, и это
+   * намеренно: иначе его принимали бы двое (вкладка и оболочка) независимо, и
+   * на десктопе об одном звонке приходило бы два уведомления. Правило одно на
+   * всех и живёт в `lib/notify.ts`: окно свёрнуто и окошки разрешены
+   * настройкой `notifications.desktopEnabled`.
+   */
+  notify: boolean;
+}
+
+/**
+ * Входящий вызов — оболочке (задача 9 плана B). Она умеет то, чего вкладка не
+ * может: поднять своё окно поверх всего, написать «входящий вызов» в трее и
+ * показать системное окошко там, где у движка нет `Notification` API (macOS
+ * WKWebView).
+ *
+ * Зовём НЕ спрашивая, есть ли оболочка: вне её `shellSend` молчит сам, и
+ * второе место, знающее про `window.__TAURI__`, тут ни к чему.
+ */
+export function shellRingStart(ring: ShellRing) {
+  send('call-ringing', { ringing: true, ...ring });
+}
+
+/**
+ * Вызов кончился — чем угодно (принят, отклонён, отбой, не ответили, обрыв
+ * сокета). То же событие, а не своё собственное: трей обязан вернуться к
+ * обычному статусу на ЛЮБОМ исходе, а два события однажды разъехались бы —
+ * одно послали, второе забыли, и в трее навсегда остался бы звонок.
+ */
+export function shellRingStop() {
+  send('call-ringing', { ringing: false });
 }
 
 /**

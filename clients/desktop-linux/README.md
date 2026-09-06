@@ -84,9 +84,9 @@ Tauri-клиентом**: `../desktop/src/index.html`. Копии нет нам�
 Только события, ровно те же имена, что у Tauri-клиента (см. `src/events.js`):
 
 - оболочка → страница: `desktop-settings`, `update-status`, `identity-reply`;
-- страница → оболочка: `voice-status`, `desktop-settings-get`, `set-autostart`,
-  `switch-server`, `check-updates`, `install-update`, `identity-request`,
-  `screen-picker`, `webrtc-missing`.
+- страница → оболочка: `voice-status`, `call-ringing`, `desktop-settings-get`,
+  `set-autostart`, `switch-server`, `check-updates`, `install-update`,
+  `identity-request`, `screen-picker`, `webrtc-missing`.
 
 Со стороны web это один и тот же код — `apps/web/lib/shell-bridge.ts` находит
 мост в `window.__TAURI__.event` или в `window.__RELAY_SHELL__`, а всё остальное

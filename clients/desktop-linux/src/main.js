@@ -19,12 +19,13 @@
 //
 // Мост (страница ↔ оболочка) — только события из src/events.js:
 //   • оболочка → страница: `desktop-settings`, `update-status`, `identity-reply`;
-//   • страница → оболочка: `voice-status`, `desktop-settings-get`,
-//     `set-autostart`, `switch-server`, `check-updates`, `install-update`,
-//     `identity-request`, `screen-picker`, `webrtc-missing`.
+//   • страница → оболочка: `voice-status`, `call-ringing`,
+//     `desktop-settings-get`, `set-autostart`, `switch-server`,
+//     `check-updates`, `install-update`, `identity-request`, `screen-picker`,
+//     `webrtc-missing`.
 
 const path = require('node:path');
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { Notification, app, BrowserWindow, ipcMain, shell } = require('electron');
 
 const identity = require('./identity');
 const settings = require('./settings');
@@ -33,7 +34,7 @@ const { icon, pickerPage } = require('./assets');
 const { ulog } = require('./log');
 const { configDir } = require('./paths');
 const { installMediaHandlers } = require('./media');
-const { buildTray, updateTray } = require('./tray');
+const { buildTray, callBody, updateTray } = require('./tray');
 const { originOf, safeProtocol } = require('./url');
 const { checkUpdates, installUpdate } = require('./updater');
 
@@ -49,6 +50,14 @@ const state = {
   /** Состояние звонка — его показывает трей (приходит событием `voice-status`). */
   inCall: false,
   muted: false,
+  /**
+   * Кому-то звонят прямо сейчас (событие `call-ringing`). Живёт РЯДОМ с
+   * `inCall`, а не вместо него: вызов кончится, и трей обязан вернуться к
+   * тому статусу разговора, который был до звонка, — а не забыть его.
+   */
+  ringing: false,
+  /** Системное окошко о текущем входящем — чтобы убрать его, когда отзвонит. */
+  ringNotification: null,
 };
 
 // ── Окружение ───────────────────────────────────────────────────────────────
@@ -190,7 +199,49 @@ function showPicker() {
   // Звонок рвётся вместе с уходом со страницы — трей об этом уже не услышит.
   state.inCall = false;
   state.muted = false;
-  updateTray(false, false);
+  endRing();
+  updateTray(false, false, false);
+}
+
+/**
+ * Входящий вызов: поднять окно и (если страница просит) показать системное
+ * окошко.
+ *
+ * Окно поднимаем ТОЛЬКО на входящем — не на любом событии моста. Это
+ * единственное, ради чего оболочка вообще нужна звонку: страница, свёрнутая в
+ * трей или закрытая другим окном, показать свой тост не может никак.
+ *
+ * Окошко рисует оболочка, а не страница, хотя Chromium умеет `Notification`
+ * сам (media.js разрешение выдаёт). Причина одна: показать его должен РОВНО
+ * ОДИН — иначе об одном звонке приходит два уведомления. Кто именно, решает
+ * страница, и она же передаёт решение полем `notify` (см. `notifyCall` в
+ * apps/web/lib/notify.ts): в оболочке своего окошка она не показывает вовсе.
+ */
+function startRing(payload) {
+  state.ringing = true;
+  showMain();
+  if (payload.notify !== true || !Notification.isSupported()) return;
+  endNotification(); // второго вызова разом не бывает, но и висеть двум незачем
+  state.ringNotification = new Notification({
+    title: String(payload.nick || 'relay'),
+    body: callBody(payload.video === true),
+  });
+  // Клик возвращает к окну, где лежит тост с «принять»/«отклонить»: сами эти
+  // кнопки окошко не несёт и нести не должно — решение принимают в relay.
+  state.ringNotification.on('click', showMain);
+  state.ringNotification.show();
+}
+
+/** Вызов кончился любым исходом — принят, отклонён, отбит, не отвечен. */
+function endRing() {
+  state.ringing = false;
+  endNotification();
+}
+
+function endNotification() {
+  if (!state.ringNotification) return;
+  state.ringNotification.close();
+  state.ringNotification = null;
 }
 
 // ── Мост ────────────────────────────────────────────────────────────────────
@@ -217,7 +268,14 @@ function handle(name, payload, sender) {
     case 'voice-status': {
       state.inCall = Boolean(payload && payload.in_call);
       state.muted = Boolean(payload && payload.muted);
-      updateTray(state.inCall, state.muted);
+      updateTray(state.inCall, state.muted, state.ringing);
+      return;
+    }
+
+    case 'call-ringing': {
+      if (payload && payload.ringing === true) startRing(payload);
+      else endRing();
+      updateTray(state.inCall, state.muted, state.ringing);
       return;
     }
 

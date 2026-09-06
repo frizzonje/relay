@@ -12,6 +12,10 @@
 const FROM_PAGE = [
   // Статус звонка для трея: { in_call, muted }.
   'voice-status',
+  // Входящий вызов: { ringing, nick, video, notify }. `ringing: true` —
+  // поднять окно, показать вызов в трее и (если `notify`) системное окошко;
+  // `ringing: false` — вызов кончился любым исходом, убрать всё это.
+  'call-ringing',
   // Запрос настроек оболочки; ответ — событие `desktop-settings`.
   'desktop-settings-get',
   // Автозапуск при входе в систему (bool).

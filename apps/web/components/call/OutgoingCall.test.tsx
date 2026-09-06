@@ -78,6 +78,34 @@ describe('экран исходящего вызова', () => {
     expect(out).toMatch(/relay is open|web app/i);
   });
 
+  /**
+   * Вторая строка — про ЭТО устройство, а не про собеседника (задача 9).
+   * Мобильный веб пушей не получает вовсе, и человек, которому не дозвонились
+   * дважды, обязан узнать почему из интерфейса, а не опытом. В оболочке её
+   * нет намеренно: там входящий как раз доходит — оболочка поднимает окно и
+   * показывает системное окошко, — и та же строка была бы неправдой.
+   */
+  it('на мобильном вебе сказано и про свою сторону — узкий экран, но не оболочка', async () => {
+    await act(() => useRingStore.getState().start(PEER));
+    markup();
+    const notice = [...host.querySelectorAll('p')].find((p) => /push/i.test(p.textContent!));
+    expect(notice).toBeTruthy();
+    // Показывается ровно на узком экране — тем же способом, каким весь
+    // остальной каркас делит десктоп и мобилку (см. `md:hidden` в MobileNav).
+    expect(notice!.className).toContain('md:hidden');
+  });
+
+  it('в нативной оболочке строки про мобильный веб нет — там входящий доходит', async () => {
+    window.__TAURI__ = {
+      event: { listen: async () => () => {}, emit: async () => {} },
+    } as unknown as typeof window.__TAURI__;
+    await act(() => useRingStore.getState().start(PEER));
+    markup();
+    const notice = [...host.querySelectorAll('p')].find((p) => /push/i.test(p.textContent!));
+    expect(notice).toBeUndefined();
+    window.__TAURI__ = undefined;
+  });
+
   it.each([
     ['declined', /declined/i],
     ['no-answer', /no answer/i],

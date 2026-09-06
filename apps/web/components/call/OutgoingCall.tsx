@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import { Icon } from '@/components/ui/icon';
 import { Identicon } from '@/components/ui/Identicon';
 import { cn } from '@/lib/utils';
+import { inShell } from '@/lib/shell-bridge';
 import { useT } from '@/lib/i18n';
 import { outgoingCaption, outgoingLive, useRingStore } from '@/stores/ring';
 
@@ -101,8 +102,31 @@ export function OutgoingCall() {
 
       <div className="flex w-full max-w-[360px] flex-col items-center gap-6">
         {/* Честное ограничение (глобальное ограничение плана 2.0): сказано
-            здесь, на экране исходящего, а не только в документации. */}
-        <p className="text-[12px] leading-relaxed text-text-faint">{t('call.delivery')}</p>
+            здесь, на экране исходящего, а не только в документации. Экран
+            один на обе раскладки — на телефоне это та же строка на том же
+            месте, а не десктопная роскошь. */}
+        <div className="flex flex-col items-center gap-2">
+          <p className="text-[12px] leading-relaxed text-text-faint">{t('call.delivery')}</p>
+
+          {/* Вторая строка — про ЭТО устройство (задача 9). Первая говорит про
+            собеседника, а на мобильном вебе ровно то же верно и про тебя
+            самого: пушей нет, и входящий не придёт, пока страница закрыта или
+            в фоне. Узнавать это опытом — двумя пропущенными звонками — плохой
+            способ, поэтому сказано словами, там же и сразу.
+
+            `md:hidden` — тот же способ делить мобилку и десктоп, что и во всём
+            остальном каркасе (см. MobileNav, DmPeerCard), без второго
+            источника истины о ширине экрана.
+
+            В нативной оболочке строки нет намеренно: там входящий как раз
+            доходит — окно поднимается, окошко показывается (см. `notifyCall`
+            и `shellRingStart`), — и та же строка была бы просто неправдой. */}
+          {!inShell() && (
+            <p className="text-[12px] leading-relaxed text-text-faint md:hidden">
+              {t('call.delivery.mobile')}
+            </p>
+          )}
+        </div>
 
         <div className="flex w-full items-center justify-center gap-6">
           {/* `min-h-[44px]` — не запас, а нижняя граница цели из референса

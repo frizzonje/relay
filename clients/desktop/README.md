@@ -53,6 +53,9 @@ origin капабилити [`remote.json`](src-tauri/capabilities/remote.json) 
 - Rust → webview: `ptt` (bool) — глобальный хоткей нажат/отпущен;
   `desktop-settings` — состояние настроек оболочки (см. ниже);
 - webview → Rust: `voice-status` (`{in_call, muted}`) для трея,
+  `call-ringing` (`{ringing, nick, video, notify}`) — входящий вызов: окно
+  поверх всего, вызов в трее и системное окошко (окошко показывает оболочка, а
+  не страница: в WKWebView `Notification` API нет),
   `desktop-settings-get` — запрос настроек, `set-ptt-shortcut` (комбинация или
   `null`) — смена хоткея, `set-autostart` (bool) — автозапуск,
   `switch-server` — возврат на экран выбора сервера.

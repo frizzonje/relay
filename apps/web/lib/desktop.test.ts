@@ -22,6 +22,8 @@ import {
   requestShellSettings,
   setAutostart,
   setPttShortcut,
+  shellRingStart,
+  shellRingStop,
 } from '@/lib/desktop';
 
 type Handler = (e: { payload: unknown }) => void;
@@ -60,6 +62,9 @@ describe('мост настроек оболочки', () => {
     // стартовый handshake проверяем здесь же, до остальных кейсов.
     await initDesktopBridge();
     expect(emit).toHaveBeenCalledWith('desktop-settings-get');
+    // Страницу могли перезагрузить посреди звонка: `call-incoming` заново не
+    // придёт, а трей оболочки перезагрузку вкладки пережил — и звонил бы вечно.
+    expect(emit).toHaveBeenCalledWith('call-ringing', { ringing: false });
     expect(useDesktopStore.getState().shell).toBeNull(); // ответа ещё не было
 
     listeners['desktop-settings']({ payload: SETTINGS });
@@ -102,6 +107,41 @@ describe('мост настроек оболочки', () => {
     await Promise.resolve(); // дать сработать catch'у
     expect(spy).toHaveBeenCalledWith(expect.stringContaining('set-autostart'), err);
     spy.mockRestore();
+  });
+});
+
+/**
+ * Входящий звонок → оболочка (задача 9 плана B). Оболочка умеет то, чего
+ * вкладка не может: поднять окно поверх всего и написать в трее, что звонят.
+ * Событие одно на оба края вызова (`ringing: true|false`) — трей обязан
+ * вернуться к обычному статусу, чем бы вызов ни кончился, а два разных
+ * события однажды разошлись бы: одно послали, второе забыли.
+ *
+ * `notify` — это «системное окошко покажи ТЫ»: в оболочке вкладка своего не
+ * рисует вовсе (в WKWebView его и нет), и решение принимается в одном месте,
+ * а не двумя сторонами независимо (см. lib/notify.ts).
+ */
+describe('входящий вызов', () => {
+  it('шлёт оболочке ник, вид вызова и просьбу показать окошко', () => {
+    shellRingStart({ nick: 'Аня', video: true, notify: true });
+    expect(emit).toHaveBeenCalledWith('call-ringing', {
+      ringing: true,
+      nick: 'Аня',
+      video: true,
+      notify: true,
+    });
+  });
+
+  it('конец вызова гасит звонок тем же событием', () => {
+    shellRingStop();
+    expect(emit).toHaveBeenCalledWith('call-ringing', { ringing: false });
+  });
+
+  it('вне оболочки молчит — в браузере окно поднимать нечем', () => {
+    window.__TAURI__ = undefined;
+    shellRingStart({ nick: 'Аня', video: false, notify: true });
+    shellRingStop();
+    expect(emit).not.toHaveBeenCalled();
   });
 });
 

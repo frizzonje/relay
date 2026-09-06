@@ -7,7 +7,9 @@
 //   • Rust → webview: событие `ptt` (bool) от глобального хоткея (см. lib/desktop.ts),
 //     `desktop-settings` — текущее состояние настроек оболочки;
 //   • webview → Rust: `voice-status` ({in_call, muted}) обновляет трей,
-//     `desktop-settings-get` запрашивает настройки, `set-ptt-shortcut`
+//     `call-ringing` ({ringing, nick, video, notify}) — входящий вызов: окно
+//     поверх всего, вызов в трее и системное окошко, `desktop-settings-get`
+//     запрашивает настройки, `set-ptt-shortcut`
 //     (комбинация или null) переназначает хоткей, `set-autostart` (bool) —
 //     автозапуск, `switch-server` возвращает окно на экран выбора сервера.
 //
@@ -63,6 +65,8 @@ struct AppState {
     picker_url: Mutex<Option<tauri::Url>>,
     /// Настройки оболочки (PTT-хоткей, автозапуск) — см. `settings.rs`.
     settings: Mutex<Settings>,
+    /// Что показывает трей — см. `TrayState`.
+    tray: Mutex<TrayState>,
     /// Почему не удалось применить хоткей/автозапуск. Держим до следующей
     /// попытки: web-UI загружается позже старта и должен узнать про осечку
     /// (например «F8 занят другой программой»), а не гадать, почему молчит PTT.
@@ -73,6 +77,30 @@ struct AppState {
 /// Статус звонка, приходящий из web-UI событием `voice-status`.
 #[derive(serde::Deserialize)]
 struct VoiceStatus {
+    in_call: bool,
+    muted: bool,
+}
+
+/// Входящий вызов, приходящий из web-UI событием `call-ringing`.
+/// Поля кроме `ringing` нужны только на его начале, поэтому `default`:
+/// конец вызова — это `{ "ringing": false }` и больше ничего.
+#[derive(serde::Deserialize)]
+struct CallRinging {
+    ringing: bool,
+    #[serde(default)]
+    nick: String,
+    #[serde(default)]
+    video: bool,
+    #[serde(default)]
+    notify: bool,
+}
+
+/// Что показывает трей. Три поля, а не одно на всех: входящий вызов разговор
+/// НЕ отменяет, а временно вытесняет — отзвонит, и статус обязан вернуться к
+/// тому, что было, а не к «не в эфире».
+#[derive(Default, Clone, Copy)]
+struct TrayState {
+    ringing: bool,
     in_call: bool,
     muted: bool,
 }
@@ -327,8 +355,79 @@ fn main() {
             let h = handle.clone();
             handle.listen("voice-status", move |event| {
                 if let Ok(s) = serde_json::from_str::<VoiceStatus>(event.payload()) {
-                    update_tray(&h, s.in_call, s.muted);
+                    let cur = {
+                        let app = h.state::<AppState>();
+                        let mut tray = app.tray.lock().unwrap();
+                        tray.in_call = s.in_call;
+                        tray.muted = s.muted;
+                        *tray
+                    };
+                    update_tray(&h, cur);
                 }
+            });
+
+            // Входящий вызов (задача 9 плана B): поднять окно и сказать о
+            // вызове там, где web-UI сказать не может.
+            //
+            // Окно поднимаем ТОЛЬКО здесь и только на начале вызова — не на
+            // любом событии моста: это единственное, ради чего оболочка звонку
+            // вообще нужна. Свёрнутое в трей окно свой тост не покажет никак, и
+            // всё, что остаётся человеку без этой строчки, — звук неизвестно
+            // откуда.
+            //
+            // Системное окошко рисуем здесь же, а НЕ в web-UI, и это не
+            // дублирование, а его отсутствие: у WKWebView (macOS) `Notification`
+            // API нет вовсе, а у WebView2 (Windows) он упирается в разрешения
+            // хоста. Показать окошко должен ровно один — кто именно, решает
+            // страница и говорит полем `notify` (в оболочке она своего не
+            // показывает; см. `notifyCall` в apps/web/lib/notify.ts).
+            let h = handle.clone();
+            handle.listen("call-ringing", move |event| {
+                let Ok(c) = serde_json::from_str::<CallRinging>(event.payload()) else {
+                    return;
+                };
+                let cur = {
+                    let state = h.state::<AppState>();
+                    let mut tray = state.tray.lock().unwrap();
+                    tray.ringing = c.ringing;
+                    *tray
+                };
+                update_tray(&h, cur);
+                if !c.ringing {
+                    return;
+                }
+                ulog(&format!(
+                    "call ringing (video={}, notify={})",
+                    c.video, c.notify
+                ));
+                // Окошко не отзываем по концу вызова: плагин уведомлений
+                // отданное системе окошко назад не берёт. Оно самоистечёт, а
+                // «принять»/«отклонить» живут в окне, которое к этому моменту
+                // уже поднято (в Electron-оболочке окошко закрывается — см.
+                // `endNotification` там).
+                if c.notify {
+                    // Ник — заголовок окошка; пустым он приходить не должен, но
+                    // окошко «» вместо имени было бы хуже, чем имя приложения.
+                    let title = if c.nick.is_empty() {
+                        "relay".to_string()
+                    } else {
+                        c.nick.clone()
+                    };
+                    let _ = h
+                        .notification()
+                        .builder()
+                        .title(title)
+                        .body(if c.video {
+                            "Входящий видеозвонок"
+                        } else {
+                            "Входящий вызов"
+                        })
+                        .show();
+                }
+                // Показ окна — на главном потоке: событие моста приходит не с
+                // него (тот же приём, что у `screen-picker` ниже).
+                let app = h.clone();
+                let _ = h.run_on_main_thread(move || show_main(&app));
             });
 
             // web-UI спрашивает текущие настройки оболочки. Отвечаем событием
@@ -718,8 +817,11 @@ fn show_picker(app: &AppHandle) {
     // пикер откроется невидимо и «ничего не произошло».
     show_main(app);
     // Звонок (если был) рвётся вместе с уходом со страницы — трей об этом уже не
-    // услышит, обнуляем статус сами.
-    update_tray(app, false, false);
+    // услышит, обнуляем статус сами. Вместе с ним обнуляем и входящий: страницы,
+    // которая скажет «отзвонило», больше нет.
+    let cleared = TrayState::default();
+    *app.state::<AppState>().tray.lock().unwrap() = cleared;
+    update_tray(app, cleared);
 }
 
 /// Снять прежний PTT-хоткей и зарегистрировать новый. `None` — хоткей выключен
@@ -894,12 +996,14 @@ fn emit_settings(app: &AppHandle) {
     );
 }
 
-/// Человекочитаемый статус для трея.
-fn status_text(in_call: bool, muted: bool) -> &'static str {
-    match (in_call, muted) {
-        (false, _) => "не в эфире",
-        (true, true) => "в эфире · микрофон выключен",
-        (true, false) => "в эфире",
+/// Человекочитаемый статус для трея. Входящий вызов главнее всего остального:
+/// на него отвечают сейчас, а не когда-нибудь.
+fn status_text(s: TrayState) -> &'static str {
+    match (s.ringing, s.in_call, s.muted) {
+        (true, _, _) => "входящий вызов",
+        (false, false, _) => "не в эфире",
+        (false, true, true) => "в эфире · микрофон выключен",
+        (false, true, false) => "в эфире",
     }
 }
 
@@ -907,7 +1011,7 @@ fn status_text(in_call: bool, muted: bool) -> &'static str {
 /// Версия берётся из Cargo.toml на этапе компиляции (`CARGO_PKG_VERSION`), поэтому
 /// после авто-обновления в трее сразу виден новый номер — наглядная проверка, что
 /// апдейт применился, без правок фронта.
-fn build_menu(app: &AppHandle, in_call: bool, muted: bool) -> tauri::Result<Menu<Wry>> {
+fn build_menu(app: &AppHandle, tray: TrayState) -> tauri::Result<Menu<Wry>> {
     let version = MenuItem::with_id(
         app,
         "version",
@@ -915,13 +1019,7 @@ fn build_menu(app: &AppHandle, in_call: bool, muted: bool) -> tauri::Result<Menu
         false,
         None::<&str>,
     )?;
-    let status = MenuItem::with_id(
-        app,
-        "status",
-        status_text(in_call, muted),
-        false,
-        None::<&str>,
-    )?;
+    let status = MenuItem::with_id(app, "status", status_text(tray), false, None::<&str>)?;
     // Единственный способ достать окно, когда relay стартовал из автозапуска
     // (свёрнутым) или его спрятали — поэтому пункт идёт первым.
     let open = MenuItem::with_id(app, "open", "Открыть relay", true, None::<&str>)?;
@@ -963,10 +1061,10 @@ const TRAY_ICON: &[u8] = include_bytes!("../icons/tray.png");
 
 // Трей: статус звонка + выход. Иконка — template-силуэт без плашки.
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
-    let menu = build_menu(app, false, false)?;
+    let menu = build_menu(app, TrayState::default())?;
 
     let mut tray = TrayIconBuilder::with_id("main")
-        .tooltip(format!("relay — {}", status_text(false, false)))
+        .tooltip(format!("relay — {}", status_text(TrayState::default())))
         .icon_as_template(true)
         .menu(&menu)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -994,21 +1092,23 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 /// Перерисовать трей под новый статус: тултип, меню и (на macOS) компактный
-/// индикатор в строке меню — ◉ в эфире, ◌ без звука, пусто вне звонка.
-fn update_tray(app: &AppHandle, in_call: bool, muted: bool) {
+/// индикатор в строке меню — ☎ входящий, ◉ в эфире, ◌ без звука, пусто вне
+/// звонка.
+fn update_tray(app: &AppHandle, state: TrayState) {
     let Some(tray) = app.tray_by_id("main") else {
         return;
     };
-    let _ = tray.set_tooltip(Some(format!("relay — {}", status_text(in_call, muted))));
-    if let Ok(menu) = build_menu(app, in_call, muted) {
+    let _ = tray.set_tooltip(Some(format!("relay — {}", status_text(state))));
+    if let Ok(menu) = build_menu(app, state) {
         let _ = tray.set_menu(Some(menu));
     }
     #[cfg(target_os = "macos")]
     {
-        let title = match (in_call, muted) {
-            (false, _) => "",
-            (true, true) => "◌",
-            (true, false) => "◉",
+        let title = match (state.ringing, state.in_call, state.muted) {
+            (true, _, _) => "☎",
+            (false, false, _) => "",
+            (false, true, true) => "◌",
+            (false, true, false) => "◉",
         };
         let _ = tray.set_title(Some(title));
     }

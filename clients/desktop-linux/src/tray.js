@@ -5,8 +5,9 @@
 // же порядке, чтобы человек, обновившийся с Tauri-сборки, ничего не искал.
 //
 // Язык берём у системы, как это делает экран выбора сервера: en — база, ru —
-// перевод (см. apps/web/lib/i18n). Трей — единственное место оболочки со своими
-// строками; всё остальное рисует web-UI и переводит себя сам.
+// перевод (см. apps/web/lib/i18n). Трей и системное окошко о входящем звонке —
+// единственные места оболочки со своими строками (потому и живут вместе, в
+// одном словаре); всё остальное рисует web-UI и переводит себя сам.
 
 const { Menu, Tray, app, nativeImage } = require('electron');
 
@@ -17,7 +18,13 @@ let tray = null;
 let actions = {};
 
 const RU = {
-  status: { idle: 'не в эфире', live: 'в эфире', muted: 'в эфире · микрофон выключен' },
+  status: {
+    idle: 'не в эфире',
+    live: 'в эфире',
+    muted: 'в эфире · микрофон выключен',
+    ringing: 'входящий вызов',
+  },
+  call: { audio: 'Входящий вызов', video: 'Входящий видеозвонок' },
   open: 'Открыть relay',
   switch: 'Сменить сервер…',
   check: 'Проверить обновления',
@@ -25,7 +32,13 @@ const RU = {
 };
 
 const EN = {
-  status: { idle: 'not live', live: 'live', muted: 'live · microphone off' },
+  status: {
+    idle: 'not live',
+    live: 'live',
+    muted: 'live · microphone off',
+    ringing: 'incoming call',
+  },
+  call: { audio: 'Incoming call', video: 'Incoming video call' },
   open: 'Open relay',
   switch: 'Switch server…',
   check: 'Check for updates',
@@ -36,17 +49,34 @@ function dict() {
   return app.getLocale().toLowerCase().startsWith('ru') ? RU : EN;
 }
 
-function statusText(inCall, muted) {
+/**
+ * Строка статуса. Входящий вызов главнее всего остального: на него отвечают
+ * сейчас, а не когда-нибудь, — и человек, увидевший подсказку трея, должен
+ * узнать об этом первым делом. Разговор при этом никуда не делся: вызов
+ * кончится (любым исходом — приняли, отклонили, не ответили), придёт
+ * `call-ringing{ringing:false}`, и статус вернётся к тому, что было.
+ */
+function statusText(inCall, muted, ringing) {
   const t = dict().status;
+  if (ringing) return t.ringing;
   if (!inCall) return t.idle;
   return muted ? t.muted : t.live;
 }
 
-function menu(inCall, muted) {
+/**
+ * Тело системного окошка о входящем. Вид вызова назван ДО ответа — как и в
+ * тосте web-UI: «принять», молча включающее камеру, было бы враньём.
+ */
+function callBody(video) {
+  const t = dict().call;
+  return video ? t.video : t.audio;
+}
+
+function menu(inCall, muted, ringing) {
   const t = dict();
   return Menu.buildFromTemplate([
     { label: `relay ${app.getVersion()}`, enabled: false },
-    { label: statusText(inCall, muted), enabled: false },
+    { label: statusText(inCall, muted, ringing), enabled: false },
     { type: 'separator' },
     // Первым — единственная дорога к окну, если relay стартовал свёрнутым.
     { label: t.open, click: () => actions.onOpen && actions.onOpen() },
@@ -65,8 +95,8 @@ function buildTray(handlers) {
   try {
     const image = nativeImage.createFromPath(icon('tray.png'));
     tray = new Tray(image.isEmpty() ? nativeImage.createFromPath(icon('32x32.png')) : image);
-    tray.setToolTip(`relay — ${statusText(false, false)}`);
-    tray.setContextMenu(menu(false, false));
+    tray.setToolTip(`relay — ${statusText(false, false, false)}`);
+    tray.setContextMenu(menu(false, false, false));
     // На Linux клик по иконке меню НЕ открывает (это делает AppIndicator сам),
     // поэтому вешаем показ окна на клик там, где он вообще доходит.
     tray.on('click', () => actions.onOpen && actions.onOpen());
@@ -76,10 +106,10 @@ function buildTray(handlers) {
   }
 }
 
-function updateTray(inCall, muted) {
+function updateTray(inCall, muted, ringing) {
   if (!tray) return;
-  tray.setToolTip(`relay — ${statusText(inCall, muted)}`);
-  tray.setContextMenu(menu(inCall, muted));
+  tray.setToolTip(`relay — ${statusText(inCall, muted, ringing)}`);
+  tray.setContextMenu(menu(inCall, muted, ringing));
 }
 
-module.exports = { buildTray, statusText, updateTray };
+module.exports = { buildTray, callBody, statusText, updateTray };
