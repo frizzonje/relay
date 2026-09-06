@@ -342,6 +342,14 @@ export interface DmConversation {
   /** Последняя реплика, обрезанная до DM_PREVIEW_LIMIT. */
   preview: string;
   previewMine: boolean;
+  /**
+   * Заполнено, если последняя строка беседы — отметка о пропущенном звонке.
+   * `preview` в этом случае несёт запаску сервера («missed call», непереведена
+   * намеренно — см. `ChatMessage.call`), а рисовать список обязан своим
+   * словом через `t()`: без этого поля список отличался бы от самой отметки в
+   * ленте, где ровно то же поле уже переведено.
+   */
+  call?: CallMark;
 }
 
 export interface DmOpenPayload {
@@ -383,6 +391,8 @@ export interface DmActivityRelay {
   preview: string;
   previewMine: boolean;
   peer: DmPeer;
+  /** См. `DmConversation.call` — то же поле, тем же путём, что и превью. */
+  call?: CallMark;
 }
 
 // ─────────────────────────────────────────────────────────────────────────

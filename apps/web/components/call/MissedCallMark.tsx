@@ -3,7 +3,7 @@
 import type { CallMark } from '@relay/shared';
 import { Icon } from '@/components/ui/icon';
 import { fmtClock } from '@/lib/format';
-import { useT, type MessageKey } from '@/lib/i18n';
+import { useT, type MessageKey, type Translate } from '@/lib/i18n';
 import { useCallGate, useRingStore } from '@/stores/ring';
 import { useUiStore } from '@/stores/ui';
 
@@ -84,3 +84,20 @@ const REASON: Record<CallMark['state'], MessageKey> = {
   'no-answer': 'call.mark.noAnswer',
   failed: 'call.mark.offline',
 };
+
+/**
+ * Подпись пропущенного звонка там, где полной плашки нет: строка списка
+ * переписок и тост активности (задача 8, доработка — правка находки
+ * ревью: обе площадки раньше показывали серверную запаску `ChatMessage.call`
+ * as is («missed call» по-английски всегда, вне зависимости от языка
+ * читающего) вместо перевода через `t()`).
+ *
+ * Причина и длительность («не ответили», «38 с дозвона») сюда не идут — это
+ * места на бегу мимо ленты, а не сама лента, и той же краткости держится
+ * подпись самой плашки в её первой строке. `t` принимается параметром, а не
+ * зовётся хуком внутри: тост живёт вне React-дерева и вызывает `tx`, список
+ * переписок — компонент и держит `useT()`, а слово одно и то же.
+ */
+export function callMarkLabel(previewMine: boolean, t: Translate): string {
+  return t(previewMine ? 'call.mark.outgoing' : 'call.mark.missed');
+}

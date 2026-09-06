@@ -206,6 +206,63 @@ describe('список', () => {
     const reopened = await dm.open(me.id, you.fingerprint);
     expect(reopened.ok && reopened.view.preview).toBe('привет!');
   });
+
+  /**
+   * Находка ревью задачи 8: список переписок узнавал о пропущенном звонке
+   * только из живого `dm-activity` (см. `chat.handlers.ts`), а холодная
+   * загрузка списка (`dm-list`/переоткрытие `dm-open`) шла мимо этого пути и
+   * несла голый `preview` без `call` — экран так и остался бы говорить
+   * непереведённой серверной строкой при каждой перезагрузке. `call` обязан
+   * доехать той же дорогой, что и `preview`: из `messages.call` через
+   * `previews()`.
+   */
+  it('несёт call пропущенного звонка и в списке, и при повторном open()', async () => {
+    const me = await person('я');
+    const you = await person('ты');
+    const opened = await dm.open(me.id, you.fingerprint);
+    const slug = opened.ok ? opened.view.slug : '';
+    await db.getRepository(MessageRow).insert({
+      id: randomUUID(),
+      channelId: slug,
+      authorName: 'ты',
+      authorIdentityId: you.id,
+      text: 'missed call',
+      system: true,
+      call: { state: 'no-answer', ms: 5_000 },
+      spoiler: false,
+      reactions: {},
+      mentions: [],
+      createdAt: new Date(),
+    });
+
+    const list = await dm.list(me.id);
+    expect(list[0].call).toEqual({ state: 'no-answer', ms: 5_000 });
+
+    const reopened = await dm.open(me.id, you.fingerprint);
+    expect(reopened.ok && reopened.view.call).toEqual({ state: 'no-answer', ms: 5_000 });
+  });
+
+  it('обычная реплика не несёт call вовсе — не пустым объектом, а ключа нет', async () => {
+    const me = await person('я');
+    const you = await person('ты');
+    const opened = await dm.open(me.id, you.fingerprint);
+    const slug = opened.ok ? opened.view.slug : '';
+    await db.getRepository(MessageRow).insert({
+      id: randomUUID(),
+      channelId: slug,
+      authorName: 'ты',
+      authorIdentityId: you.id,
+      text: 'привет!',
+      system: false,
+      spoiler: false,
+      reactions: {},
+      mentions: [],
+      createdAt: new Date(),
+    });
+
+    const list = await dm.list(me.id);
+    expect('call' in list[0]).toBe(false);
+  });
 });
 
 describe('люди', () => {

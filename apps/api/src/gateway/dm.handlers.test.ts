@@ -231,11 +231,18 @@ describe('активность беседы', () => {
       slug: string;
       preview: string;
       previewMine: boolean;
+      call?: unknown;
     };
     expect(relay.slug).toBe(slug);
     expect(relay.preview).toBe('привет');
     // Для второй стороны реплика не «моя».
     expect(relay.previewMine).toBe(false);
+    // `call` — только у отметки о пропущенном звонке (см.
+    // ring.handlers.test.ts → «отметка о пропущенном»). Обычная реплика не
+    // несёт его вовсе, а не пустым/null-полем: клиент отличает «звонок» от
+    // «сказанное» по наличию ключа, и лишний ключ на месте undefined перепутал
+    // бы их.
+    expect('call' in relay).toBe(false);
     // Никакой глобальной активности с адресом беседы.
     expect(theirs.got('dm-activity')).toBe(false);
     expect(theirs.got('chat-activity')).toBe(false);

@@ -499,6 +499,14 @@ describe('отметка о пропущенном', () => {
       // будильника: часы события ставит машина, а не тот, кто её разбудил.
       [true, { state: 'no-answer', ms: 10_000 }, anya.identityId],
     ]);
+
+    // Находка ревью: `dm-activity` обязан нести `call` рядом с `preview`, а не
+    // только строка в базе, — иначе список переписок и тост активности так и
+    // остались бы рисовать непереведённую серверную запаску `preview`
+    // (`ChatMessage.call` — единственный способ клиенту узнать, что это
+    // отметка, а не обычная реплика).
+    expect(last(hers, 'dm-activity')).toMatchObject({ call: { state: 'no-answer', ms: 10_000 } });
+    expect(last(his, 'dm-activity')).toMatchObject({ call: { state: 'no-answer', ms: 10_000 } });
   });
 
   it('отклонённый вызов отметки не оставляет', async () => {

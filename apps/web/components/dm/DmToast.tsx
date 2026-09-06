@@ -2,6 +2,7 @@
 
 import { toast } from 'sonner';
 import type { DmActivityRelay } from '@relay/shared';
+import { callMarkLabel } from '@/components/call/MissedCallMark';
 import { Identicon } from '@/components/ui/Identicon';
 import { Icon } from '@/components/ui/icon';
 import { tx } from '@/lib/i18n';
@@ -17,7 +18,10 @@ import { useUiStore } from '@/stores/ui';
  *
  * Показываем только то, что уже прислал сервер в `dm-activity` (см.
  * DmActivityRelay): превью там обрезано на сервере, и разворачивать его тут
- * нечем и незачем — облачко не лента.
+ * нечем и незачем — облачко не лента. Исключение — отметка о пропущенном
+ * звонке (`relay.call`): её слово подбирается на месте через `t()`, потому что
+ * серверное превью для неё — непереведённая запаска, а не готовая фраза (см.
+ * `callMarkLabel`).
  */
 
 /** Сколько живёт облачко. Хватает прочитать две строки и не мешает дольше. */
@@ -25,6 +29,13 @@ const TOAST_MS = 6000;
 
 export function showDmToast(relay: DmActivityRelay) {
   const nick = relay.peer.nick || tx('common.anonymous');
+  // `relay.preview` для отметки о пропущенном — непереведённая серверная
+  // запаска (см. `ChatMessage.call` в протоколе): показать её как есть значило
+  // бы облачку заговорить по-английски вне зависимости от языка читающего. На
+  // практике сюда попадает только сторона, которая звонок пропустила — своя же
+  // реплика тоста не показывает (см. `!relay.previewMine` в SocketProvider), —
+  // но `callMarkLabel` сверяет `previewMine` сама, а не полагается на это.
+  const preview = relay.call ? callMarkLabel(relay.previewMine, tx) : relay.preview;
 
   toast.custom(
     (id) => (
@@ -55,9 +66,7 @@ export function showDmToast(relay: DmActivityRelay) {
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="truncate text-[13px] font-bold text-text-header">{nick}</span>
           {/* Две строки и обрыв: облачко показывает, о чём речь, а не всю реплику. */}
-          <span className="line-clamp-2 text-[12.5px] leading-snug text-text-muted">
-            {relay.preview}
-          </span>
+          <span className="line-clamp-2 text-[12.5px] leading-snug text-text-muted">{preview}</span>
         </span>
 
         {/* Стрелка проявляется на наведении — знак, что облачко ведёт внутрь,

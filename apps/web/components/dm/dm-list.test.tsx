@@ -85,6 +85,52 @@ describe('список переписок', () => {
     const out = markup();
     expect(/пока никого|no one here yet/i.test(out)).toBe(true);
   });
+
+  /**
+   * Находка ревью задачи 8: последняя строка беседы — отметка о пропущенном
+   * звонке — несёт в `preview` непереведённую серверную запаску
+   * (`ChatMessage.call`, буквально `'missed call'`), а строка списка рисовала
+   * её как есть. Тест ловит именно расхождение с переводом: `preview` в
+   * фикстуре нарочно оставлен английским, как он и приходит от сервера, —
+   * а на экране обязано быть слово читающего.
+   */
+  it('пропущенный звонок в списке — переводом, а не серверной запаской', () => {
+    useDmStore.getState().setConversations([
+      {
+        slug,
+        peer: { fingerprint, nick },
+        lastTs: 1000,
+        preview: 'missed call',
+        previewMine: false,
+        call: { state: 'no-answer', ms: 5000 },
+      },
+    ]);
+    useUnreadStore.setState({ lastRead: {} });
+
+    const out = markup();
+    expect(out).toContain('Missed call');
+    expect(out).not.toContain('missed call');
+  });
+
+  it('свой пропущенный звонок в списке — «You called»', () => {
+    useDmStore.getState().setConversations([
+      {
+        slug,
+        peer: { fingerprint, nick },
+        lastTs: 1000,
+        preview: 'missed call',
+        previewMine: true,
+        call: { state: 'failed', ms: 0 },
+      },
+    ]);
+    useUnreadStore.setState({ lastRead: {} });
+
+    const out = markup();
+    expect(out).toContain('You called');
+    // «You: missed call» — тот же баг чужими словами: обёртка `dm.you` тут
+    // неуместна, отметка сама по себе уже говорит «моя».
+    expect(out).not.toContain('missed call');
+  });
 });
 
 describe('пока список не доехал', () => {

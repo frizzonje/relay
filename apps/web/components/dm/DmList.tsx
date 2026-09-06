@@ -2,6 +2,7 @@
 
 import { AnimatePresence, motion } from 'framer-motion';
 import type { DmConversation } from '@relay/shared';
+import { callMarkLabel } from '@/components/call/MissedCallMark';
 import { Icon } from '@/components/ui/icon';
 import { Identicon } from '@/components/ui/Identicon';
 import { PresenceDot } from '@/components/ui/PresenceDot';
@@ -78,11 +79,17 @@ function DmRow({
         </div>
         <div className="flex items-center gap-1.5">
           <span className="min-w-0 flex-1 truncate text-[12.5px] text-text-muted">
-            {conversation.preview
-              ? conversation.previewMine
-                ? t('dm.you', { preview: conversation.preview })
-                : conversation.preview
-              : ' '}
+            {/* Отметка о пропущенном звонке несёт в `preview` непереведённую
+                серверную запаску (см. `ChatMessage.call` в протоколе) — само
+                слово подбираем здесь, тем же путём, что и плашка в ленте
+                (`MissedCallMark`), а не показываем чужой язык читающему. */}
+            {conversation.call
+              ? callMarkLabel(conversation.previewMine, t)
+              : conversation.preview
+                ? conversation.previewMine
+                  ? t('dm.you', { preview: conversation.preview })
+                  : conversation.preview
+                : ' '}
           </span>
           {conversation.lastTs > 0 && (
             <span className="shrink-0 text-[11px] text-text-faint">

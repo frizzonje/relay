@@ -830,6 +830,13 @@ export interface DmConversation {
   lastTs: number;
   preview: string;
   previewMine: boolean;
+  /**
+   * Заполнено, когда последняя строка беседы — отметка о пропущенном звонке
+   * (см. `CallMark` ниже и `ChatMessage.call`). `preview` в этом случае несёт
+   * непереведённую запаску сервера — рисовать список обязан клиент, своим
+   * словом через `t()`, а не показывать серверную строку как есть.
+   */
+  call?: CallMark;
 }
 
 /**

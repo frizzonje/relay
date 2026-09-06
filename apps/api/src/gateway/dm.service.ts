@@ -2,6 +2,7 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { ChannelRow, ConversationRow } from '../db/entities';
+import type { CallMark } from './protocol';
 
 /** Адрес беседы всегда начинается с этого — по нему её и узнают в ленте. */
 export const DM_PREFIX = 'dm-';
@@ -45,6 +46,15 @@ export interface DmConversationView {
   preview: string;
   /** Последняя реплика — моя. По ней список рисует «вы: …». */
   previewMine: boolean;
+  /**
+   * Заполнено, если последняя строка беседы — отметка о пропущенном звонке.
+   * `preview` тогда несёт непереведённую запаску (`ChatMessage.call` в
+   * протоколе), а слово подбирает клиент через `t()`; без этого поля список
+   * переписок показывал бы английскую строку сервера так же, как раньше — на
+   * ЭТОТ раз уже не только сразу после звонка, но и при каждой холодной
+   * загрузке списка, пока беседа не получит более свежую реплику.
+   */
+  call?: CallMark;
 }
 
 /**
@@ -195,6 +205,7 @@ export class DmService implements OnModuleInit {
         lastTs: last?.lastTs ?? 0,
         preview: last?.preview ?? '',
         previewMine: last?.previewMine ?? false,
+        ...(last?.call ? { call: last.call } : {}),
       },
     };
   }
@@ -253,6 +264,7 @@ export class DmService implements OnModuleInit {
           lastTs: p?.lastTs ?? 0,
           preview: p?.preview ?? '',
           previewMine: p?.previewMine ?? false,
+          ...(p?.call ? { call: p.call } : {}),
         };
       })
       .sort((x, y) => y.lastTs - x.lastTs);
@@ -424,16 +436,20 @@ export class DmService implements OnModuleInit {
     slugs: string[],
     meId: string,
     limit: number = DM_PREVIEW_LIMIT,
-  ): Promise<Array<{ slug: string; lastTs: number; preview: string; previewMine: boolean }>> {
+  ): Promise<
+    Array<{ slug: string; lastTs: number; preview: string; previewMine: boolean; call?: CallMark }>
+  > {
     if (!slugs.length) return [];
     const rows: Array<{
       channel_id: string;
       text: string;
       created_at: Date;
       author_identity_id: string | null;
+      // jsonb — pg возвращает уже разобранным объектом, без ручного JSON.parse.
+      call: CallMark | null;
     }> = await this.db.query(
       `SELECT DISTINCT ON (m.channel_id)
-              m.channel_id, m.text, m.created_at, m.author_identity_id
+              m.channel_id, m.text, m.created_at, m.author_identity_id, m.call
          FROM messages m
         WHERE m.channel_id = ANY($1)
         ORDER BY m.channel_id, m.created_at DESC, m.id DESC`,
@@ -444,6 +460,7 @@ export class DmService implements OnModuleInit {
       lastTs: r.created_at.getTime(),
       preview: r.text.slice(0, limit),
       previewMine: r.author_identity_id === meId,
+      ...(r.call ? { call: r.call } : {}),
     }));
   }
 }

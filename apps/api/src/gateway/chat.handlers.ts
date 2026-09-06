@@ -474,10 +474,18 @@ export class ChatHandlers {
    * Превью едет в самом событии. Иначе список переписок ходил бы за последней
    * репликой отдельным запросом — по запросу на каждое сообщение, то есть чаще
    * всего остального вместе взятого.
+   *
+   * `call` едет рядом с `preview`, а не вместо него, и ровно по той же причине,
+   * по которой сама отметка в ленте несёт структуру, а не готовую фразу: у
+   * этой строки автор — сервер, а не человек, и `preview` для неё — непереведённая
+   * запаска («missed call», см. `ChatService.addCallMark`). Список переписок и
+   * тост активности обязаны узнать в `call`, что показывать нужно словом через
+   * `t()`, а не серверной строкой как есть — иначе именно они, а не сама
+   * отметка, и остались бы говорить по-английски.
    */
   private dmActivity(
     slug: string,
-    msg: { text: string; ts: number },
+    msg: { text: string; ts: number; call?: CallMark },
     authorId: string | undefined,
   ): void {
     const members = this.dm.membersOf(slug);
@@ -499,6 +507,7 @@ export class ChatHandlers {
           preview,
           previewMine: authorId === identityId,
           peer,
+          ...(msg.call ? { call: msg.call } : {}),
         });
       }
     }
