@@ -25,7 +25,12 @@ vi.mock('@/lib/socket', () => ({ getSocket: () => socket }));
 // `joinVoice` отвечает, СОСТОЯЛСЯ ли вход, и подделка обязана уметь оба
 // ответа: всегда-успешная прячет ровно тот случай, ради которого ответ и
 // заведён (движок без WebRTC, отказ в микрофоне).
-vi.mock('@/lib/voice', () => ({ joinVoice: vi.fn(async () => true), leaveVoice: vi.fn() }));
+// `voiceRoom` по умолчанию пуст: эфир ничей, пока тест не скажет обратного.
+vi.mock('@/lib/voice', () => ({
+  joinVoice: vi.fn(async () => true),
+  leaveVoice: vi.fn(),
+  voiceRoom: vi.fn((): string | null => null),
+}));
 vi.mock('@/lib/voice/camera', () => ({
   toggleCamera: vi.fn(async () => {}),
   isCamOn: () => false,
@@ -262,6 +267,39 @@ describe('конец разговора', () => {
     land(true);
     await vi.waitFor(() => expect(voice.leaveVoice).toHaveBeenCalledTimes(2));
     expect(call.callRoom()).toBeNull();
+  });
+
+  it('уборка опоздавшей посадки не сносит канал, в который уже вошли', async () => {
+    const { call, voice } = await fresh();
+    let land = (_ok: boolean) => {};
+    vi.mocked(voice.joinVoice).mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        land = resolve;
+      }),
+    );
+    void call.dialCall('ff');
+    reply({ ok: true, ringId: 'r1' });
+    await Promise.resolve();
+    handlers['call-state'](accepted('r1') as never);
+    await vi.waitFor(() => expect(voice.joinVoice).toHaveBeenCalled());
+
+    // Звонок кончился, пока на экране висел системный запрос доступа к
+    // микрофону, — и человек, у которого он погас, щёлкнул обычный голосовой
+    // канал. Разрешение одно на оба захода, так что заход канала ждёт его же.
+    handlers['call-over']({ room: ROOM } as never);
+    expect(voice.leaveVoice).toHaveBeenCalledTimes(1);
+    vi.mocked(voice.voiceRoom).mockReturnValueOnce('obshchii');
+
+    // Разрешение выдано, посадка доезжает — и убирать ей нечего: микрофон
+    // держит чужой живой заход. Позови она `leaveVoice(true)`, тот сошёл бы с
+    // дистанции молча, оставив открытую сцену канала без звука.
+    land(false);
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(voice.leaveVoice).toHaveBeenCalledTimes(1);
+    // И спрошено это было у эфира, а не у себя: проверка «занят ли эфир»
+    // обязана состояться, иначе тест зелен по совпадению.
+    expect(voice.voiceRoom).toHaveBeenCalled();
   });
 
   it('трубку кладут отсюда же: сервер кончит разговор обоим', async () => {
