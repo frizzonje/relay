@@ -10,12 +10,17 @@ import type { CallPerson, DmOpenResult } from '@relay/shared';
  * кнопки доходят до правильных действий, а не как устроен сам протокол —
  * машину дозвона проверяют `stores/ring.test.ts` и `lib/call.test.ts`.
  */
-vi.mock('@/lib/call', () => ({ dialCall: vi.fn(), hangUp: vi.fn() }));
+vi.mock('@/lib/call', () => ({
+  dialCall: vi.fn(),
+  hangUp: vi.fn(),
+  cancelCall: vi.fn(),
+  ownedCall: vi.fn(() => null),
+}));
 vi.mock('@/lib/channels', () => ({ ask: vi.fn() }));
 const openDm = vi.fn();
 vi.mock('@/stores/ui', () => ({ useUiStore: { getState: () => ({ openDm }) } }));
 
-const { dialCall, hangUp } = await import('@/lib/call');
+const { dialCall, hangUp, ownedCall } = await import('@/lib/call');
 const { ask } = await import('@/lib/channels');
 const { useRingStore } = await import('@/stores/ring');
 const { OutgoingCall } = await import('./OutgoingCall');
@@ -34,8 +39,17 @@ describe('экран исходящего вызова', () => {
   beforeEach(() => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     useRingStore.getState().reset();
-    vi.mocked(dialCall).mockReset().mockResolvedValue({ ok: true, ringId: 'r1' });
+    // Настоящий `dialCall` объявляет вызов своим (`mine` в lib/call.ts) —
+    // подделка обязана повторять это, иначе «Отбой» на СВОЁМ наборе пошёл бы
+    // веткой соседнего устройства (см. `endRing` в stores/ring.ts).
+    vi.mocked(dialCall)
+      .mockReset()
+      .mockImplementation(async () => {
+        vi.mocked(ownedCall).mockReturnValue('r1');
+        return { ok: true, ringId: 'r1' };
+      });
     vi.mocked(hangUp).mockReset();
+    vi.mocked(ownedCall).mockReset().mockReturnValue(null);
     vi.mocked(ask).mockReset();
     openDm.mockReset();
     host = document.createElement('div');
@@ -97,13 +111,45 @@ describe('экран исходящего вызова', () => {
     expect(markup()).toBe('');
   });
 
-  it('Escape делает ровно то же, что и кнопка «Отбой»', async () => {
+  it('Escape делает ровно то же, что и кнопка «Отбой» — с того места, где фокус на самом деле', async () => {
+    // Кнопка, с которой звонили, стоит ПОД экраном и до открытия держит фокус.
+    const caller = document.createElement('button');
+    document.body.appendChild(caller);
+    caller.focus();
+
     await act(() => useRingStore.getState().start(PEER));
     markup();
-    const dialog = host.querySelector('[role="dialog"]') as HTMLDivElement;
-    act(() => dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+
+    // Экран забирает фокус себе. Без этого Escape не дошёл бы до диалога
+    // никогда: React разносит события по дереву компонентов от того, на ком
+    // они случились, а случаются они на том, что в фокусе, — то есть на
+    // кнопке снаружи оверлея. Прежний тест этого не ловил, потому что слал
+    // событие прямо в диалог — условие, которого настоящая страница не даёт.
+    const hangUpButton = host.querySelectorAll('button')[1] as HTMLButtonElement;
+    expect(document.activeElement).toBe(hangUpButton);
+
+    act(() =>
+      document.activeElement!.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      ),
+    );
     expect(hangUp).toHaveBeenCalledTimes(1);
     expect(markup()).toBe('');
+
+    // Экран погас — фокус возвращается туда, откуда его взяли, а не в `body`.
+    expect(document.activeElement).toBe(caller);
+    caller.remove();
+  });
+
+  it('«Написать вместо звонка» — цель не меньше 44px', async () => {
+    // reference/direct-messages/README.md: «Все цели ≥44px». Отступы давали
+    // ~40px: 68px отбой и 104px лицо в норме, а эта кнопка — нет.
+    // jsdom не считает раскладку, поэтому проверяем ровно то, что задаёт
+    // высоту, — класс минимальной высоты.
+    await act(() => useRingStore.getState().start(PEER));
+    markup();
+    const writeButton = host.querySelectorAll('button')[0] as HTMLButtonElement;
+    expect(writeButton.className).toContain('min-h-[44px]');
   });
 
   it('«Write instead» уводит в переписку, не роняя вызов дважды', async () => {

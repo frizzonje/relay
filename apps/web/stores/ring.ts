@@ -8,7 +8,7 @@ import type {
 } from '@relay/shared';
 import { settled as ringSettled, step, type Ring, type RingState } from '@relay/shared';
 import { ask } from '@/lib/channels';
-import { dialCall, hangUp as hangUpCall } from '@/lib/call';
+import { cancelCall, dialCall, hangUp as hangUpCall, ownedCall } from '@/lib/call';
 import { useSetting } from '@/stores/config';
 import { useUiStore } from '@/stores/ui';
 import type { MessageKey } from '@/lib/i18n';
@@ -67,9 +67,9 @@ interface RingStoreState {
   applyEnded: (payload: CallEndedRelay) => void;
   /**
    * Отбой самим звонящим. Тот же путь, что и «Закрыть» на уже завершённом
-   * экране: `hangUpCall()` из `lib/call.ts` безопасен и там, и там — рабочему
-   * вызову он шлёт `call-cancel`, у мёртвого не найдёт ни `mine`, ни `room` и
-   * промолчит (см. её собственный комментарий).
+   * экране: `endRing()` безопасен и там, и там — рабочему вызову он шлёт
+   * `call-cancel`, у мёртвого не найдёт ни номера, ни `mine`, ни `room` и
+   * промолчит.
    */
   hangUp: () => void;
   /**
@@ -80,8 +80,46 @@ interface RingStoreState {
    * незачем.
    */
   writeInstead: () => void;
+  /**
+   * Сокет оборвался. Экран гаснет молча — и это не перестраховка: вызов
+   * звонящего сервер кончает В ТОТ ЖЕ МИГ, как ушло его последнее устройство,
+   * без грейса (§4.2 протокола, `RingDesk.dropSocket`). Свой же
+   * `call-ended{cancelled}` он при этом шлёт в сокет, которого уже нет, — эхо,
+   * которого эта вкладка не увидит никогда, а на переподключении вызовы
+   * заново не рассылаются. Оставь экран как есть — и он будет пульсировать
+   * «дозваниваемся» на вызове, которого больше нет, ровно в том состоянии,
+   * ради честности которого он и заведён. Ничего не шлём: слать некуда.
+   */
+  lost: () => void;
   /** Сброс между тестами / выходом из инсталляции. */
   reset: () => void;
+}
+
+/**
+ * Кончить дозвон и на сервере, и на экране. Экран открывается двумя путями, и
+ * бросают вызов они по-разному:
+ *
+ *  • **набрали здесь** — вызовом владеет `lib/call.ts` (его `mine`), и только
+ *    он знает, чем именно этот вызов бросить: у принятого и уже посаженного
+ *    разговора это выход из комнаты, а не `call-cancel`;
+ *  • **набрали на соседнем устройстве** — `call-state{ringing}` уходит на все
+ *    устройства звонящего (§4.2), и экран открылся здесь по нему (см.
+ *    `applyState`). У этой вкладки нет ни `mine`, ни комнаты, и `hangUpCall()`
+ *    промолчал бы: экран бы погас, а у собеседника продолжало бы звонить.
+ *    Поэтому называем вызов по имени — `cancelCall(id)`; право на отбой
+ *    сервер проверяет по личности, и второе устройство звонящего для него
+ *    законная сторона.
+ *
+ * Номера может не быть вовсе (ack `call-start` ещё не пришёл) — тогда бросать
+ * нечего и незачем: вернувшийся ack отобьёт вызов сам (см. `start`).
+ */
+function endRing(current: OutgoingScreen | null): void {
+  const id = current?.ring.id;
+  if (id && ownedCall() !== id) {
+    cancelCall(id);
+    return;
+  }
+  hangUpCall();
 }
 
 /** Пустая машина в состоянии дозвона — общий старт и для набора, и для чужой рассылки. */
@@ -178,14 +216,14 @@ export const useRingStore = create<RingStoreState>((set, get) => ({
   },
 
   hangUp: () => {
-    hangUpCall();
+    endRing(get().outgoing);
     set({ outgoing: null });
   },
 
   writeInstead: () => {
     const current = get().outgoing;
     if (!current) return;
-    hangUpCall();
+    endRing(current);
     set({ outgoing: null });
     void ask<DmOpenResult>('dm-open', { fingerprint: current.peer.fingerprint }).then((res) => {
       if (res?.ok) {
@@ -195,6 +233,8 @@ export const useRingStore = create<RingStoreState>((set, get) => ({
       }
     });
   },
+
+  lost: () => set({ outgoing: null }),
 
   reset: () => set({ outgoing: null }),
 }));

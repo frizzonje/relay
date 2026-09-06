@@ -14,6 +14,8 @@ import { useConfigStore } from '@/stores/config';
 vi.mock('@/lib/call', () => ({
   dialCall: vi.fn(async () => ({ ok: true, ringId: 'r1' })),
   hangUp: vi.fn(),
+  cancelCall: vi.fn(),
+  ownedCall: vi.fn(() => null),
 }));
 
 /**

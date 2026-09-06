@@ -338,4 +338,37 @@ describe('конец разговора', () => {
     call.hangUp();
     expect(socket.emit).not.toHaveBeenCalled();
   });
+
+  it('вызов, набранный на СОСЕДНЕМ устройстве, бросают по имени', async () => {
+    // `call-state{ringing}` уходит на все устройства звонящего (§4.2), и экран
+    // дозвона открывается там, где не набирали: `mine` пуст, комнаты нет, и
+    // `hangUp()` промолчал бы — вызов продолжал бы звонить у собеседника.
+    // Право на отбой сервер проверяет по личности, так что назвать вызов
+    // отсюда законно.
+    const { call } = await fresh();
+
+    call.cancelCall('r1');
+
+    expect(socket.emit).toHaveBeenLastCalledWith(
+      'call-cancel',
+      { ringId: 'r1' },
+      expect.any(Function),
+    );
+  });
+
+  it('...и если вызов всё-таки был свой, владение снимается вместе с ним', async () => {
+    const { call, voice } = await fresh();
+    void call.dialCall('ff');
+    reply({ ok: true, ringId: 'r1' });
+    await Promise.resolve();
+
+    call.cancelCall('r1');
+
+    // Опоздавшее «принято» по брошенному вызову в комнату уже не сажает —
+    // иначе микрофон открылся бы после того, как человек положил трубку.
+    expect(call.ownedCall()).toBeNull();
+    handlers['call-state'](accepted('r1') as never);
+    await Promise.resolve();
+    expect(voice.joinVoice).not.toHaveBeenCalled();
+  });
 });

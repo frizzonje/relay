@@ -16,7 +16,13 @@ import type { DmActivityRelay, DmPeer } from '@relay/shared';
  * WebRTC/хоткеи/десктоп-мост и не шумело сетевыми звонками, которых здесь нет.
  */
 vi.mock('@/lib/voice', () => ({ initVoice: vi.fn(), relabelSelf: vi.fn() }));
-vi.mock('@/lib/call', () => ({ initCall: vi.fn() }));
+vi.mock('@/lib/call', () => ({
+  initCall: vi.fn(),
+  dialCall: vi.fn(),
+  hangUp: vi.fn(),
+  cancelCall: vi.fn(),
+  ownedCall: vi.fn(() => null),
+}));
 vi.mock('@/lib/hotkeys', () => ({ initHotkeys: vi.fn() }));
 vi.mock('@/lib/desktop', () => ({ initDesktopBridge: vi.fn(async () => {}) }));
 vi.mock('@/lib/notify', () => ({
@@ -42,7 +48,23 @@ const socket = vi.hoisted(() => {
       arr.push(cb);
       handlers.set(event, arr);
     }),
-    off: vi.fn(),
+    /**
+     * `off` здесь настоящий, а не пустышка, и это ключевое: socket.io без
+     * второго аргумента снимает ВСЕ обработчики события — вместе с чужими,
+     * повешенными `initCall`/`initVoice` один раз на приложение. Подделка,
+     * которая не снимает ничего, показывала бы такую уборку исправной (см.
+     * тест «перемонтирование…» ниже).
+     */
+    off: vi.fn((event: string, cb?: (...args: unknown[]) => void) => {
+      if (!cb) {
+        handlers.delete(event);
+        return;
+      }
+      handlers.set(
+        event,
+        (handlers.get(event) ?? []).filter((h) => h !== cb),
+      );
+    }),
     _fire: (event: string, ...args: unknown[]) => {
       for (const cb of handlers.get(event) ?? []) cb(...args);
     },
@@ -328,6 +350,93 @@ describe('дозвон: call-state/call-ended доезжают до стора �
       }),
     );
     expect(useRingStore.getState().outgoing?.ring.state).toBe('declined');
+  });
+
+  it('обрыв сокета гасит экран дозвона: эха о конце вызова не будет', () => {
+    act(() =>
+      socket._fire('call-state', {
+        ringId: 'r1',
+        state: 'ringing',
+        peer: peerA,
+        at: Date.now(),
+        video: false,
+      }),
+    );
+    expect(useRingStore.getState().outgoing).not.toBeNull();
+
+    act(() => socket._fire('disconnect'));
+
+    // Сервер кончает вызов звонящего в тот же миг, как ушло его последнее
+    // устройство, без грейса (§4.2), и `call-ended{cancelled}` уезжает в уже
+    // мёртвый сокет. На переподключении вызовы заново не рассылаются, своего
+    // таймаута дозвона клиент не считает — не сними экран здесь, и он будет
+    // пульсировать «дозваниваемся» на вызове, которого нет.
+    expect(useRingStore.getState().outgoing).toBeNull();
+  });
+
+  it('перемонтирование провайдера не уносит чужих обработчиков тех же событий', () => {
+    // `initCall`/`initVoice` вешают своих слушателей ОДИН раз на приложение
+    // (у обоих замок `initialized`) — здесь они подделаны, поэтому их роль
+    // играют эти три функции: важно не кто их повесил, а что провайдер их не
+    // трогает.
+    const foreignState = vi.fn();
+    const foreignEnded = vi.fn();
+    const foreignDisconnect = vi.fn();
+    const foreignConnect = vi.fn();
+    socket.on('call-state', foreignState);
+    socket.on('call-ended', foreignEnded);
+    socket.on('disconnect', foreignDisconnect);
+    socket.on('connect', foreignConnect);
+
+    // В строгом режиме React (`next.config.mjs`: reactStrictMode) каждое
+    // открытие страницы в разработке — это монтирование, уборка и монтирование
+    // заново. Безымянный `socket.off('call-state')` в уборке снимал бы заодно
+    // и слушатель `lib/call.ts`, а тот назад не вернётся: принятый вызов
+    // после первого же кадра не сажал бы в комнату никого.
+    act(() => root.unmount());
+    host.remove();
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() =>
+      root.render(
+        <SocketProvider>
+          <div />
+        </SocketProvider>,
+      ),
+    );
+
+    act(() =>
+      socket._fire('call-state', {
+        ringId: 'r1',
+        state: 'ringing',
+        peer: peerA,
+        at: Date.now(),
+        video: false,
+      }),
+    );
+    act(() => socket._fire('connect'));
+    act(() => socket._fire('disconnect'));
+
+    expect(foreignState).toHaveBeenCalledTimes(1);
+    expect(foreignConnect).toHaveBeenCalledTimes(1);
+    expect(foreignDisconnect).toHaveBeenCalledTimes(1);
+    // И свой слушатель жив ровно один: уборка снимает своё, а не копит его.
+    expect(socket._handlers.get('call-state')).toHaveLength(2);
+    expect(socket._handlers.get('call-ended')).toHaveLength(2);
+    expect(socket._handlers.get('disconnect')).toHaveLength(2);
+    expect(socket._handlers.get('connect')).toHaveLength(2);
+
+    act(() =>
+      socket._fire('call-ended', {
+        ringId: 'r1',
+        state: 'declined',
+        peer: peerA,
+        at: Date.now(),
+        missed: false,
+      }),
+    );
+    expect(foreignEnded).toHaveBeenCalledTimes(1);
   });
 });
 

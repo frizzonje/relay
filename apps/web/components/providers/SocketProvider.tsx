@@ -2,6 +2,7 @@
 
 import { useEffect, type ReactNode } from 'react';
 import { toast } from 'sonner';
+import type { CallEndedRelay, CallStateRelay } from '@relay/shared';
 import { getSocket } from '@/lib/socket';
 import { initVoice, relabelSelf } from '@/lib/voice';
 import { initCall } from '@/lib/call';
@@ -198,9 +199,18 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // Сервер шлёт полный снимок заново на каждом подключении (см. `presence`
     // выше), так что сброс здесь не теряет данные навсегда — только держит
     // немой промежуток честным, а не оптимистичным.
-    socket.on('disconnect', () => {
+    // Тем же обрывом кончается и дозвон, и это не догадка клиента: вызов
+    // звонящего сервер закрывает в тот же миг, как ушло его последнее
+    // устройство, без грейса (§4.2), а `call-ended{cancelled}` про это уезжает
+    // в уже мёртвый сокет. На переподключении вызовы заново не рассылаются, а
+    // таймаут дозвона клиент намеренно не считает у себя — значит некому,
+    // кроме этой строки, снять экран, пульсирующий «дозваниваемся» на вызове,
+    // которого больше нет (см. `lost` в stores/ring.ts).
+    const onDisconnect = () => {
       usePresenceStore.getState().reset();
-    });
+      ring().lost();
+    };
+    socket.on('disconnect', onDisconnect);
     socket.on('chat-reaction', ({ id, reactions }) => {
       if (!openSlug() || !id) return;
       chat().applyReaction(id, reactions ?? {});
@@ -264,8 +274,18 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // дозвона») и оба фильтруют события по своему `ringId`/`room`, так что
     // держать их в одном месте незачем и негде: `lib/call.ts` не знает про
     // экран, а этот стор не трогает ни микрофон, ни сокет напрямую.
-    socket.on('call-state', (payload) => ring().applyState(payload));
-    socket.on('call-ended', (payload) => ring().applyEnded(payload));
+    //
+    // Обработчики названы по имени не для красоты: снимаются они таким же
+    // именным `off` (см. уборку эффекта). `socket.off(event)` без второго
+    // аргумента снимает ВСЕ обработчики события — вместе с теми, что повесил
+    // `initCall`, а он защищён «один раз на приложение» и обратно их не
+    // навесит. В строгом режиме React (`next.config.mjs`) каждое монтирование
+    // — это монтирование, уборка и монтирование заново, так что после первого
+    // же кадра в dev принятый вызов не сажал бы в комнату никого.
+    const onCallState = (payload: CallStateRelay) => ring().applyState(payload);
+    const onCallEnded = (payload: CallEndedRelay) => ring().applyEnded(payload);
+    socket.on('call-state', onCallState);
+    socket.on('call-ended', onCallEnded);
 
     // В беседе написали. Летит обоим участникам (см. DmActivityRelay), поэтому
     // своя же реплика — не повод звенеть самому себе.
@@ -480,7 +500,12 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       if (err?.message === 'blocked') useContractStore.getState().setBlocked(true);
     });
 
-    socket.on('connect', () => {
+    // Названо по имени по той же причине, что и обработчики вызова выше:
+    // `connect` и `disconnect` слушает ещё и `initVoice` (переподписка на
+    // голосовой канал после обрыва), и безымянный `socket.off('connect')`
+    // уносил бы заодно и его — навсегда, у него тот же замок «один раз на
+    // приложение».
+    const onConnect = () => {
       // Дверь открылась — обслуживание кончилось, пока мы стучались.
       if (useContractStore.getState().maintenance !== null) {
         useContractStore.setState({ maintenance: null });
@@ -529,7 +554,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       // при раскрытом разделе список приходил бы вовремя, а на каналах рейка
       // стояла бы пустой до первого захода в ЛС.
       dm().reload();
-    });
+    };
+    socket.on('connect', onConnect);
 
     // Смена открытого текстового канала: подписка/отписка на сервере. Плюс
     // пересчёт «смотрю ли я в канал» — он зависит ещё и от `view` (сетка голоса
@@ -673,7 +699,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('chat-roster');
       socket.off('presence');
       socket.off('presence-update');
-      socket.off('disconnect');
+      // Именной `off` — снимаем СВОЙ обработчик, а не все чужие заодно (см.
+      // комментарий у `onCallState`/`onConnect` выше).
+      socket.off('disconnect', onDisconnect);
       socket.off('chat-reaction');
       socket.off('chat-edited');
       socket.off('chat-deleted');
@@ -683,8 +711,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('chat-closed');
       socket.off('mention');
       socket.off('mentions');
-      socket.off('call-state');
-      socket.off('call-ended');
+      socket.off('call-state', onCallState);
+      socket.off('call-ended', onCallEnded);
       socket.off('dm-activity');
       socket.off('admin-changed');
       socket.off('reads');
@@ -693,7 +721,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('servers');
       socket.off('server-unlock-result');
       socket.off('channels');
-      socket.off('connect');
+      socket.off('connect', onConnect);
     };
   }, []);
 

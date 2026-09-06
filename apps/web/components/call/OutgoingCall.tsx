@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useRef } from 'react';
 import { Icon } from '@/components/ui/icon';
 import { Identicon } from '@/components/ui/Identicon';
 import { cn } from '@/lib/utils';
@@ -31,6 +32,31 @@ export function OutgoingCall() {
   const outgoing = useRingStore((s) => s.outgoing);
   const hangUp = useRingStore((s) => s.hangUp);
   const writeInstead = useRingStore((s) => s.writeInstead);
+  const hangUpRef = useRef<HTMLButtonElement>(null);
+  const open = outgoing !== null;
+
+  /**
+   * Фокус переезжает в оверлей сам — на кнопку отбоя.
+   *
+   * Без этого экран лгал бы дважды. Во-первых, Escape: React разносит события
+   * по дереву КОМПОНЕНТОВ от того, на ком они случились, а случаются они на
+   * том, что в фокусе, — а в фокусе осталась кнопка «позвонить» из карточки
+   * собеседника, стоящая ПОД экраном. Обработчик на диалоге не сработал бы ни
+   * разу (в тесте — сработал бы, если событие отправить прямо в диалог: см.
+   * `OutgoingCall.test.tsx`, там оно нарочно шлётся тому, кто в фокусе).
+   * Во-вторых, `aria-modal`: экран во весь экран, а человек с клавиатурой или
+   * читалкой продолжал бы табать по интерфейсу за ним.
+   *
+   * Уходя, фокус возвращаем туда, откуда взяли: экран гаснет и по своей
+   * кнопке, и сам (ответили, отклонили) — и фокус, брошенный в `body`, стоил
+   * бы человеку места в интерфейсе.
+   */
+  useEffect(() => {
+    if (!open) return;
+    const from = document.activeElement as HTMLElement | null;
+    hangUpRef.current?.focus();
+    return () => from?.focus?.();
+  }, [open]);
 
   if (!outgoing) return null;
 
@@ -79,10 +105,14 @@ export function OutgoingCall() {
         <p className="text-[12px] leading-relaxed text-text-faint">{t('call.delivery')}</p>
 
         <div className="flex w-full items-center justify-center gap-6">
+          {/* `min-h-[44px]` — не запас, а нижняя граница цели из референса
+              (reference/direct-messages/README.md: «Все цели ≥44px»): одни
+              отступы давали ~40px, и на телефоне эта кнопка промахивалась бы
+              там, где соседние 68px и 104px попадают. */}
           <button
             type="button"
             onClick={writeInstead}
-            className="flex items-center gap-2 rounded-full px-4 py-2.5 text-[13px] font-medium text-text-muted outline-none transition-colors hover:bg-bg-hover hover:text-text-header focus-visible:ring-2 focus-visible:ring-line-strong"
+            className="flex min-h-[44px] items-center gap-2 rounded-full px-4 py-2.5 text-[13px] font-medium text-text-muted outline-none transition-colors hover:bg-bg-hover hover:text-text-header focus-visible:ring-2 focus-visible:ring-line-strong"
           >
             <Icon name="message-square" className="text-[15px]" strokeWidth={1.8} />
             {t('call.writeInstead')}
@@ -92,6 +122,7 @@ export function OutgoingCall() {
               референса); на десктопе, где кнопку берут мышью, не нужно так
               много места — 56px. */}
           <button
+            ref={hangUpRef}
             type="button"
             onClick={hangUp}
             aria-label={live ? t('call.hangUp') : t('common.close')}

@@ -13,6 +13,11 @@ import type { CallEndedRelay, CallPerson, CallStartResult, DmOpenResult } from '
 vi.mock('@/lib/call', () => ({
   dialCall: vi.fn(),
   hangUp: vi.fn(),
+  cancelCall: vi.fn(),
+  // Вызов, которым владеет ЭТА вкладка. По умолчанию пусто — то есть экран
+  // открыт рассылкой с соседнего устройства; тесты своего набора говорят
+  // обратное явно (см. `owning()`).
+  ownedCall: vi.fn((): string | null => null),
 }));
 vi.mock('@/lib/channels', () => ({ ask: vi.fn() }));
 vi.mock('@/stores/ui', () => ({ useUiStore: { getState: vi.fn(() => ({ openDm: vi.fn() })) } }));
@@ -28,6 +33,22 @@ async function fresh() {
   const ui = await import('@/stores/ui');
   ring.useRingStore.getState().reset();
   return { ring, call, channels, ui };
+}
+
+type CallModule = typeof import('@/lib/call');
+
+/**
+ * Подделать ответ ack `call-start`. Настоящий `dialCall` при `ok` объявляет
+ * вызов СВОИМ (`mine` внутри lib/call.ts), и подделка обязана делать то же:
+ * `hangUp` этого стора спрашивает `ownedCall()`, чтобы отличить свой набор от
+ * набора на соседнем устройстве, — и всегда-ничей ответ незаметно превратил бы
+ * каждый тест своего набора в тест чужого.
+ */
+function answers(call: CallModule, res: CallStartResult) {
+  vi.mocked(call.dialCall).mockImplementation(async () => {
+    if (res.ok) vi.mocked(call.ownedCall).mockReturnValue(res.ringId);
+    return res;
+  });
 }
 
 /** Ответ ack `call-start`, отложенный до вызова `resolve`. */
@@ -60,7 +81,7 @@ describe('дозвон: набор и подтверждение', () => {
 
   it('ack приносит id, не трогая состояние экрана', async () => {
     const { ring, call } = await fresh();
-    vi.mocked(call.dialCall).mockResolvedValue({ ok: true, ringId: 'r1' });
+    answers(call, { ok: true, ringId: 'r1' });
 
     await ring.useRingStore.getState().start(PEER);
 
@@ -98,7 +119,7 @@ describe('дозвон: отказ ДО того, как что-либо заз�
     ['rate', { key: 'call.refusal.rate', color: 'text-text-faint' }],
   ] as const)('%s рисует свою подпись и гасит пульс', async (error, caption) => {
     const { ring, call } = await fresh();
-    vi.mocked(call.dialCall).mockResolvedValue({ ok: false, error });
+    answers(call, { ok: false, error });
 
     await ring.useRingStore.getState().start(PEER);
 
@@ -113,12 +134,12 @@ describe('дозвон: отказ ДО того, как что-либо заз�
     // `failed` из `call-ended`) обязаны сойтись в ОДНОЙ подписи, а не в двух
     // похожих, которым однажды случится разойтись.
     const { ring: forRefusal, call: callA } = await fresh();
-    vi.mocked(callA.dialCall).mockResolvedValue({ ok: false, error: 'offline' });
+    answers(callA, { ok: false, error: 'offline' });
     await forRefusal.useRingStore.getState().start(PEER);
     const viaRefusal = forRefusal.outgoingCaption(forRefusal.useRingStore.getState().outgoing!);
 
     const { ring: forEnded, call: callB } = await fresh();
-    vi.mocked(callB.dialCall).mockResolvedValue({ ok: true, ringId: 'r1' });
+    answers(callB, { ok: true, ringId: 'r1' });
     await forEnded.useRingStore.getState().start(PEER);
     forEnded.useRingStore.getState().applyEnded({
       ringId: 'r1',
@@ -136,7 +157,7 @@ describe('дозвон: отказ ДО того, как что-либо заз�
 describe('дозвон: конец, не ставший разговором', () => {
   async function ringing() {
     const stand = await fresh();
-    vi.mocked(stand.call.dialCall).mockResolvedValue({ ok: true, ringId: 'r1' });
+    answers(stand.call, { ok: true, ringId: 'r1' });
     await stand.ring.useRingStore.getState().start(PEER);
     return stand;
   }
@@ -195,7 +216,7 @@ describe('дозвон: конец, не ставший разговором', (
 describe('«Написать вместо звонка»', () => {
   it('отбивает вызов РОВНО один раз и уводит в переписку', async () => {
     const { ring, call, channels, ui } = await fresh();
-    vi.mocked(call.dialCall).mockResolvedValue({ ok: true, ringId: 'r1' });
+    answers(call, { ok: true, ringId: 'r1' });
     await ring.useRingStore.getState().start(PEER);
 
     const conversation: DmOpenResult = {
@@ -224,5 +245,102 @@ describe('«Написать вместо звонка»', () => {
     // Кто-то нажал ещё раз (двойной клик, повторный Escape) — отбоя не прибавляется.
     ring.useRingStore.getState().writeInstead();
     expect(call.hangUp).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('экран, открытый набором с СОСЕДНЕГО устройства', () => {
+  /**
+   * `call-state{ringing}` уходит на ВСЕ устройства звонящего (§4.2 протокола):
+   * набрали с ноутбука — экран дозвона обязан быть и в телефоне. У этой
+   * вкладки при этом нет ни своего вызова (`ownedCall()` пуст), ни комнаты, и
+   * `hangUp()` из lib/call.ts тут бессилен по построению.
+   */
+  async function sibling() {
+    const stand = await fresh();
+    // Здесь не набирали: своего вызова у этой вкладки нет (в настоящем
+    // `lib/call.ts` это пустой `mine`).
+    vi.mocked(stand.call.ownedCall).mockReturnValue(null);
+    stand.ring.useRingStore.getState().applyState({
+      ringId: 'r1',
+      state: 'ringing',
+      peer: PEER,
+      at: Date.now(),
+      video: false,
+    });
+    expect(stand.ring.useRingStore.getState().outgoing).not.toBeNull();
+    return stand;
+  }
+
+  it('«Отбой» кончает вызов по имени, а не гасит экран молча', async () => {
+    const { ring, call } = await sibling();
+
+    ring.useRingStore.getState().hangUp();
+
+    // Молчание здесь было бы худшим из исходов: экран погас, человек уверен,
+    // что положил трубку, — а у собеседника продолжает звонить.
+    expect(call.cancelCall).toHaveBeenCalledWith('r1');
+    expect(call.hangUp).not.toHaveBeenCalled();
+    expect(ring.useRingStore.getState().outgoing).toBeNull();
+  });
+
+  it('«Написать вместо звонка» кончает вызов РОВНО один раз', async () => {
+    const { ring, call, channels, ui } = await sibling();
+    const conversation: DmOpenResult = {
+      ok: true,
+      conversation: {
+        slug: 'dm-0123456789abcdef01234567',
+        peer: PEER,
+        lastTs: 0,
+        preview: '',
+        previewMine: false,
+      },
+    };
+    vi.mocked(channels.ask).mockResolvedValue(conversation);
+    const openDm = vi.fn();
+    vi.mocked(ui.useUiStore.getState).mockReturnValue({ openDm } as never);
+
+    ring.useRingStore.getState().writeInstead();
+
+    // Бриф требует «не уронить вызов дважды»; на соседнем устройстве прежний
+    // код ронял его НОЛЬ раз — что то же враньё, только тише.
+    expect(call.cancelCall).toHaveBeenCalledTimes(1);
+    expect(call.cancelCall).toHaveBeenCalledWith('r1');
+    await vi.waitFor(() =>
+      expect(openDm).toHaveBeenCalledWith('dm-0123456789abcdef01234567', 'ff', 'Боря'),
+    );
+
+    ring.useRingStore.getState().writeInstead();
+    expect(call.cancelCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('свой набор по-прежнему бросают через lib/call.ts — он один знает про комнату', async () => {
+    const { ring, call } = await fresh();
+    answers(call, { ok: true, ringId: 'r1' });
+    await ring.useRingStore.getState().start(PEER);
+
+    ring.useRingStore.getState().hangUp();
+
+    // Принятый и уже посаженный вызов бросают выходом из комнаты, а не
+    // `call-cancel`, и знает об этом только `lib/call.ts`.
+    expect(call.hangUp).toHaveBeenCalledTimes(1);
+    expect(call.cancelCall).not.toHaveBeenCalled();
+  });
+});
+
+describe('обрыв сокета', () => {
+  it('гасит экран: вызова больше нет, а эха об этом не будет', async () => {
+    const { ring, call } = await fresh();
+    answers(call, { ok: true, ringId: 'r1' });
+    await ring.useRingStore.getState().start(PEER);
+
+    ring.useRingStore.getState().lost();
+
+    // Сервер кончает вызов звонящего сразу, как ушло последнее устройство, без
+    // грейса (§4.2), а `call-ended{cancelled}` шлёт в уже мёртвый сокет —
+    // ждать его бессмысленно, и «дозваниваемся» висело бы вечно.
+    expect(ring.useRingStore.getState().outgoing).toBeNull();
+    // Слать некуда: сокета нет, а вызов уже закрыт сервером.
+    expect(call.hangUp).not.toHaveBeenCalled();
+    expect(call.cancelCall).not.toHaveBeenCalled();
   });
 });
