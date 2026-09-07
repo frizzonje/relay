@@ -1,5 +1,14 @@
-import { expect, type Page } from '@playwright/test';
-import { openChannel, person, test, unique } from '../fixtures/stand';
+import { expect } from '@playwright/test';
+import {
+  conversationRow,
+  onStage,
+  openChannel,
+  openDirect,
+  person,
+  test,
+  unique,
+  writeTo,
+} from '../fixtures/stand';
 
 /**
  * Личные сообщения: то самое «готово» первого этапа плана 2.0 — двое
@@ -20,58 +29,6 @@ import { openChannel, person, test, unique } from '../fixtures/stand';
  * `SITE_PASSWORD`, если ворота инсталляции включены. Имена — через `unique()`,
  * так что чистить стенд между прогонами не нужно.
  */
-
-/**
- * Лента на сцене. Именно `main`, а не вся страница: список переписок остаётся
- * на экране и после выбора беседы (панель ЛС стоит своей колонкой справа и
- * каналов собой не подменяет), а в строке списка написана та же реплика —
- * превью. Поиск по всей странице нашёл бы обе и упал бы на неоднозначности.
- */
-function onStage(page: Page, text: string) {
-  return page.locator('main').getByText(text);
-}
-
-/** Раздел ЛС: кнопка тулбара — единственный вход в него. */
-async function openDirect(page: Page): Promise<void> {
-  await page.getByTestId('toolbar-direct').click();
-  await expect(page.getByText('Direct', { exact: true })).toBeVisible({ timeout: 15_000 });
-}
-
-/**
- * Строка переписки в списке — по нику И последней реплике сразу.
- *
- * Одним ником нельзя: ник собеседника написан на экране ещё дважды — в стеке
- * лиц у тулбара (подсказка при наведении) и в шапке открытой беседы, — и
- * `getByText(ник)` находит все три места, а Playwright на неоднозначности
- * падает. Имя роли у строки собирается из её содержимого целиком, поэтому
- * «ник, а следом эта реплика» — то, чем строка списка отличается от всего
- * остального на экране.
- */
-function conversationRow(page: Page, nick: string, preview: string) {
-  return page.getByRole('button', { name: new RegExp(`${nick}[\\s\\S]*${preview}`) });
-}
-
-/**
- * Написать человеку, с которым ещё не было ни слова: «+» → поиск по нику →
- * строка человека → композер.
- *
- * Кнопку «+» ищем по доступному имени, а не по `data-testid`: имя у неё и так
- * обязано быть — кнопка без подписи, одна иконка, и без `aria-label` её не
- * прочитает скринридер. Тестид тут завёл бы вторую опору для того же самого,
- * причём такую, что молча переживёт потерю первой.
- *
- * Ищем по НИКУ, а не по отпечатку: полного отпечатка в интерфейсе нет вовсе
- * (везде короткая форма), а ник у каждого человека прогона свой (`unique`).
- */
-async function writeTo(page: Page, nick: string, text: string): Promise<void> {
-  await page.getByRole('button', { name: 'New conversation' }).click();
-  await page.getByPlaceholder('Search by nick or fingerprint').fill(nick);
-  await page.getByText(nick, { exact: true }).click();
-  const composer = page.getByPlaceholder('Message', { exact: true });
-  await expect(composer).toBeVisible({ timeout: 15_000 });
-  await composer.fill(text);
-  await composer.press('Enter');
-}
 
 test('двое переписываются, история переживает перезагрузку', async ({ browser }) => {
   test.setTimeout(180_000);

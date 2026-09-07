@@ -1,5 +1,15 @@
 import { expect, type Browser, type Page } from '@playwright/test';
-import { connected, person, test, tile, unique } from '../fixtures/stand';
+import {
+  connected,
+  conversationRow,
+  onStage,
+  openDirect,
+  person,
+  test,
+  tile,
+  unique,
+  writeTo,
+} from '../fixtures/stand';
 
 /**
  * Дозвон (задача 10 плана B) — четыре ветви из брифа, каждая доказана тем, что
@@ -80,36 +90,6 @@ async function ownerPage(browser: Browser): Promise<Page> {
   await page.keyboard.press('Escape');
   hostess = page;
   return page;
-}
-
-/** Лента открытой беседы — `main`, а не вся страница (см. `dm.spec.ts`): список
- * переписок и его превью стоят в другой части разметки (см. `AppShell` —
- * `DmDrawer`/`Sidebar` живут в панели навигации, а не в `<main>`), и без
- * этой границы «Missed call» из превью строки списка и «Missed call» из
- * плашки в самой ленте было бы не различить. */
-function onStage(page: Page, text: string) {
-  return page.locator('main').getByText(text);
-}
-
-async function openDirect(page: Page): Promise<void> {
-  await page.getByTestId('toolbar-direct').click();
-  await expect(page.getByText('Direct', { exact: true })).toBeVisible({ timeout: 15_000 });
-}
-
-/** Строка переписки в списке — по нику и превью сразу (см. `dm.spec.ts`). */
-function conversationRow(page: Page, nick: string, preview: string) {
-  return page.getByRole('button', { name: new RegExp(`${nick}[\\s\\S]*${preview}`) });
-}
-
-/** Написать человеку — заводит беседу (см. `dm.spec.ts`). */
-async function writeTo(page: Page, nick: string, text: string): Promise<void> {
-  await page.getByRole('button', { name: 'New conversation' }).click();
-  await page.getByPlaceholder('Search by nick or fingerprint').fill(nick);
-  await page.getByText(nick, { exact: true }).click();
-  const composer = page.getByPlaceholder('Message', { exact: true });
-  await expect(composer).toBeVisible({ timeout: 15_000 });
-  await composer.fill(text);
-  await composer.press('Enter');
 }
 
 /**

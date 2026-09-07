@@ -169,6 +169,64 @@ export async function say(page: Page, text: string): Promise<void> {
   await composer.press('Enter');
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Личные сообщения
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Лента открытой беседы — `main`, а не вся страница: список переписок
+ * остаётся на экране и после выбора беседы (панель ЛС стоит своей колонкой
+ * справа, `DmDrawer`/`Sidebar` живут в панели навигации, а не в `<main>`), и
+ * в строке списка написана та же реплика — превью. Поиск по всей странице
+ * нашёл бы оба места и упал бы на неоднозначности (у звонков это ещё и
+ * «Missed call» — оно есть и в превью строки списка, и в плашке самой ленты).
+ */
+export function onStage(page: Page, text: string) {
+  return page.locator('main').getByText(text);
+}
+
+/** Раздел ЛС: кнопка тулбара — единственный вход в него. */
+export async function openDirect(page: Page): Promise<void> {
+  await page.getByTestId('toolbar-direct').click();
+  await expect(page.getByText('Direct', { exact: true })).toBeVisible({ timeout: 15_000 });
+}
+
+/**
+ * Строка переписки в списке — по нику И последней реплике сразу.
+ *
+ * Одним ником нельзя: ник собеседника написан на экране ещё дважды — в стеке
+ * лиц у тулбара (подсказка при наведении) и в шапке открытой беседы, — и
+ * `getByText(ник)` находит все три места, а Playwright на неоднозначности
+ * падает. Имя роли у строки собирается из её содержимого целиком, поэтому
+ * «ник, а следом эта реплика» — то, чем строка списка отличается от всего
+ * остального на экране.
+ */
+export function conversationRow(page: Page, nick: string, preview: string) {
+  return page.getByRole('button', { name: new RegExp(`${nick}[\\s\\S]*${preview}`) });
+}
+
+/**
+ * Написать человеку, с которым ещё не было ни слова: «+» → поиск по нику →
+ * строка человека → композер.
+ *
+ * Кнопку «+» ищем по доступному имени, а не по `data-testid`: имя у неё и так
+ * обязано быть — кнопка без подписи, одна иконка, и без `aria-label` её не
+ * прочитает скринридер. Тестид тут завёл бы вторую опору для того же самого,
+ * причём такую, что молча переживёт потерю первой.
+ *
+ * Ищем по НИКУ, а не по отпечатку: полного отпечатка в интерфейсе нет вовсе
+ * (везде короткая форма), а ник у каждого человека прогона свой (`unique`).
+ */
+export async function writeTo(page: Page, nick: string, text: string): Promise<void> {
+  await page.getByRole('button', { name: 'New conversation' }).click();
+  await page.getByPlaceholder('Search by nick or fingerprint').fill(nick);
+  await page.getByText(nick, { exact: true }).click();
+  const composer = page.getByPlaceholder('Message', { exact: true });
+  await expect(composer).toBeVisible({ timeout: 15_000 });
+  await composer.fill(text);
+  await composer.press('Enter');
+}
+
 /**
  * Свой сервер с первым текстовым каналом — чтобы разговаривать в своём, а не в
  * чужом: модерирует сервер его создатель, и права проверяются только там.
