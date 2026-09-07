@@ -22,36 +22,41 @@ socket.on = vi.fn((event: string, h: (payload: never) => void) => {
 });
 
 vi.mock('@/lib/socket', () => ({ getSocket: () => socket }));
+// Эфир подделки — не заглушка, а маленький дирижёр: он помнит комнату, в
+// которой вкладка числится, и оповещает подписчиков `onVoiceLeft` на выходе.
+// Состояние вынесено наружу (`vi.hoisted`) затем, чтобы тест мог поставить
+// посадку на паузу, не теряя при этом объявленной комнаты, — см. `pendingSeat`.
+const air = vi.hoisted(() => ({
+  room: null as string | null,
+  watchers: new Set<(room: string) => void>(),
+}));
 // `joinVoice` отвечает, СОСТОЯЛСЯ ли вход, и подделка обязана уметь оба
 // ответа: всегда-успешная прячет ровно тот случай, ради которого ответ и
 // заведён (движок без WebRTC, отказ в микрофоне).
-// `voiceRoom` по умолчанию пуст: эфир ничей, пока тест не скажет обратного.
+// `voiceRoom` отвечает тем же состоянием, что и настоящий: эфир занят ровно
+// тогда, когда дирижёр объявил комнату своей.
 //
 // `leaveVoice` в подделке САМ оповещает подписчиков `onVoiceLeft` — ровно то,
 // что делает настоящий дирижёр. Пустышка вместо этого показывала бы связку
 // исправной при любом её устройстве: выход из голоса кнопкой (`Controls`,
 // `Sidebar`, `MobileNav`, хоткей) зовёт `leaveVoice` напрямую и про
 // `lib/call.ts` не знает вовсе.
-vi.mock('@/lib/voice', () => {
-  const watchers = new Set<(room: string) => void>();
-  let current: string | null = null;
-  return {
-    joinVoice: vi.fn(async (newRoom: string) => {
-      current = newRoom;
-      return true;
-    }),
-    leaveVoice: vi.fn(() => {
-      const left = current;
-      current = null;
-      if (left) for (const cb of watchers) cb(left);
-    }),
-    voiceRoom: vi.fn((): string | null => null),
-    onVoiceLeft: vi.fn((cb: (room: string) => void) => {
-      watchers.add(cb);
-      return () => watchers.delete(cb);
-    }),
-  };
-});
+vi.mock('@/lib/voice', () => ({
+  joinVoice: vi.fn(async (newRoom: string) => {
+    air.room = newRoom;
+    return true;
+  }),
+  leaveVoice: vi.fn(() => {
+    const left = air.room;
+    air.room = null;
+    if (left) for (const cb of air.watchers) cb(left);
+  }),
+  voiceRoom: vi.fn((): string | null => air.room),
+  onVoiceLeft: vi.fn((cb: (room: string) => void) => {
+    air.watchers.add(cb);
+    return () => air.watchers.delete(cb);
+  }),
+}));
 vi.mock('@/lib/voice/camera', () => ({
   toggleCamera: vi.fn(async () => {}),
   isCamOn: () => false,
@@ -64,11 +69,36 @@ async function fresh() {
   vi.resetModules();
   vi.clearAllMocks();
   for (const key of Object.keys(handlers)) delete handlers[key];
+  // Эфир переживает `resetModules` (состояние подделки вынесено наружу) —
+  // забываем комнату и подписчиков прошлого модуля сами, иначе выход из голоса
+  // будили бы покойники.
+  air.room = null;
+  air.watchers.clear();
   const call = await import('./call');
   const voice = await import('@/lib/voice');
   const camera = await import('@/lib/voice/camera');
   call.initCall();
   return { call, voice, camera };
+}
+
+/**
+ * Посадка, которая не доезжает, пока тест её не отпустит: ровно так висит на
+ * экране первый в жизни системный запрос доступа к микрофону.
+ *
+ * Комнату дирижёр объявляет своей ДО сетевого круга (`room = newRoom` в
+ * `joinVoice` стоит сразу за микрофоном), и подделка обязана делать то же.
+ * Иначе выход из голоса посреди посадки не оповестил бы никого, и разбор
+ * такого выхода выглядел бы исправным при любом своём устройстве.
+ */
+function pendingSeat(voice: typeof import('./voice')): (ok: boolean) => void {
+  let land = (_ok: boolean) => {};
+  vi.mocked(voice.joinVoice).mockImplementationOnce((newRoom: string) => {
+    air.room = newRoom;
+    return new Promise<boolean>((resolve) => {
+      land = resolve;
+    });
+  });
+  return (ok) => land(ok);
 }
 
 /** «Принято» так, как его присылает сервер обеим сторонам. */
@@ -264,14 +294,7 @@ describe('конец разговора', () => {
 
   it('конец разговора посреди посадки не оставляет микрофон открытым', async () => {
     const { call, voice } = await fresh();
-    // Посадка, которая не доезжает, пока тест её не отпустит: ровно так висит
-    // на экране первый в жизни запрос доступа к микрофону.
-    let land = (_ok: boolean) => {};
-    vi.mocked(voice.joinVoice).mockReturnValueOnce(
-      new Promise<boolean>((resolve) => {
-        land = resolve;
-      }),
-    );
+    const land = pendingSeat(voice);
     void call.dialCall('ff');
     reply({ ok: true, ringId: 'r1' });
     await Promise.resolve();
@@ -292,12 +315,7 @@ describe('конец разговора', () => {
 
   it('уборка опоздавшей посадки не сносит канал, в который уже вошли', async () => {
     const { call, voice } = await fresh();
-    let land = (_ok: boolean) => {};
-    vi.mocked(voice.joinVoice).mockReturnValueOnce(
-      new Promise<boolean>((resolve) => {
-        land = resolve;
-      }),
-    );
+    const land = pendingSeat(voice);
     void call.dialCall('ff');
     reply({ ok: true, ringId: 'r1' });
     await Promise.resolve();
@@ -321,6 +339,34 @@ describe('конец разговора', () => {
     // И спрошено это было у эфира, а не у себя: проверка «занят ли эфир»
     // обязана состояться, иначе тест зелен по совпадению.
     expect(voice.voiceRoom).toHaveBeenCalled();
+  });
+
+  it('...и не отменяет заход, начатый после выхода из голоса', async () => {
+    const { call, voice } = await fresh();
+    const land = pendingSeat(voice);
+    void call.dialCall('ff');
+    reply({ ok: true, ringId: 'r1' });
+    await Promise.resolve();
+    handlers['call-state'](accepted('r1') as never);
+    await vi.waitFor(() => expect(voice.joinVoice).toHaveBeenCalled());
+
+    // Человек отвечал на вызов, сидя в голосовом канале: посадка объявила
+    // комнату беседы своей и висит на сетевом круге. В это окно он жмёт
+    // «Выйти» — и сразу щёлкает соседний голосовой канал. Микрофон после
+    // жёсткого выхода отпущен, значит новый заход ждёт `getUserMedia`, и
+    // эфир на это время выглядит ничьим: `voiceRoom()` пуст, хотя заход идёт.
+    voice.leaveVoice(true);
+    expect(call.callRoom()).toBeNull();
+    vi.mocked(voice.leaveVoice).mockClear();
+
+    // Опоздавшая посадка доезжает — и убирать ей нечего: микрофон отпустил тот
+    // самый выход, а всё, что взято после него, принадлежит свежему заходу.
+    // Позови она `leaveVoice(true)` вторым разом — тот сдвинул бы общее
+    // поколение, и щелчок по каналу молча не сработал бы.
+    land(false);
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(voice.leaveVoice).not.toHaveBeenCalled();
   });
 
   it('трубку кладут отсюда же: сервер кончит разговор обоим', async () => {
