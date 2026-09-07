@@ -10,20 +10,34 @@ import {
 } from '@relay/shared';
 import { Icon } from '@/components/ui/icon';
 import { Identicon } from '@/components/ui/Identicon';
+import { PresenceDot } from '@/components/ui/PresenceDot';
 import { ask } from '@/lib/channels';
 import { fmtSince, shortFingerprint } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
 import { useDmStore } from '@/stores/dm';
+import { usePresence } from '@/stores/presence';
 import { useUiStore } from '@/stores/ui';
 import { useSetting } from '@/stores/config';
 
 /** Пауза перед запросом при наборе — как в поиске по истории (SearchPanel). */
 const TYPING_PAUSE_MS = 280;
 
+/**
+ * Строка человека — отдельным компонентом, а не куском внутри `.map`:
+ * `usePresence` и `useSetting` — хуки, а длина списка меняется с каждой буквой
+ * запроса. Позови их прямо в `people.map(...)`, и число хуков `PeoplePicker`
+ * за один рендер плавало бы вместе со списком (тот же довод, что у `Candidate`
+ * в MentionPicker и у `RosterRow` в OnlineMembers).
+ */
 function PersonRow({ person, onOpen }: { person: DmPerson; onOpen: () => void }) {
   const t = useT();
   const showFingerprints = useSetting<boolean>('people.showFingerprints');
+  // Присутствие — из глобального стора, как во всех остальных местах показа
+  // человека (DmList, MentionPicker, Members, ростер). Критерий приёмки плана
+  // 2.0 — «присутствие видно везде, где виден человек», и палитра выбора
+  // собеседника не исключение: сюда приходят, чтобы написать прямо сейчас.
+  const presence = usePresence(person.fingerprint);
   // «Был в сети» инсталляция вправе не показывать (`people.lastSeenVisible`):
   // это не про удобство, а про то, сколько чужой распорядок дня виден
   // посторонним. Скрыто — строки нет вовсе, а не «никогда»: подделанный ответ
@@ -31,9 +45,15 @@ function PersonRow({ person, onOpen }: { person: DmPerson; onOpen: () => void })
   const showLastSeen = useSetting<boolean>('people.lastSeenVisible');
   // «Когда видели» — то самое поле `lastSeenTs`, ради которого `DmPerson`
   // вообще отличается от `DmPeer` (см. комментарий у типа в packages/shared).
-  // 0 не «сегодня в полночь», а «никогда»: presence ещё не заведён (см. README
-  // референса — стор придёт этапом B), и `lastSeenTs` — единственное, что можно
-  // честно сказать о собеседнике прямо сейчас.
+  // 0 не «сегодня в полночь», а «никогда».
+  //
+  // Точку присутствия оно не дублирует, и потому осталось на месте: точка
+  // отвечает «где человек СЕЙЧАС» (в сети, в разговоре, недавно, никак), а эта
+  // строка — «когда его видели в последний раз». У офлайн-человека — а это
+  // большинство списка — точка не говорит ни слова о том, вчера он был или
+  // полгода назад, и ровно за этим сюда и смотрят, выбирая, кому написать.
+  // Настройку `people.lastSeenVisible` это не трогает: скрыто — строки нет
+  // вовсе, точка при этом остаётся (она не рассказывает распорядок дня).
   const seen = person.lastSeenTs
     ? t('dm.person.seen', { when: fmtSince(new Date(person.lastSeenTs).toISOString()) })
     : t('dm.person.never');
@@ -50,7 +70,17 @@ function PersonRow({ person, onOpen }: { person: DmPerson; onOpen: () => void })
       }}
       className="flex h-[60px] w-full cursor-pointer select-none items-center gap-3 rounded-[10px] px-2 outline-none transition-colors hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent/70"
     >
-      <Identicon fingerprint={person.fingerprint} size={40} className="shrink-0" />
+      {/* Кольцо-разделитель — под фон панели: `.panel` красится
+          `--color-bg-sidebar`, тот же, под который подобраны точки в DmList и
+          DmPeerCard. */}
+      <div className="relative h-[40px] w-[40px] shrink-0">
+        <Identicon fingerprint={person.fingerprint} size={40} />
+        <PresenceDot
+          state={presence}
+          size={12}
+          className="absolute -bottom-0.5 -right-0.5 ring-2 ring-bg-sidebar"
+        />
+      </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-[14px] font-medium text-text-header">{person.nick}</div>
         <div className="flex items-center gap-1.5 text-[11px] text-text-muted">

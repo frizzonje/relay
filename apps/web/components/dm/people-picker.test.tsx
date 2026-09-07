@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import { DM_PEOPLE_LIMIT, type DmPerson } from '@relay/shared';
 import { PeoplePicker } from './PeoplePicker';
 import { shortFingerprint } from '@/lib/format';
+import { usePresenceStore } from '@/stores/presence';
 
 /**
  * `ask` — единственная дверь наружу у `PeoplePicker` (dm-people, dm-open).
@@ -76,6 +77,7 @@ describe('выбор собеседника', () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     askMock.mockReset();
+    usePresenceStore.getState().reset();
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -97,6 +99,46 @@ describe('выбор собеседника', () => {
 
     expect(host.textContent).toContain(p.nick);
     expect(host.textContent).toContain(shortFingerprint(p.fingerprint));
+  });
+
+  /**
+   * «Присутствие видно везде, где виден человек» — критерий приёмки плана 2.0,
+   * и палитра выбора собеседника не исключение: точка стоит в списке
+   * переписок, в подсказке @-упоминаний, в ростере и в шапке беседы, а здесь
+   * человека выбирают, чтобы написать ему прямо сейчас.
+   *
+   * Источник — глобальный стор (`stores/presence.ts`), а не `lastSeenTs` из
+   * ответа `dm-people`: то поле говорит «когда видели», а не «где человек
+   * сейчас», и точка, собранная из него, разъехалась бы с той же точкой на том
+   * же человеке в соседней панели.
+   */
+  it('строка человека показывает присутствие из стора, а не только «был в сети»', async () => {
+    const p = person({});
+    usePresenceStore
+      .getState()
+      .applySnapshot([{ fingerprint: p.fingerprint, state: 'in-voice', since: 1000 }]);
+    askMock.mockResolvedValueOnce({ ok: true, people: [p] });
+
+    renderPicker();
+    await advance(0);
+    await flush();
+
+    const dot = host.querySelector('[role="img"]');
+    expect(dot?.getAttribute('aria-label')).toMatch(/in a call|в голосе/i);
+  });
+
+  it('без записи в сторе точка честно пустая, а не отсутствует', async () => {
+    // Незнакомый отпечаток — это `offline`, а не дыра в разметке: состояние
+    // существует (личность заведена в инсталляции), просто заявлять о ней
+    // нечего. Ровно тот же довод, что у `Candidate` в MentionPicker.
+    askMock.mockResolvedValueOnce({ ok: true, people: [person({})] });
+
+    renderPicker();
+    await advance(0);
+    await flush();
+
+    const dot = host.querySelector('[role="img"]');
+    expect(dot?.getAttribute('aria-label')).toMatch(/offline|не в сети/i);
   });
 
   it('директория ровно по лимиту показывает подсказку сузить поиск', async () => {
