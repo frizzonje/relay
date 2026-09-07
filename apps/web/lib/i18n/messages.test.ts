@@ -97,4 +97,33 @@ describe('message dictionaries', () => {
       for (const text of texts) expect([key, text.trim()]).not.toEqual([key, '']);
     }
   });
+
+  /**
+   * `call.delivery` is the honest limitation of the 1:1 call plan, printed on
+   * the outgoing-call screen: it must name exactly the surfaces a call really
+   * reaches. Relay has no push gateway, and the mobile app (the iOS client)
+   * subscribes to no call event at all — see
+   * clients/ios/Relay/Core/SocketClient.swift — so a person on a phone looks
+   * reachable (presence follows the socket, and their socket is alive) while
+   * the phone never rings. Naming the mobile app here is a promise the code
+   * does not keep, and this is the one line the owner reads while checking the
+   * plan against a live call.
+   *
+   * "Mobile web" stays allowed on purpose: saying that a backgrounded mobile
+   * browser misses the call is true, and it is the same warning the second
+   * line (`call.delivery.mobile`) gives about your own phone.
+   *
+   * The table is complete by type (`Record<Locale, …>`), not by conscience: a
+   * new language cannot join the build until someone says how that promise
+   * would read in it. Cyrillic endings are spelled out as a character class:
+   * JavaScript's `\w` is ASCII-only, so `\w*` would never match "десктопное".
+   */
+  const NO_MOBILE_APP: Record<Locale, RegExp> = {
+    en: /mobile app|desktop\/mobile/i,
+    ru: /мобильн[а-яё]*\s+(приложени|клиент)|десктопн[а-яё]*\s+или\s+мобильн/i,
+  };
+
+  it.each(LOCALES)('%s does not promise a mobile app in call.delivery', (locale: Locale) => {
+    expect(String(load(locale)['call.delivery'])).not.toMatch(NO_MOBILE_APP[locale]);
+  });
 });
