@@ -347,3 +347,42 @@ describe('ожидание вернувшегося медиасервера', (
     expect(joins()).toHaveLength(joinsAfter);
   });
 });
+
+/**
+ * Оповещение о выходе (`onVoiceLeft`) стоит ПОСРЕДИ разборки эфира: до
+ * `if (!hard) return` и до остановки дорожек. Подписчик там чужой — сегодня
+ * это `@/lib/call`, завтра кто угодно, — и брось он, `leaveVoice` оборвалась
+ * бы ровно на этой строке. Микрофон остался бы открытым при погашенном экране:
+ * то самое «человека слышно, а он об этом не знает», ради которого весь этот
+ * файл и считает дорожки.
+ */
+describe('оповещение о выходе', () => {
+  it('упавший подписчик не оставляет микрофон открытым и не глушит соседей', async () => {
+    const failed = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const heard: string[] = [];
+    const offBroken = voice.onVoiceLeft(() => {
+      throw new Error('подписчик упал');
+    });
+    const offNext = voice.onVoiceLeft((room) => heard.push(room));
+    try {
+      await voice.joinVoice('room-x', 'X');
+      await settle();
+      const mic = takenMics[takenMics.length - 1];
+
+      voice.leaveVoice(true);
+
+      // Разборка эфира доведена до конца…
+      expect(mic.track.stop).toHaveBeenCalled();
+      // …соседний подписчик своё получил (падает один — молчат все, если
+      // ловить весь цикл разом)…
+      expect(heard).toEqual(['room-x']);
+      // …и падение не проглочено молча: разбирать его будет тот, кто увидит
+      // журнал.
+      expect(failed).toHaveBeenCalled();
+    } finally {
+      offBroken();
+      offNext();
+      failed.mockRestore();
+    }
+  });
+});
