@@ -2,7 +2,12 @@
 
 import { useEffect, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import type { CallEndedRelay, CallIncomingRelay, CallStateRelay } from '@relay/shared';
+import type {
+  CallEndedRelay,
+  CallIncomingRelay,
+  CallStateRelay,
+  VoiceRefusedRelay,
+} from '@relay/shared';
 import { getSocket } from '@/lib/socket';
 import { initVoice, relabelSelf } from '@/lib/voice';
 import { initCall } from '@/lib/call';
@@ -369,10 +374,29 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // То же в голосе: ни `join`, ни `media-update` ответа не ждут, а `join`
     // вдобавок неотличим для клиента от удавшегося — без этой строки выключенная
     // владельцем камера выглядела бы сломанной кнопкой, а полный канал тишиной.
-    socket.on('voice-refused', ({ reason }) => {
-      if (!reason) return;
+    //
+    // Кроме одной причины. `not-in-call` — отказ во входе в комнату БЕСЕДЫ, и
+    // хозяин у него один: `lib/call.ts` (см. `voice-refused` там). Стучится в
+    // такую комнату только он — в реестре каналов её нет, и щелчком по каналу
+    // такого `join` не получить, — а значит отказ приходит либо законной
+    // стороне разговора, у которой сторож (`CALL_ROOM_SEAT_MS`) закрыл комнату,
+    // пока висел первый в жизни системный запрос доступа к микрофону, либо на
+    // опоздавший `join` того, кто из разговора уже вышел. Общий тост в обоих
+    // случаях говорит «это разговор двоих, и он не ваш» человеку, который был
+    // стороной собственного вызова: обвинение вместо объяснения. Ответ на этот
+    // отказ и без тоста есть — `lib/call.ts` снимает экран звонка и отпускает
+    // микрофон, а это ровно то, что человеку нужно.
+    //
+    // Сверять комнату здесь (`callRoom()`) нельзя, и это не осторожность:
+    // порядок обработчиков одного события между двумя модулями не гарантия, а
+    // `lib/call.ts` подписывается раньше (`initCall` выше по этому же эффекту)
+    // и к нашему приходу комнату уже обнулит — проверка молча оказалась бы
+    // всегда-истинной.
+    const onVoiceRefused = ({ reason }: VoiceRefusedRelay) => {
+      if (!reason || reason === 'not-in-call') return;
       toast(tx(voiceRefusalKey(reason)));
-    });
+    };
+    socket.on('voice-refused', onVoiceRefused);
 
     // Реестр серверов — сервер шлёт полный список на connect и при изменениях.
     socket.on('servers', (list) => {
@@ -729,6 +753,12 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('call-state', onCallState);
       socket.off('call-ended', onCallEnded);
       socket.off('call-incoming', onCallIncoming);
+      // Тоже именной, и здесь это не стиль: на `voice-refused` висит ещё и
+      // обработчик `lib/call.ts`, а тот вешается один раз на приложение и
+      // назад не вернётся. Голый `socket.off('voice-refused')` снял бы его
+      // заодно — и законный участник, которому сторож закрыл комнату, остался
+      // бы с открытым микрофоном под экраном звонка, которого некому снять.
+      socket.off('voice-refused', onVoiceRefused);
       socket.off('dm-activity');
       socket.off('admin-changed');
       socket.off('reads');

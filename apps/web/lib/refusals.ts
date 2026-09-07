@@ -31,6 +31,16 @@ export const CHAT_REFUSAL_KEYS: Record<ChatRefusal, MessageKey> = {
   'spoiler-off': 'refused.chat.spoiler-off',
 };
 
+/**
+ * `not-in-call` в этой карте есть, а тостом сейчас не показывается ни разу, и
+ * это не забытый хвост. Отказ во входе в комнату беседы разбирает `lib/call.ts`
+ * — единственный, кто в такую комнату стучится, — и разбирает делом: снимает
+ * экран звонка и отпускает микрофон (см. `voice-refused` там и комментарий в
+ * `SocketProvider`). Общий тост поверх этого обвинял бы законную сторону
+ * разговора в том, что разговор не её. Карта остаётся полной по типу: причина
+ * от сервера существует, и место для её текста должно быть заведено — иначе
+ * следующий, кому она понадобится, начнёт с пустого тоста.
+ */
 export const VOICE_REFUSAL_KEYS: Record<VoiceRefusal, MessageKey> = {
   'video-off': 'refused.voice.video-off',
   'screen-share-off': 'refused.voice.screen-share-off',

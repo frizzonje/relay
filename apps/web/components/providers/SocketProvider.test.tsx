@@ -33,6 +33,20 @@ vi.mock('@/lib/notify', () => ({
   notifyMessage: vi.fn(),
   notifyCall: vi.fn(),
 }));
+/**
+ * Тосты — шпион: по отказам провайдер только их и показывает. `custom` и
+ * `dismiss` в подделке не для красоты — ими живёт всплывашка беседы
+ * (`showDmToast`), и без них соседние тесты падали бы на ровном месте.
+ */
+const toast = vi.hoisted(() =>
+  Object.assign(vi.fn(), {
+    error: vi.fn(),
+    success: vi.fn(),
+    custom: vi.fn(),
+    dismiss: vi.fn(),
+  }),
+);
+vi.mock('sonner', () => ({ toast }));
 
 /**
  * Socket.io-клиент — фейковая шина событий: `on` копит обработчики, `_fire`
@@ -474,6 +488,60 @@ describe('дозвон: call-state/call-ended доезжают до стора �
       }),
     );
     expect(foreignEnded).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('отказ в голосе: тост и его уборка', () => {
+  it('«эта беседа — между двумя другими» законному участнику не показывают', () => {
+    // `not-in-call` сервер шлёт ровно в одном месте — на `join` в комнату
+    // беседы (voice.handlers.ts). Стучится в неё только `lib/call.ts`: в
+    // реестре каналов такой комнаты нет, и щелчком по каналу такой `join` не
+    // получить. Значит отказ приходит либо законной стороне разговора, у
+    // которой сторож закрыл комнату, пока висел системный запрос доступа к
+    // микрофону, либо на опоздавший `join` того, кто из разговора уже вышел.
+    // Общий тост в обоих случаях обвиняет человека в том, что он был стороной
+    // собственного вызова.
+    act(() => socket._fire('voice-refused', { reason: 'not-in-call' }));
+
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('прочие отказы в голосе по-прежнему объясняют себя', () => {
+    // Молчание здесь было бы второй крайностью: `join` без объяснения
+    // неотличим от удавшегося.
+    act(() => socket._fire('voice-refused', { reason: 'room-full' }));
+
+    expect(toast).toHaveBeenCalledTimes(1);
+  });
+
+  it('перемонтирование не уносит чужой обработчик voice-refused', () => {
+    // `lib/call.ts` вешает свой обработчик того же события один раз на
+    // приложение (`initCall` замокан выше — его роль играет этот шпион).
+    // Безымянный `socket.off('voice-refused')` снял бы и его, а назад он не
+    // вернётся: законный участник, которому сторож закрыл комнату, остался бы
+    // с открытым микрофоном под экраном звонка навсегда.
+    const foreign = vi.fn();
+    socket.on('voice-refused', foreign);
+
+    act(() => root.unmount());
+    host.remove();
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() =>
+      root.render(
+        <SocketProvider>
+          <div />
+        </SocketProvider>,
+      ),
+    );
+
+    act(() => socket._fire('voice-refused', { reason: 'room-full' }));
+
+    expect(foreign).toHaveBeenCalledTimes(1);
+    // И свой ровно один: уборка снимает своё, а не копит его.
+    expect(socket._handlers.get('voice-refused')).toHaveLength(2);
+    expect(toast).toHaveBeenCalledTimes(1);
   });
 });
 
