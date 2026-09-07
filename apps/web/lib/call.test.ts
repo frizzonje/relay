@@ -26,11 +26,32 @@ vi.mock('@/lib/socket', () => ({ getSocket: () => socket }));
 // ответа: всегда-успешная прячет ровно тот случай, ради которого ответ и
 // заведён (движок без WebRTC, отказ в микрофоне).
 // `voiceRoom` по умолчанию пуст: эфир ничей, пока тест не скажет обратного.
-vi.mock('@/lib/voice', () => ({
-  joinVoice: vi.fn(async () => true),
-  leaveVoice: vi.fn(),
-  voiceRoom: vi.fn((): string | null => null),
-}));
+//
+// `leaveVoice` в подделке САМ оповещает подписчиков `onVoiceLeft` — ровно то,
+// что делает настоящий дирижёр. Пустышка вместо этого показывала бы связку
+// исправной при любом её устройстве: выход из голоса кнопкой (`Controls`,
+// `Sidebar`, `MobileNav`, хоткей) зовёт `leaveVoice` напрямую и про
+// `lib/call.ts` не знает вовсе.
+vi.mock('@/lib/voice', () => {
+  const watchers = new Set<(room: string) => void>();
+  let current: string | null = null;
+  return {
+    joinVoice: vi.fn(async (newRoom: string) => {
+      current = newRoom;
+      return true;
+    }),
+    leaveVoice: vi.fn(() => {
+      const left = current;
+      current = null;
+      if (left) for (const cb of watchers) cb(left);
+    }),
+    voiceRoom: vi.fn((): string | null => null),
+    onVoiceLeft: vi.fn((cb: (room: string) => void) => {
+      watchers.add(cb);
+      return () => watchers.delete(cb);
+    }),
+  };
+});
 vi.mock('@/lib/voice/camera', () => ({
   toggleCamera: vi.fn(async () => {}),
   isCamOn: () => false,
@@ -331,6 +352,59 @@ describe('конец разговора', () => {
     handlers['call-state'](accepted('r1') as never);
     await Promise.resolve();
     expect(call.callRoom()).toBeNull();
+  });
+
+  /**
+   * Разговор кончается двумя путями, и второй — обычный: человек сам жмёт
+   * «Отбой»/«Выйти» в панели голоса (`Controls`, `Sidebar`, `MobileNav`) или
+   * бьёт хоткей. Все они зовут `leaveVoice` напрямую и про `lib/call.ts` не
+   * знают; пока тот об этом не узнавал, `room`/`mine` оставались набитыми
+   * навсегда — и серверный `call-over` приезжал в комнату, которую сокет уже
+   * покинул.
+   */
+  it('выход из голоса кнопкой кончает разговор и здесь', async () => {
+    const { call, voice } = await talking();
+
+    voice.leaveVoice(true);
+
+    expect(call.callRoom()).toBeNull();
+    expect(call.ownedCall()).toBeNull();
+  });
+
+  it('...и следующий отбой отменяет дозвон, а не выдёргивает из канала', async () => {
+    const { call, voice } = await talking();
+    voice.leaveVoice(true);
+    vi.mocked(voice.leaveVoice).mockClear();
+    socket.emit.mockReset();
+
+    // Позже человек звонит кому-то ещё и жмёт «Отбой» до ответа. Устаревший
+    // `room` уводил `hangUp` в ветку разговора: вместо отмены дозвона
+    // `leaveVoice(true)` выдёргивал человека из того голосового канала, в
+    // котором он на самом деле сидит.
+    void call.dialCall('ff');
+    reply({ ok: true, ringId: 'r2' });
+    await Promise.resolve();
+    call.hangUp();
+
+    expect(voice.leaveVoice).not.toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenLastCalledWith(
+      'call-cancel',
+      { ringId: 'r2' },
+      expect.any(Function),
+    );
+  });
+
+  it('выход из ЧУЖОЙ комнаты разговора не касается', async () => {
+    const { call } = await talking();
+    // Тот же хук приходит и на переезд между обычными каналами, и на мягкий
+    // выход внутри захода в саму комнату беседы (`joinVoice` покидает прежний
+    // канал сам). Разбери его без сверки комнаты — и посадка в разговор
+    // сносила бы саму себя.
+    const { onVoiceLeft } = await import('@/lib/voice');
+    const notify = vi.mocked(onVoiceLeft).mock.calls[0]?.[0] as (room: string) => void;
+    notify('obshchii');
+
+    expect(call.callRoom()).toBe(ROOM);
   });
 
   it('без своего вызова и без комнаты отбой не шлёт ничего', async () => {
