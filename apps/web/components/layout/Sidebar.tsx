@@ -30,6 +30,7 @@ import {
   toggleSpeakers,
 } from '@/lib/voice';
 import { channelMenuEntries } from '@/lib/channel-menu';
+import { orphanVoiceRooms } from '@/lib/orphan-rooms';
 import { previewMessageSound } from '@/lib/notify';
 import { openContextMenu } from '@/lib/context-menu';
 import { useSfuAvailable } from '@/lib/use-sfu';
@@ -439,11 +440,11 @@ export function Sidebar() {
   // Занятые эфиры, которых нет ни в одном сервере реестра (напр. канал удалили,
   // пока в нём сидят) — не роняем из виду. Слаги считаем глобально (не по активному
   // серверу), иначе живые каналы других серверов утекли бы сюда как «сироты».
-  // Показываем их только на главном — своего сервера у них уже нет.
+  // Показываем их только на главном — своего сервера у них уже нет. Правила
+  // отбора (включая «комната разговора двоих сюда не попадает никогда») живут
+  // в lib/orphan-rooms.
   const allVoiceSlugs = new Set(channels.filter((c) => c.type === 'voice').map((c) => c.slug));
-  const orphanRooms = Object.keys(presence).filter(
-    (r) => !allVoiceSlugs.has(r) && ((presence[r]?.length ?? 0) > 0 || r === voiceRoom),
-  );
+  const orphanRooms = orphanVoiceRooms(presence, allVoiceSlugs, voiceRoom);
 
   // Клик по уже открытому текстовому каналу — выходим.
   function openTextChannel(slug: string, label: string) {
