@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { Logger, type OnModuleDestroy } from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
@@ -10,6 +10,7 @@ import {
   WebSocketServer,
 } from '@nestjs/websockets';
 import type { AppServer, AppSocket } from './socket-data';
+import { BackgroundWork } from './background';
 import { ChatSessions } from './chat-sessions';
 import { Directory } from './directory';
 import { Mentions } from './mentions';
@@ -188,7 +189,9 @@ function spokenProtocol(auth: unknown): number | undefined {
  * одного обращения к `client.data`. Ровно из-за его отсутствия здесь и появился
  * когда-то забытый `sfuPassRoom` — см. docs/plans/old/core-refactor.md.
  */
-export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
+export class SignalingGateway
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy
+{
   @WebSocketServer()
   server!: AppServer;
 
@@ -209,6 +212,28 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
   ) {}
 
   private readonly logger = new Logger(SignalingGateway.name);
+
+  /**
+   * Работа, которую гейтвей начал и не ждёт: отметка о пропущенном, узнавание
+   * личности на подключении, личные настройки первого кадра. Почему её не
+   * ждут и почему при этом обязаны уметь дождаться — в ./background.
+   */
+  private readonly background = new BackgroundWork((what, err) =>
+    this.logger.error(`${what}: ${err}`),
+  );
+
+  /**
+   * Сервис останавливают — доводим начатое до конца.
+   *
+   * Зовётся не сам по себе: `app.close()` по SIGTERM/SIGINT (см. main.ts)
+   * проходит по провайдерам этим хуком и только потом закрывает соединение с
+   * базой. Без него отметка о пропущенном, начатая за секунду до рестарта,
+   * упиралась бы в уже закрытую базу — то есть пропущенный звонок пропадал бы
+   * ровно так же незаметно, как сам звонок.
+   */
+  async onModuleDestroy(): Promise<void> {
+    await this.background.settled();
+  }
 
   /**
    * Контур доступа. Заводится здесь по той же причине, что и голосовая сессия:
@@ -302,13 +327,14 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     marksMissed: () => this.settings.get<boolean>('calls.missedMarkEnabled'),
     // Саму строку пишет лента (`ChatHandlers`), а не владелец вызовов: тот про
     // переписку не знает вовсе и ждать записи в базу не должен — оба конца
-    // ждут «чем кончилось» прямо сейчас. Поэтому и `void` с обработанным
-    // отказом: упавшая запись — это потерянная отметка, а не потерянный
-    // процесс, и молчать о ней всё равно нельзя.
+    // ждут «чем кончилось» прямо сейчас. Поэтому запись уходит в фоновую
+    // работу: здесь её не ждут, но дождаться её можно — на остановке сервиса и
+    // на стенде тестов (см. ./background).
     markMissed: (from, to, mark) => {
-      void this.chatHandlers
-        .noteMissedCall({ id: from.id, nick: from.nick }, to.fingerprint, mark)
-        .catch((err) => this.logger.error(`отметка о пропущенном не записана: ${err}`));
+      this.background.run(
+        'отметка о пропущенном не записана',
+        this.chatHandlers.noteMissedCall({ id: from.id, nick: from.nick }, to.fingerprint, mark),
+      );
     },
     // Принятый вызов открывает комнату беседы — и на этом дозвон кончается.
     // Адрес у неё тот же, что у переписки этих двоих (он считается из их id и
@@ -498,33 +524,39 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
         );
         return;
       }
-      void this.perimeter.recognize(socket).then((refusal) => {
-        // Забаненного на всю инсталляцию — и всякого, кроме владельца, пока
-        // идёт обслуживание, — не пускаем внутрь вовсе: отказом самой
-        // миддлвары, до `handleConnection`. Причина уезжает клиенту текстом
-        // ошибки: белый экран вместо объяснения — худший из ответов на «почему
-        // меня не пускает».
-        if (refusal) {
-          if (refusal === 'banned') {
-            next(new Error(BANNED_ERROR));
+      // Узнавание идёт в базу, а рукопожатие её не ждёт. Регистрируем по
+      // тому же правилу, что и остальное начатое: гейтвей, которого
+      // останавливают посреди чужого входа, доводит вход до ответа.
+      this.background.run(
+        'личность на подключении не разобрана',
+        this.perimeter.recognize(socket).then((refusal) => {
+          // Забаненного на всю инсталляцию — и всякого, кроме владельца, пока
+          // идёт обслуживание, — не пускаем внутрь вовсе: отказом самой
+          // миддлвары, до `handleConnection`. Причина уезжает клиенту текстом
+          // ошибки: белый экран вместо объяснения — худший из ответов на «почему
+          // меня не пускает».
+          if (refusal) {
+            if (refusal === 'banned') {
+              next(new Error(BANNED_ERROR));
+              return;
+            }
+            if (refusal === 'blocked') {
+              next(new Error(BLOCKED_ERROR));
+              return;
+            }
+            // Текст обслуживания едет ВМЕСТЕ с отказом, а не снимком настроек:
+            // снимок приезжает по сокету, которого у отвергнутого как раз и нет.
+            // socket.io доставляет `data` рядом с сообщением ошибки — это
+            // единственное, что доходит до того, кого не пустили.
+            const err = new Error(MAINTENANCE_ERROR) as Error & { data?: unknown };
+            const text = this.settings.get<string>('maintenance.message').trim();
+            if (text) err.data = { message: text };
+            next(err);
             return;
           }
-          if (refusal === 'blocked') {
-            next(new Error(BLOCKED_ERROR));
-            return;
-          }
-          // Текст обслуживания едет ВМЕСТЕ с отказом, а не снимком настроек:
-          // снимок приезжает по сокету, которого у отвергнутого как раз и нет.
-          // socket.io доставляет `data` рядом с сообщением ошибки — это
-          // единственное, что доходит до того, кого не пустили.
-          const err = new Error(MAINTENANCE_ERROR) as Error & { data?: unknown };
-          const text = this.settings.get<string>('maintenance.message').trim();
-          if (text) err.data = { message: text };
-          next(err);
-          return;
-        }
-        next();
-      });
+          next();
+        }),
+      );
     });
   }
 
@@ -661,7 +693,7 @@ export class SignalingGateway implements OnGatewayInit, OnGatewayConnection, OnG
     // Своё личное — отметки чтения и настройки. Отдельно от реестра и позже
     // него: за ними надо в базу, а реестр уже здесь, и задерживать первый кадр
     // приложения ради громкостей незачем.
-    void this.personalHandlers.send(client);
+    this.background.run('личное не доехало', this.personalHandlers.send(client));
   }
 
   /**

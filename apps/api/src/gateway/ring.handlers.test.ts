@@ -480,6 +480,43 @@ describe('отметка о пропущенном', () => {
       .find({ where: { channelId: DmService.address(a, b) }, order: { createdAt: 'ASC' } });
   }
 
+  it('остановка сервиса дожидается начатой отметки', async () => {
+    const { boris, hers } = await pair();
+    await tune(settings, 'calls.ringTimeoutSeconds', 10);
+    // Тишина до начала: подключения стенда тоже заводят фоновую работу (личное
+    // первого кадра), и без этой строки проверка ниже держалась бы на ней, а не
+    // на отметке — то есть зеленела бы и с потерянной записью.
+    await gw.onModuleDestroy();
+
+    // Держим запись за руку: пока обещание не разрешено, отметка не доехала —
+    // и остановка не имеет права закончиться.
+    let release!: () => void;
+    const writing = new Promise<void>((r) => (release = r));
+    const chatHandlers = (
+      gw as unknown as { chatHandlers: { noteMissedCall: () => Promise<void> } }
+    ).chatHandlers;
+    vi.spyOn(chatHandlers, 'noteMissedCall').mockReturnValue(writing);
+
+    await call(hers, boris.fingerprint);
+    vi.advanceTimersByTime(11_000);
+
+    let stopped = false;
+    const stopping = gw.onModuleDestroy().then(() => (stopped = true));
+    // Крутим цикл щедро и выходим раньше, если остановка всё-таки закончилась:
+    // проверка обязана падать на потерянной записи, а не просто не успевать её
+    // заметить. Часы поддельные, поэтому оборот цикла даётся самими таймерами.
+    for (let i = 0; i < 40 && !stopped; i++) await vi.advanceTimersByTimeAsync(5);
+    // Вот ради этой строки всё и написано: сервис, остановленный посреди
+    // записи, ждёт её. Иначе отметка о звонке, случившемся за секунду до
+    // рестарта, упиралась бы в закрытую базу — а на стенде тестов брошенная
+    // запись встречала бы TRUNCATE следующего теста (см. gateway.testkit).
+    expect(stopped).toBe(false);
+
+    release();
+    await stopping;
+    expect(stopped).toBe(true);
+  });
+
   it('«не ответили» оставляет в переписке отметку с длительностью дозвона', async () => {
     const { anya, boris, hers, his } = await pair();
     await tune(settings, 'calls.ringTimeoutSeconds', 10);

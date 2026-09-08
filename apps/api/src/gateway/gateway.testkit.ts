@@ -48,6 +48,30 @@ export type AnyGw = SignalingGateway & {
 
 let db: DataSource;
 
+/**
+ * Гейтвей, который стенд поднял последним, — и потому единственный, кто ещё
+ * может разговаривать с базой.
+ */
+let live: SignalingGateway | undefined;
+
+/**
+ * Остановить поднятую инсталляцию и дождаться начатого ею.
+ *
+ * Это условие очистки базы, а не уборка ради порядка. Гейтвей начинает работу,
+ * которую не ждёт (отметка о пропущенном — самая заметная, см.
+ * ./background), и брошенная вставка живёт дольше теста, который её вызвал.
+ * Следующий тест открывается с `TRUNCATE`, а TRUNCATE и чужая вставка не
+ * расходятся миром: Postgres разнимает их взаимной блокировкой, и падает при
+ * этом не тот тест, что оставил хвост, а тот, что пришёл следом. Так упал
+ * релиз 2.0.0 (release-images #18) — на «вызов занятому отвечает busy», сразу
+ * за тестом, который сам говорит, что строку в переписке не ждёт.
+ */
+async function stopGateway(): Promise<void> {
+  const gw = live;
+  live = undefined;
+  await gw?.onModuleDestroy();
+}
+
 /** База стенда: нужна тестам, которые проверяют не рассылку, а запись. */
 export function database(): DataSource {
   return db;
@@ -84,6 +108,9 @@ export function useGatewayStand() {
   });
 
   afterAll(async () => {
+    // Соединение закрываем последним: брошенный запрос, встретивший закрытую
+    // базу, — это ошибка в отчёте о прогоне, который уже кончился.
+    await stopGateway();
     await db?.destroy();
   });
 
@@ -97,7 +124,10 @@ export function useGatewayStand() {
     delete process.env.SFU_SECRET;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Раньше всего остального: за начатым гейтвеем ещё может идти запись, а
+    // ниже снимаются шпионы и поддельные часы, на которых она стоит.
+    await stopGateway();
     vi.useRealTimers();
     vi.restoreAllMocks();
     // Дверь по адресу — модульная переменная на весь процесс: её ставит
@@ -149,6 +179,7 @@ export async function putUpload(id: string, att: Partial<Attachment> = {}) {
  * кладётся строками, потому что реестр читает их.
  */
 export async function makeGateway(saved: PersistedRegistry = {}) {
+  await stopGateway();
   await resetDatabase(db);
   if (saved.servers?.length) {
     await db.getRepository(ServerRow).insert(
@@ -229,6 +260,7 @@ export async function makeGateway(saved: PersistedRegistry = {}) {
     audit,
     retention,
   );
+  live = gw;
   gw.server = server.asServer();
   // Узнавание личности вешается миддлварой — заводим её и здесь, иначе тест
   // проверял бы гейтвей, у которого этой двери нет вовсе.
