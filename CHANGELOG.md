@@ -5,6 +5,137 @@ it: every entry says what changes on your machine and for the people using it.
 Releases before 1.0.0 are on the [releases page](https://github.com/frizzonje/relay/releases) —
 reconstructing notes for them after the fact would be invention, not history.
 
+## 2.0.0 — 2026-09-08
+
+Two things carry this release, and both change who an address can name: **a
+conversation can be with one person instead of a room**, and **that person can
+be called, not just met in a channel**. The third follows from the two: **the
+installation is now set up from a panel, not from `.env`** — a server where
+strangers can reach your people needs an owner with the off switch within
+reach, and the panel is that switch, for this release and the ones after it.
+
+### Upgrading from 1.x — read this first
+
+The machinery was built in 1.0, so this time the upgrade asks before it moves
+instead of requiring a reinstall:
+
+- **`:latest` does not move to 2.0.** Nothing about a running stack changes by
+  itself. The way up is `relay update`, which sees a major, says so, takes a
+  full backup first and asks — before a single file moves. The rollback is the
+  two commands it prints.
+- **No new services and no new required variables.** The database gains three
+  tables (direct messages, settings, call marks), and api creates them itself
+  on the first start after the upgrade.
+- **The settings table starts from your `.env`, then stops reading it.** On
+  the first start with an empty settings table, `RETENTION_DAYS` and
+  `UPLOAD_MAX_TOTAL_BYTES` are read once and become the values in the panel;
+  from then on the panel rules and those lines change nothing. `SITE_PASSWORD`
+  stays a fallback: a password set in the panel wins over the file.
+- **The owner stays the owner.** The identity bound in 1.0 keeps the panel. If
+  nobody ever claimed ownership, `relay owner-link` prints the one-time link
+  that binds it now — and only that person sees the panel.
+
+### Added
+
+- **Direct messages.** A conversation with a person, not a room: addressed to
+  an identity, listed in its own section next to the servers, kept by the same
+  rules as everything else — same history, same retention, same file limits.
+  Names are not unique, so every list of people shows the identicon and a
+  short fingerprint, and presence tells whether the person is there to read
+  it. Anyone who passed the site password can start one; guests cannot, and a
+  ban closes the door on both channels and conversations. One thing is said
+  where people make the decision rather than hidden in a corner: a direct
+  message is addressed to one person, but it is not hidden from the
+  installation's owner.
+- **Presence that covers the whole installation.** Online, in a call, or away —
+  the same dot everywhere a person is shown, across all devices, not just
+  inside a voice channel.
+- **Calling a person.** From a conversation, a call rings the other side with
+  accept and decline — a corner toast, not a takeover: the person can keep
+  working. The ring runs 45 seconds by default (10–180, a panel setting). If
+  the person is already speaking in a voice channel, the caller hears busy
+  rather than silence; if no device is connected at all, the refusal is
+  immediate. No answer leaves a mark in the conversation with a one-tap call
+  back, and a wrong number is a wrong number — `offline` and `no-answer` read
+  differently. A call is answered per person, not per tab: it rings on every
+  device, and answering one silences the rest. The conversation itself is
+  always a direct connection between the two — never the media server — and
+  it survives a few seconds of dropped network (24 s, like a voice channel).
+  Video is asked for while dialing, so the person being called knows before
+  accepting.
+- **Who can call you is your own door.** By default only people you already
+  have a conversation with — a setting, all the way up to everyone and all the
+  way down to nobody (calls can be switched off for the whole installation).
+- **An incoming call that reaches beyond the tab.** A background tab flashes
+  its title and rings; the desktop app raises its window, shows the call in
+  its tray and hands the system a notification. The honest limit is on the
+  screen where the call is placed, not discovered by experience: relay has no
+  push gateway, so a call reaches someone only while relay is open in a
+  browser tab or running as an app. Mobile web in the background will not
+  catch one.
+- **The owner panel.** Behind a shield that only the owner sees: 95 settings
+  in twelve tabs — access, people, moderation, messages, files, direct
+  messages, servers, voice, invites, appearance, notifications, maintenance.
+  Almost everything lands at once, without a restart, and each field says when
+  it lands. Beside the settings: everyone who ever signed in with their
+  devices and fingerprints (revoke a device, or ban the person across the
+  whole installation), installation-wide bans and address blocking before
+  anything else is asked, and a log of every change with its author and time.
+  Upkeep: export and import the settings, run the retention sweep by hand,
+  sign every device out, issue a fresh owner link. Overview shows how much
+  CPU, memory and disk the machine is using. Secrets never leave the server —
+  the login password and the TURN/SFU keys are shown as "set" or "not set",
+  not shown.
+- **The daily settings stop being env variables.** Retention, upload quotas,
+  rate limits, first-message rules, the DM policy, maintenance mode — seeded
+  from `.env` once, governed from the panel from then on. Four fields stay in
+  `.env` for good (the TURN and SFU addresses and keys); the panel shows them
+  and says where to edit them.
+
+### Changed
+
+- **The rail grew a place for people.** The toolbar moved to the right edge,
+  and next to the servers stands the Direct section — conversations live
+  outside any server, so they are not stored as a server's channel. Search
+  inside a conversation stays inside it; there are no pins and no mention
+  counters there, and unread counts say how much is unread, not that something
+  is.
+- **A refused conversation is said out loud.** Opening a direct message that
+  is no longer yours answers "this conversation isn't open to you anymore"
+  instead of quietly failing, and the people picker says when its list is cut
+  short and how to narrow it.
+
+### Fixed
+
+- **The feed respects the page size the owner set.** The message feed ignored
+  the panel's page size and always served its own.
+- **Idle tabs stop redrawing.** The animated background was re-rendered every
+  frame; laptops no longer pay for a screen nobody is watching.
+- **Every route out of voice now ends the conversation.** Leaving by any door
+  closes the call for both sides and frees the seat — no ghost holding the
+  microphone, no conversation outliving its people.
+
+### The desktop client
+
+Released alongside, from this same repository, as
+[`desktop-v2.0.0`](https://github.com/frizzonje/relay/releases/tag/desktop-v2.0.0):
+one version number continues to cover the app, the images and the packages.
+Its own notes are on that page — the short version is that the app now knows
+it can be called: an incoming call raises the window, the tray shows it, and
+the system gets a notification even when the window is minimized.
+
+### Not in this release
+
+Push notifications, and with them incoming calls on a phone that has relay
+closed. The question was decided: not now — a push gateway needs
+infrastructure and keys that no self-hosted installation can provide for
+itself, and promising one that does not exist would be worse than saying so on
+the screen where it matters. The native iOS client does not receive calls yet
+either; it connects and shows presence, and a call to it ends as "no answer".
+End-to-end encryption remains out, for the reasons written in 1.0's notes; if
+it ever comes, a conversation between two people is the natural place for it
+to start.
+
 ## 1.0.0 — 2026-08-21
 
 Two things carry this release, and everything else in it exists because those
