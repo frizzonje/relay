@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const emit = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/socket', () => ({ getSocket: () => ({ emit }) }));
+
 import { unreadIn, useDmStore } from './dm';
 import { useUnreadStore } from './unread';
 
@@ -6,9 +10,21 @@ const peer = { fingerprint: 'fp-ты', nick: 'ты' };
 const slug = 'dm-0123456789abcdef01234567';
 
 beforeEach(() => {
+  emit.mockClear();
   useDmStore.getState().reset();
   useUnreadStore.setState({ lastRead: {} });
 });
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+/** Ответить за сервер: подтверждение — последний аргумент вызова. */
+function answerLast(res: unknown): void {
+  const cb = emit.mock.calls.at(-1)?.at(-1);
+  if (typeof cb !== 'function') throw new Error('в этом вызове нечем ответить');
+  (cb as (r: unknown) => void)(res);
+}
 
 describe('список переписок', () => {
   it('свежая реплика поднимает беседу наверх', () => {
@@ -114,5 +130,71 @@ describe('unreadIn', () => {
       .getState()
       .remember({ slug, peer, lastTs: 500, preview: 'было давно', previewMine: false });
     expect(unreadIn(slug)).toBe(true);
+  });
+});
+
+/**
+ * Обрыв на полуслове — не отзыв прав.
+ *
+ * Живой разбор (Atlas-70, 8 сентября): сокет пересоздавался трижды за
+ * тринадцать минут, `dm-list` остался без ответа, и раздел встал на «Не
+ * удалось получить список переписок» до самого конца этой чехарды. Список
+ * держит не только сам раздел, но и лица в рейке тулбара, так что «ЛС не
+ * работает совсем» — это ровно оно.
+ *
+ * Разницы между «сервер отказал» и «ответ не доехал» у события с
+ * подтверждением нет вовсе: у socket.io ack потерянного сокета не приходит
+ * никогда, а `perimeter.allow` — токен-бакет, и его отказ приезжает тем же
+ * `forbidden`, что и настоящий запрет. Поэтому единственный честный ответ на
+ * первую неудачу — спросить ещё раз, а не рисовать приговор.
+ */
+describe('reload(): неудача — повод переспросить, а не сдаться', () => {
+  it('оставшись без ответа, спрашивает список заново', () => {
+    vi.useFakeTimers();
+    useDmStore.getState().reload();
+    expect(emit).toHaveBeenCalledTimes(1);
+
+    // Сокет умер на полуслове: подтверждения не будет никогда.
+    vi.advanceTimersByTime(60_000);
+
+    expect(emit.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('отказ лимитера тоже переспрашивается: он временный', () => {
+    vi.useFakeTimers();
+    useDmStore.getState().reload();
+    answerLast({ ok: false, error: 'forbidden' });
+
+    vi.advanceTimersByTime(60_000);
+
+    expect(emit.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('пока повторы не исчерпаны, про отказ не врёт', () => {
+    vi.useFakeTimers();
+    useDmStore.getState().reload();
+    answerLast({ ok: false, error: 'forbidden' });
+
+    expect(useDmStore.getState().failed).toBe(false);
+  });
+
+  it('исчерпав повторы, признаёт неудачу — кнопке «Ещё раз» есть что чинить', () => {
+    vi.useFakeTimers();
+    useDmStore.getState().reload();
+    vi.advanceTimersByTime(300_000);
+
+    expect(useDmStore.getState().failed).toBe(true);
+    expect(useDmStore.getState().loading).toBe(false);
+  });
+
+  it('дождавшись списка, повторов не заводит', () => {
+    vi.useFakeTimers();
+    useDmStore.getState().reload();
+    answerLast({ ok: true, conversations: [] });
+
+    vi.advanceTimersByTime(300_000);
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(useDmStore.getState().failed).toBe(false);
   });
 });

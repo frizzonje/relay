@@ -52,15 +52,41 @@ const initial: Pick<DmState, 'conversations' | 'activity' | 'loading' | 'failed'
 let listSeq = 0;
 const LIST_TIMEOUT_MS = 6000;
 
-export const useDmStore = create<DmState>((set, get) => ({
-  ...initial,
+/**
+ * Через сколько переспросить, если список не доехал, — и сколько раз.
+ *
+ * Первая неудача не значит ничего. Ответа может не быть по двум причинам, и
+ * обе временные: сокет умер на полуслове (у socket.io подтверждение мёртвого
+ * сокета не приходит НИКОГДА — повторов у ack нет, и терять его окончательно
+ * тут больше некому), либо сервер отказал лимитером — `perimeter.allow` в
+ * `dm.handlers` это токен-бакет, и его отказ приезжает тем же `forbidden`, что
+ * и настоящий запрет. Отличить их отсюда нельзя, а стоят они разного: на
+ * настоящем запрете три лишних вопроса не стоят ничего, на оборванном сокете
+ * отсутствие повтора стоит целого раздела.
+ *
+ * Раздел без списка — это не только пустой список: из него же берутся лица в
+ * рейке тулбара. Поэтому одна потерянная реплика протокола гасила ЛС целиком и
+ * до конца обрыва — ровно это и видели 8 сентября, пока сокет одного человека
+ * пересоздавался трижды за тринадцать минут.
+ *
+ * Растущие паузы, а не «ещё раз сразу»: сокет, который сейчас переподключается,
+ * ответит не раньше, чем поднимется, и три вопроса в одну секунду ему ничем не
+ * помогут. Всего на попытки уходит меньше сорока секунд — дальше слово снова у
+ * человека («Ещё раз») и у реконнекта, который сам зовёт `reload`.
+ */
+const LIST_RETRY_DELAYS_MS = [1000, 4000, 10_000];
 
-  reload: () => {
+export const useDmStore = create<DmState>((set, get) => {
+  /**
+   * Одна попытка спросить список. `tries` — сколько их уже было позади: по нему
+   * же берётся пауза до следующей, и он же кончает череду.
+   */
+  const attempt = (tries: number): void => {
     const mine = (listSeq += 1);
     set({ loading: true, failed: false });
     const giveUp = setTimeout(() => {
       if (mine !== listSeq) return;
-      set({ loading: false, failed: true });
+      again(mine, tries);
     }, LIST_TIMEOUT_MS);
     getSocket().emit('dm-list', (res) => {
       // Ответ на обогнанный запрос (переподключились, пока ждали) не трогает
@@ -68,63 +94,95 @@ export const useDmStore = create<DmState>((set, get) => ({
       if (mine !== listSeq) return;
       clearTimeout(giveUp);
       if (!res.ok) {
-        set({ loading: false, failed: true });
+        again(mine, tries);
         return;
       }
       set({ loading: false, failed: false });
       get().setConversations(res.conversations);
     });
-  },
+  };
 
-  // Снимок с сервера (`dm-list`) — заменяем список целиком и следом за ним
-  // карту активности: без этого свежий снимок с уже прочитанными беседами
-  // выглядел бы непрочитанным до первой живой реплики.
-  setConversations: (list) => {
-    const activity: Record<string, number> = {};
-    for (const c of list) {
-      if (c.lastTs) activity[c.slug] = c.lastTs;
+  /**
+   * Неудача: переспросить или наконец признать отказ. `mine` сверяется ещё раз
+   * уже перед самой попыткой — за время паузы список могли спросить заново
+   * (реконнект, кнопка, раскрытый раздел), и второй вопрос вдогонку первому
+   * только гонял бы `loading` туда-сюда.
+   */
+  const again = (mine: number, tries: number): void => {
+    const pause = LIST_RETRY_DELAYS_MS[tries];
+    if (pause === undefined) {
+      set({ loading: false, failed: true });
+      return;
     }
-    set({ conversations: [...list].sort((a, b) => b.lastTs - a.lastTs), activity });
-  },
+    setTimeout(() => {
+      if (mine !== listSeq) return;
+      attempt(tries + 1);
+    }, pause);
+  };
 
-  applyActivity: (relay) =>
-    set((s) => {
-      const known = s.activity[relay.slug] ?? 0;
-      if (relay.ts <= known) return s;
-      const updated: DmConversation = {
-        slug: relay.slug,
-        peer: relay.peer,
-        lastTs: relay.ts,
-        preview: relay.preview,
-        previewMine: relay.previewMine,
-      };
-      const rest = s.conversations.filter((c) => c.slug !== relay.slug);
-      return {
-        activity: { ...s.activity, [relay.slug]: relay.ts },
-        conversations: [updated, ...rest],
-      };
-    }),
+  return {
+    ...initial,
 
-  remember: (conversation) =>
-    set((s) => {
-      if (s.conversations.some((c) => c.slug === conversation.slug)) return s;
-      // Открытая беседа не всегда пуста — за ней может стоять история с уже
-      // ненулевым `lastTs` (переоткрыли со свежего устройства, список
-      // подчистили). Не сидируя activity тем же способом, что и
-      // setConversations, unreadIn молчал бы про непрочитанное до первой живой
-      // реплики — тот самый лживый бейдж, ради которого стор и завели.
-      const activity = conversation.lastTs
-        ? { ...s.activity, [conversation.slug]: conversation.lastTs }
-        : s.activity;
-      // Сортируем по месту, а не кладём наверх: список уже упорядочен по
-      // lastTs (setConversations/applyActivity держат это), и переписка без
-      // свежей активности не должна перепрыгивать более новые беседы.
-      const conversations = [...s.conversations, conversation].sort((a, b) => b.lastTs - a.lastTs);
-      return { conversations, activity };
-    }),
+    reload: () => attempt(0),
 
-  reset: () => set(initial),
-}));
+    // Снимок с сервера (`dm-list`) — заменяем список целиком и следом за ним
+    // карту активности: без этого свежий снимок с уже прочитанными беседами
+    // выглядел бы непрочитанным до первой живой реплики.
+    setConversations: (list) => {
+      const activity: Record<string, number> = {};
+      for (const c of list) {
+        if (c.lastTs) activity[c.slug] = c.lastTs;
+      }
+      set({ conversations: [...list].sort((a, b) => b.lastTs - a.lastTs), activity });
+    },
+
+    applyActivity: (relay) =>
+      set((s) => {
+        const known = s.activity[relay.slug] ?? 0;
+        if (relay.ts <= known) return s;
+        const updated: DmConversation = {
+          slug: relay.slug,
+          peer: relay.peer,
+          lastTs: relay.ts,
+          preview: relay.preview,
+          previewMine: relay.previewMine,
+        };
+        const rest = s.conversations.filter((c) => c.slug !== relay.slug);
+        return {
+          activity: { ...s.activity, [relay.slug]: relay.ts },
+          conversations: [updated, ...rest],
+        };
+      }),
+
+    remember: (conversation) =>
+      set((s) => {
+        if (s.conversations.some((c) => c.slug === conversation.slug)) return s;
+        // Открытая беседа не всегда пуста — за ней может стоять история с уже
+        // ненулевым `lastTs` (переоткрыли со свежего устройства, список
+        // подчистили). Не сидируя activity тем же способом, что и
+        // setConversations, unreadIn молчал бы про непрочитанное до первой живой
+        // реплики — тот самый лживый бейдж, ради которого стор и завели.
+        const activity = conversation.lastTs
+          ? { ...s.activity, [conversation.slug]: conversation.lastTs }
+          : s.activity;
+        // Сортируем по месту, а не кладём наверх: список уже упорядочен по
+        // lastTs (setConversations/applyActivity держат это), и переписка без
+        // свежей активности не должна перепрыгивать более новые беседы.
+        const conversations = [...s.conversations, conversation].sort(
+          (a, b) => b.lastTs - a.lastTs,
+        );
+        return { conversations, activity };
+      }),
+
+    // Сброс отменяет и незаконченные повторы: `listSeq` сдвигается, и уже
+    // заведённые таймеры узна́ют себя обогнанными. Иначе повтор от прошлой
+    // жизни стора дорисовал бы список тому, кто уже вышел.
+    reset: () => {
+      listSeq += 1;
+      set(initial);
+    },
+  };
+});
 
 /**
  * То же, что `unreadIn`, но подпиской на оба стора — для разметки.
