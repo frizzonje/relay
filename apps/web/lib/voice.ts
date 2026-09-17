@@ -34,6 +34,7 @@ import {
   isMicOn,
   loadMediaPrefs,
   loadMicThreshold,
+  reacquireMic,
   refreshMicInfo,
   setMicOn,
   startGate,
@@ -195,6 +196,9 @@ const host: TransportHost = {
   camOn: () => isCamOn(),
   screenOn: () => isScreenOn(),
   screenDegradation: () => screenDegradation(),
+  // Перевзятие микрофона после гибели его дорожки — просит SFU-публикация,
+  // чтобы мёртвый трек не уронил вход в эфир (см. publishLocal).
+  reacquireMic: () => reacquireMic(),
 
   addTile,
   removeTile,
@@ -260,6 +264,16 @@ export function toggleSpeakers() {
 // Вступление в голосовой канал
 // ─────────────────────────────────────────────────────────────────────────
 
+/** Ответ на запрос пропуска в медиасервер: сам пропуск и причина отказа. */
+interface SfuTicketReply {
+  ticket: VoiceTicket | null;
+  /**
+   * Почему пропуска нет. 'not-sfu' — канал объявлен прямым, пропуск ему не
+   * положен; 'unavailable' — медиасервер не поднят. undefined — сеть/таймаут.
+   */
+  denied?: string;
+}
+
 /**
  * Спрашиваем у api пропуск в медиасервер для канала. Ответ и есть выбор
  * транспорта: пропуск дали — канал в режиме SFU и сервер поднят; отказали
@@ -268,7 +282,7 @@ export function toggleSpeakers() {
  * Таймаут короткий и намеренный: канал в SFU-режиме, но api молчит — звонок не
  * должен из-за этого ждать. Молчание = mesh.
  */
-async function requestSfuTicket(targetRoom: string): Promise<VoiceTicket | null> {
+async function requestSfuTicket(targetRoom: string): Promise<SfuTicketReply> {
   try {
     // Имя — в запросе: `join` ещё не случился, серверу его больше взять неоткуда.
     const res = await socket()
@@ -278,12 +292,12 @@ async function requestSfuTicket(targetRoom: string): Promise<VoiceTicket | null>
       // 'not-sfu' — штатный p2p-канал; остальные отказы означают, что канал
       // ЖДАЛ медиасервер, а мы уезжаем в p2p — веху обязан увидеть сервер.
       if (res.error !== 'not-sfu') diag('sfu-ticket denied', res.error);
-      return null;
+      return { ticket: null, denied: res.error };
     }
-    return { url: res.url, token: res.token };
+    return { ticket: { url: res.url, token: res.token } };
   } catch {
     diag('sfu-ticket timeout'); // api не ответил вовремя — звоним напрямую
-    return null;
+    return { ticket: null };
   }
 }
 
@@ -301,7 +315,15 @@ function meshFallbackMaxPeers(): number {
   return setting<number>('voice.sfuThreshold') - 1;
 }
 const SFU_RETRY_MS = 5000;
+/** Потолок паузы круга ожидания: навсегда сломанный клиент не флапает в такт кругу. */
+const SFU_RETRY_MAX_MS = 60_000;
 let sfuRetryTimer: ReturnType<typeof setTimeout> | null = null;
+// Сколько раз подряд мы падали с медиасервера. По счёту растёт пауза круга
+// (5с → 10с → … → 60с): клиенту, у которого sfu не встаёт никогда, круга
+// хватает на редкие пробы, а не на дрожь комнаты каждые пять секунд.
+// Сбрасывается при свежем заходе (`joinVoice`) и при переезде по воле
+// дирижёра (смена режима канала, вернувшийся сокет) — там пауза нужна с базы.
+let sfuFallCount = 0;
 
 function leaveTransports() {
   meshTransport?.leave();
@@ -378,9 +400,13 @@ async function remigrate(force?: 'mesh') {
   const gen = ++migration;
   holdSplitChecks();
   cancelSfuRetry();
+  // Пауза круга ожидания — заново с базы: этот переезд начали мы (режим
+  // канала, вернувшийся сокет), а не падение медиасервера. У моста в mesh
+  // (force) счётчик падений, наоборот, жив — его ведёт onTransportLost.
+  if (force !== 'mesh') sfuFallCount = 0;
   leaveTransports();
   dropRemoteTiles();
-  const ticket = force === 'mesh' ? null : await requestSfuTicket(target);
+  const ticket = force === 'mesh' ? null : (await requestSfuTicket(target)).ticket;
   if (room !== target || gen !== migration) return; // нас обогнал следующий переезд
   await enterRoom(target, ticket, gen);
   if (gen !== migration) return;
@@ -394,9 +420,10 @@ function cancelSfuRetry() {
   sfuRetryTimer = null;
 }
 
-/** Ждём возвращения медиасервера, пока канал слишком велик для прямых звонков. */
+/** Ждём возвращения медиасервера — и возвращаемся, когда он встанет. */
 function scheduleSfuRetry() {
   cancelSfuRetry();
+  const delay = Math.min(SFU_RETRY_MS * 2 ** Math.max(0, sfuFallCount - 1), SFU_RETRY_MAX_MS);
   sfuRetryTimer = setTimeout(() => {
     sfuRetryTimer = null;
     void (async () => {
@@ -408,10 +435,13 @@ function scheduleSfuRetry() {
       // вышел и зашёл снова. Раньше сходства слага хватало, чтобы запоздавший
       // круг разобрал заново собранный звонок и пересобрал его поверх себя.
       const gen = migration;
-      const ticket = await requestSfuTicket(target);
+      const { ticket, denied } = await requestSfuTicket(target);
       if (room !== target || gen !== migration) return;
       if (!ticket) {
-        scheduleSfuRetry(); // всё ещё лежит — заходим на следующий круг
+        // 'not-sfu' — канал объявлен прямым: звонить напрямую и есть правильный
+        // транспорт, круг больше не нужен. Иначе сервер ещё не встал (или сеть
+        // моргнула) — заходим на следующий круг.
+        if (denied !== 'not-sfu') scheduleSfuRetry();
         return;
       }
       diag('sfu-retry', 'ok — moving back to sfu');
@@ -422,18 +452,30 @@ function scheduleSfuRetry() {
       await enterRoom(target, ticket, moving);
       if (moving !== migration) return;
       holdSplitChecks();
-      toast.success(msg('voice.toast.sfuBack'));
+      if (transport === sfuTransport) {
+        toast.success(msg('voice.toast.sfuBack'));
+      } else {
+        // Переехали, но не туда: транспорт медиасервера у нас так и не встал
+        // (не доехал его чанк и т.п.). Следующий круг спросит реже — счётчик
+        // падений растит паузу, чтобы не дёргать комнату в такт кругу.
+        sfuFallCount = Math.min(sfuFallCount + 1, 10);
+      }
     })();
-  }, SFU_RETRY_MS);
+  }, delay);
 }
 
 // Комната разъехалась в транспортах: часть через медиасервер, часть напрямую.
 // Слышать друг друга такие участники не могут в принципе — это не деградация
 // качества, а полная тишина, причём выглядящая как «он в канале, но молчит».
-// Съезжаем в p2p всей комнатой: он собирает всех, тогда как медиасервер собрать
-// не всех может (старый клиент про него не знает, у кого-то он не поднялся).
-// Но только пока комната мала: тащить туда 4+ — ровно та боль, ради которой SFU
-// и заводился, там честнее сказать правду и оставить как есть.
+//
+// Раньше мелкая комната при этом съезжала в p2p целиком — «там соберутся
+// все». На деле это значило: один упавший пир утаскивал за собой соседей, а
+// переезд (разбор транспорта) гасил у всех дорожки — после чего вход обратно
+// падал, и весь эфир оставался без звука до перезаходов. Теперь с медиасервера
+// не уезжает никто: оставшиеся на нём продолжают слышать друг друга, а
+// напрямую звонящий возвращается сам — тем же кругом ожидания, что и при
+// падении сервера (scheduleSfuRetry). Глухого предупреждают честно — и его,
+// и тех, кто его не слышит.
 let splitHandled = false;
 
 // Комната переезжает не мгновенно и не у всех разом: пока идёт переезд,
@@ -527,16 +569,22 @@ function evaluateSplit() {
   splitHandled = true;
   const names = apart.map((p) => p.name || msg('voice.peer.fallback')).join(', ');
   diag('transport split', `me=${mine} apart=${apart.length} (${names})`);
-  if (mine === 'sfu' && others.length <= meshFallbackMaxPeers()) {
-    toast(msg('voice.toast.peersDirect', { names }));
-    void remigrate('mesh');
+  if (mine === 'p2p') {
+    // Мы звоним напрямую, а остальные — через медиасервер. Тащить комнату к
+    // нам бессмысленно: один упавший пир так валил весь эфир (переезд гасил
+    // дорожки у всех, вход обратно падал — и тишина до перезаходов).
+    // Возвращаемся сами — кругом ожидания; он сам погаснет, если канал
+    // объявлен прямым (ответ 'not-sfu' на запрос пропуска).
+    toast.error(msg('voice.toast.youAreDirect'));
+    sfx().play('error');
+    scheduleSfuRetry();
     return;
   }
-  // Съезжать некуда: либо нас слишком много для прямых звонков, либо напрямую
-  // звоним как раз мы. Молчать нельзя — человек должен понимать, почему тишина.
-  toast.error(
-    mine === 'sfu' ? msg('voice.toast.peerCannotHear', { names }) : msg('voice.toast.youAreDirect'),
-  );
+  // Мы на медиасервере, кто-то — напрямую. Его не слышим не мы одни, а никто
+  // из нас; но переезд всей комнаты в p2p порвал бы связь всем ради одного.
+  // Остаёмся: слышим друг друга, честно говорим о глухом, а вернётся он тем
+  // же кругом, которым вернулись бы мы на его месте.
+  toast.error(msg('voice.toast.peerCannotHear', { names }));
   sfx().play('error');
 }
 
@@ -546,12 +594,22 @@ function evaluateSplit() {
  */
 function onTransportLost(reason: 'setup' | 'lost') {
   if (!room || transport !== sfuTransport) return;
+  // Каждое падение удлиняет паузу круга ожидания (см. sfuFallCount): клиенту,
+  // у которого sfu не встаёт никогда, круга хватает на редкие пробы, а не на
+  // дрожь комнаты в такт кругу.
+  sfuFallCount = Math.min(sfuFallCount + 1, 10);
   // На входе — всегда в p2p: человек ещё никого не слышал, ждать ему нечего.
   if (reason === 'setup' || remoteCount() <= meshFallbackMaxPeers()) {
     diag('sfu-lost', `${reason} → mesh fallback`);
     toast.error(msg('voice.toast.sfuDownDirect'));
     sfx().play('error');
     void remigrate('mesh');
+    // Мост в p2p — не навсегда: канал в режиме sfu, и круг ожидания сам
+    // переедет нас обратно, когда сервер (или путь до него) вернётся. Раньше
+    // мелкая комната оставалась в p2p до перезахода. Круг вооружаем в обоих
+    // случаях: навсегда сломанного клиента от дрожи в такт кругу спасает
+    // растущая пауза (sfuFallCount), а долгую временную поломку круг лечит сам.
+    scheduleSfuRetry();
     return;
   }
   diag('sfu-lost', `${reason} → waiting for sfu (${remoteCount()} peers)`);
@@ -660,6 +718,7 @@ export async function joinVoice(newRoom: string, label: string): Promise<boolean
   // второго транспорта за спиной.
   if (room) leaveVoice(false); // мягко переключаемся между голосовыми — поток живёт
   const gen = ++migration;
+  sfuFallCount = 0; // свежий заход — пауза круга ожидания опять с базы
 
   if (!localStream && listenOnly) {
     // Слушателю устройство не нужно, и спрашивать его — врать: отдать эту
@@ -694,7 +753,7 @@ export async function joinVoice(newRoom: string, label: string): Promise<boolean
   // к этому моменту должно быть решено, кто его слушает. Спрашиваем у api — не
   // у своего реестра каналов: гость по инвайту реестра не получает вовсе, а
   // разъехавшись с остальными в транспорте, он останется без звука.
-  const ticket = await requestSfuTicket(newRoom);
+  const ticket = (await requestSfuTicket(newRoom)).ticket;
   if (room !== newRoom || gen !== migration) return false; // нас обогнал следующий заход
   await enterRoom(newRoom, ticket, gen);
   if (room !== newRoom || gen !== migration) return false;

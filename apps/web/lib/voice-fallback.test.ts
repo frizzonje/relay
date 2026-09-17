@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+import { toast } from 'sonner';
 import type { TransportHost } from './voice/types';
 
 /**
@@ -16,13 +17,19 @@ import type { TransportHost } from './voice/types';
 
 let ticketAnswer: unknown = { ok: false, error: 'not-sfu' };
 
+// Счётчик запросов пропуска в медиасервер: по нему видно, сколько кругов
+// ожидания сделал дирижёр.
+const ticketRequests = vi.fn();
+
 const sockets = {
   id: 'self',
   connected: true,
   emit: vi.fn(),
   on: vi.fn(),
   off: vi.fn(),
-  timeout: () => ({ emitWithAck: () => Promise.resolve(ticketAnswer) }),
+  timeout: () => ({
+    emitWithAck: ticketRequests.mockImplementation(() => Promise.resolve(ticketAnswer)),
+  }),
 };
 const handlers: Record<string, (...a: unknown[]) => unknown> = {};
 sockets.on = vi.fn((event: string, h: (...a: unknown[]) => unknown) => {
@@ -138,6 +145,10 @@ beforeEach(() => {
   // sfuHost НЕ обнуляем: транспорт создаётся один раз на приложение и живёт
   // между входами — как настоящий.
   sockets.emit.mockClear();
+  ticketRequests.mockClear();
+  vi.mocked(toast).mockClear();
+  vi.mocked(toast.error).mockClear();
+  vi.mocked(toast.success).mockClear();
   ticketAnswer = { ok: true, url: '/', token: 'ticket' }; // канал в режиме SFU
 });
 
@@ -167,6 +178,41 @@ describe('фолбэк на p2p при недоступном медиасерв
     expect(FakePC.instances).toHaveLength(1);
   });
 
+  it('не поднялись на входе — круг ожидания продолжает пробовать сервер', async () => {
+    await voice.joinVoice('room-sfu', 'SFU-канал');
+    sfuHost!.transportLost('setup');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sfuCalls).toEqual(['join', 'leave']); // мост в mesh, звонок живёт
+
+    // Сервер снова выдаёт пропуск — круг сам вернул нас в медиасервер.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(sfuCalls).toEqual(['join', 'leave', 'join']);
+    expect(joins()).toHaveLength(3);
+    expect(joins()[2][1]).toMatchObject({ transport: 'sfu' });
+  });
+
+  it('повторные падения удлиняют паузу круга — навсегда сломанный клиент не флапает', async () => {
+    await voice.joinVoice('room-sfu', 'SFU-канал');
+
+    // Первое падение: круг через 5 с вернул нас, но медиасервер снова не дался.
+    sfuHost!.transportLost('setup');
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(sfuCalls).toEqual(['join', 'leave', 'join']);
+
+    sfuHost!.transportLost('setup');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sfuCalls).toEqual(['join', 'leave', 'join', 'leave']);
+
+    // Второй круг ждёт уже 10 с: через 5 с ничего не происходит…
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(sfuCalls).toEqual(['join', 'leave', 'join', 'leave']);
+    // …и только ещё через 5 с пробует снова.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(sfuCalls).toEqual(['join', 'leave', 'join', 'leave', 'join']);
+  });
+
   it('развалилось в звонке при малом составе → тоже mesh', async () => {
     await voice.joinVoice('room-sfu', 'SFU-канал');
     sfuHost!.addTile('a', 'A', null, false);
@@ -177,6 +223,23 @@ describe('фолбэк на p2p при недоступном медиасерв
 
     expect(sfuCalls).toEqual(['join', 'leave']);
     expect(joins()).toHaveLength(2);
+  });
+
+  it('развалилось в малом составе → мост в mesh, но вернувшийся сервер сам переезжает нас обратно', async () => {
+    await voice.joinVoice('room-sfu', 'SFU-канал');
+    sfuHost!.addTile('a', 'A', null, false);
+
+    sfuHost!.transportLost('lost');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sfuCalls).toEqual(['join', 'leave']);
+    expect(joins()).toHaveLength(2); // мост в mesh, звонок живёт
+
+    // Сервер вернулся: круг ожидания переехал нас обратно, без всякого участия.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(sfuCalls).toEqual(['join', 'leave', 'join']);
+    expect(joins()).toHaveLength(3);
+    expect(joins()[2][1]).toMatchObject({ transport: 'sfu' });
   });
 
   it('развалилось в звонке при большом составе → ждём сервер, а не душим mesh', async () => {
@@ -213,8 +276,11 @@ describe('фолбэк на p2p при недоступном медиасерв
 /**
  * Расщепление комнаты по транспортам. Так выглядит клиент, который медиасервер
  * не умеет вовсе (нативный iOS — mesh-only) или у которого он не поднялся: в
- * канале он есть, а слышать его не может никто. Проверяем, что дирижёр это
- * замечает и уводит малую комнату туда, где сойдутся все.
+ * канале он есть, а слышать его не может никто. Дирижёр замечает раскол, но
+ * комнату никуда не утаскивает: с медиасервера не уезжает никто, а напрямую
+ * звонящий возвращается на него сам — кругом ожидания. Раньше малая комната
+ * съезжала в p2p целиком, переезд гасил дорожки у всех, и эфир оставался без
+ * звука до перезаходов.
  */
 describe('расщепление комнаты по транспортам', () => {
   const peer = (id: string, transport: 'p2p' | 'sfu') => ({
@@ -225,20 +291,21 @@ describe('расщепление комнаты по транспортам', ()
     transport,
   });
 
-  it('малая комната: кто-то напрямую → съезжаем в p2p все вместе', async () => {
+  it('малая комната: кто-то напрямую → с медиасервера не уезжаем', async () => {
     await voice.joinVoice('room-sfu', 'SFU-канал');
     expect(sfuCalls).toEqual(['join']);
 
-    // Мы через медиасервер, телефон — напрямую: друг друга не слышим.
+    // Мы через медиасервер, телефон — напрямую: друг друга не слышим. Но
+    // переезд всей комнаты к нему ломал всех: остаёмся на сервере и честно
+    // предупреждаем.
     handlers['voice-presence']({
       'room-sfu': [peer('self', 'sfu'), peer('phone', 'p2p')],
     });
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(20_000);
 
-    expect(sfuCalls).toEqual(['join', 'leave']);
-    expect(joins()).toHaveLength(2);
-    // И это mesh: последний join объявил именно его.
-    expect(joins()[1][1]).toMatchObject({ transport: 'p2p' });
+    expect(sfuCalls).toEqual(['join']); // никуда не съехали
+    expect(joins()).toHaveLength(1);
+    expect(vi.mocked(toast.error)).toHaveBeenCalled();
   });
 
   it('большая комната: остаёмся на медиасервере, а не душим всех mesh', async () => {
@@ -254,6 +321,44 @@ describe('расщепление комнаты по транспортам', ()
     await vi.advanceTimersByTimeAsync(0);
 
     expect(sfuCalls).toEqual(['join']);
+    expect(joins()).toHaveLength(1);
+  });
+
+  it('мы напрямую, остальные на сервере → возвращаемся на него сами', async () => {
+    ticketAnswer = { ok: false, error: 'not-sfu' };
+    await voice.joinVoice('room-sfu', 'SFU-канал'); // вошли как p2p
+    expect(joins()).toHaveLength(1);
+    expect(joins()[0][1]).toMatchObject({ transport: 'p2p' });
+
+    // Канал объявили sfu, соседи уже там — мы в расщеплении. Круг ожидания
+    // вернёт нас на сервер, не трогая остальных.
+    ticketAnswer = { ok: true, url: '/', token: 'ticket' };
+    handlers['voice-presence']({
+      'room-sfu': [peer('self', 'p2p'), peer('a', 'sfu')],
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(sfuCalls).toEqual(['join']);
+    expect(joins()).toHaveLength(2);
+    expect(joins()[1][1]).toMatchObject({ transport: 'sfu' });
+  });
+
+  it('канал объявлен прямым — круг ожидания не флапает на отказе', async () => {
+    ticketAnswer = { ok: false, error: 'not-sfu' };
+    await voice.joinVoice('room-sfu', 'SFU-канал'); // вошли как p2p
+    const askedBefore = ticketRequests.mock.calls.length;
+
+    // Соседи на сервере, а канал для нас так и остался прямым: круг спросил
+    // пропуск, получил 'not-sfu' и погас — следующих кругов не будет.
+    handlers['voice-presence']({
+      'room-sfu': [peer('self', 'p2p'), peer('a', 'sfu')],
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(ticketRequests.mock.calls.length - askedBefore).toBe(1); // один круг
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(ticketRequests.mock.calls.length - askedBefore).toBe(1); // и всё
+    expect(sfuCalls).toEqual([]);
     expect(joins()).toHaveLength(1);
   });
 
@@ -277,8 +382,8 @@ describe('расщепление комнаты по транспортам', ()
  * транспортах. Раньше первый же такой срез читался как расщепление и утаскивал
  * переехавшего обратно в mesh, а следом за ним и остальных — то есть кнопка
  * режима рвала разговор. Проверяем, что середина переезда больше не путается с
- * расщеплением, что настоящее расщепление при этом не потерялось, и что второе
- * нажатие не оставляет позади первый транспорт.
+ * расщеплением, что настоящее расщепление замечается, но комнату не утаскивает,
+ * и что второе нажатие не оставляет позади первый транспорт.
  */
 describe('смена режима канала', () => {
   const peer = (id: string, transport: 'p2p' | 'sfu') => ({
@@ -315,17 +420,18 @@ describe('смена режима канала', () => {
     expect(joins()).toHaveLength(2);
   });
 
-  it('расщепление, пережившее переезд, всё равно разбирается', async () => {
+  it('расщепление, пережившее переезд, замечается — но комнату не утаскивает', async () => {
     await switchToSfu();
 
     // Сосед в медиасервер так и не попал (нативный клиент, mesh-only).
     handlers['voice-presence']({ 'room-x': [peer('self', 'sfu'), peer('a', 'p2p')] });
     await vi.advanceTimersByTimeAsync(20_000);
 
-    // Ждали осадки, но не забыли: съезжаем в p2p, где сойдёмся оба.
-    expect(sfuCalls).toEqual(['join', 'leave']);
-    expect(joins()).toHaveLength(3);
-    expect(joins()[2][1]).toMatchObject({ transport: 'p2p' });
+    // Остаёмся на сервере: уезжать всей комнатой — значит порвать связь всем
+    // ради одного. Глухого предупреждаем, возвращается он сам.
+    expect(sfuCalls).toEqual(['join']);
+    expect(joins()).toHaveLength(2);
+    expect(vi.mocked(toast.error)).toHaveBeenCalled();
   });
 
   it('канал объявили прямым, а мы и так звоним напрямую — звук не рвём', async () => {

@@ -29,6 +29,13 @@ export interface TransportHost {
   screenOn(): boolean;
   /** Тумблер «качество/ФПС» демонстрации — влияет на degradationPreference. */
   screenDegradation(): RTCDegradationPreference;
+  /**
+   * Перевзять микрофон: его дорожка умерла (устройство выдернули, система
+   * отозвала доступ), а публиковать что-то надо. Возвращает новую дорожку —
+   * или null, если взять не вышло. Зовёт только SFU-публикация: mesh меняет
+   * дорожку отдельной командой `replaceMicTrack`.
+   */
+  reacquireMic(): Promise<MediaStreamTrack | null>;
 
   // ── Витрина (плитки, статусы, метрики) ─────────────────────────────────
   addTile(id: string, name: string, stream: MediaStream | null, isLocal: boolean): void;

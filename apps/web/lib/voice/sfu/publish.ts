@@ -111,6 +111,13 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
       const producer = await transport.produce({
         track,
         appData: { source },
+        // Дорожкой владеет приложение, а не производитель: mediasoup-client по
+        // умолчанию (stopTracks: true) останавливает трек при закрытии
+        // producer'а, и любой разбор транспорта — переезд, реконнект сокета,
+        // пересборка лестницей — молча гасил микрофон и экран. Следующая
+        // публикация падала с «track ended», и звонок оставался в тишине до
+        // перезахода. Гасят дорожки только их владельцы: mic.ts и camera.ts.
+        stopTracks: false,
         ...(track.kind === 'video'
           ? { encodings: isScreen ? SCREEN_ENCODINGS : camEncodings() }
           : {}),
@@ -191,7 +198,14 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
     async publishLocal() {
       const stream = host.localStream();
       const screenAudio = host.screenAudioTrack();
-      const mic = stream?.getAudioTracks().find((t) => t !== screenAudio) ?? null;
+      let mic = stream?.getAudioTracks().find((t) => t !== screenAudio) ?? null;
+      // Дорожка микрофона умерла (выдернули устройство, система отозвала
+      // доступ) — перевзяться дешевле, чем уронить вход: раньше «track ended»
+      // здесь ронял publishLocal целиком, и звонок уезжал в p2p с тишиной.
+      if (mic && mic.readyState === 'ended') {
+        host.diag('sfu mic ended', 'reacquiring');
+        mic = (await host.reacquireMic()) ?? mic;
+      }
       let micOk = true;
       if (mic) micOk = await produce('mic', mic);
       // Микрофона нет вовсе (не выдали устройство) — это не отказ медиасервера:

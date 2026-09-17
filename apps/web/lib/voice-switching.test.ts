@@ -307,10 +307,13 @@ describe('расщепление на входе', () => {
     await settle();
     expect(sfuCalls).toEqual(['join']);
 
-    // И настоящее расщепление после входа по-прежнему разбирается.
+    // И настоящее расщепление после входа замечается — но с медиасервера мы
+    // больше не уезжаем: остаёмся на связи, глухого предупреждаем честно.
     handlers['voice-presence']({ 'room-sfu': [peer('self', 'sfu'), peer('a', 'p2p')] });
     await vi.advanceTimersByTimeAsync(20_000);
-    expect(sfuCalls).toEqual(['join', 'leave']);
+    expect(sfuCalls).toEqual(['join']);
+    expect(joins()).toHaveLength(1);
+    expect(toast.error).toHaveBeenCalled();
   });
 });
 
