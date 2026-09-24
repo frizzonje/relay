@@ -180,6 +180,52 @@ mediasoup 3.22 не знает `audio/red` (нет в `supportedRtpCapabilities`
 слушатель». Итог — раздел в этом файле и одна строка в
 [docs/media.md](../media.md).
 
+### Итог разведки (2026-09-24)
+
+1. **RED в mediasoup нет и не планируется.** Ни в установленной 3.22.0, ни в
+   последней 3.27.1 (npm, 2026-09-16) `audio/red` нет в
+   `node/lib/supportedRtpCapabilities.js`. Запрос
+   [versatica/mediasoup#481](https://github.com/versatica/mediasoup/issues/481)
+   открыт с ноября 2020 года, в нём нет ни PR, ни плана. Живых форков с RED
+   не нашлось.
+2. **«Насквозь» не протащить.** `ortc.generateRouterRtpCapabilities` ищет
+   каждый кодек роутера в `supportedRtpCapabilities` и на неизвестный
+   `mimeType` бросает `UnsupportedError` («media codec not supported»). Это
+   происходит уже в `createRouter`, так что до переговоров с клиентом дело не
+   доходит. Чтобы пропустить RED, нужна правка C++-воркера: разбирать RED у
+   производителя и снимать его для потребителей, которые RED не умеют (Firefox).
+   Это означало бы держать свой форк mediasoup.
+3. **Opus DRED пока недоступен.** Он вышел в Opus 1.5 (март 2024), но в
+   libwebrtc и Chrome официально не включён, а формат ещё дорабатывается
+   ([draft-ietf-mlcodec-opus-dred-05](https://datatracker.ietf.org/doc/draft-ietf-mlcodec-opus-dred/),
+   январь 2026; [обзор](https://bloggeek.me/webrtcglossary/dred/)). Когда DRED
+   появится в браузерах, SFU он, скорее всего, не потребует: данные едут
+   внутри Opus-пакета, а mediasoup Opus не разбирает. Но это вывод из формата,
+   а не проверка.
+4. **In-band FEC уже покрывает участок «сервер → слушатель».** Кодер
+   libwebrtc включает FEC только по потерям из RTCP Receiver Report: без
+   сообщённых потерь FEC не шлётся, порог около 5%
+   ([bloggeek](https://bloggeek.me/fixing-packet-loss-webrtc/)). У mediasoup
+   для производителя с `useinbandfec=1` (Chrome объявляет его сам, роутер
+   relay тоже) `RtpStreamRecv` отправляет в RR худшее из двух значений: своих
+   потерь на участке «отправитель → сервер» и худшего `fractionLost` среди
+   потребителей (`worker/src/RTC/RTP/RtpStreamRecv.cpp`,
+   `OnRtpStreamNeedWorstRemoteFractionLost` → `Router` → `Consumer`). Поэтому
+   говорящий наращивает FEC под самого неудачного слушателя. Цена: один
+   слушатель на плохой сети делает поток толще для всех (для голоса это
+   десятки кбит/с). Есть известная неточность: потери участка «отправитель →
+   сервер» слушатель тоже считает своими
+   ([versatica/mediasoup#1898](https://github.com/versatica/mediasoup/issues/1898)).
+
+**Рекомендация: RED в SFU не делать.** Своя поддержка RED в C++-воркере —
+это недели работы и постоянное сопровождение форка. Выигрыш при этом узкий:
+пачки потерь, от которых in-band FEC (он восстанавливает только один
+предыдущий кадр) не спасает. FEC на обоих участках у SFU уже работает, а
+дешёвых рычагов сверх этого нет. Следить стоит за DRED в libwebrtc: когда он
+появится, его можно будет включить в обоих транспортах без правок сервера.
+Вернуться к RED через SFU имеет смысл, только если жалобы на «бульканье»
+придут именно из sfu-каналов, а mesh с RED будет звучать заметно лучше.
+
 ## Проверка
 
 - Юнит-тесты (vitest, в Docker): `sdp.ts` на реальных SDP; `red.ts` на поддельных
