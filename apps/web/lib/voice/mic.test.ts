@@ -12,29 +12,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => {
   const node = () => ({ connect: (n: unknown) => n, disconnect: () => {} });
   const sources: { getAudioTracks(): unknown[] }[] = [];
-  return {
-    rms: 0,
-    sources,
-    ctx: {
-      currentTime: 0,
-      destination: {},
-      createMediaStreamSource: (s: { getAudioTracks(): unknown[] }) => {
-        sources.push(s);
-        return node();
-      },
-      createAnalyser: () => ({ ...node(), fftSize: 0 }),
-      createGain: () => ({ ...node(), gain: { value: 1, setTargetAtTime: () => {} } }),
-      // Старый код гнал голос сюда и отдавал собеседникам ЭТУ дорожку. Подделка
-      // умеет выход Web Audio, чтобы тест «в сеть уходит дорожка устройства»
-      // падал на старом коде, а не проходил из-за отката на сырую дорожку.
-      createMediaStreamDestination: () => ({
-        ...node(),
-        stream: new (
-          globalThis as unknown as { MediaStream: new (t: unknown[]) => unknown }
-        ).MediaStream([{ kind: 'audio', id: 'web-audio', enabled: true, contentHint: '' }]),
-      }),
+  const ctx = {
+    state: 'running' as AudioContextState,
+    currentTime: 0,
+    destination: {},
+    createMediaStreamSource: (s: { getAudioTracks(): unknown[] }) => {
+      sources.push(s);
+      return node();
     },
+    createAnalyser: () => ({ ...node(), fftSize: 0, context: ctx }),
+    createGain: () => ({ ...node(), gain: { value: 1, setTargetAtTime: () => {} } }),
+    // Старый код гнал голос сюда и отдавал собеседникам ЭТУ дорожку. Подделка
+    // умеет выход Web Audio, чтобы тест «в сеть уходит дорожка устройства»
+    // падал на старом коде, а не проходил из-за отката на сырую дорожку.
+    createMediaStreamDestination: () => ({
+      ...node(),
+      stream: new (
+        globalThis as unknown as { MediaStream: new (t: unknown[]) => unknown }
+      ).MediaStream([{ kind: 'audio', id: 'web-audio', enabled: true, contentHint: '' }]),
+    }),
   };
+  return { rms: 0, sources, ctx };
 });
 
 vi.mock('@/lib/voice/output', () => ({
@@ -90,6 +88,9 @@ class FakeStream {
   }
 }
 
+/** getUserMedia, который отвечает, когда скажет тест, — для гонок со сменой устройства. */
+let held: (() => void)[] | null;
+
 let mic: typeof import('./mic');
 let outgoing: FakeStream | null;
 let captured: FakeTrack[];
@@ -111,6 +112,8 @@ beforeEach(async () => {
   });
   h.rms = 0;
   h.sources.length = 0;
+  h.ctx.state = 'running';
+  held = null;
   captured = [];
   replaced = [];
   outgoing = null;
@@ -133,6 +136,7 @@ beforeEach(async () => {
       getUserMedia: async () => {
         const t = new FakeTrack(String(captured.length + 1));
         captured.push(t);
+        if (held) await new Promise<void>((resolve) => held!.push(resolve));
         return new FakeStream([t]);
       },
       enumerateDevices: async () => [],
@@ -243,6 +247,20 @@ it('без анализатора затвор не глушит — иначе 
   expect(sent().enabled).toBe(true);
 });
 
+it('Web Audio спит (автоплей не разрешён) — затвор не глушит, мерить нечем', async () => {
+  h.ctx.state = 'suspended';
+  mic.setMicThreshold(0.5);
+  await mic.ensureLocalStream();
+  mic.startGate();
+  level(0);
+  vi.advanceTimersByTime(100);
+  expect(sent().enabled).toBe(true);
+
+  h.ctx.state = 'running'; // проснулся — порог снова в силе
+  vi.advanceTimersByTime(100);
+  expect(sent().enabled).toBe(false);
+});
+
 it('выход гасит и дорожку устройства, и клон — лампочка записи гаснет', async () => {
   await mic.ensureLocalStream();
   const clone = meter();
@@ -263,6 +281,35 @@ describe('смена устройства', () => {
     expect(captured[1].enabled).toBe(false);
     expect(captured[0].readyState).toBe('ended');
     expect(oldClone.readyState).toBe('ended');
+  });
+
+  it('вышли из эфира, пока ждали устройство, — новая дорожка гаснет, а не висит', async () => {
+    await mic.ensureLocalStream();
+    held = [];
+    const switching = mic.setMic('dev-x');
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    mic.teardownMic();
+    outgoing = null;
+    held[0]();
+    await switching;
+    expect(captured[1].readyState).toBe('ended');
+    expect(replaced).toEqual([]);
+  });
+
+  it('два переключения подряд — побеждает последнее, даже если ответ пришёл раньше', async () => {
+    await mic.ensureLocalStream();
+    held = [];
+    const first = mic.setMic('dev-a');
+    const second = mic.setMic('dev-b');
+    await vi.waitFor(() => expect(held).toHaveLength(2));
+    held[1]();
+    await second;
+    held[0]();
+    await first;
+    expect(sent()).toBe(captured[2]);
+    expect(outgoing!.getAudioTracks()).toHaveLength(1);
+    expect(captured[1].readyState).toBe('ended');
+    expect(replaced).toEqual([[captured[0], captured[2]]]);
   });
 
   it('клон, снятый при муте, всё равно слышит — метр и затвор живы', async () => {

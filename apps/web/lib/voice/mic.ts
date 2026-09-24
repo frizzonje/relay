@@ -246,14 +246,17 @@ export function getMicLevel(): number {
 }
 
 /**
- * Тик гейта. Без анализатора (нет Web Audio) порог не применяем вовсе: уровень
- * там всегда ноль, и затвор закрылся бы навсегда — человека не было бы слышно.
+ * Тик гейта. Порог применяем, только пока есть чем мерить: без анализатора (нет
+ * Web Audio) или со спящим контекстом (браузер не разрешил автоплей, iOS
+ * прервал звук) уровень всегда ноль, и затвор закрылся бы намертво — человека
+ * не было бы слышно, а он бы об этом не знал.
  */
 function evaluateGate() {
+  const measuring = localAnalyser?.context.state === 'running';
   setGate(
     nextGate({
       level: micOn ? micLevelNorm() : 0,
-      threshold: localAnalyser ? micThreshold : 0,
+      threshold: measuring ? micThreshold : 0,
       now: performance.now(),
       openUntil: gateOpenUntil,
       holdMs: GATE_HOLD_MS,
@@ -282,6 +285,14 @@ export function refreshMics() {
 }
 
 /**
+ * Номер последнего переключения микрофона. Переключение ждёт устройство, и за
+ * это время человек успевает щёлкнуть второй тумблер или выйти из эфира.
+ * Опоздавший ответ устройства не должен ни перебить более свежий выбор, ни
+ * повиснуть горящей лампочкой записи мимо звонка.
+ */
+let micSwitch = 0;
+
+/**
  * Переключение микрофона на лету: новый getUserMedia + replaceTrack у всех
  * собеседников без пересборки SDP. Выбор запоминаем в localStorage.
  */
@@ -291,6 +302,7 @@ export async function setMic(deviceId: string) {
   // Не в звонке — просто запомнили выбор, применится при следующем входе
   if (!around.stream()) return;
 
+  const turn = ++micSwitch;
   let stream: MediaStream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
@@ -299,7 +311,13 @@ export async function setMic(deviceId: string) {
         : audioConstraints(),
     });
   } catch (err) {
-    toast.error(msg('voice.toast.micSwitchFailed', { reason: mediaErrorText(err) }));
+    if (turn === micSwitch) {
+      toast.error(msg('voice.toast.micSwitchFailed', { reason: mediaErrorText(err) }));
+    }
+    return;
+  }
+  if (turn !== micSwitch || !around.stream()) {
+    stream.getTracks().forEach((t) => t.stop());
     return;
   }
 
@@ -574,6 +592,7 @@ export function loadMicThreshold(): void {
  * микрофон — забудь любой, и лампочка записи не гаснет до перезагрузки вкладки.
  */
 export function teardownMic(): void {
+  micSwitch++; // переключение, начатое в этом эфире, в следующий не доезжает
   micTrack?.stop();
   micTrack = null;
   gateOpen = true;
