@@ -42,6 +42,14 @@ E2e (Playwright) гоняются в CI на каждый push; локально
 после e2e сносит тома `relay_uploads` и `relay_caddy_data` вашей локальной
 установки. Если она вам нужна, гоняйте e2e с отдельным `-p`.
 
+Документация проверяется отдельно: ссылки из `docs/` и README на файлы
+репозитория должны существовать, а каждое socket-событие — быть описано в
+[docs/protocol.md](docs/protocol.md) или [docs/media.md](docs/media.md):
+
+```bash
+node tools/check-docs.mjs   # или pnpm docs:check
+```
+
 Форматирование и линт:
 
 ```bash
@@ -68,8 +76,12 @@ pnpm audit --prod --audit-level=high
 ## Стиль и соглашения
 
 - **Контракт клиент↔сервер** живёт в `packages/shared` (типы, socket-события,
-  HMAC-auth) и в [docs/protocol.md](docs/protocol.md). Меняете формат сообщений —
-  правьте оба места и держите web-клиент референс-реализацией.
+  токены, каталог настроек). api его не импортирует и держит копии
+  (`gateway/protocol.ts`, `settings/catalog.ts`, `gateway/ring-machine.ts`,
+  `identity/crypto.ts`) — совпадение сверяют тесты `packages/shared`. Меняете
+  формат сообщений — правьте обе половины и [docs/protocol.md](docs/protocol.md),
+  держите web-клиент эталонной реализацией. Подробно —
+  [docs/architecture.md](docs/architecture.md#контракт-и-его-копии).
 - **Сиды серверов/каналов** дублируются во фронте (`apps/web/lib/constants.ts`) и
   в реестре api (`apps/api/src/gateway/registry.service.ts`) — id и slug обязаны
   совпадать байт-в-байт.

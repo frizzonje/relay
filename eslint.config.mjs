@@ -90,7 +90,7 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.browser, ...globals.worker } },
   },
   {
-    files: ['tools/keyprobe/*.mjs'],
+    files: ['tools/keyprobe/*.mjs', 'tools/*.mjs'],
     languageOptions: { globals: { ...globals.node } },
   },
 

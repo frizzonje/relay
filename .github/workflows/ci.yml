@@ -51,6 +51,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm format:check
+      - run: pnpm docs:check
       - run: pnpm turbo run typecheck test build
 
   # Known-vulnerable dependencies in what we actually ship. `--prod` on purpose:
