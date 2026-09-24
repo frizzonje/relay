@@ -1,6 +1,6 @@
 {
   "name": "relay-desktop-linux",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "description": "relay — voice and chat on your own server",
   "license": "MIT",

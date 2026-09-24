@@ -5,7 +5,7 @@ it: every entry says what changes on your machine and for the people using it.
 Releases before 1.0.0 are on the [releases page](https://github.com/frizzonje/relay/releases) —
 reconstructing notes for them after the fact would be invention, not history.
 
-## Unreleased
+## 2.0.1 — 2026-09-24
 
 ### Fixed
 
