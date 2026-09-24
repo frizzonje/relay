@@ -45,12 +45,30 @@ interface Room {
 export class RoomsService {
   private readonly logger = new Logger(RoomsService.name);
   private readonly rooms = new Map<string, Room>();
+  /**
+   * Комнаты, чей роутер ещё заводится. Между «комнаты нет» и «вот она» стоит
+   * `await createRouter`, и второй вошедший в это окно заводил свой роутер:
+   * комната получала два, последний затирал первый в `rooms`, и двое сидели
+   * «в одном канале», не слыша друг друга (consume чужого роутера не бывает).
+   * Окно открыто всегда, когда в пустую комнату входят разом, — а так входит
+   * вся комната после рестарта медиасервера.
+   */
+  private readonly creating = new Map<string, Promise<Room>>();
 
   constructor(private readonly workers: WorkersService) {}
 
-  private async room(id: string): Promise<Room> {
+  private room(id: string): Promise<Room> {
     const existing = this.rooms.get(id);
-    if (existing) return existing;
+    if (existing) return Promise.resolve(existing);
+    let pending = this.creating.get(id);
+    if (!pending) {
+      pending = this.createRoom(id).finally(() => this.creating.delete(id));
+      this.creating.set(id, pending);
+    }
+    return pending;
+  }
+
+  private async createRoom(id: string): Promise<Room> {
     const router = await this.workers.take().createRouter({ mediaCodecs: MEDIA_CODECS });
     const room: Room = { id, router, peers: new Map() };
     this.rooms.set(id, room);

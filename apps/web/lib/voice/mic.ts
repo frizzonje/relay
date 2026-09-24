@@ -338,11 +338,31 @@ export function refreshMics() {
 }
 
 /**
- * Перевести исходящую дорожку микрофона на новую. Обе ветки внутри: с цепочкой
- * чувствительности меняется ИСТОЧНИК (исходящая, обработанная, остаётся
- * прежней), без неё — дорожка в исходящем потоке и у подключённых собеседников.
+ * Переключение микрофона на лету: новый getUserMedia + replaceTrack у всех
+ * собеседников без пересборки SDP. Выбор запоминаем в localStorage.
  */
-function switchMicTrack(newTrack: MediaStreamTrack) {
+export async function setMic(deviceId: string) {
+  if (typeof localStorage !== 'undefined') localStorage.setItem(MIC_KEY, deviceId);
+
+  // Не в звонке — просто запомнили выбор, применится при следующем входе
+  if (!around.stream()) return;
+
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: deviceId
+        ? { ...audioConstraints(), deviceId: { exact: deviceId } }
+        : audioConstraints(),
+    });
+  } catch (err) {
+    toast.error(msg('voice.toast.micSwitchFailed', { reason: mediaErrorText(err) }));
+    return;
+  }
+
+  const newTrack = stream.getAudioTracks()[0];
+  if (!newTrack) return;
+  newTrack.contentHint = 'speech'; // голос, не музыка
+
   const pipelineCtx = audioContext();
   if (micPipelineActive && micGainNode && pipelineCtx) {
     // Цепочка чувствительности поднята: меняем ИСТОЧНИК, исходящая (обработанная)
@@ -369,58 +389,6 @@ function switchMicTrack(newTrack: MediaStreamTrack) {
     around.stream()!.addTrack(newTrack);
     rawMicTrack = newTrack;
   }
-}
-
-/**
- * Перевзять микрофон после того, как его дорожка умерла (устройство выдернули,
- * система отозвала доступ). Зовёт SFU-публикация, чтобы не уронить вход в эфир
- * из-за мёртвого трека. Возвращает новую дорожку — или null, если взять не вышло.
- */
-export async function reacquireMic(): Promise<MediaStreamTrack | null> {
-  if (!around.stream()) return null;
-  let stream: MediaStream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints() });
-  } catch (err) {
-    console.warn('mic reacquire failed:', err);
-    return null;
-  }
-  const newTrack = stream.getAudioTracks()[0];
-  if (!newTrack) return null;
-  newTrack.contentHint = 'speech'; // голос, не музыка
-  switchMicTrack(newTrack);
-  setupLocalVad(); // переподцепляем анализатор обводки к новому устройству
-  void refreshMicInfo();
-  return newTrack;
-}
-
-/**
- * Переключение микрофона на лету: новый getUserMedia + replaceTrack у всех
- * собеседников без пересборки SDP. Выбор запоминаем в localStorage.
- */
-export async function setMic(deviceId: string) {
-  if (typeof localStorage !== 'undefined') localStorage.setItem(MIC_KEY, deviceId);
-
-  // Не в звонке — просто запомнили выбор, применится при следующем входе
-  if (!around.stream()) return;
-
-  let stream: MediaStream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: deviceId
-        ? { ...audioConstraints(), deviceId: { exact: deviceId } }
-        : audioConstraints(),
-    });
-  } catch (err) {
-    toast.error(msg('voice.toast.micSwitchFailed', { reason: mediaErrorText(err) }));
-    return;
-  }
-
-  const newTrack = stream.getAudioTracks()[0];
-  if (!newTrack) return;
-  newTrack.contentHint = 'speech'; // голос, не музыка
-
-  switchMicTrack(newTrack);
 
   setupLocalVad(); // переподцепляем анализатор обводки к новому устройству
   await refreshMicInfo();
