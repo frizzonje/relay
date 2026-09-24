@@ -112,8 +112,8 @@ describe('анонсируемый адрес', () => {
 });
 
 describe('WebRtcServer и транспорт', () => {
-  it('воркер i слушает min + i — UDP и TCP на одном номере', () => {
-    const o = webRtcServerOptions(3);
+  it('UDP и TCP — на одном номере', () => {
+    const o = webRtcServerOptions(40003);
     expect(o.listenInfos.map((i) => [i.protocol, i.port])).toEqual([
       ['udp', 40003],
       ['tcp', 40003],
@@ -122,7 +122,7 @@ describe('WebRtcServer и транспорт', () => {
 
   it('слушаем 0.0.0.0, а анонсируем публичный адрес', () => {
     process.env.SFU_ANNOUNCED_IP = '203.0.113.7';
-    for (const info of webRtcServerOptions(0).listenInfos) {
+    for (const info of webRtcServerOptions(40000).listenInfos) {
       expect(info.ip).toBe('0.0.0.0');
       expect(info.announcedAddress).toBe('203.0.113.7');
     }

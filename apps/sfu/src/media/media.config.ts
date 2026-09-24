@@ -75,9 +75,9 @@ export function workerSettings(): types.WorkerSettings {
 /**
  * Диапазон RTC-портов из env. Раньше из него брал порт КАЖДЫЙ транспорт, и
  * сотни портов хватало человек на пятьдесят на весь сервер (у участника два
- * транспорта). Теперь каждый воркер слушает ровно один порт — `min + номер
- * воркера`, — а транспорты живут на нём и различаются по ICE ufrag. Диапазон
- * остался прежним, чтобы уже открытый фаервол продолжал подходить.
+ * транспорта). Теперь каждый воркер слушает ровно один порт — первый свободный
+ * по порядку от `min`, — а транспорты живут на нём и различаются по ICE ufrag.
+ * Диапазон остался прежним, чтобы уже открытый фаервол продолжал подходить.
  */
 export function rtcPortRange(): { min: number; max: number } {
   return {
@@ -92,9 +92,8 @@ export function rtcPortCount(): number {
   return Math.max(0, max - min + 1);
 }
 
-/** WebRtcServer воркера `index`: UDP и TCP на одном порту `min + index`. */
-export function webRtcServerOptions(index: number): types.WebRtcServerOptions {
-  const port = rtcPortRange().min + index;
+/** WebRtcServer воркера: UDP и TCP на одном порту. */
+export function webRtcServerOptions(port: number): types.WebRtcServerOptions {
   const announcedAddress = announcedIp();
   return {
     listenInfos: [

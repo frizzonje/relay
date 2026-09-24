@@ -143,13 +143,15 @@ flowchart LR
   [`rooms.service.ts`](../apps/sfu/src/media/rooms.service.ts)).
 - **Кодеки** ([`media.config.ts`](../apps/sfu/src/media/media.config.ts)): Opus
   48 кГц стерео, VP8, VP9 (profile 2), H.264 `42e01f` — последний ради WebKit.
-- **Транспорты** живут на `WebRtcServer` своего воркера: воркер `i` слушает один
-  порт `SFU_RTC_MIN_PORT + i`, UDP и TCP, все его транспорты — на нём, различаются
-  по ICE ufrag. Слушаем `0.0.0.0`, анонсируем `SFU_ANNOUNCED_IP` (или
+- **Транспорты** живут на `WebRtcServer` своего воркера: каждый воркер слушает
+  один порт — первый свободный по порядку от `SFU_RTC_MIN_PORT`, UDP и TCP, — все
+  его транспорты на нём, различаются по ICE ufrag. Порт, занятый чужим процессом
+  (диапазон пересекается с эфемерными портами Linux), пропускается с
+  предупреждением. Слушаем `0.0.0.0`, анонсируем `SFU_ANNOUNCED_IP` (или
   `TURN_EXTERNAL_IP`, или `SERVER_HOST`, если это IP). Воркеров не больше, чем
   портов в диапазоне: число по ядрам урезается с предупреждением, явный
-  `SFU_WORKERS` сверх диапазона — отказ на старте. В compose сервис в
-  `network_mode: host`.
+  `SFU_WORKERS` сверх диапазона или сверх свободных портов — отказ на старте. В
+  compose сервис в `network_mode: host`.
 - **Доступ** — только по пропуску из api: `auth.token` = токен `sfu-token`,
   проверка HMAC на `SFU_SECRET` ([`apps/sfu/src/token.ts`](../apps/sfu/src/token.ts)).
   В пропуске комната, `peerId` (= `socket.id` в api), имя и флаг `listen`.
