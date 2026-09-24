@@ -1,30 +1,26 @@
 import './globals.css';
+/**
+ * Шрифты relay лежат в npm-пакетах @fontsource и едут в бандл сами. Не
+ * next/font/google: тот качает CSS у Google прямо во время `next build`, и
+ * когда Google отвечает раннеру CI не тем, сборка образа падает на ровном
+ * месте. Каждый файл — все подмножества с unicode-range: браузер берёт только
+ * нужные (latin, cyrillic). Семейства потребляют токены --font-sans/--font-mono
+ * в globals.css. IBM Plex Sans — UI; IBM Plex Mono — лейблы/метрики/таймстампы.
+ */
+import '@fontsource/ibm-plex-sans/400.css';
+import '@fontsource/ibm-plex-sans/500.css';
+import '@fontsource/ibm-plex-sans/600.css';
+import '@fontsource/ibm-plex-sans/700.css';
+import '@fontsource/ibm-plex-mono/400.css';
+import '@fontsource/ibm-plex-mono/500.css';
+import '@fontsource/ibm-plex-mono/600.css';
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
-import { IBM_Plex_Sans, IBM_Plex_Mono } from 'next/font/google';
 import { APP_NAME } from '@relay/shared';
 import { Background } from '@/components/layout/Background';
 import { getLocale, getT } from '@/lib/i18n/server';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
 import { Providers } from './providers';
-
-/**
- * Шрифты relay через next/font (self-hosted, без FOUT-запроса к Google в
- * рантайме). IBM Plex Sans — UI; IBM Plex Mono — лейблы/метрики/таймстампы.
- * Переменные --font-plex-* потребляют токены --font-sans/--font-mono в globals.css.
- */
-const plexSans = IBM_Plex_Sans({
-  subsets: ['latin', 'cyrillic'],
-  weight: ['400', '500', '600', '700'],
-  variable: '--font-plex-sans',
-  display: 'swap',
-});
-const plexMono = IBM_Plex_Mono({
-  subsets: ['latin', 'cyrillic'],
-  weight: ['400', '500', '600'],
-  variable: '--font-plex-mono',
-  display: 'swap',
-});
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getT();
@@ -48,7 +44,7 @@ export const viewport: Viewport = {
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const locale = await getLocale();
   return (
-    <html lang={locale} data-theme="dark" className={`${plexSans.variable} ${plexMono.variable}`}>
+    <html lang={locale} data-theme="dark">
       <head>
         {/* Применяем сохранённую тему до отрисовки — иначе светлая мигнёт тёмным. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
