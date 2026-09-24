@@ -15,19 +15,19 @@ vi.mock('mediasoup', () => ({ createWorker }));
 
 import { WorkersService } from './workers.service';
 
-interface FakeWorker {
-  pid: number;
-  closed: boolean;
-  die: () => void;
-}
-
-function fakeWorker(pid: number): FakeWorker & { on: unknown; close: () => void } {
+function fakeWorker(pid: number) {
   let onDied: (() => void) | undefined;
+  const servers: { listenInfos: { port: number }[] }[] = [];
   return {
     pid,
     closed: false,
+    servers,
     on(event: string, fn: () => void) {
       if (event === 'died') onDied = fn;
+    },
+    async createWebRtcServer(opts: { listenInfos: { port: number }[] }) {
+      servers.push(opts);
+      return { id: `srv-${pid}`, opts };
     },
     close() {
       this.closed = true;
@@ -43,6 +43,7 @@ let made: ReturnType<typeof fakeWorker>[];
 beforeEach(() => {
   vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {});
   vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+  vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
   made = [];
   createWorker.mockImplementation(async () => {
     const w = fakeWorker(1000 + made.length);
@@ -50,10 +51,14 @@ beforeEach(() => {
     return w;
   });
   delete process.env.SFU_WORKERS;
+  delete process.env.SFU_RTC_MIN_PORT;
+  delete process.env.SFU_RTC_MAX_PORT;
 });
 
 afterEach(() => {
   delete process.env.SFU_WORKERS;
+  delete process.env.SFU_RTC_MIN_PORT;
+  delete process.env.SFU_RTC_MAX_PORT;
   vi.restoreAllMocks();
 });
 
@@ -79,21 +84,44 @@ it('мусор и ноль в SFU_WORKERS не оставляют без вор�
   }
 });
 
-it('воркеры получают настроенный диапазон портов', async () => {
-  process.env.SFU_WORKERS = '1';
+it('воркер i поднимает WebRtcServer на min + i', async () => {
+  process.env.SFU_WORKERS = '3';
   process.env.SFU_RTC_MIN_PORT = '50000';
   process.env.SFU_RTC_MAX_PORT = '50100';
   await new WorkersService().onModuleInit();
-  expect(createWorker.mock.calls[0][0]).toMatchObject({ rtcMinPort: 50000, rtcMaxPort: 50100 });
-  delete process.env.SFU_RTC_MIN_PORT;
-  delete process.env.SFU_RTC_MAX_PORT;
+  expect(made.map((w) => w.servers[0].listenInfos[0].port)).toEqual([50000, 50001, 50002]);
 });
 
 it('комнаты раздаются по кругу — воркер однопоточный, свалить всё в один нельзя', async () => {
   process.env.SFU_WORKERS = '2';
   const s = new WorkersService();
   await s.onModuleInit();
-  expect([s.take(), s.take(), s.take()]).toEqual([made[0], made[1], made[0]]);
+  const taken = [s.take(), s.take(), s.take()];
+  expect(taken.map((t) => t.worker)).toEqual([made[0], made[1], made[0]]);
+  expect(taken[0].webRtcServer).toEqual({ id: 'srv-1000', opts: made[0].servers[0] });
+});
+
+it('ядер больше, чем портов, — воркеров столько, сколько портов, и предупреждение', async () => {
+  process.env.SFU_RTC_MIN_PORT = '40000';
+  process.env.SFU_RTC_MAX_PORT = '40000';
+  const warn = vi.spyOn(Logger.prototype, 'warn');
+  await new WorkersService().onModuleInit();
+  expect(made).toHaveLength(1);
+  if (cpus().length > 1) expect(warn).toHaveBeenCalled();
+});
+
+it('явный SFU_WORKERS, который не влезает в диапазон, — громкий отказ на старте', async () => {
+  process.env.SFU_WORKERS = '5';
+  process.env.SFU_RTC_MIN_PORT = '40000';
+  process.env.SFU_RTC_MAX_PORT = '40002';
+  await expect(new WorkersService().onModuleInit()).rejects.toThrow(/SFU_WORKERS=5.*3/);
+  expect(made).toHaveLength(0);
+});
+
+it('перевёрнутый диапазон — отказ на старте, даже без SFU_WORKERS', async () => {
+  process.env.SFU_RTC_MIN_PORT = '40100';
+  process.env.SFU_RTC_MAX_PORT = '40000';
+  await expect(new WorkersService().onModuleInit()).rejects.toThrow(/SFU_RTC_MAX_PORT/);
 });
 
 it('смерть воркера роняет процесс — чинить это изнутри нечем', async () => {

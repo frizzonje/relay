@@ -29,7 +29,7 @@ flowchart LR
 | Путь медиа | напрямую между участниками (или через TURN) | через сервис `sfu` |
 | Исходящих потоков у участника | N−1 | 1 |
 | Хорошо для | 2–3 с видео, до ~6–7 только голосом | 4+ с видео |
-| Нагрузка на сервер | только сигналинг | CPU и UDP/TCP-порты `40000–40100` |
+| Нагрузка на сервер | только сигналинг | CPU; по UDP/TCP-порту на воркер из `40000–40100` |
 | Нужно | ничего | `--profile sfu` и `SFU_SECRET` |
 | Сервер видит медиа | нет | да — SFU расшифровывает, чтобы маршрутизировать |
 
@@ -143,9 +143,13 @@ flowchart LR
   [`rooms.service.ts`](../apps/sfu/src/media/rooms.service.ts)).
 - **Кодеки** ([`media.config.ts`](../apps/sfu/src/media/media.config.ts)): Opus
   48 кГц стерео, VP8, VP9 (profile 2), H.264 `42e01f` — последний ради WebKit.
-- **Транспорты** слушают UDP и TCP на `0.0.0.0`, анонсируют `SFU_ANNOUNCED_IP`
-  (или `TURN_EXTERNAL_IP`, или `SERVER_HOST`, если это IP). Порты —
-  `SFU_RTC_MIN_PORT`–`SFU_RTC_MAX_PORT`. В compose сервис в `network_mode: host`.
+- **Транспорты** живут на `WebRtcServer` своего воркера: воркер `i` слушает один
+  порт `SFU_RTC_MIN_PORT + i`, UDP и TCP, все его транспорты — на нём, различаются
+  по ICE ufrag. Слушаем `0.0.0.0`, анонсируем `SFU_ANNOUNCED_IP` (или
+  `TURN_EXTERNAL_IP`, или `SERVER_HOST`, если это IP). Воркеров не больше, чем
+  портов в диапазоне: число по ядрам урезается с предупреждением, явный
+  `SFU_WORKERS` сверх диапазона — отказ на старте. В compose сервис в
+  `network_mode: host`.
 - **Доступ** — только по пропуску из api: `auth.token` = токен `sfu-token`,
   проверка HMAC на `SFU_SECRET` ([`apps/sfu/src/token.ts`](../apps/sfu/src/token.ts)).
   В пропуске комната, `peerId` (= `socket.id` в api), имя и флаг `listen`.

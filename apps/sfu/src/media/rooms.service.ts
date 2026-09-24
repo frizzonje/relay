@@ -32,6 +32,8 @@ export interface Peer {
 interface Room {
   id: string;
   router: types.Router;
+  /** Сервер воркера, где живёт роутер: транспорты комнаты садятся на его порт. */
+  webRtcServer: types.WebRtcServer;
   peers: Map<string, Peer>;
 }
 
@@ -69,8 +71,9 @@ export class RoomsService {
   }
 
   private async createRoom(id: string): Promise<Room> {
-    const router = await this.workers.take().createRouter({ mediaCodecs: MEDIA_CODECS });
-    const room: Room = { id, router, peers: new Map() };
+    const { worker, webRtcServer } = this.workers.take();
+    const router = await worker.createRouter({ mediaCodecs: MEDIA_CODECS });
+    const room: Room = { id, router, webRtcServer, peers: new Map() };
     this.rooms.set(id, room);
     this.logger.log(`room "${id}" created (router ${router.id})`);
     return room;
@@ -141,9 +144,11 @@ export class RoomsService {
   async createTransport(
     peer: Peer,
   ): Promise<{ transport: types.WebRtcTransport; params: TransportParams }> {
-    const router = this.router(peer.room);
-    if (!router) throw new Error('room is gone');
-    const transport = await router.createWebRtcTransport(webRtcTransportOptions());
+    const room = this.rooms.get(peer.room);
+    if (!room) throw new Error('room is gone');
+    const transport = await room.router.createWebRtcTransport(
+      webRtcTransportOptions(room.webRtcServer),
+    );
     // Судьба медиапути видна только отсюда: клиентские логи умирают вместе со
     // вкладкой, а «отвалились на второй минуте» назавтра разбирается ровно по
     // этим строчкам. dtls connected — медиа реально пошло; ice disconnected —

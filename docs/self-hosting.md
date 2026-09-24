@@ -112,7 +112,7 @@ coturn читает сертификат из тома Caddy и перечиты
 | `STUN_URLS` / `TURN_URLS` | — | заменить список ICE-серверов целиком |
 | `SFU_SECRET` | пусто | общий ключ api и sfu. Пусто — режим `sfu` выключен, все каналы звонят напрямую |
 | `SFU_ANNOUNCED_IP` | `TURN_EXTERNAL_IP` | публичный IP в кандидатах медиасервера |
-| `SFU_RTC_MIN_PORT` / `SFU_RTC_MAX_PORT` | `40000` / `40100` | порты медиа SFU |
+| `SFU_RTC_MIN_PORT` / `SFU_RTC_MAX_PORT` | `40000` / `40100` | порты медиа SFU: воркер `i` слушает `MIN + i` (UDP и TCP), воркеров не больше, чем портов |
 | `SFU_URL` | `/` | адрес сигналинга SFU для клиентов; `/` — тот же origin, путь `/sfu/` |
 | `SFU_INTERNAL_URL` | `http://host.docker.internal:3100` | откуда api проверяет, жив ли SFU |
 | `SFU_WORKERS` | число ядер | воркеров mediasoup |
