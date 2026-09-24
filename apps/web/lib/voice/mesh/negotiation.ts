@@ -4,6 +4,7 @@ import type { SdpPayload } from '@relay/shared';
 import { getSocket } from '@/lib/socket';
 import { tx } from '@/lib/i18n';
 import type { TransportHost } from '../types';
+import { preferRedForVoice } from './red';
 import { tuneSdp } from './senders';
 
 /**
@@ -103,6 +104,7 @@ export function createNegotiation({
       const talk = talkOf(peerId);
       try {
         talk.makingOffer = true;
+        preferRedForVoice(pc);
         const offer = await pc.createOffer();
         // Пока ждали createOffer, мог прийти встречный offer (glare) и сменить
         // состояние. Тогда свой локальный offer уже не нужен: ответим в onOffer,
@@ -165,6 +167,7 @@ export function createNegotiation({
         await pc.setRemoteDescription(sdp as RTCSessionDescriptionInit);
         if (remoteFp) talk.fingerprint = remoteFp;
         await drainCandidates(from, pc);
+        preferRedForVoice(pc);
         const answer = await pc.createAnswer();
         answer.sdp = tuneSdp(answer.sdp);
         await pc.setLocalDescription(answer);
