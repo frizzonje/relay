@@ -1,5 +1,3 @@
-<br>
-<br>
 
 <p align="center">
   <picture>
