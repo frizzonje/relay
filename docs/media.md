@@ -55,7 +55,7 @@ flowchart LR
 | Файл | Что |
 |---|---|
 | [`voice.ts`](../apps/web/lib/voice.ts) | вход/выход, выбор транспорта, переезд между каналами, ожидание медиасервера |
-| [`voice/mic.ts`](../apps/web/lib/voice/mic.ts) | захват микрофона, шумодав/эхо, порог VAD, push-to-talk |
+| [`voice/mic.ts`](../apps/web/lib/voice/mic.ts) | захват микрофона, шумодав/эхо/автоусиление, порог (затвор через `track.enabled`, анализатор на клоне), push-to-talk |
 | [`voice/camera.ts`](../apps/web/lib/voice/camera.ts) | камера и демонстрация экрана (один видеослот), звук экрана |
 | [`voice/output.ts`](../apps/web/lib/voice/output.ts) | воспроизведение, микшер громкости 0–300 %, выбор динамика, deafen |
 | [`voice/speaking.ts`](../apps/web/lib/voice/speaking.ts) | индикатор «говорит» |

@@ -5,10 +5,10 @@ import { tx as msg } from '@/lib/i18n';
 import { mediaErrorText } from '@/lib/voice/device-error';
 import { useVoiceStore } from '@/stores/voice';
 import { setting } from '@/stores/config';
+import { nextGate } from '@/lib/voice/gate';
 import {
   ANALYSER_FFT_SIZE,
   analyserRms,
-  audioContext,
   getAudioCtx,
   refreshOutputDevices,
 } from '@/lib/voice/output';
@@ -17,14 +17,17 @@ import {
  * Захват микрофона: устройство, шумовой гейт, push-to-talk, мут и анализатор,
  * по которому зажигается обводка «говорю».
  *
- * Главная сложность здесь одна и она стоит того, чтобы назвать её вслух:
- * дорожек микрофона ДВЕ. Сырая — с устройства, она источник; обработанная —
- * выход цепочки «сырая → gain(затвор) → destination», и именно она уходит
- * собеседникам, когда человек задал порог. Цепочка поднимается лениво: при
- * пороге 0 её нет вовсе и шлётся сырая. Отсюда и все развилки в файле — смена
- * устройства, мут и метки читаются то с одной дорожки, то с другой, и путать
- * их нельзя: у обработанной нет ни label, ни deviceId, а сырая живёт отдельно
- * от исходящего потока и гаснет только вручную.
+ * Дорожка микрофона одна — та, что пришла с устройства, и она же уходит
+ * собеседникам. Всё, что её глушит (мут, push-to-talk, «глушилка», затвор
+ * порога), сходится в одну формулу `enabled = micOn && gateOpen` и пишется в
+ * одном месте — `applyTrackState`. Web Audio здесь только слушает: уровень
+ * снимается с КЛОНА дорожки, потому что выключенная дорожка отдаёт тишину всем
+ * своим потребителям, и анализатор на ней самой после первого же закрытия
+ * затвора видел бы ноль — затвор больше не открылся бы никогда.
+ *
+ * Раньше при пороге > 0 голос шёл через GainNode и MediaStreamDestination, и
+ * собеседникам уходил выход Web Audio — вторая дорожка, пересэмплирование на
+ * частоту вывода и подозреваемый в треске на Linux. См. docs/plans/voice-quality.md.
  */
 
 /**
@@ -129,26 +132,22 @@ function audioConstraints(): MediaTrackConstraints {
 }
 
 // ─── Порог срабатывания микрофона (шумовой гейт, как в Discord) ───────────
-// «Сырой» микрофон гоним через GainNode и собеседникам шлём УЖЕ обработанную
-// дорожку. Gain здесь работает ЗАТВОРОМ: пока уровень ниже порога — плавно
-// закрываемся в 0 (тебя не слышно), выше — открываемся в 1. Цепочку поднимаем
-// ЛЕНИВО: при пороге 0 («выкл») отправляется сырая дорожка, гейт не строится.
-// Гейт включается, только когда пользователь задаёт порог > 0 (или он сохранён).
-// Смена устройства и мут работают через ту же дорожку.
+// Пока уровень ниже порога, затвор закрыт и дорожка устройства выключена
+// (`enabled = false`: пакеты тишины идут дальше, и сторож тишины у собеседника
+// не спутает это с обрывом — ровно как при муте). Выше — открыт. После спада
+// держим открытым ещё GATE_HOLD_MS, чтобы хвосты слов не рубило. Порог 0 —
+// затвора нет. Затвор резкий, без фронтов: цена того, что голос не идёт через
+// Web Audio.
 const MIC_THRESHOLD_KEY = 'relay-mic-threshold';
 let micThreshold = 0; // 0..1 в шкале метра (0 = гейт выключен); читаем в initVoice
-let micPipelineActive = false;
-let rawMicTrack: MediaStreamTrack | null = null; // дорожка устройства (для меток и как источник цепочки)
-let micSource: MediaStreamAudioSourceNode | null = null;
-let micGainNode: GainNode | null = null; // затвор гейта (0/1 с плавным переходом)
-let micDest: MediaStreamAudioDestinationNode | null = null;
+let micTrack: MediaStreamTrack | null = null; // дорожка устройства — она же уходит собеседникам
+let meterTrack: MediaStreamTrack | null = null; // её клон под анализатор: затвор и мут его не глушат
 
-// Гейт: уровень нормируем в 0..1 (как метр у ползунка), сравниваем с порогом,
-// открытие держим ещё чуть-чуть после спада (hold), чтобы хвосты слов не рубило.
 const MIC_METER_FULL = 0.5; // RMS, при котором метр (и шкала порога) заполнен
 const MIC_RING_FLOOR = 0.12; // мин. уровень для обводки «говорю», когда гейт выключен
 const GATE_HOLD_MS = 250;
 const GATE_TICK_MS = 50;
+let gateOpen = true;
 let gateOpenUntil = 0;
 let gateTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -199,11 +198,11 @@ export async function ensureLocalStream(): Promise<void> {
   if (around.stream()) return; // нас опередил другой заход — поток уже принят
 
   around.adopt(stream);
-  rawMicTrack = stream.getAudioTracks()[0] ?? null;
-  if (rawMicTrack) rawMicTrack.contentHint = 'speech'; // голос, не музыка
-  // Сохранённый порог > 0 — поднимаем цепочку гейта ДО join, чтобы новые пиры
-  // сразу получили уже затворённую дорожку.
-  if (micThreshold > 0) ensureMicPipeline();
+  micTrack = stream.getAudioTracks()[0] ?? null;
+  if (micTrack) micTrack.contentHint = 'speech'; // голос, не музыка
+  gateOpen = true; // первый тик гейта закроет, если тихо
+  gateOpenUntil = 0;
+  applyTrackState();
   setupLocalVad(); // анализатор своего микрофона для обводки и гейта
   // Доступ выдан — метки устройств теперь видны, наполняем списки
   void refreshMicInfo();
@@ -211,84 +210,25 @@ export async function ensureLocalStream(): Promise<void> {
 }
 
 /**
- * Дорожка микрофона, которую РЕАЛЬНО шлём собеседникам (именно микрофон, не звук
- * демонстрации): при поднятой цепочке чувствительности — обработанная, иначе —
- * сырая с устройства. Её мутит `applyMute` и подменяет `setMic`.
- */
-function sentMicTrack(): MediaStreamTrack | null {
-  const screenAudio = around.screenAudioTrack();
-  return (
-    around
-      .stream()
-      ?.getAudioTracks()
-      .find((t) => t !== screenAudio) ?? null
-  );
-}
-
-/**
- * Лениво поднимает цепочку «сырой микрофон → gain(чувствительность) → выход» и
- * переводит собеседников на обработанную дорожку. Зовётся, когда пользователь
- * впервые уводит чувствительность с 100% (или при входе, если значение сохранено).
- * Возвращает false, если Web Audio недоступен (тогда остаёмся на сырой дорожке).
- */
-function ensureMicPipeline(): boolean {
-  if (micPipelineActive) return true;
-  if (!around.stream() || typeof window === 'undefined') return false;
-  const Ctor =
-    window.AudioContext ||
-    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!Ctor) return false;
-
-  const raw = rawMicTrack ?? sentMicTrack();
-  if (!raw) return false;
-
-  try {
-    const ctx = getAudioCtx();
-    micSource = ctx.createMediaStreamSource(new MediaStream([raw]));
-    micGainNode = ctx.createGain();
-    micGainNode.gain.value = 1; // открыт по умолчанию; гейт прикроет, если тихо
-    micDest = ctx.createMediaStreamDestination();
-    micSource.connect(micGainNode).connect(micDest);
-  } catch (err) {
-    console.warn('mic pipeline failed, остаёмся на сырой дорожке:', err);
-    micSource = micGainNode = null;
-    micDest = null;
-    return false;
-  }
-
-  const processed = micDest.stream.getAudioTracks()[0];
-  processed.enabled = micOn;
-  processed.contentHint = 'speech'; // подсказка кодеку/AEC: это голос, не музыка
-  rawMicTrack = raw; // сырая дорожка остаётся жить — она источник цепочки (не stop'аем)
-
-  // Переводим уже подключённых собеседников на обработанную дорожку…
-  around.replaceTrack(raw, processed);
-  // …и подменяем дорожку в исходящем потоке, чтобы новые пиры брали уже её.
-  around.stream()!.removeTrack(raw);
-  around.stream()!.addTrack(processed);
-
-  micPipelineActive = true;
-  return true;
-}
-
-/**
  * Порог срабатывания микрофона, 0..1 в шкале метра (0 = гейт выключен, слышно
  * всегда). Чем правее — тем громче надо говорить, чтобы микрофон открылся.
- * Поднимает цепочку лениво; сам затвор ведёт evaluateGate. Выбор — в localStorage.
+ * Сам затвор ведёт evaluateGate. Выбор — в localStorage.
  */
 export function setMicThreshold(value: number) {
   const t = Math.max(0, Math.min(1, value));
   micThreshold = t;
   if (typeof localStorage !== 'undefined') localStorage.setItem(MIC_THRESHOLD_KEY, String(t));
   useVoiceStore.getState().setMicThreshold(t);
+  // Порог выключили — затвор открывается сразу, не дожидаясь тика.
+  if (t <= 0) setGate({ open: true, openUntil: 0 });
+}
 
-  if (t > 0) {
-    if (around.stream()) ensureMicPipeline(); // гейту нужна цепочка
-  } else if (micGainNode && audioContext()) {
-    // Порог 0 — гейт выключаем, микрофон держим открытым.
-    gateOpenUntil = 0;
-    micGainNode.gain.setTargetAtTime(1, audioContext()!.currentTime, 0.02);
-  }
+/** Сменить состояние затвора; дорожку трогаем, только если оно правда сменилось. */
+function setGate(next: { open: boolean; openUntil: number }) {
+  gateOpenUntil = next.openUntil;
+  if (next.open === gateOpen) return;
+  gateOpen = next.open;
+  applyTrackState();
 }
 
 /** Текущий уровень микрофона в шкале метра (0..1, sqrt-кривая — тихое заметнее). */
@@ -306,25 +246,26 @@ export function getMicLevel(): number {
 }
 
 /**
- * Шумовой гейт: пока уровень ниже порога — плавно закрываем микрофон в 0, выше —
- * открываем в 1, удерживая открытым ещё GATE_HOLD_MS после спада. Затвор —
- * micGainNode цепочки; setTargetAtTime даёт мягкие атаку/спад без щелчков.
+ * Тик гейта. Без анализатора (нет Web Audio) порог не применяем вовсе: уровень
+ * там всегда ноль, и затвор закрылся бы навсегда — человека не было бы слышно.
  */
 function evaluateGate() {
-  const ctx = audioContext();
-  if (micThreshold <= 0 || !micPipelineActive || !micGainNode || !ctx) return;
-  const now = performance.now();
-  if (micOn && micLevelNorm() >= micThreshold) gateOpenUntil = now + GATE_HOLD_MS;
-  const open = now < gateOpenUntil;
-  micGainNode.gain.setTargetAtTime(open ? 1 : 0, ctx.currentTime, open ? 0.015 : 0.06);
+  setGate(
+    nextGate({
+      level: micOn ? micLevelNorm() : 0,
+      threshold: localAnalyser ? micThreshold : 0,
+      now: performance.now(),
+      openUntil: gateOpenUntil,
+      holdMs: GATE_HOLD_MS,
+    }),
+  );
 }
 
 /** Обновляет в сторе активное устройство и список доступных микрофонов. */
 export async function refreshMicInfo() {
   const store = useVoiceStore.getState();
-  // Метку/девайс берём с СЫРОЙ дорожки устройства: у обработанной (выход
-  // MediaStreamDestination) ни label, ни deviceId нет.
-  const track = rawMicTrack ?? sentMicTrack();
+  // Метку/девайс берём с дорожки устройства — она и уходит собеседникам.
+  const track = micTrack;
   const settings = track?.getSettings?.();
   store.setCurrentMic(settings?.deviceId ?? null, track?.label ?? '');
   try {
@@ -365,35 +306,21 @@ export async function setMic(deviceId: string) {
   const newTrack = stream.getAudioTracks()[0];
   if (!newTrack) return;
   newTrack.contentHint = 'speech'; // голос, не музыка
+  // Мут и затвор — до того, как дорожка попадёт к собеседникам: иначе между
+  // replaceTrack и applyTrackState заглушённый человек на миг слышен.
+  newTrack.enabled = micOn && gateOpen;
 
-  const pipelineCtx = audioContext();
-  if (micPipelineActive && micGainNode && pipelineCtx) {
-    // Цепочка чувствительности поднята: меняем ИСТОЧНИК, исходящая (обработанная)
-    // дорожка остаётся прежней — собеседников переподписывать не нужно.
-    newTrack.enabled = true; // сырой источник всегда «течёт», мут — на выходной дорожке
-    try {
-      micSource?.disconnect();
-    } catch {
-      /* источник мог быть уже отключён */
-    }
-    rawMicTrack?.stop();
-    micSource = pipelineCtx.createMediaStreamSource(new MediaStream([newTrack]));
-    micSource.connect(micGainNode);
-    rawMicTrack = newTrack;
-  } else {
-    // Сырой путь (цепочки нет): подменяем дорожку у всех собеседников и в потоке.
-    newTrack.enabled = micOn; // сохраняем текущее состояние «выкл/вкл»
-    const oldTrack = sentMicTrack();
-    around.replaceTrack(oldTrack, newTrack);
-    if (oldTrack) {
-      oldTrack.stop();
-      around.stream()!.removeTrack(oldTrack);
-    }
-    around.stream()!.addTrack(newTrack);
-    rawMicTrack = newTrack;
+  const oldTrack = micTrack;
+  around.replaceTrack(oldTrack, newTrack);
+  if (oldTrack) {
+    oldTrack.stop();
+    around.stream()!.removeTrack(oldTrack);
   }
+  around.stream()!.addTrack(newTrack);
+  micTrack = newTrack;
+  applyTrackState();
 
-  setupLocalVad(); // переподцепляем анализатор обводки к новому устройству
+  setupLocalVad(); // переподцепляем анализатор к новому устройству
   await refreshMicInfo();
   toast(
     msg('voice.toast.micSwitched', {
@@ -541,37 +468,47 @@ export function loadMediaPrefs() {
 }
 
 /**
- * Применить текущий мут к дорожкам исходящего потока.
+ * Привести дорожку микрофона к формуле `micOn && gateOpen`. Звук демонстрации
+ * в том же потоке, но ни мут, ни затвор его не касаются.
+ */
+function applyTrackState() {
+  const live = micOn && gateOpen;
+  const screenAudio = around.screenAudioTrack();
+  around
+    .stream()
+    ?.getAudioTracks()
+    .forEach((t) => {
+      if (t !== screenAudio) t.enabled = live;
+    });
+}
+
+/**
+ * Применить текущий мут к дорожкам исходящего потока и рассказать витрине.
  *
  * Зовётся и снаружи: при входе в канал поток только что собран, а мут на нём
  * уже свой — он переживает выход из эфира (под «глушилкой» микрофон остаётся
  * выключенным).
  */
 export function applyMute() {
-  // Микрофон глушим, а звук демонстрации экрана — нет (он не зависит от микрофона)
-  const screenAudio = around.screenAudioTrack();
-  around
-    .stream()
-    ?.getAudioTracks()
-    .forEach((t) => {
-      if (t === screenAudio) return;
-      t.enabled = micOn;
-    });
+  applyTrackState();
   around.syncStore();
 }
 
-// Поднимает локальный анализатор микрофона (независимо от цепочки чувствительности).
-// Тихий путь до destination нужен, чтобы граф «тянул» микрофон, — себя мы не слышим.
+// Поднимает локальный анализатор микрофона. Слушает КЛОН дорожки: выключенная
+// дорожка отдаёт тишину всем потребителям, и анализатор на ней самой не
+// услышал бы голос, который должен открыть закрытый затвор.
 function setupLocalVad() {
   teardownLocalVad();
-  if (!rawMicTrack || typeof window === 'undefined') return;
+  if (!micTrack || typeof window === 'undefined') return;
   const Ctor =
     window.AudioContext ||
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctor) return;
   try {
     const ctx = getAudioCtx();
-    localVadSource = ctx.createMediaStreamSource(new MediaStream([rawMicTrack]));
+    meterTrack = micTrack.clone();
+    meterTrack.enabled = true; // клон наследует enabled — а при муте он был бы глухим
+    localVadSource = ctx.createMediaStreamSource(new MediaStream([meterTrack]));
     localAnalyser = ctx.createAnalyser();
     localAnalyser.fftSize = ANALYSER_FFT_SIZE;
     localVadGain = ctx.createGain();
@@ -593,6 +530,8 @@ function teardownLocalVad() {
   } catch {
     /* узлы могли быть уже отключены */
   }
+  meterTrack?.stop(); // клон держит устройство так же, как оригинал
+  meterTrack = null;
   localVadSource = null;
   localAnalyser = null;
   localVadGain = null;
@@ -631,25 +570,13 @@ export function loadMicThreshold(): void {
 }
 
 /**
- * Полный выход из эфира: разбираем цепочку чувствительности и гасим устройство.
- *
- * Сырая дорожка живёт ОТДЕЛЬНО от исходящего потока (когда цепочка активна),
- * поэтому её надо погасить вручную — иначе лампочка записи не гаснет до
- * перезагрузки вкладки.
+ * Полный выход из эфира: гасим устройство и клон под анализатор. Оба держат
+ * микрофон — забудь любой, и лампочка записи не гаснет до перезагрузки вкладки.
  */
 export function teardownMic(): void {
-  try {
-    micSource?.disconnect();
-    micGainNode?.disconnect();
-  } catch {
-    /* узлы могли быть уже отключены */
-  }
-  rawMicTrack?.stop();
-  rawMicTrack = null;
-  micSource = null;
-  micGainNode = null;
-  micDest = null;
-  micPipelineActive = false;
+  micTrack?.stop();
+  micTrack = null;
+  gateOpen = true;
   gateOpenUntil = 0;
   teardownLocalVad();
 }
