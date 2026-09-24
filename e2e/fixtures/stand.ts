@@ -60,6 +60,13 @@ export interface PersonOptions {
    * ловит (мышь в нём есть).
    */
   mobile?: boolean;
+  /**
+   * Скрипт, который браузер выполнит до кода приложения на каждой странице
+   * контекста. Нужен спекам, которые смотрят в само соединение: приложение
+   * своих RTCPeerConnection наружу не отдаёт, и подсмотреть их можно, только
+   * встав между ним и конструктором раньше него.
+   */
+  initScript?: () => void;
 }
 
 /**
@@ -80,6 +87,7 @@ export async function person(
     ...(options.permissions ? { permissions: options.permissions } : {}),
   });
   await ctx.addCookies([{ name: 'relay-lang', value: 'en', url: BASE }]);
+  if (options.initScript) await ctx.addInitScript(options.initScript);
   const page = await ctx.newPage();
   await page.goto('/');
 
