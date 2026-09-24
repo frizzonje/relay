@@ -11,8 +11,9 @@
 #
 # Tags applied: the git tag without leading "v" (0.4.0), plus "latest" for a
 # release tag (v1.2.3) — but not for a prerelease (v1.0.0-rc1), not for a new
-# major (v1.0.0, v2.0.0) and not for a manual dispatch unless it explicitly asks
-# for it. Everything installed follows :latest, so moving it is a decision, not
+# major (v1.0.0, v2.0.0), not for any release of a major other than the one
+# :latest is on (LATEST_MAJOR in the meta job) and not for a manual dispatch
+# unless it explicitly asks for it. Everything installed follows :latest, so moving it is a decision, not
 # a side effect — and across a major it is a decision to be taken by hand, once
 # the installed base has been given a way over (see the case below).
 #
@@ -70,6 +71,14 @@ jobs:
           EVENT: ${{ github.event_name }}
           INPUT_TAG: ${{ github.event.inputs.tag }}
           INPUT_LATEST: ${{ github.event.inputs.latest }}
+          # Мажор, на котором сейчас стоит `:latest`. Правило «мажор `:latest`
+          # не двигает» ниже закрывало только сам x.0.0, а первый же патч после
+          # него (2.0.1) шёл в `*` и переводил `:latest` на 2.x — ровно то
+          # падение 0.x-инсталляций, от которого x.0.0 и держали. Патч двигает
+          # `:latest`, только если он того же мажора. Кто вручную переводит
+          # `:latest` на новый мажор (workflow_dispatch, latest=true), меняет
+          # и это число — тем же диффом.
+          LATEST_MAJOR: '0'
         run: |
           if [ "$EVENT" = "push" ]; then
             V="${GITHUB_REF_NAME#v}"
@@ -89,7 +98,9 @@ jobs:
               # «Upgrading»). Промоушен `:latest` остаётся ручным — workflow_dispatch
               # с latest=true, когда придёт время.
               *.0.0)  LATEST=false ;;
-              *)      LATEST=true ;;
+              "$LATEST_MAJOR".*) LATEST=true ;;
+              *)      LATEST=false
+                      echo "::notice::$V: :latest стоит на $LATEST_MAJOR.x, чужой мажор его не двигает." ;;
             esac
           else
             # Тот же срез "v", что и у тега: поле просит "0.4.0", но пишут в
