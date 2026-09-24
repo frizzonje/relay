@@ -175,6 +175,8 @@ interface VoiceState {
   currentCamLabel: string;
   /** Аппаратное шумоподавление микрофона (getUserMedia constraint). */
   noiseSuppression: boolean;
+  /** Автоусиление микрофона (getUserMedia constraint). */
+  autoGain: boolean;
   /** Режим Push-to-talk: микрофон открыт, только пока удерживается пробел. */
   pushToTalk: boolean;
   /** Здоровье своего аплинка (см. UplinkStatus) — предупреждение на своей плитке. */
@@ -205,6 +207,7 @@ interface VoiceState {
   setCameras: (cameras: MediaDeviceInfo[]) => void;
   setCurrentCamera: (id: string | null, label: string) => void;
   setNoiseSuppression: (v: boolean) => void;
+  setAutoGain: (v: boolean) => void;
   setPushToTalk: (v: boolean) => void;
   setUplink: (v: UplinkStatus) => void;
   setListenOnly: (v: boolean) => void;
@@ -235,6 +238,7 @@ export const useVoiceStore = create<VoiceState>((set) => ({
   currentCamId: null,
   currentCamLabel: '',
   noiseSuppression: true,
+  autoGain: true,
   pushToTalk: false,
   uplink: 'ok',
   listenOnly: false,
@@ -257,6 +261,7 @@ export const useVoiceStore = create<VoiceState>((set) => ({
   setCameras: (cameras) => set({ cameras }),
   setCurrentCamera: (id, label) => set({ currentCamId: id, currentCamLabel: label }),
   setNoiseSuppression: (v) => set({ noiseSuppression: v }),
+  setAutoGain: (v) => set({ autoGain: v }),
   setPushToTalk: (v) => set({ pushToTalk: v }),
   setUplink: (v) => set({ uplink: v }),
   setListenOnly: (v) => set({ listenOnly: v }),

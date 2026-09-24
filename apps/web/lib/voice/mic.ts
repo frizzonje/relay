@@ -80,10 +80,11 @@ export function setMicOn(on: boolean): void {
 }
 
 // ─── Настройки медиа (модалка настроек, раздел 06 референса) ───────────────
-// Шумоподавление — constraint для getUserMedia (по умолчанию вкл); Push-to-talk —
-// микрофон открыт, только пока удерживается пробел (по умолчанию выкл). Оба
-// значения запоминаются в localStorage и синхронизируются в стор при загрузке.
+// Шумоподавление и автоусиление — constraint'ы getUserMedia (по умолчанию вкл);
+// Push-to-talk — микрофон открыт, только пока удерживается пробел (по умолчанию
+// выкл). Значения запоминаются в localStorage и синхронизируются в стор при загрузке.
 const NS_KEY = 'relay-noise-suppress';
+const AGC_KEY = 'relay-auto-gain';
 const PTT_KEY = 'relay-ptt';
 
 /**
@@ -98,31 +99,33 @@ function chosen(key: string): string | null {
 }
 
 /**
- * Шумоподавление и push-to-talk: выбор человека, а без него — умолчание
- * инсталляции (`voice.noiseSuppressionDefault`, `voice.pushToTalkDefault`).
+ * Тумблер микрофона: выбор человека, а без него — умолчание инсталляции
+ * (`voice.noiseSuppressionDefault`, `voice.autoGainControlDefault`,
+ * `voice.pushToTalkDefault`).
  *
  * Спрашиваем каждый раз, а не запоминаем при загрузке модуля: снимок настроек
  * приезжает после первого кадра, и значение, снятое на старте, осталось бы
  * вчерашним до перезагрузки вкладки. Умолчания каталога — сегодняшние «вкл» и
  * «выкл», поэтому в инсталляции, где панель не открывали, всё как было.
  */
-function noiseSuppressionOn(): boolean {
-  const raw = chosen(NS_KEY);
-  if (raw !== null) return raw !== '0';
-  return setting<boolean>('voice.noiseSuppressionDefault');
+function toggleOn(key: string, fallback: string): boolean {
+  const raw = chosen(key);
+  return raw === null ? setting<boolean>(fallback) : raw === '1';
 }
 
-function pushToTalkOn(): boolean {
-  const raw = chosen(PTT_KEY);
-  if (raw !== null) return raw === '1';
-  return setting<boolean>('voice.pushToTalkDefault');
-}
+const noiseSuppressionOn = () => toggleOn(NS_KEY, 'voice.noiseSuppressionDefault');
+const autoGainOn = () => toggleOn(AGC_KEY, 'voice.autoGainControlDefault');
+const pushToTalkOn = () => toggleOn(PTT_KEY, 'voice.pushToTalkDefault');
 
 let pttHeld = false;
 
-/** Constraint аудио с учётом тоггла шумоподавления (замена статичного AUDIO_CONSTRAINTS). */
+/** Constraint аудио с учётом тумблеров шумоподавления и автоусиления. */
 function audioConstraints(): MediaTrackConstraints {
-  return { echoCancellation: true, noiseSuppression: noiseSuppressionOn(), autoGainControl: true };
+  return {
+    echoCancellation: true,
+    noiseSuppression: noiseSuppressionOn(),
+    autoGainControl: autoGainOn(),
+  };
 }
 
 // ─── Порог срабатывания микрофона (шумовой гейт, как в Discord) ───────────
@@ -400,13 +403,28 @@ export async function setMic(deviceId: string) {
 }
 
 /**
- * Тоггл аппаратного шумоподавления микрофона (модалка настроек, раздел 06).
- * Меняем constraint и, если уже в звонке, переснимаем дорожку текущего устройства.
+ * Запомнить тумблер обработки и, если уже в звонке, переснять дорожку текущего
+ * устройства: constraint'ы действуют только на новом захвате.
  */
-export async function setNoiseSuppression(on: boolean) {
-  if (typeof localStorage !== 'undefined') localStorage.setItem(NS_KEY, on ? '1' : '0');
-  useVoiceStore.getState().setNoiseSuppression(on);
+async function rememberAndRecapture(key: string, on: boolean) {
+  if (typeof localStorage !== 'undefined') localStorage.setItem(key, on ? '1' : '0');
   if (around.stream()) await setMic(useVoiceStore.getState().currentMicId ?? '');
+}
+
+/** Тоггл аппаратного шумоподавления микрофона (модалка настроек, раздел 06). */
+export async function setNoiseSuppression(on: boolean) {
+  useVoiceStore.getState().setNoiseSuppression(on);
+  await rememberAndRecapture(NS_KEY, on);
+}
+
+/**
+ * Тоггл автоусиления. На Linux браузер ведёт им СИСТЕМНЫЙ ползунок микрофона
+ * (PulseAudio/PipeWire) и может загнать его за 100% — голос хрипит и «плавает».
+ * На Windows драйвер обычно держит потолок, поэтому там этого не слышно.
+ */
+export async function setAutoGain(on: boolean) {
+  useVoiceStore.getState().setAutoGain(on);
+  await rememberAndRecapture(AGC_KEY, on);
 }
 
 // ─── Push-to-talk (модалка настроек) ───────────────────────────────────────
@@ -512,6 +530,7 @@ export function loadMediaPrefs() {
   const store = useVoiceStore.getState();
   const ptt = pushToTalkOn();
   store.setNoiseSuppression(noiseSuppressionOn());
+  store.setAutoGain(autoGainOn());
   store.setPushToTalk(ptt);
   // Пробел слушаем ровно тогда, когда режим включён. До этапа C подписка
   // заводилась только тумблером, поэтому вкладка, открытая с уже включённым

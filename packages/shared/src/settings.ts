@@ -830,6 +830,14 @@ export const SETTINGS: readonly SettingSpec[] = [
     client: true,
   },
   {
+    key: 'voice.autoGainControlDefault',
+    group: 'voice',
+    kind: 'boolean',
+    fallback: true,
+    applies: 'new',
+    client: true,
+  },
+  {
     key: 'voice.pushToTalkDefault',
     group: 'voice',
     kind: 'boolean',
