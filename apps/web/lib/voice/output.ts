@@ -5,6 +5,7 @@ import { getSfx } from '@/lib/sfx';
 import { tx as msg } from '@/lib/i18n';
 import { useVoiceStore } from '@/stores/voice';
 import { diag } from '@/lib/voice/diag';
+import { cmpMid } from '@/lib/voice/mid';
 import { roleOf, setTileScreenAudio, tileOf } from '@/lib/voice/tiles';
 
 let vadBuf: Uint8Array<ArrayBuffer> | null = null;
@@ -130,14 +131,6 @@ function ensurePeerAudio(peerId: string, stream: MediaStream | null): PeerAudio 
     void pa.sink.play().catch(() => {});
   }
   return pa;
-}
-
-// Сравнение mid: числовые («0», «1», …) по значению, иначе лексикографически.
-function cmpMid(a: string, b: string): number {
-  const na = Number(a);
-  const nb = Number(b);
-  if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
-  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 // Пересчитываем роли дорожек пира (голос/демонстрация) по порядку mid и

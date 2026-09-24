@@ -10,10 +10,17 @@ export const SDP_MIN_BITRATE_KBPS = 1200;
 export const SDP_MAX_BITRATE_KBPS = 8000;
 
 // ─────────────────────────────────────────────────────────────────────────
-// Качество голоса (Opus). Дефолт WebRTC для голоса — ~32 кбит/с моно без тюнинга,
-// и звонок звучит глухо. Поднимаем до «discord-уровня»: стерео, высокий средний
-// битрейт, in-band FEC (устойчивость к потерям) и без DTX (без «проглатывания»
-// тихих участков). Касается и микрофона, и звука демонстрации экрана.
+// Качество голоса (Opus). Дефолт WebRTC для голоса — ~32 кбит/с без тюнинга, и
+// звонок звучит глухо. Поднимаем: высокий средний битрейт, in-band FEC
+// (устойчивость к потерям), без DTX (без «проглатывания» тихих участков).
+//
+// Каналы — по роли линии. Голос — моно: микрофон моно, а стерео заставляло
+// кодек кодировать два одинаковых канала (разведка: 100% кадров голоса шли
+// стерео). Звук демонстрации — стерео: там музыка и фильмы. Роль линии — её
+// место среди аудиолиний: первая — голос, остальные — демонстрация. То же
+// правило, по которому микшер (lib/voice/output.ts) отличает голос от показа:
+// микрофон добавляется первым, звук экрана — позже, а m-линии не
+// переупорядочиваются никогда.
 //
 // Это ПОТОЛОК кодека в SDP (maxaveragebitrate). Фактический максимум каждого
 // потока задаётся отдельно через sender.encodings.maxBitrate (см.
@@ -23,10 +30,8 @@ export const SDP_MAX_BITRATE_KBPS = 8000;
 // ─────────────────────────────────────────────────────────────────────────
 export const OPUS_MAX_BITRATE = 256_000;
 
-// Параметры fmtp Opus, которые мы навязываем (перетирая встречные значения).
-const OPUS_FMTP_PARAMS: Record<string, string> = {
-  stereo: '1',
-  'sprop-stereo': '1',
+// Параметры fmtp Opus, общие для обеих ролей (перетирают встречные значения).
+const OPUS_FMTP_COMMON: Record<string, string> = {
   maxaveragebitrate: String(OPUS_MAX_BITRATE),
   maxplaybackrate: '48000',
   useinbandfec: '1',
@@ -34,53 +39,75 @@ const OPUS_FMTP_PARAMS: Record<string, string> = {
   minptime: '10',
 };
 
+const VOICE_CHANNELS: Record<string, string> = { stereo: '0', 'sprop-stereo': '0' };
+const SCREEN_CHANNELS: Record<string, string> = { stereo: '1', 'sprop-stereo': '1' };
+
 /**
- * Прокачивает качество Opus в SDP: для каждого opus-кодека выставляет stereo,
- * высокий maxaveragebitrate, FEC и т.д. Если у кодека ещё нет строки a=fmtp —
- * добавляет её сразу после a=rtpmap. Не-аудио строки не трогаются. Идемпотентна.
- * undefined → undefined.
+ * Прокачивает Opus в SDP по ролям линий: первая аудиолиния — голос (моно),
+ * остальные — звук демонстрации (стерео); битрейт, FEC и DTX — общие. Кодеку
+ * без строки a=fmtp дописывает её сразу после a=rtpmap. Не-Opus строки (RED,
+ * видео) не трогает. Идемпотентна. undefined → undefined.
  */
 export function boostAudioBitrate(sdp: string | undefined): string | undefined {
   if (!sdp) return sdp;
-  const lines = sdp.split('\r\n');
+  const out: string[] = [];
+  let section: string[] = [];
+  let audioSeen = 0;
+  const flush = () => {
+    if (section[0]?.startsWith('m=audio')) {
+      const channels = audioSeen === 0 ? VOICE_CHANNELS : SCREEN_CHANNELS;
+      out.push(...tuneOpus(section, { ...OPUS_FMTP_COMMON, ...channels }));
+      audioSeen++;
+    } else {
+      out.push(...section);
+    }
+    section = [];
+  };
+  for (const line of sdp.split('\r\n')) {
+    if (line.startsWith('m=')) flush();
+    section.push(line);
+  }
+  flush();
+  return out.join('\r\n');
+}
 
+/** Opus одной m-линии: fmtp обновить на месте, недостающий — дописать. */
+function tuneOpus(lines: string[], params: Record<string, string>): string[] {
   // Payload-типы opus и индекс их rtpmap-строки (чтобы вставить fmtp при нужде)
   const opusPts = new Map<string, number>();
   lines.forEach((l, i) => {
     const m = l.match(/^a=rtpmap:(\d+) opus\/\d+/i);
     if (m) opusPts.set(m[1], i);
   });
-  if (!opusPts.size) return sdp;
+  if (!opusPts.size) return lines;
 
-  // Существующие fmtp opus-кодеков обновляем на месте
   const seen = new Set<string>();
   const out = lines.map((l) => {
     const m = l.match(/^a=fmtp:(\d+) (.*)$/);
     if (!m || !opusPts.has(m[1])) return l;
     seen.add(m[1]);
-    return `a=fmtp:${m[1]} ${mergeFmtp(m[2])}`;
+    return `a=fmtp:${m[1]} ${mergeFmtp(m[2], params)}`;
   });
 
   // Кодекам без fmtp дописываем строку сразу после rtpmap (с конца, чтобы
   // индексы не съезжали)
   const missing = [...opusPts.entries()].filter(([pt]) => !seen.has(pt));
   missing.sort((a, b) => b[1] - a[1]);
-  const params = Object.entries(OPUS_FMTP_PARAMS)
+  const fresh = Object.entries(params)
     .map(([k, v]) => `${k}=${v}`)
     .join(';');
-  for (const [pt, idx] of missing) out.splice(idx + 1, 0, `a=fmtp:${pt} ${params}`);
-
-  return out.join('\r\n');
+  for (const [pt, idx] of missing) out.splice(idx + 1, 0, `a=fmtp:${pt} ${fresh}`);
+  return out;
 }
 
 // Сливает существующие параметры fmtp с нашими (наши перетирают встречные).
-function mergeFmtp(existing: string): string {
+function mergeFmtp(existing: string, ours: Record<string, string>): string {
   const params = new Map<string, string>();
   for (const part of existing.split(';')) {
     const [k, ...rest] = part.split('=');
     if (k.trim()) params.set(k.trim(), rest.join('='));
   }
-  for (const [k, v] of Object.entries(OPUS_FMTP_PARAMS)) params.set(k, v);
+  for (const [k, v] of Object.entries(ours)) params.set(k, v);
   return [...params.entries()].map(([k, v]) => (v === '' ? k : `${k}=${v}`)).join(';');
 }
 

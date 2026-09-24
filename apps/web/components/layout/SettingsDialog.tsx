@@ -41,6 +41,7 @@ import {
   setSpeaker,
   setCamera,
   setNoiseSuppression,
+  setAutoGain,
   setPushToTalk,
   getMicLevel,
 } from '@/lib/voice';
@@ -526,6 +527,7 @@ export function SettingsDialog({
   const cameras = useVoiceStore((s) => s.cameras);
   const currentCamId = useVoiceStore((s) => s.currentCamId);
   const noiseSuppression = useVoiceStore((s) => s.noiseSuppression);
+  const autoGain = useVoiceStore((s) => s.autoGain);
   const pushToTalk = useVoiceStore((s) => s.pushToTalk);
   const [theme, setThemeVal] = useState<Theme>('dark');
   const isDesktop = useDesktopStore((s) => s.isDesktop);
@@ -717,6 +719,12 @@ export function SettingsDialog({
                       onChange={(v) => void setNoiseSuppression(v)}
                       title={t('settings.noiseSuppression')}
                       hint={t('settings.noiseSuppression.hint')}
+                    />
+                    <Toggle
+                      checked={autoGain}
+                      onChange={(v) => void setAutoGain(v)}
+                      title={t('settings.autoGain')}
+                      hint={t('settings.autoGain.hint')}
                     />
                   </div>
                 </div>

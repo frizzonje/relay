@@ -64,37 +64,99 @@ describe('boostVideoBitrate', () => {
   });
 });
 
+// Голос и звук демонстрации — две аудиолинии, как у собеседника, который
+// показывает экран. Opus = 111 в обеих: BUNDLE это разрешает, разведка
+// (docs/plans/voice-quality.md) проверила на Chromium, WebKit и Firefox.
+const call = [
+  'v=0',
+  'a=group:BUNDLE 0 1 2',
+  'm=audio 9 UDP/TLS/RTP/SAVPF 111 63',
+  'a=mid:0',
+  'a=rtpmap:111 opus/48000/2',
+  'a=fmtp:111 minptime=10;useinbandfec=1',
+  'a=rtpmap:63 red/48000/2',
+  'a=fmtp:63 111/111',
+  'm=video 9 UDP/TLS/RTP/SAVPF 96',
+  'a=mid:1',
+  'a=rtpmap:96 VP8/90000',
+  'a=fmtp:96 max-fs=12288',
+  'm=audio 9 UDP/TLS/RTP/SAVPF 111 63',
+  'a=mid:2',
+  'a=rtpmap:111 opus/48000/2',
+  'a=fmtp:111 minptime=10;useinbandfec=1',
+  'a=rtpmap:63 red/48000/2',
+  'a=fmtp:63 111/111',
+  '',
+].join('\r\n');
+
+/** fmtp Opus в N-й аудиолинии. */
+function opusFmtp(sdp: string, audioIndex: number): string {
+  const audio = sdp.split(/\r\n(?=m=)/).filter((s) => s.startsWith('m=audio'))[audioIndex];
+  return audio.split('\r\n').find((l) => l.startsWith('a=fmtp:111'))!;
+}
+
 describe('boostAudioBitrate', () => {
   it('undefined/пусто → как есть', () => {
     expect(boostAudioBitrate(undefined)).toBeUndefined();
     expect(boostAudioBitrate('')).toBe('');
   });
 
-  it('навязывает стерео/битрейт/FEC в fmtp opus, видео не трогает', () => {
-    const out = boostAudioBitrate(sdp)!;
-    const lines = out.split('\r\n');
-    const audioFmtp = lines.find((l) => l.startsWith('a=fmtp:111'))!;
-    const videoFmtp = lines.find((l) => l.startsWith('a=fmtp:96'))!;
-    expect(audioFmtp).toContain('stereo=1');
-    expect(audioFmtp).toContain(`maxaveragebitrate=${OPUS_MAX_BITRATE}`);
-    expect(audioFmtp).toContain('useinbandfec=1');
-    expect(audioFmtp).toContain('usedtx=0');
-    // встречный useinbandfec не дублируется
-    expect((audioFmtp.match(/useinbandfec/g) || []).length).toBe(1);
-    // видеокодек не трогаем
-    expect(videoFmtp).not.toContain('stereo');
+  it('голос — первая аудиолиния — моно: стерео на голосе только тратит битрейт', () => {
+    const voice = opusFmtp(boostAudioBitrate(call)!, 0);
+    expect(voice).toContain(';stereo=0');
+    expect(voice).toContain('sprop-stereo=0');
   });
 
-  it('добавляет a=fmtp, если у opus её не было', () => {
+  it('звук демонстрации — следующие аудиолинии — стерео: там музыка', () => {
+    const screen = opusFmtp(boostAudioBitrate(call)!, 1);
+    expect(screen).toContain(';stereo=1');
+    expect(screen).toContain('sprop-stereo=1');
+  });
+
+  it('битрейт, FEC и DTX одинаковы у обеих ролей', () => {
+    const out = boostAudioBitrate(call)!;
+    for (const fmtp of [opusFmtp(out, 0), opusFmtp(out, 1)]) {
+      expect(fmtp).toContain(`maxaveragebitrate=${OPUS_MAX_BITRATE}`);
+      expect(fmtp).toContain('useinbandfec=1');
+      expect(fmtp).toContain('usedtx=0');
+      expect((fmtp.match(/useinbandfec/g) || []).length).toBe(1);
+    }
+  });
+
+  it('RED и видео не трогает', () => {
+    const lines = boostAudioBitrate(call)!.split('\r\n');
+    expect(lines.filter((l) => l.startsWith('a=fmtp:63'))).toEqual([
+      'a=fmtp:63 111/111',
+      'a=fmtp:63 111/111',
+    ]);
+    expect(lines.find((l) => l.startsWith('a=fmtp:96'))).toBe('a=fmtp:96 max-fs=12288');
+  });
+
+  it('слушатель: единственная recvonly-аудиолиния — это голос', () => {
+    const listener = [
+      'v=0',
+      'm=audio 9 UDP/TLS/RTP/SAVPF 111',
+      'a=recvonly',
+      'a=rtpmap:111 opus/48000/2',
+    ].join('\r\n');
+    expect(boostAudioBitrate(listener)).toContain(';stereo=0');
+  });
+
+  it('добавляет a=fmtp сразу после rtpmap, если её не было', () => {
     const noFmtp = ['m=audio 9 RTP 111', 'a=rtpmap:111 opus/48000/2'].join('\r\n');
-    const out = boostAudioBitrate(noFmtp)!;
-    expect(out).toContain('a=fmtp:111 ');
-    expect(out).toContain('stereo=1');
+    const lines = boostAudioBitrate(noFmtp)!.split('\r\n');
+    expect(lines[2]).toMatch(/^a=fmtp:111 .*stereo=0/);
   });
 
   it('идемпотентность: повторный вызов не меняет результат', () => {
-    const once = boostAudioBitrate(sdp)!;
+    const once = boostAudioBitrate(call)!;
     expect(boostAudioBitrate(once)).toBe(once);
+  });
+
+  it('сохраняет CRLF и число строк, если fmtp уже были', () => {
+    const out = boostAudioBitrate(call)!;
+    expect(out.split('\r\n').length).toBe(call.split('\r\n').length);
+    expect(out.endsWith('\r\n')).toBe(true);
   });
 
   it('без opus SDP не меняется', () => {

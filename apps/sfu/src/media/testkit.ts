@@ -143,8 +143,11 @@ export class FakeRouter {
 
   constructor(readonly mediaCodecs: unknown) {}
 
-  async createWebRtcTransport(): Promise<FakeTransport> {
+  readonly transportOptions: unknown[] = [];
+
+  async createWebRtcTransport(options?: unknown): Promise<FakeTransport> {
     if (this.failTransport) throw new Error('порты кончились');
+    this.transportOptions.push(options);
     const t = new FakeTransport();
     this.transports.push(t);
     return t;
@@ -161,16 +164,22 @@ export class FakeRouter {
 
 export class FakeWorkers {
   readonly routers: FakeRouter[] = [];
+  readonly servers: { id: string }[] = [];
   taken = 0;
 
   take() {
     this.taken++;
+    const webRtcServer = { id: nextId('webrtc-server') };
+    this.servers.push(webRtcServer);
     return {
-      createRouter: async ({ mediaCodecs }: { mediaCodecs: unknown }) => {
-        const router = new FakeRouter(mediaCodecs);
-        this.routers.push(router);
-        return router as unknown as types.Router;
-      },
+      worker: {
+        createRouter: async ({ mediaCodecs }: { mediaCodecs: unknown }) => {
+          const router = new FakeRouter(mediaCodecs);
+          this.routers.push(router);
+          return router as unknown as types.Router;
+        },
+      } as unknown as types.Worker,
+      webRtcServer: webRtcServer as unknown as types.WebRtcServer,
     };
   }
 }

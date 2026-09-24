@@ -133,13 +133,12 @@ describe('транспорты', () => {
     expect(peer.transports.get(transport.id)).toBe(transport);
   });
 
-  it('транспорт анонсирует внешний адрес, а не адрес контейнера', async () => {
-    process.env.SFU_ANNOUNCED_IP = '203.0.113.7';
+  it('транспорт садится на WebRtcServer воркера своей комнаты, а не на свой порт', async () => {
     const { peer } = await join('эфир', 'a');
     await rooms.createTransport(peer);
-    delete process.env.SFU_ANNOUNCED_IP;
-    // Опции ушли в роутер — проверяем, что он их получил именно с адресом.
-    expect(workers.routers[0].transports).toHaveLength(1);
+    const options = workers.routers[0].transportOptions[0] as { webRtcServer: unknown };
+    expect(options.webRtcServer).toBe(workers.servers[0]);
+    expect(options).not.toHaveProperty('listenInfos');
   });
 
   it('закрытие транспорта снимает его с участника — не ждём дисконнекта', async () => {

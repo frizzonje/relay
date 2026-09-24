@@ -69,9 +69,37 @@ export function workerSettings(): types.WorkerSettings {
   return {
     logLevel: 'warn',
     logTags: ['info', 'ice', 'dtls', 'rtp', 'srtp', 'rtcp'],
-    // Диапазон должен быть открыт на фаерволе (UDP+TCP) и проброшен в compose.
-    rtcMinPort: num(process.env.SFU_RTC_MIN_PORT, 40000),
-    rtcMaxPort: num(process.env.SFU_RTC_MAX_PORT, 40100),
+  };
+}
+
+/**
+ * Диапазон RTC-портов из env. Раньше из него брал порт КАЖДЫЙ транспорт, и
+ * сотни портов хватало человек на пятьдесят на весь сервер (у участника два
+ * транспорта). Теперь каждый воркер слушает ровно один порт — первый свободный
+ * по порядку от `min`, — а транспорты живут на нём и различаются по ICE ufrag.
+ * Диапазон остался прежним, чтобы уже открытый фаервол продолжал подходить.
+ */
+export function rtcPortRange(): { min: number; max: number } {
+  return {
+    min: num(process.env.SFU_RTC_MIN_PORT, 40000),
+    max: num(process.env.SFU_RTC_MAX_PORT, 40100),
+  };
+}
+
+/** Сколько воркеров влезает в диапазон: по порту на каждого. */
+export function rtcPortCount(): number {
+  const { min, max } = rtcPortRange();
+  return Math.max(0, max - min + 1);
+}
+
+/** WebRtcServer воркера: UDP и TCP на одном порту. */
+export function webRtcServerOptions(port: number): types.WebRtcServerOptions {
+  const announcedAddress = announcedIp();
+  return {
+    listenInfos: [
+      { protocol: 'udp', ip: '0.0.0.0', announcedAddress, port },
+      { protocol: 'tcp', ip: '0.0.0.0', announcedAddress, port },
+    ],
   };
 }
 
@@ -89,12 +117,11 @@ export function announcedIp(): string | undefined {
   return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) ? host : undefined;
 }
 
-export function webRtcTransportOptions(): types.WebRtcTransportOptions {
+export function webRtcTransportOptions(
+  webRtcServer: types.WebRtcServer,
+): types.WebRtcTransportOptions {
   return {
-    listenInfos: [
-      { protocol: 'udp', ip: '0.0.0.0', announcedAddress: announcedIp() },
-      { protocol: 'tcp', ip: '0.0.0.0', announcedAddress: announcedIp() },
-    ],
+    webRtcServer,
     enableUdp: true,
     // ICE-TCP — единственный путь наружу из сетей, где UDP режут. Своим TURN
     // mediasoup ходить не умеет, так что это его единственная страховка.

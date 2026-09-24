@@ -65,6 +65,7 @@ export {
   desktopPtt,
   getMicLevel,
   refreshMics,
+  setAutoGain,
   setMic,
   setMicThreshold,
   setNoiseSuppression,
