@@ -35,6 +35,13 @@ reconstructing notes for them after the fact would be invention, not history.
   chose when to fall back to direct calls, and there is no fallback any more.
   A value saved for it is ignored, with a warning in the api log.
 
+### Security
+
+- **Next.js 15.5.26, multer 2.4, sharp 0.35.4 and qs 6.16.** Closes the
+  published advisories against what the server runs, among them a critical
+  one in Next.js image optimization and denial-of-service ones in upload
+  handling.
+
 ## 2.0.0 — 2026-09-08
 
 Two things carry this release, and both change who an address can name: **a
