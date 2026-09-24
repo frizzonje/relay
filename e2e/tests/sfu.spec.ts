@@ -100,7 +100,9 @@ test('режим канала переключается посреди разг
   await expect(boris.getByText(her, { exact: true }).first()).toBeVisible();
 });
 
-test('падение медиасервера роняет канал в прямые звонки, а не в тишину', async ({ browser }) => {
+test('упавший медиасервер: канал ждёт его и возвращается сам, в прямые звонки никто не уходит', async ({
+  browser,
+}) => {
   test.setTimeout(300_000);
   test.skip(!dockerReachable(), 'нужен проброшенный сокет docker: -v /var/run/docker.sock:...');
 
@@ -130,15 +132,23 @@ test('падение медиасервера роняет канал в пря�
     // ничего не сделалось.
     await expect(anya.getByText(/reconnecting/).first()).toBeVisible({ timeout: 30_000 });
 
-    // Лестница восстановления у SFU-транспорта своя (restart-ice, пересборка
-    // транспортов), и только исчерпав её, он говорит дирижёру «потерян». Тот и
-    // принимает решение: вдвоём — сразу напрямую.
-    await route(anya, 'direct');
-    await route(boris, 'direct');
-    await connected(anya);
-    await connected(boris);
+    // Исчерпав лестницу, транспорт говорит дирижёру «потерян» — и тот
+    // переподключает к медиасерверу же. Раньше канал уезжал в прямые звонки:
+    // по одному, потом целиком, переезды гасили дорожки, и эфир оставался
+    // немым до перезаходов. Теперь режим канала — закон.
+    await expect(anya.getByText(/media server is unavailable/i).first()).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(anya.getByText('direct', { exact: true })).toHaveCount(0);
+    await expect(boris.getByText('direct', { exact: true })).toHaveCount(0);
   } finally {
     // Стенд общий: следующему спеку медиасервер нужен живым.
     await startContainer(SFU_CONTAINER).catch(() => {});
   }
+
+  // Сервер вернулся — круг ожидания сам переподключил обоих, без перезахода.
+  await route(anya, 'via the server');
+  await route(boris, 'via the server');
+  await connected(anya);
+  await connected(boris);
 });

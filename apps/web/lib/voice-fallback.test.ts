@@ -3,18 +3,22 @@ import { toast } from 'sonner';
 import type { TransportHost } from './voice/types';
 
 /**
- * Политика фолбэка при падении медиасервера (шаг E, docs/plans/old/sfu.md).
+ * Что дирижёр делает, когда медиасервер не даётся.
  *
  * Проверяем не медиа (для него нужен настоящий WebRTC), а РЕШЕНИЕ дирижёра:
  * SFU-транспорт заменён заглушкой, которая по команде теста говорит «я не
- * вывез» — ровно как настоящий, исчерпав лестницу восстановления. Дальше
- * смотрим, куда дирижёр увёл звонок.
+ * вывез» (или «встал») — ровно как настоящий. Дальше смотрим, куда дирижёр
+ * повёл звонок.
  *
- * Правило: не поднялись на входе — всегда в p2p (человек ещё никого не слышал);
- * развалилось в звонке — в p2p только при малом составе, иначе ждём сервер,
- * потому что mesh на таком числе людей и есть та боль, ради которой был SFU.
+ * Правило одно: режим канала — закон. Sfu-канал звонит только через
+ * медиасервер: упал — ждём и переподключаемся к нему же, в p2p не уходит никто
+ * и никогда. Раньше уходили — поодиночке и целыми комнатами, — комната
+ * разъезжалась по транспортам, переезды гасили дорожки, и эфир оставался без
+ * звука до перезаходов.
  */
 
+/** Ответ-маркер: api не ответил на запрос пропуска вовсе. */
+const TIMEOUT = Symbol('timeout');
 let ticketAnswer: unknown = { ok: false, error: 'not-sfu' };
 
 // Счётчик запросов пропуска в медиасервер: по нему видно, сколько кругов
@@ -28,7 +32,11 @@ const sockets = {
   on: vi.fn(),
   off: vi.fn(),
   timeout: () => ({
-    emitWithAck: ticketRequests.mockImplementation(() => Promise.resolve(ticketAnswer)),
+    emitWithAck: ticketRequests.mockImplementation(() =>
+      ticketAnswer === TIMEOUT
+        ? Promise.reject(new Error('operation has timed out'))
+        : Promise.resolve(ticketAnswer),
+    ),
   }),
 };
 const handlers: Record<string, (...a: unknown[]) => unknown> = {};
@@ -160,127 +168,160 @@ function joins() {
   return sockets.emit.mock.calls.filter((c) => c[0] === 'join');
 }
 
-describe('фолбэк на p2p при недоступном медиасервере', () => {
-  it('не поднялись на входе → уезжаем в mesh и звоним напрямую', async () => {
+describe('медиасервер не даётся — ждём его, в p2p не уходим', () => {
+  it('не поднялись на входе → остаёмся в канале и переподключаемся', async () => {
     await voice.joinVoice('room-sfu', 'SFU-канал');
     expect(sfuCalls).toEqual(['join']); // пропуск выдан — пошли в медиасервер
-    expect(joins()).toHaveLength(1);
 
     // Транспорт исчерпал лестницу ещё до первого звука.
     sfuHost!.transportLost('setup');
-    await vi.advanceTimersByTimeAsync(0); // переезд асинхронный (запрос пропуска)
+    await vi.advanceTimersByTimeAsync(0);
 
-    expect(sfuCalls).toEqual(['join', 'leave']);
-    expect(joins()).toHaveLength(2); // объявились в комнате заново, уже как mesh
-
-    // И это действительно mesh: состав комнаты поднимает p2p-соединение.
+    // Никакого mesh: ни переезда, ни прямых соединений.
+    expect(sfuCalls).toEqual(['join']);
+    expect(joins()).toHaveLength(1);
     await Promise.resolve(handlers['peers']([{ id: 'zzz', name: 'Z' }]));
-    expect(FakePC.instances).toHaveLength(1);
-  });
+    expect(FakePC.instances).toHaveLength(0);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledTimes(1);
 
-  it('не поднялись на входе — круг ожидания продолжает пробовать сервер', async () => {
-    await voice.joinVoice('room-sfu', 'SFU-канал');
-    sfuHost!.transportLost('setup');
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(sfuCalls).toEqual(['join', 'leave']); // мост в mesh, звонок живёт
-
-    // Сервер снова выдаёт пропуск — круг сам вернул нас в медиасервер.
+    // Круг ожидания переподключил к медиасерверу же — с новым пропуском.
     await vi.advanceTimersByTimeAsync(5000);
     expect(sfuCalls).toEqual(['join', 'leave', 'join']);
-    expect(joins()).toHaveLength(3);
-    expect(joins()[2][1]).toMatchObject({ transport: 'sfu' });
-  });
-
-  it('повторные падения удлиняют паузу круга — навсегда сломанный клиент не флапает', async () => {
-    await voice.joinVoice('room-sfu', 'SFU-канал');
-
-    // Первое падение: круг через 5 с вернул нас, но медиасервер снова не дался.
-    sfuHost!.transportLost('setup');
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(sfuCalls).toEqual(['join', 'leave', 'join']);
-
-    sfuHost!.transportLost('setup');
-    await vi.advanceTimersByTimeAsync(0);
-    expect(sfuCalls).toEqual(['join', 'leave', 'join', 'leave']);
-
-    // Второй круг ждёт уже 10 с: через 5 с ничего не происходит…
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(sfuCalls).toEqual(['join', 'leave', 'join', 'leave']);
-    // …и только ещё через 5 с пробует снова.
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(sfuCalls).toEqual(['join', 'leave', 'join', 'leave', 'join']);
-  });
-
-  it('развалилось в звонке при малом составе → тоже mesh', async () => {
-    await voice.joinVoice('room-sfu', 'SFU-канал');
-    sfuHost!.addTile('a', 'A', null, false);
-    sfuHost!.addTile('b', 'B', null, false);
-
-    sfuHost!.transportLost('lost');
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(sfuCalls).toEqual(['join', 'leave']);
     expect(joins()).toHaveLength(2);
+    expect(joins()[1][1]).toMatchObject({ transport: 'sfu' });
   });
 
-  it('развалилось в малом составе → мост в mesh, но вернувшийся сервер сам переезжает нас обратно', async () => {
+  it('развалилось в звонке, даже вдвоём → ждём медиасервер, а не звоним напрямую', async () => {
     await voice.joinVoice('room-sfu', 'SFU-канал');
     sfuHost!.addTile('a', 'A', null, false);
 
     sfuHost!.transportLost('lost');
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(sfuCalls).toEqual(['join', 'leave']);
-    expect(joins()).toHaveLength(2); // мост в mesh, звонок живёт
-
-    // Сервер вернулся: круг ожидания переехал нас обратно, без всякого участия.
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(sfuCalls).toEqual(['join', 'leave', 'join']);
-    expect(joins()).toHaveLength(3);
-    expect(joins()[2][1]).toMatchObject({ transport: 'sfu' });
-  });
-
-  it('развалилось в звонке при большом составе → ждём сервер, а не душим mesh', async () => {
-    await voice.joinVoice('room-sfu', 'SFU-канал');
-    for (const id of ['a', 'b', 'c', 'd', 'e']) sfuHost!.addTile(id, id, null, false);
-
-    sfuHost!.transportLost('lost');
-    await vi.advanceTimersByTimeAsync(0);
-
-    // В mesh не поехали: звонок остаётся ждать медиасервер.
     expect(sfuCalls).toEqual(['join']);
     expect(joins()).toHaveLength(1);
     expect(FakePC.instances).toHaveLength(0);
 
-    // Сервер вернулся — пропуск снова выдают, переподключаемся к нему же.
     await vi.advanceTimersByTimeAsync(5000);
     expect(sfuCalls).toEqual(['join', 'leave', 'join']);
-    expect(joins()).toHaveLength(2);
+    expect(joins()[1][1]).toMatchObject({ transport: 'sfu' });
   });
 
-  it('пока сервер лежит, повторные попытки не срываются в mesh', async () => {
+  it('пока сервер лежит: круги всё реже, тост один, в mesh не срываемся', async () => {
     await voice.joinVoice('room-sfu', 'SFU-канал');
-    for (const id of ['a', 'b', 'c', 'd', 'e']) sfuHost!.addTile(id, id, null, false);
-
-    ticketAnswer = { ok: false, error: 'unavailable' }; // медиасервер всё ещё мёртв
+    ticketAnswer = { ok: false, error: 'unavailable' }; // медиасервер мёртв
     sfuHost!.transportLost('lost');
-    await vi.advanceTimersByTimeAsync(20_000); // четыре круга ожидания
+    await vi.advanceTimersByTimeAsync(0);
+    const asked = () => ticketRequests.mock.calls.length - 1; // минус вход
+
+    // Паузы растут: 5 → 10 → 20 → 30 → 30 с.
+    for (const [pause, total] of [
+      [5000, 1],
+      [10_000, 2],
+      [20_000, 3],
+      [30_000, 4],
+      [30_000, 5],
+    ]) {
+      await vi.advanceTimersByTimeAsync(pause - 1);
+      expect(asked()).toBe(total - 1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(asked()).toBe(total);
+    }
+
+    // Сказали один раз на весь обрыв, а не на каждый круг.
+    expect(vi.mocked(toast.error)).toHaveBeenCalledTimes(1);
+    expect(sfuCalls).toEqual(['join']);
+    expect(FakePC.instances).toHaveLength(0);
+  });
+
+  it('«медиасервер вернулся» — только когда транспорт встал; пауза снова с базы', async () => {
+    await voice.joinVoice('room-sfu', 'SFU-канал');
+    sfuHost!.transportLost('lost');
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(sfuCalls).toEqual(['join', 'leave', 'join']);
+
+    // Пропуск выдан и транспорт в пути — это ещё не связь.
+    expect(vi.mocked(toast.success)).not.toHaveBeenCalled();
+    sfuHost!.transportUp();
+    expect(vi.mocked(toast.success)).toHaveBeenCalledTimes(1);
+
+    // Встали — счёт промахов обнулён: следующий обрыв ждёт снова 5 с, а не 10.
+    sfuHost!.transportLost('lost');
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(sfuCalls).toEqual(['join', 'leave', 'join', 'leave', 'join']);
+  });
+
+  it('транспорт встал раньше круга ожидания → круг не разбирает живой звонок', async () => {
+    await voice.joinVoice('room-sfu', 'SFU-канал');
+    sfuHost!.transportLost('lost');
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // Связь вернулась сама, до круга (так было на стенде: медиасервер
+    // поднялся раньше, чем круг спросил пропуск).
+    sfuHost!.transportUp();
+    await vi.advanceTimersByTimeAsync(30_000);
 
     expect(sfuCalls).toEqual(['join']);
+    expect(joins()).toHaveLength(1);
+  });
+
+  it('сервер лежит уже на входе → входим в канал через медиасервер и ждём его', async () => {
+    ticketAnswer = { ok: false, error: 'unavailable' };
+    await voice.joinVoice('room-sfu', 'SFU-канал');
+
+    // В комнате мы есть — и объявлены тем, что велит канал.
+    expect(joins()).toHaveLength(1);
+    expect(joins()[0][1]).toMatchObject({ transport: 'sfu' });
+    expect(sfuCalls).toEqual([]);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledTimes(1);
+
+    ticketAnswer = { ok: true, url: '/', token: 'ticket' }; // сервер поднялся
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(sfuCalls).toEqual(['join']);
+    expect(joins()).toHaveLength(2);
+    expect(joins()[1][1]).toMatchObject({ transport: 'sfu' });
+  });
+
+  it('api не ответил → ждём молча и спрашиваем снова; «канал прямой» уводит в p2p', async () => {
+    ticketAnswer = TIMEOUT;
+    await voice.joinVoice('room-x', 'Канал');
+
+    // Режим неизвестен: не кричим «медиасервер лежит» и не звоним напрямую.
+    expect(joins()).toHaveLength(1);
+    expect(vi.mocked(toast.error)).not.toHaveBeenCalled();
+
+    ticketAnswer = { ok: false, error: 'not-sfu' }; // оказалось — прямой
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(joins()).toHaveLength(2);
+    expect(joins()[1][1]).toMatchObject({ transport: 'p2p' });
+    await Promise.resolve(handlers['peers']([{ id: 'zzz', name: 'Z' }]));
+    expect(FakePC.instances).toHaveLength(1);
+
+    // В прямом канале круг ожидания гаснет — больше никаких вопросов.
+    const before = ticketRequests.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(ticketRequests.mock.calls.length).toBe(before);
+  });
+
+  it('сокет api вернулся, пока канал ждёт сервер → снова sfu, а не mesh', async () => {
+    ticketAnswer = { ok: false, error: 'unavailable' };
+    await voice.joinVoice('room-sfu', 'SFU-канал');
+
+    handlers['connect']();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(joins()).toHaveLength(2);
+    expect(joins()[1][1]).toMatchObject({ transport: 'sfu' });
     expect(FakePC.instances).toHaveLength(0);
   });
 });
 
 /**
  * Расщепление комнаты по транспортам. Так выглядит клиент, который медиасервер
- * не умеет вовсе (нативный iOS — mesh-only) или у которого он не поднялся: в
- * канале он есть, а слышать его не может никто. Дирижёр замечает раскол, но
- * комнату никуда не утаскивает: с медиасервера не уезжает никто, а напрямую
- * звонящий возвращается на него сам — кругом ожидания. Раньше малая комната
- * съезжала в p2p целиком, переезд гасил дорожки у всех, и эфир оставался без
- * звука до перезаходов.
+ * не умеет вовсе (нативный iOS — mesh-only): в канале он есть, а слышать его
+ * не может никто. Дирижёр замечает раскол и честно о нём говорит, но комнату
+ * никуда не утаскивает. Раньше малая комната съезжала в p2p целиком, переезд
+ * гасил дорожки у всех, и эфир оставался без звука до перезаходов.
  */
 describe('расщепление комнаты по транспортам', () => {
   const peer = (id: string, transport: 'p2p' | 'sfu') => ({
@@ -324,40 +365,18 @@ describe('расщепление комнаты по транспортам', ()
     expect(joins()).toHaveLength(1);
   });
 
-  it('мы напрямую, остальные на сервере → возвращаемся на него сами', async () => {
+  it('мы напрямую, остальные на сервере → предупреждаем, но никуда не едем', async () => {
     ticketAnswer = { ok: false, error: 'not-sfu' };
-    await voice.joinVoice('room-sfu', 'SFU-канал'); // вошли как p2p
-    expect(joins()).toHaveLength(1);
-    expect(joins()[0][1]).toMatchObject({ transport: 'p2p' });
-
-    // Канал объявили sfu, соседи уже там — мы в расщеплении. Круг ожидания
-    // вернёт нас на сервер, не трогая остальных.
-    ticketAnswer = { ok: true, url: '/', token: 'ticket' };
-    handlers['voice-presence']({
-      'room-sfu': [peer('self', 'p2p'), peer('a', 'sfu')],
-    });
-    await vi.advanceTimersByTimeAsync(5000);
-
-    expect(sfuCalls).toEqual(['join']);
-    expect(joins()).toHaveLength(2);
-    expect(joins()[1][1]).toMatchObject({ transport: 'sfu' });
-  });
-
-  it('канал объявлен прямым — круг ожидания не флапает на отказе', async () => {
-    ticketAnswer = { ok: false, error: 'not-sfu' };
-    await voice.joinVoice('room-sfu', 'SFU-канал'); // вошли как p2p
+    await voice.joinVoice('room-x', 'Канал'); // канал прямой — вошли как p2p
     const askedBefore = ticketRequests.mock.calls.length;
 
-    // Соседи на сервере, а канал для нас так и остался прямым: круг спросил
-    // пропуск, получил 'not-sfu' и погас — следующих кругов не будет.
     handlers['voice-presence']({
-      'room-sfu': [peer('self', 'p2p'), peer('a', 'sfu')],
+      'room-x': [peer('self', 'p2p'), peer('a', 'sfu')],
     });
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(ticketRequests.mock.calls.length - askedBefore).toBe(1); // один круг
-
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(ticketRequests.mock.calls.length - askedBefore).toBe(1); // и всё
+
+    expect(vi.mocked(toast.error)).toHaveBeenCalledTimes(1);
+    expect(ticketRequests.mock.calls.length).toBe(askedBefore); // и не стучимся
     expect(sfuCalls).toEqual([]);
     expect(joins()).toHaveLength(1);
   });

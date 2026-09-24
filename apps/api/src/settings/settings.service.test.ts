@@ -62,7 +62,7 @@ describe('умолчания', () => {
     const settings = await started();
     // Не выборочно, а все до одного: это и есть «инсталляция, где панель не
     // открывали, работает как прежде», проверенное в лоб.
-    expect(SETTINGS.length).toBe(103);
+    expect(SETTINGS.length).toBe(102);
     for (const spec of SETTINGS) {
       expect([spec.key, settings.get<SettingValue>(spec.key)]).toEqual([spec.key, spec.fallback]);
     }

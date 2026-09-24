@@ -198,14 +198,7 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
     async publishLocal() {
       const stream = host.localStream();
       const screenAudio = host.screenAudioTrack();
-      let mic = stream?.getAudioTracks().find((t) => t !== screenAudio) ?? null;
-      // Дорожка микрофона умерла (выдернули устройство, система отозвала
-      // доступ) — перевзяться дешевле, чем уронить вход: раньше «track ended»
-      // здесь ронял publishLocal целиком, и звонок уезжал в p2p с тишиной.
-      if (mic && mic.readyState === 'ended') {
-        host.diag('sfu mic ended', 'reacquiring');
-        mic = (await host.reacquireMic()) ?? mic;
-      }
+      const mic = stream?.getAudioTracks().find((t) => t !== screenAudio) ?? null;
       let micOk = true;
       if (mic) micOk = await produce('mic', mic);
       // Микрофона нет вовсе (не выдали устройство) — это не отказ медиасервера:

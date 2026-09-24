@@ -34,7 +34,7 @@ import { createSubscriber } from './subscribe';
 /**
  * WebView-обёртки прячутся из UA: WKWebView (десктоп на macOS) не пишет туда ни
  * `Safari`, ни `Chrome`, и автоопределение mediasoup-client честно отвечает
- * «device not supported» — мгновенный отвал в p2p, хотя движок — тот же WebKit
+ * «device not supported» — мгновенный отказ медиасервера, хотя движок — тот же WebKit
  * с полноценным WebRTC. Ловим ровно этот случай и явно просим handler Safari.
  * Остальные ошибки не наши — пробрасываем.
  */
@@ -151,6 +151,11 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     }
 
     transport.on('connectionstatechange', (state) => {
+      // Лестница одна на все сессии, а транспорты у каждой свои. Мёртвый
+      // транспорт прошлой сессии, доложив «failed» с опозданием, поднял бы
+      // надпись «переподключение» над исправной связью нынешней — и снять её
+      // было бы некому: её снимает только `connected` от текущих транспортов.
+      if (transport !== sendTransport && transport !== recvTransport) return;
       ladder.transportState(direction, state);
     });
 
@@ -158,47 +163,72 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
   }
 
   /**
-   * Всё, что нужно отдать наружу сразу после подключения. Возвращает false, если
-   * микрофон у нас есть, а уехать не смог: это не мелочь, а весь смысл звонка —
-   * дальше по стеку такой заход лечится переездом в p2p, а не тишиной с
-   * зелёной надписью «подключено».
+   * Всё, что нужно отдать наружу сразу после подключения. Микрофон у нас есть,
+   * а уехать не смог — это не мелочь, а весь смысл звонка: такой заход — отказ,
+   * и дирижёр переподключит нас заново, а не оставит тишину с зелёной надписью
+   * «подключено».
+   *
+   * Сессия — это сокет, на котором пришёл `welcome`. После каждого ожидания
+   * сверяемся с ним: пока мы ждали, транспорт могли разобрать (переезд,
+   * выход, реконнект) и даже поднять заново. Недоделанный вход прошлой сессии
+   * иначе писал бы свои транспорты поверх новых, а свой отказ — в лестницу
+   * новой: `giveUp` ставил ей «уже сдались», и следующая сессия оставалась без
+   * сторожа входа и без лестницы. Отсюда в логах «setup failed no transports»
+   * уже после ухода с медиасервера.
    */
   async function onWelcome(payload: WelcomePayload) {
+    const session = sock;
+    const stale = () => sock !== session;
     try {
       device = createDevice();
       await device.load({ routerRtpCapabilities: payload.routerRtpCapabilities });
-      sendTransport = await openTransport('send');
-      recvTransport = await openTransport('recv');
+      if (stale()) return;
+      // Транспорт, открытый уже для мёртвой сессии, закрываем сами: ссылку на
+      // него не получит никто, и разобрать его потом будет нечем.
+      const send = await openTransport('send');
+      if (stale()) return void send?.close();
+      sendTransport = send;
+      const recv = await openTransport('recv');
+      if (stale()) return void recv?.close();
+      recvTransport = recv;
       if (!sendTransport || !recvTransport) throw new Error('no transports');
       // Микрофон не уехал — считаем это несостоявшимся входом, как и мёртвый
-      // транспорт: дирижёр уведёт звонок в p2p, где дорожка пойдёт напрямую.
-      // Раньше такой заход молча заканчивался «подключено» и полной тишиной.
-      if (!(await publisher.publishLocal())) throw new Error('mic not published');
+      // транспорт. Раньше такой заход молча заканчивался «подключено» и
+      // полной тишиной.
+      const published = await publisher.publishLocal();
+      if (stale()) return;
+      if (!published) throw new Error('mic not published');
       // Вход состоялся ЗДЕСЬ: транспорты стоят, своё медиа уехало — нас уже
       // слышно. Подписки на чужие дорожки идут следом и в счёт входа не идут:
       // каждая — отдельный запрос с ответом (до 10 с ожидания), и в людной
       // комнате их сумма легко перебирала сторож входа. Сторож срабатывал на
-      // полностью исправном соединении и уводил весь звонок в p2p.
+      // полностью исправном соединении и рвал весь звонок.
       ladder.markUp();
       // Число своих дорожек — в ту же веху: «встал» без единой из них и есть тот
       // самый немой заход, и по логу это должно читаться одной строкой.
       host.diag('sfu up', `peers=${payload.peers.length} tracks=${publisher.count()}`);
+      host.transportUp();
       // Успевший прийти до `welcome` в его снимке комнаты не значится — снять
       // надпись с его плитки больше некому.
       for (const peerId of subscriber.peerIds()) subscriber.sayTileState(peerId);
       for (const peer of payload.peers) {
+        if (stale()) return;
         subscriber.addPeer(peer.peerId, peer.name);
         for (const producer of peer.producers) await subscriber.consume(peer.peerId, producer);
       }
+      if (stale()) return;
       // То, что объявилось, пока мы строились. Обязательно после снимка
       // комнаты: в нём тех же дорожек может уже и не быть.
       await subscriber.drainPending();
     } catch (err) {
+      // Отказ разобранной сессии — не наш: сказать о нём значит уронить ту,
+      // что живёт сейчас (см. выше).
+      if (stale()) return;
       console.error('[sfu] setup failed:', err);
       host.diag('sfu setup failed', String((err as Error)?.message ?? err));
-      // Упало ДО того, как мы встали, — это несостоявшийся вход (дирижёр уводит
-      // в p2p безусловно). Упало после — мы уже на связи и слышны, решение о
-      // переезде принимается по составу комнаты, как при любой другой потере.
+      // Упало ДО того, как мы встали, — несостоявшийся вход; после — потеря
+      // уже идущего звонка. Лечится одинаково: дирижёр переподключает нас к
+      // медиасерверу заново.
       ladder.giveUp(ladder.isUp() ? 'lost' : 'setup');
     }
   }
@@ -250,6 +280,10 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
    * с точки зрения витрины никто никуда не уходил.
    */
   async function rebuildTransports() {
+    // Та же сверка с сессией, что и во входе (см. `onWelcome`): ступень идёт
+    // через несколько ожиданий, и разобрать звонок за это время успевают.
+    const session = sock;
+    const stale = () => sock !== session;
     const wanted = subscriber.entries().map((entry) => ({
       peerId: entry.peerId,
       info: {
@@ -267,15 +301,21 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       void ask('close-transport', { transportId: transport.id });
       transport.close();
     }
-    sendTransport = await openTransport('send');
-    recvTransport = await openTransport('recv');
+    const send = await openTransport('send');
+    if (stale()) return void send?.close();
+    sendTransport = send;
+    const recv = await openTransport('recv');
+    if (stale()) return void recv?.close();
+    recvTransport = recv;
     if (!sendTransport || !recvTransport) return; // не вышло — дожмёт сторож
     // Микрофон не уехал — на пересборке это значит ровно то же, что и на входе
     // (см. `onWelcome`): транспорты стоят, палочки зелёные, а нас не слышно, и
     // человек узнаёт об этом от собеседника через минуту разговора в пустоту.
     // Раньше ответ `publishLocal` здесь выбрасывался, и ступень 2 кончалась
-    // молчаливым успехом. Считаем это потерей — дирижёр уведёт в p2p.
-    if (!(await publisher.publishLocal())) {
+    // молчаливым успехом. Считаем это потерей — дирижёр переподключит заново.
+    const published = await publisher.publishLocal();
+    if (stale()) return;
+    if (!published) {
       host.diag('sfu rebuild failed', 'mic not published');
       ladder.giveUp('lost');
       return;
@@ -314,6 +354,10 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       // остаётся жить безымянным — со своими транспортами и нашим микрофоном в
       // комнате, из которой мы уже ушли, и снять его будет уже нечем.
       if (sock) teardown();
+      // Лестницу сбрасываем и без прошлого сокета: сдавшейся её могла оставить
+      // сессия, разобранная раньше, — тогда `teardown` здесь уже не зовётся,
+      // а «уже сдались» глушило бы и сторож входа, и ступени новой сессии.
+      ladder.reset();
       // `url === '/'` — медиасервер за тем же Caddy, что и страница; в дев-режиме
       // адрес api задан явно, тогда идём туда же.
       const base =
@@ -324,12 +368,20 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         path: '/sfu/',
         transports: ['websocket', 'polling'],
         auth: { token: ticket.token },
+        // Сессия — это сокет (см. `onWelcome`), и заводит её только дирижёр.
+        // Переподключившись сам, сокет получал второй `welcome` поверх живых
+        // транспортов прошлого захода: входов становилось два, прежние
+        // транспорты, никем не закрытые, докладывали «failed» уже в лестницу
+        // нового, и плитки застревали на «переподключении» при исправной
+        // связи. А пока медиасервер лежал, он ещё и долбился в него сам — мимо
+        // круга ожидания и его растущей паузы.
+        reconnection: false,
       });
       sock = s;
 
       // Сторож входа: медиасервер не поднял нас за отведённое время — это отказ,
-      // а не «ещё чуть-чуть». Дирижёр уведёт звонок в p2p, вместо того чтобы
-      // держать человека в тишине с крутилкой.
+      // а не «ещё чуть-чуть». Дирижёр переподключит нас заново, вместо того
+      // чтобы держать человека в тишине с крутилкой.
       ladder.armSetup();
 
       // Сокет не открылся вовсе (сервер лежит, прокси не пускает) — ждать сторож
@@ -361,8 +413,9 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         subscriber.layerReported(consumerId, spatialLayer);
       });
       // Сигналинг оборвался посреди звонка. Само по себе медиа ещё может идти —
-      // ICE живёт отдельно от WS, — но переподключиться сокет не сможет: пропуск
-      // одноразовый и уже протух. Новый умеет выписать только дирижёр.
+      // ICE живёт отдельно от WS, — но сам сокет больше не поднимется (см.
+      // `reconnection` выше): новую сессию с новым пропуском заводит дирижёр,
+      // когда лестница сдастся.
       s.on('disconnect', () => {
         ladder.signalingLost();
       });

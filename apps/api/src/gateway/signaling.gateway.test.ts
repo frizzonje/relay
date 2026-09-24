@@ -635,7 +635,7 @@ describe('настройки доезжают до вкладки', () => {
     expect('access.sitePasswordSet' in snapshot).toBe(false);
     expect('moderation.bannedWords' in snapshot).toBe(false);
 
-    // Гостю реестры не положены, а битрейты и порог mesh — положены: без них
+    // Гостю реестры не положены, а битрейты и окна лестницы — положены: без них
     // он звонил бы по числам, которых инсталляция не выбирала.
     const { token } = issueGuestToken('voice-obshchii');
     // Собираем гостя руками: `connect` подчищает журнал сокета, а здесь весь
@@ -643,7 +643,7 @@ describe('настройки доезжают до вкладки', () => {
     const guest = server.connect({ id: 'g', auth: { guest: token } });
     gw.handleConnection(asSocket(guest));
     expect(guest.got('servers')).toBe(false);
-    expect((guest.last('settings') as Record<string, unknown>)['voice.sfuThreshold']).toBe(4);
+    expect((guest.last('settings') as Record<string, unknown>)['voice.iceRestartSeconds']).toBe(8);
   });
 
   it('правка доезжает до всех открытых вкладок, не дожидаясь перезагрузки', async () => {

@@ -821,21 +821,6 @@ export const SETTINGS: readonly SettingSpec[] = [
     max: 8000,
     client: true,
   },
-  // Сколько собеседников (себя не считаем) — уже повод держаться медиасервера.
-  // Четыре — это MESH_FALLBACK_MAX_PEERS + 1 из apps/web/lib/voice.ts: троих
-  // прямые соединения переживут, а на четвёртом с видео начинается та боль,
-  // ради которой SFU и затевался. Ниже порога упавший медиасервер уводит звонок
-  // в p2p, на пороге и выше — честнее подождать сервер.
-  {
-    key: 'voice.sfuThreshold',
-    group: 'voice',
-    kind: 'number',
-    fallback: 4,
-    applies: 'new',
-    min: 2,
-    max: 50,
-    client: true,
-  },
   {
     key: 'voice.noiseSuppressionDefault',
     group: 'voice',

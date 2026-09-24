@@ -615,16 +615,39 @@ describe('sfu-token', () => {
     expect(owner.data.sfuPassRoom).toBe(slugOf('эфир'));
   });
 
-  it('без настроенного медиасервера — unavailable', async () => {
+  it('без настроенного медиасервера и sfu-канал звонит напрямую — not-sfu', async () => {
+    // Медиасервера у инсталляции нет вовсе: ждать его нечего, а дефолтный
+    // «SFU общий» есть у всех. `unavailable` значил бы «жди» — и вечную тишину.
     const { gw, server } = await makeGateway();
     const a = connect(gw, server);
     expect(await gw.handleSfuToken(asSocket(a), { room: 'voice-obshchii-sfu' })).toEqual({
       ok: false,
-      error: 'unavailable',
+      error: 'not-sfu',
     });
   });
 
-  it('настроен, но лежит — тоже unavailable: пропуск в мёртвый сервер хуже отказа', async () => {
+  // Порядок проверок — протокол: клиент звонит напрямую только на `not-sfu`, а
+  // на `unavailable` ждёт медиасервер. Прямой канал, услышавший «жди сервер»,
+  // не позвонил бы никогда — ни без медиасервера, ни пока тот лежит.
+  it('прямому каналу без медиасервера — not-sfu, а не unavailable', async () => {
+    const { gw, server } = await makeGateway();
+    const a = connect(gw, server);
+    expect(await gw.handleSfuToken(asSocket(a), { room: 'voice-obshchii' })).toEqual({
+      ok: false,
+      error: 'not-sfu',
+    });
+  });
+
+  it('прямому каналу при лежащем медиасервере — тоже not-sfu', async () => {
+    const { gw, owner } = await withSfuChannel();
+    sfuHealthy.mockResolvedValue(false);
+    expect(await gw.handleSfuToken(asSocket(owner), { room: 'voice-obshchii' })).toEqual({
+      ok: false,
+      error: 'not-sfu',
+    });
+  });
+
+  it('настроен, но лежит — unavailable: пропуск в мёртвый сервер хуже отказа', async () => {
     const { gw, owner } = await withSfuChannel();
     sfuHealthy.mockResolvedValue(false);
     expect(await gw.handleSfuToken(asSocket(owner), { room: slugOf('эфир') })).toEqual({

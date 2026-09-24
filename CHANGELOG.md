@@ -5,6 +5,36 @@ it: every entry says what changes on your machine and for the people using it.
 Releases before 1.0.0 are on the [releases page](https://github.com/frizzonje/relay/releases) —
 reconstructing notes for them after the fact would be invention, not history.
 
+## Unreleased
+
+### Fixed
+
+- **A screen share in a room of three no longer leaves everyone mute.** Any
+  rebuild of the media-server connection — a reconnect, a recovery step —
+  used to switch off your own microphone and screen without a word, so the
+  next attempt to send them failed and the room went silent until everyone
+  left and came back. Your devices now survive the rebuild.
+- **A call through the media server recovers on its own.** A reconnect that
+  was cut short could leave the next one without its watchdog: stuck on
+  "connecting" in silence, with nothing left to notice it.
+- **Two people entering an empty media-server room at once hear each other.**
+  The media server could open the room twice, once for each of them, and
+  leave them in the same channel on two separate switchboards. That is exactly
+  how a whole room comes back after the media server restarts.
+
+### Changed
+
+- **A media-server channel calls only through the media server.** When the
+  server fails, the channel no longer falls back to direct calls — that
+  fallback moved people one by one, split the room across two ways of calling
+  that cannot hear each other, and caused the silence above. The channel now
+  says the server is unavailable and reconnects by itself as soon as it is
+  back. A direct channel stays direct, and an installation with no media
+  server configured at all still calls directly in every channel.
+- **The "Hold on to the media server from (people)" setting is gone.** It
+  chose when to fall back to direct calls, and there is no fallback any more.
+  A value saved for it is ignored, with a warning in the api log.
+
 ## 2.0.0 — 2026-09-08
 
 Two things carry this release, and both change who an address can name: **a

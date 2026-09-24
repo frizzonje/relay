@@ -10,8 +10,8 @@ import type { TransportHost } from './voice/types';
  *
  * Здесь проверяется ровно то, что должно пережить такой обгон: заход, которого
  * обогнали, обязан сойти с дистанции целиком; состав комнаты до выбора
- * транспорта не считается расщеплением; сорвавшийся вход уезжает в p2p, а не
- * оставляет человека в тишине; ожидание вернувшегося медиасервера не воскресает
+ * транспорта не считается расщеплением; сорвавшийся вход остаётся в канале и
+ * переподключается к медиасерверу, а не уезжает в p2p; ожидание вернувшегося медиасервера не воскресает
  * поверх нового захода; и микрофон на два клика берётся один раз.
  */
 
@@ -224,7 +224,7 @@ const peer = (id: string, transport: 'p2p' | 'sfu') => ({
  * иначе тест тихо перестал бы проверять что-либо.
  */
 describe('сорвавшийся вход', () => {
-  it('транспорт медиасервера не поднялся → уезжаем в p2p, а не в тишину', async () => {
+  it('транспорт медиасервера не поднялся → остаёмся в канале и переподключаемся', async () => {
     sfuBroken = true; // чанк mediasoup-client не доехал
     ticketFor = () => SFU;
 
@@ -233,9 +233,20 @@ describe('сорвавшийся вход', () => {
 
     expect(sfuBreaks).toBeGreaterThan(0); // подъём действительно ломали
     // Заход обязан состояться: канал у человека открыт, и остаться в нём без
-    // единого `join` — это «подключено» с полной тишиной и без пути назад.
+    // единого `join` — это «подключено» без состава и без пути назад. Но
+    // объявляемся тем, что велит канал, — через медиасервер: уехав в p2p, мы
+    // оказались бы одни, никого не слыша (остальные на медиасервере).
     expect(joins()).toHaveLength(1);
-    expect(joins()[0][1]).toMatchObject({ room: 'room-sfu', transport: 'p2p' });
+    expect(joins()[0][1]).toMatchObject({ room: 'room-sfu', transport: 'sfu' });
+    expect(FakePC.instances).toHaveLength(0);
+    expect(toast.error).toHaveBeenCalledTimes(1);
+
+    // Чанк доехал со второй попытки — круг ожидания сам поднял транспорт.
+    sfuBroken = false;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(sfuCalls).toEqual(['join']);
+    expect(joins()).toHaveLength(2);
+    expect(joins()[1][1]).toMatchObject({ room: 'room-sfu', transport: 'sfu' });
   });
 });
 
@@ -322,8 +333,7 @@ describe('ожидание вернувшегося медиасервера', (
     ticketFor = () => SFU;
     await voice.joinVoice('room-sfu', 'SFU-канал');
     await settle();
-    // Комната большая — в p2p не уезжаем, встаём ждать сервер.
-    for (const id of ['a', 'b', 'c', 'd', 'e']) sfuHost!.addTile(id, id, null, false);
+    // Медиасервер потерян — встаём ждать его.
     sfuHost!.transportLost('lost');
     await settle();
     expect(sfuCalls).toEqual(['join']);
