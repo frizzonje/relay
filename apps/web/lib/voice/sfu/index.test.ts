@@ -19,6 +19,8 @@ type Handler = (...args: unknown[]) => unknown;
 class FakeSocket {
   handlers: Record<string, Handler> = {};
   connected = true;
+  recovered = false;
+  opts: Record<string, unknown> = {};
   on(event: string, h: Handler) {
     this.handlers[event] = h;
     return this;
@@ -38,8 +40,9 @@ class FakeSocket {
 
 const sockets: FakeSocket[] = [];
 vi.mock('socket.io-client', () => ({
-  io: () => {
+  io: (_url: unknown, opts: Record<string, unknown>) => {
     const s = new FakeSocket();
+    s.opts = opts;
     sockets.push(s);
     return s;
   },
@@ -48,8 +51,12 @@ vi.mock('socket.io-client', () => ({
 // Загрузку устройства держим, пока тест не отпустит: ровно в этом ожидании
 // звонок и разбирают.
 let releaseLoad: () => void = () => {};
+let devices = 0;
 vi.mock('mediasoup-client', () => ({
   Device: class {
+    constructor() {
+      devices += 1;
+    }
     load() {
       return new Promise<void>((resolve) => {
         releaseLoad = resolve;
@@ -129,5 +136,80 @@ describe('сессии SFU-транспорта', () => {
     sfu.join('room', ticket);
     await vi.advanceTimersByTimeAsync(SETUP_TIMEOUT_MS);
     expect(host.transportLost).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * Обрыв сигналинга посреди звонка. Сокет переподключается сам, а медиасервер
+   * держит сессию на время восстановления: вернулась та же сессия — звонок
+   * идёт дальше как шёл. Не вернулась — сервер нас уже не помнит, и честнее
+   * сразу войти заново, чем сидеть на транспортах, которых у него больше нет.
+   */
+  it('сокет медиасервера переподключается сам', async () => {
+    const { createSfuTransport } = await import('./index');
+    const sfu = createSfuTransport(makeHost());
+    sfu.join('room', { url: 'https://sfu.example', token: 't' });
+    expect(sockets[0].opts.reconnection).toBe(true);
+  });
+
+  it('вернулась та же сессия — не сдаёмся; не та — сдаёмся сразу и чужой welcome не берём', async () => {
+    const { createSfuTransport } = await import('./index');
+    const host = makeHost();
+    const sfu = createSfuTransport(host);
+    sfu.join('room', { url: 'https://sfu.example', token: 't' });
+    const s = sockets[0];
+    s.handlers['connect']();
+
+    s.recovered = true;
+    s.handlers['connect']();
+    expect(host.transportLost).not.toHaveBeenCalled();
+
+    s.recovered = false;
+    s.handlers['connect']();
+    expect(host.transportLost).toHaveBeenCalledTimes(1);
+  });
+
+  it('второй welcome на том же сокете не запускает второй вход', async () => {
+    const { createSfuTransport } = await import('./index');
+    const host = makeHost();
+    const sfu = createSfuTransport(host);
+    sfu.join('room', { url: 'https://sfu.example', token: 't' });
+    const s = sockets[0];
+    const before = devices;
+    const welcome = { routerRtpCapabilities: {}, peers: [] };
+    void s.handlers['welcome'](welcome);
+    void s.handlers['welcome'](welcome);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(devices - before).toBe(1);
+  });
+
+  it('сокет, не открывшийся на входе, останавливается и не входит сам позже', async () => {
+    const { createSfuTransport } = await import('./index');
+    const host = makeHost();
+    const sfu = createSfuTransport(host);
+    sfu.join('room', { url: 'https://sfu.example', token: 't' });
+    const s = sockets[0];
+    const before = devices;
+    s.handlers['connect_error']({ message: 'timeout' });
+    expect(host.transportLost).toHaveBeenCalledWith('setup');
+    expect(s.connected).toBe(false);
+    // Даже если welcome всё же доедет — входа нет.
+    void s.handlers['welcome']({ routerRtpCapabilities: {}, peers: [] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(devices - before).toBe(0);
+  });
+
+  it('уходя со страницы, прощаемся с медиасервером явно — он снимет нас сразу', async () => {
+    const g = globalThis as { window?: EventTarget };
+    const had = g.window;
+    g.window = new EventTarget();
+    try {
+      const { createSfuTransport } = await import('./index');
+      const sfu = createSfuTransport(makeHost());
+      sfu.join('room', { url: 'https://sfu.example', token: 't' });
+      g.window.dispatchEvent(new Event('pagehide'));
+      expect(sockets[0].connected).toBe(false);
+    } finally {
+      g.window = had;
+    }
   });
 });

@@ -36,6 +36,15 @@ function recoverWindowMs(): number {
 // это отказ, а не «ещё чуть-чуть»: дирижёр переподключит нас заново.
 const SETUP_TIMEOUT_MS = 12_000;
 
+/**
+ * Сколько ждём возврата сигналинга. Сокет переподключается сам, а медиасервер
+ * держит нашу сессию 20 с (окно восстановления socket.io), — ждём чуть меньше
+ * его окна, а не окно ступени: медиа всё это время обычно идёт, и сдаться
+ * раньше значит бросить сессию, которая вот-вот вернётся, ради полного
+ * перезахода с гарантированной тишиной.
+ */
+export const SIGNALING_GRACE_MS = 15_000;
+
 export interface LadderDeps {
   host: TransportHost;
   /** Развалилась ли связь с сервером прямо сейчас. */
@@ -68,6 +77,8 @@ export interface Ladder {
   transportState(direction: 'send' | 'recv', state: string): void;
   /** Сигналинг оборвался: даём окно на возврат, потом сдаёмся. */
   signalingLost(): void;
+  /** Сигналинг вернулся той же сессией — звонок продолжается как шёл. */
+  signalingBack(): void;
   /** Лестница кончилась. Куда ехать дальше — не наше решение, а дирижёра. */
   giveUp(reason: 'setup' | 'lost'): void;
   /** Разбор: снять все сторожа и забыть, где мы были. */
@@ -200,7 +211,15 @@ export function createLadder({
       socketTimer = setTimeout(() => {
         socketTimer = null;
         if (!socketConnected()) giveUp('lost');
-      }, recoverWindowMs());
+      }, SIGNALING_GRACE_MS);
+    },
+
+    signalingBack() {
+      if (!ready || lost) return;
+      if (socketTimer) clearTimeout(socketTimer);
+      socketTimer = null;
+      host.diag('sfu signaling back');
+      host.transportUp();
     },
 
     giveUp,

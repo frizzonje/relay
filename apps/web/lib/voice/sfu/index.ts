@@ -105,6 +105,13 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     rebuild: rebuildTransports,
   });
 
+  // Закрытие и перезагрузка вкладки для сервера выглядят как обрыв сети, а
+  // обрыв он держит, ожидая возврата, — и у остальных висела бы замёрзшая
+  // плитка. Прощаемся явно: такой уход сервер снимает сразу.
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pagehide', () => sock?.disconnect());
+  }
+
   /** Запрос с ack. Ошибку не глотаем — возвращаем `null` и пишем в консоль. */
   function ask<T>(event: string, payload: unknown): Promise<({ ok: true } & T) | null> {
     const s = sock;
@@ -368,16 +375,24 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         path: '/sfu/',
         transports: ['websocket', 'polling'],
         auth: { token: ticket.token },
-        // Сессия — это сокет (см. `onWelcome`), и заводит её только дирижёр.
-        // Переподключившись сам, сокет получал второй `welcome` поверх живых
-        // транспортов прошлого захода: входов становилось два, прежние
-        // транспорты, никем не закрытые, докладывали «failed» уже в лестницу
-        // нового, и плитки застревали на «переподключении» при исправной
-        // связи. А пока медиасервер лежал, он ещё и долбился в него сам — мимо
-        // круга ожидания и его растущей паузы.
-        reconnection: false,
+        // Моргание сети рвёт сокет, но не медиа: медиасервер держит нашу сессию,
+        // пока socket.io её восстанавливает (тот же id, доигранные события), и
+        // звонок идёт дальше как шёл. Раньше сокет не переподключался вовсе, и
+        // любой обрыв стоил полного перезахода — 13–50 с тишины.
+        //
+        // Вход при этом по-прежнему заводит только дирижёр: сессия, которую
+        // сервер не вернул, — повод сдаться, а не входить второй раз поверх
+        // живых транспортов (см. `connect` и `welcome` ниже).
+        reconnection: true,
+        reconnectionDelay: 500,
+        reconnectionDelayMax: 2_000,
       });
       sock = s;
+      // Вход у сокета один. Второй `welcome` пришёл бы, только если сервер
+      // принял переподключение за новый вход, — и второй вход поверх живого
+      // плодил бы транспорты, которые потом докладывают «failed» в чужую лестницу.
+      let welcomed = false;
+      let connectedOnce = false;
 
       // Сторож входа: медиасервер не поднял нас за отведённое время — это отказ,
       // а не «ещё чуть-чуть». Дирижёр переподключит нас заново, вместо того
@@ -389,10 +404,39 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       s.on('connect_error', (err) => {
         console.warn('[sfu] connect_error:', err.message);
         host.diag('sfu connect_error', err.message);
-        if (!ladder.isUp()) ladder.giveUp('setup');
+        // Посреди звонка это очередная попытка переподключения — ждём дальше,
+        // сдаётся лестница по своему окну. На входе же отказ окончательный, и
+        // сокет надо остановить: иначе он дозвонится сам и войдёт в звонок, от
+        // которого мы уже отказались.
+        if (ladder.isUp()) return;
+        ladder.giveUp('setup');
+        s.disconnect();
       });
 
-      s.on('welcome', (payload: WelcomePayload) => void onWelcome(payload));
+      s.on('connect', () => {
+        if (!connectedOnce) {
+          connectedOnce = true;
+          return;
+        }
+        // Вернулась та же сессия: транспорты и дорожки на сервере целы, а
+        // пропущенные за обрыв события socket.io уже доиграл.
+        if (s.recovered) {
+          ladder.signalingBack();
+          return;
+        }
+        // Сервер нас не помнит (окно вышло, медиасервер перезапускался) — наши
+        // транспорты у него больше не числятся. Сдаёмся сразу: дирижёр войдёт
+        // заново с новым пропуском, ждать тут нечего.
+        ladder.giveUp(ladder.isUp() ? 'lost' : 'setup');
+        s.disconnect();
+      });
+
+      s.on('welcome', (payload: WelcomePayload) => {
+        // Сдавшейся сессии вход не нужен: её место займёт новая от дирижёра.
+        if (welcomed || ladder.gaveUp()) return;
+        welcomed = true;
+        void onWelcome(payload);
+      });
       s.on('peer-joined', ({ peerId, name }: { peerId: string; name: string }) => {
         subscriber.addPeer(peerId, name);
       });
@@ -412,10 +456,9 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       s.on('consumer-layers', ({ consumerId, spatialLayer }: ConsumerLayers) => {
         subscriber.layerReported(consumerId, spatialLayer);
       });
-      // Сигналинг оборвался посреди звонка. Само по себе медиа ещё может идти —
-      // ICE живёт отдельно от WS, — но сам сокет больше не поднимется (см.
-      // `reconnection` выше): новую сессию с новым пропуском заводит дирижёр,
-      // когда лестница сдастся.
+      // Сигналинг оборвался посреди звонка. Медиа ещё может идти — ICE живёт
+      // отдельно от WS, — а сокет переподключается сам. Лестница ждёт его
+      // возврата и сдаётся, только если сессия так и не вернулась.
       s.on('disconnect', () => {
         ladder.signalingLost();
       });
