@@ -92,6 +92,13 @@ interface LayersPayload {
   // socket.io возвращает тот же id с теми же комнатами и доигрывает пропущенные
   // рассылки, а сессию на это время держим мы (`RESUME_GRACE_MS`).
   connectionStateRecovery: { maxDisconnectionDuration: 20_000 },
+  // Тихую смерть сети (без разрыва соединения) сокет узнаёт только по
+  // сердцебиению, а после него сессию ещё держим. С умолчаниями socket.io
+  // (25 + 20 с) замёрзшая плитка ушедшего висела бы у остальных больше
+  // минуты; так обрыв замечается за 20 с, а с удержанием выходит не дольше,
+  // чем было до удержания.
+  pingInterval: 10_000,
+  pingTimeout: 10_000,
 })
 export class SfuGateway implements OnGatewayConnection {
   private readonly logger = new Logger(SfuGateway.name);
