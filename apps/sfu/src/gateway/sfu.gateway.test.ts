@@ -47,7 +47,7 @@ beforeEach(() => {
   workers = new FakeWorkers();
   rooms = new RoomsService(workers as unknown as WorkersService);
   gw = new SfuGateway(rooms);
-  gw.server = {} as never;
+  gw.server = io as never;
 });
 
 afterEach(() => {
@@ -131,14 +131,18 @@ describe('подключение', () => {
     const a = await connect('эфир', 'a');
     const b = await connect('эфир', 'b');
     a.clear();
-    gw.handleDisconnect(sock(b));
+    b.drop('client namespace disconnect');
     expect(a.last('peer-left')).toEqual({ peerId: 'b' });
     expect(rooms.peers('эфир').map((p) => p.id)).toEqual(['a']);
   });
 
-  it('дисконнект неизвестного сокета — не событие', () => {
+  it('дисконнект сокета, которого не пустили, — не событие', async () => {
+    const other = await connect('эфир', 'a');
+    other.clear();
     const s = io.connect();
-    expect(() => gw.handleDisconnect(sock(s))).not.toThrow();
+    await gw.handleConnection(sock(s));
+    expect(() => s.drop('transport close')).not.toThrow();
+    expect(other.got('peer-left')).toBe(false);
   });
 });
 
@@ -567,7 +571,7 @@ describe('переподключение', () => {
     await gw.handleConnection(sock(fresh));
     other.clear();
 
-    gw.handleDisconnect(sock(stale));
+    stale.drop('client namespace disconnect');
 
     // Участник в комнате остался — и остальные об уходе не услышали.
     expect(other.got('peer-left')).toBe(false);
@@ -584,12 +588,172 @@ describe('переподключение', () => {
     const other = await connect('эфир', 'b');
     const fresh = io.connect({ token: issue({ room: 'эфир', peerId: 'a' }), id: 'sock-a2' });
     await gw.handleConnection(sock(fresh));
-    gw.handleDisconnect(sock(stale));
+    stale.drop('client namespace disconnect');
     other.clear();
 
-    gw.handleDisconnect(sock(fresh));
+    fresh.drop('client namespace disconnect');
 
     expect(other.last('peer-left')).toEqual({ peerId: 'a' });
     expect(rooms.peers('эфир').map((p) => p.id)).toEqual(['b']);
+  });
+});
+
+/** Участник с транспортом и одной своей дорожкой. */
+async function publishing(room: string, peerId: string, source = 'mic') {
+  const { s, transportId } = await withTransport(room, peerId);
+  const ack = await gw.handleProduce(sock(s), {
+    transportId,
+    kind: source === 'mic' || source === 'screen-audio' ? 'audio' : 'video',
+    rtpParameters: {},
+    source,
+  });
+  if (!ack.ok) throw new Error('produce не прошёл');
+  return { s, transportId, producerId: ack.id };
+}
+
+/**
+ * Моргание сети. Сокет сигналинга рвётся от любой смены пути (wifi, NAT, сон
+ * ноутбука), а медиа по UDP переживает такое само. Раньше сессия умирала вместе
+ * с сокетом: медиасервер в ту же секунду закрывал транспорты, остальным уходил
+ * `peer-left`, и человек возвращался только полным перезаходом — 13–50 секунд
+ * тишины в живом звонке (логи overhype, 29.09). Теперь сессию держим, пока
+ * socket.io восстанавливает соединение, — тот же приём, что у api.
+ */
+describe('моргание сети', () => {
+  async function pair() {
+    const a = await publishing('эфир', 'a', 'mic');
+    const b = await withTransport('эфир', 'b');
+    a.s.clear();
+    return { a, b };
+  }
+
+  it('обрыв соединения не выносит участника — его медиа живо, комнате ничего не говорим', async () => {
+    const { a } = await pair();
+    const transport = workers.routers[0].transports.find((t) => t.id === a.transportId)!;
+    const other = await connect('эфир', 'c');
+    other.clear();
+
+    a.s.drop('transport close');
+
+    expect(other.got('peer-left')).toBe(false);
+    expect(transport.closed).toBe(false);
+    expect(rooms.peers('эфир').map((p) => p.id)).toContain('a');
+  });
+
+  it('восстановленный сокет продолжает ту же сессию: без нового welcome и без пропуска', async () => {
+    const { a, b } = await pair();
+    a.s.drop('ping timeout');
+    b.s.clear();
+
+    // Пропуск живёт минуту, а звонок — часы: вернувшийся по восстановлению
+    // предъявляет протухший. Его подлинность — сама восстановленная сессия.
+    const back = io.connect({
+      id: a.s.id,
+      recovered: true,
+      token: issue({ room: 'эфир', peerId: 'a' }, -1000),
+    });
+    await gw.handleConnection(sock(back));
+
+    expect(back.got('welcome')).toBe(false);
+    expect(back.got('sfu-error')).toBe(false);
+    expect(back.disconnected).toBe(false);
+    expect(b.s.got('peer-joined')).toBe(false);
+    // Сессия та же: своей дорожкой он по-прежнему распоряжается.
+    expect(gw.handleCloseProducer(sock(back), { producerId: a.producerId })).toEqual({ ok: true });
+  });
+
+  it('не вернулся за окно — уход доходит до комнаты', async () => {
+    vi.useFakeTimers();
+    try {
+      const { a, b } = await pair();
+      const transport = workers.routers[0].transports.find((t) => t.id === a.transportId)!;
+      a.s.drop('transport close');
+      vi.advanceTimersByTime(SfuGateway.RESUME_GRACE_MS + 1);
+      expect(b.s.last('peer-left')).toEqual({ peerId: 'a' });
+      expect(transport.closed).toBe(true);
+      expect(rooms.peers('эфир').map((p) => p.id)).toEqual(['b']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('вернувшийся вовремя не получает запоздалого ухода', async () => {
+    vi.useFakeTimers();
+    try {
+      const { a, b } = await pair();
+      a.s.drop('transport close');
+      await gw.handleConnection(sock(io.connect({ id: a.s.id, recovered: true })));
+      vi.advanceTimersByTime(SfuGateway.RESUME_GRACE_MS + 1);
+      expect(b.s.got('peer-left')).toBe(false);
+      expect(rooms.peers('эфир').map((p) => p.id)).toContain('a');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('выход по своей воле не ждёт окна', async () => {
+    const { a, b } = await pair();
+    a.s.drop('client namespace disconnect');
+    expect(b.s.last('peer-left')).toEqual({ peerId: 'a' });
+  });
+
+  it('восстановленный сокет без сессии — отказ, клиент войдёт заново', async () => {
+    const back = io.connect({ id: 'sock-никто', recovered: true });
+    await gw.handleConnection(sock(back));
+    expect(back.last('sfu-error')).toEqual({ error: 'session-lost' });
+    expect(back.disconnected).toBe(true);
+  });
+
+  it('событие для слушателя адресовано сессии, а не мёртвому объекту сокета', async () => {
+    const { a, b } = await pair();
+    await gw.handleConsume(sock(b.s), {
+      transportId: b.transportId,
+      producerId: a.producerId,
+      rtpCapabilities: { codecs: [] },
+    });
+    const consumer = workers.routers[0].transports.flatMap((t) => t.consumed)[0];
+    b.s.drop('transport close');
+    const back = io.connect({ id: b.s.id, recovered: true });
+    await gw.handleConnection(sock(back));
+
+    consumer.fire('producerclose');
+    consumer.fire('layerschange', { spatialLayer: 1, temporalLayer: 0 });
+
+    expect(back.last('producer-closed')).toEqual({ peerId: 'a', producerId: a.producerId });
+    expect(back.got('consumer-layers')).toBe(true);
+  });
+
+  it('сокет, оборвавшийся посреди входа, не остаётся в комнате призраком', async () => {
+    const other = await connect('эфир', 'b');
+    other.clear();
+    const s = io.connect({ token: issue({ room: 'эфир', peerId: 'a' }), id: 'sock-a' });
+    const entering = gw.handleConnection(sock(s));
+    s.drop('transport close');
+    await entering;
+    expect(rooms.peers('эфир').map((p) => p.id)).toEqual(['b']);
+    expect(other.got('peer-joined')).toBe(false);
+  });
+});
+
+describe('ответ на каждый запрос', () => {
+  /**
+   * Брошенное исключение Nest не превращает в ack: клиент ждёт ответа свои 10
+   * секунд, а вход подписывается на соседей по одному — и вся очередь встаёт.
+   */
+  it('сорвавшийся resume — отказ, а не повисший запрос', async () => {
+    const a = await publishing('эфир', 'a', 'mic');
+    const b = await withTransport('эфир', 'b');
+    const ack = await gw.handleConsume(sock(b.s), {
+      transportId: b.transportId,
+      producerId: a.producerId,
+      rtpCapabilities: { codecs: [] },
+    });
+    const consumerId = (ack as { consumer: { id: string } }).consumer.id;
+    const consumer = workers.routers[0].transports.flatMap((t) => t.consumed)[0];
+    consumer.failResume = true;
+    await expect(gw.handleResume(sock(b.s), { consumerId })).resolves.toEqual({
+      ok: false,
+      error: 'resume-failed',
+    });
   });
 });
