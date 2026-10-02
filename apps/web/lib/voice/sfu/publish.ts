@@ -141,6 +141,10 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
     // Трансляции — аппаратный кодировщик, если он есть (см. screen-codec.ts).
     const codec =
       source === 'screen' ? await pickScreenCodec(dev, host.screenProfile()) : undefined;
+    // Пока движок отвечал про кодировщик, показ успели остановить: публиковать
+    // нечего, а опубликованная мёртвая дорожка висела бы у зрителей замёрзшим
+    // кадром до следующей сверки.
+    if (track.readyState === 'ended') return false;
     if (codec) {
       const ok = await produceWith(source, track, codec);
       if (ok) return true;
