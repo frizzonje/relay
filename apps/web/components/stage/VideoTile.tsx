@@ -740,7 +740,9 @@ export const VideoTile = memo(function VideoTile({
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3, ease: 'easeOut' }}
-          className="absolute inset-0 z-[3] flex flex-col items-center justify-end gap-2.5 bg-[linear-gradient(to_top,rgba(0,0,0,0.6),transparent_62%)] pb-12"
+          // Под чипом имени и кнопками плитки (они ниже по разметке, слой тот
+          // же): затемнение подкладывается под них, а не гасит их.
+          className="absolute inset-0 z-[2] flex flex-col items-center justify-end gap-2.5 bg-[linear-gradient(to_top,rgba(0,0,0,0.6),transparent_62%)] pb-12"
         >
           <span className="flex items-center gap-1.5 rounded-full bg-black/55 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-white/85 backdrop-blur-[6px]">
             <span className="h-1.5 w-1.5 rounded-full bg-danger motion-safe:animate-pulse" />
