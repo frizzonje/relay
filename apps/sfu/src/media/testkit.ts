@@ -102,14 +102,19 @@ export class FakeTransport extends Emitter {
     return this.iceParameters;
   }
 
+  /** С какими параметрами заводили каждую дорожку — по её id. */
+  readonly produceOptions = new Map<string, Record<string, unknown>>();
+
   async produce(opts: {
     kind: 'audio' | 'video';
     rtpParameters?: unknown;
     appData: Record<string, unknown>;
+    keyFrameRequestDelay?: number;
   }): Promise<FakeProducer> {
     if (this.failProduce) throw new Error('нет rtpParameters');
     const producer = new FakeProducer(opts.kind, opts.appData);
     this.produced.push(producer);
+    this.produceOptions.set(producer.id, opts);
     return producer;
   }
 

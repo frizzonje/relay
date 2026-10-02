@@ -124,6 +124,9 @@ export class SfuGateway implements OnGatewayConnection {
    */
   private static readonly MAX_TRANSPORTS_PER_PEER = 6;
 
+  /** Не чаще раза в столько ключевой кадр трансляции экрана (см. `produce`). */
+  static readonly SCREEN_KEYFRAME_DELAY_MS = 1000;
+
   @WebSocketServer()
   server!: Server;
 
@@ -349,6 +352,14 @@ export class SfuGateway implements OnGatewayConnection {
         kind,
         rtpParameters: payload?.rtpParameters as types.RtpParameters,
         appData: { source, peerId: peer.id },
+        // Ключевой кадр трансляции — сотни килобайт. Просит его каждый зритель
+        // с потерями и каждый, кто только что нажал «Смотреть», и без выдержки
+        // их просьбы складывались в очередь жирных кадров для всех сразу —
+        // всплеск, после которого теряют пакеты уже все. Раз в секунду хватает:
+        // новый зритель ждёт первого кадра не дольше неё.
+        ...(source === 'screen'
+          ? { keyFrameRequestDelay: SfuGateway.SCREEN_KEYFRAME_DELAY_MS }
+          : {}),
       });
       // На роль — одна дорожка: клиент держит по producer'у на роль, и второй
       // той же роли значит, что ответ на прошлый до него не дошёл (сокет

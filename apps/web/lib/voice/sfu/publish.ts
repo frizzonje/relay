@@ -5,11 +5,12 @@ import type { UplinkStatus } from '@/stores/voice';
 import { setting } from '@/stores/config';
 import type { TransportHost } from '../types';
 import { readStats, worseUplink } from '../stats';
+import { sfuScreenEncodings } from '../screen-profile';
 import {
+  AUDIO_ENCODINGS,
   CAM_ENCODINGS,
   MIC_CODEC_OPTIONS,
   SCREEN_AUDIO_CODEC_OPTIONS,
-  SCREEN_ENCODINGS,
   type Ask,
   type Source,
 } from './protocol';
@@ -78,10 +79,39 @@ export interface Publisher {
   uplink(): Promise<UplinkStatus>;
 }
 
+/** Высота кадра, который снимается сейчас: от неё считается нижний слой экрана. */
+function trackHeight(track: MediaStreamTrack): number {
+  return track.getSettings?.().height ?? 0;
+}
+
 export function createPublisher({ host, sendTransport, device, ask }: PublishDeps): Publisher {
   const producers = new Map<Source, Producer>();
+  // Публикации, которые уже идут, по роли. Роль публикуют с разных сторон почти
+  // разом — вход, сверка после обрыва, тумблер камеры, — а в `producers` она
+  // попадает только после ответа сервера. Без этой записи обе проходили
+  // проверку «уже течёт»: сервер оставлял вторую, а первая так и кодировалась
+  // у нас сиротой — для экрана это двойная нагрузка на процессор и аплинк.
+  const inflight = new Map<Source, Promise<boolean>>();
 
   async function produce(source: Source, track: MediaStreamTrack): Promise<boolean> {
+    const pending = inflight.get(source);
+    if (pending) {
+      // Дождаться той публикации и подменить в ней дорожку — как с живой.
+      await pending;
+      const live = producers.get(source);
+      if (live && live.track !== track) await live.replaceTrack({ track }).catch(() => {});
+      return !!live;
+    }
+    const run = produceNow(source, track);
+    inflight.set(source, run);
+    try {
+      return await run;
+    } finally {
+      inflight.delete(source);
+    }
+  }
+
+  async function produceNow(source: Source, track: MediaStreamTrack): Promise<boolean> {
     const transport = sendTransport();
     const dev = device();
     if (!transport || !dev) {
@@ -102,6 +132,7 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
     const live = producers.get(source);
     if (live) {
       await live.replaceTrack({ track }).catch(() => {});
+      if (source === 'screen') await retuneScreen();
       return true;
     }
     // appData уходит в `produce` на сервер — по нему остальные узнают роль
@@ -118,9 +149,17 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
         // публикация падала с «track ended», и звонок оставался в тишине до
         // перезахода. Гасят дорожки только их владельцы: mic.ts и camera.ts.
         stopTracks: false,
-        ...(track.kind === 'video'
-          ? { encodings: isScreen ? SCREEN_ENCODINGS : camEncodings() }
-          : {}),
+        // Экран — два слоя simulcast под профиль трансляции: нижний для
+        // плитки, верхний для того, кто развернул (см. screen-profile.ts).
+        // Голос и звук трансляции — с высоким приоритетом: стример льёт
+        // десяток мегабит, и на забитом аплинке голос иначе рвался бы наравне
+        // с картинкой (в mesh так с самого начала, см. setAudioSenderBitrate).
+        encodings:
+          track.kind === 'audio'
+            ? AUDIO_ENCODINGS
+            : isScreen
+              ? sfuScreenEncodings(host.screenProfile(), trackHeight(track))
+              : camEncodings(),
         ...(track.kind === 'audio'
           ? {
               codecOptions:
@@ -177,16 +216,25 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
   }
 
   /**
-   * Тумблер «качество/ФПС» демонстрации. Слои тут ни при чём: mediasoup рулит
-   * producer'ом, но под ним остаётся обычный `RTCRtpSender`, и предпочтение
-   * кодировщика ставится ровно так же, как в mesh — иначе один и тот же тумблер
-   * в двух режимах делал бы разное.
+   * Привести кодировки экрана к профилю трансляции: битрейт и кадры каждого
+   * слоя, масштаб нижнего (кадр мог смениться — другой режим, другое окно) и
+   * что беречь при нехватке. Слоёв столько же, сколько было при создании:
+   * число кодировок `setParameters` менять не даёт. Тот же тумблер в mesh
+   * ставится тем же `setParameters` — иначе в двух режимах он делал бы разное.
    */
   async function retuneScreen() {
-    const sender = producers.get('screen')?.rtpSender;
-    if (!sender) return;
+    const producer = producers.get('screen');
+    const sender = producer?.rtpSender;
+    if (!producer || !sender || !producer.track) return;
+    const wanted = sfuScreenEncodings(host.screenProfile(), trackHeight(producer.track));
     try {
       const params = sender.getParameters();
+      params.encodings.forEach((encoding, i) => {
+        const layer = wanted[Math.min(i, wanted.length - 1)];
+        encoding.maxBitrate = layer.maxBitrate;
+        encoding.maxFramerate = layer.maxFramerate;
+        encoding.scaleResolutionDownBy = layer.scaleResolutionDownBy;
+      });
       params.degradationPreference = host.screenDegradation();
       await sender.setParameters(params);
     } catch (err) {

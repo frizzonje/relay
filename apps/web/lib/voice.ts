@@ -45,18 +45,23 @@ export { refreshSpeakers, resumeVoiceAudio, setSpeaker } from '@/lib/voice/outpu
 import {
   currentScreenMode,
   currentVideoTrack,
+  currentScreenProfile,
   initCamera,
+  loadScreenPrefs,
   isCamOn,
   isScreenOn,
   screenAudio,
   screenDegradation,
   teardownVideo,
+  transportChanged,
 } from '@/lib/voice/camera';
 
 export {
   refreshCameras,
   setCamera,
   setScreenMode,
+  setScreenMotion,
+  setScreenQuality,
   toggleCamera,
   toggleScreen,
 } from '@/lib/voice/camera';
@@ -194,6 +199,7 @@ const host: TransportHost = {
   camOn: () => isCamOn(),
   screenOn: () => isScreenOn(),
   screenDegradation: () => screenDegradation(),
+  screenProfile: () => currentScreenProfile(),
 
   addTile,
   removeTile,
@@ -338,6 +344,7 @@ function leaveTransports() {
   sfuTransport?.leave();
   transport = null;
   roomMode = null;
+  useVoiceStore.getState().setCallVia(null);
 }
 
 /**
@@ -380,6 +387,9 @@ async function enterRoom(target: string, route: Route, gen: number) {
   if (transport && transport !== next) transport.leave();
   transport = next;
   roomMode = route.mode;
+  useVoiceStore.getState().setCallVia(route.mode);
+  // Потолок трансляции у транспортов разный — идущий показ подстраиваем.
+  transportChanged();
   if (route.mode === 'p2p') {
     // Канал прямой — ждать медиасервер ему незачем, даже если ждали.
     cancelSfuRetry();
@@ -928,6 +938,7 @@ export function initVoice() {
   // инсталляции. Раньше это состояние поднимала только модалка настроек, и
   // включённый push-to-talk оживал лишь после того, как её откроют.
   loadMediaPrefs();
+  loadScreenPrefs();
 
   // Подключили/отключили устройство — обновляем списки в сторе
   navigator.mediaDevices?.addEventListener?.('devicechange', () => {
@@ -966,6 +977,7 @@ export function initVoice() {
     publish: (what) => (what === 'camera' ? tx().publishVideo() : tx().publishScreen()),
     unpublish: (what) => (what === 'camera' ? tx().unpublishVideo() : tx().unpublishScreen()),
     retune: () => tx().retuneVideo(),
+    transport: () => (roomMode === 'sfu' ? 'sfu' : 'mesh'),
     syncStore: syncMediaState,
     announce: broadcastMediaState,
   });

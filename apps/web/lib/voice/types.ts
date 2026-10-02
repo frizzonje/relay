@@ -3,6 +3,7 @@
 import type { SfxName } from '@/lib/sfx';
 import type { MessageKey, Vars } from '@/lib/i18n/translate';
 import type { TileNet, UplinkStatus, VoicePing } from '@/stores/voice';
+import type { ScreenProfile } from './screen-profile';
 
 /**
  * Шов между дирижёром (`lib/voice.ts`) и транспортом медиа.
@@ -29,6 +30,8 @@ export interface TransportHost {
   screenOn(): boolean;
   /** Тумблер «качество/ФПС» демонстрации — влияет на degradationPreference. */
   screenDegradation(): RTCDegradationPreference;
+  /** Профиль трансляции: потолок кадра, кадров и битрейта (см. screen-profile.ts). */
+  screenProfile(): ScreenProfile;
 
   // ── Витрина (плитки, статусы, метрики) ─────────────────────────────────
   addTile(id: string, name: string, stream: MediaStream | null, isLocal: boolean): void;

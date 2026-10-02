@@ -286,6 +286,21 @@ describe('дорожки', () => {
     expect(ack.ok).toBe(true);
   });
 
+  /**
+   * Ключевой кадр трансляции жирный, а просят его все зрители с потерями и все,
+   * кто только что нажал «Смотреть». Без выдержки их просьбы складывались в
+   * очередь таких кадров. Голосу и камере выдержка не нужна.
+   */
+  it('ключевой кадр трансляции — не чаще раза в секунду, остальным без выдержки', async () => {
+    const { producerId: screen } = await producing('эфир', 'a', 'screen');
+    const { producerId: cam } = await producing('эфир', 'b', 'cam');
+    const options = (id: string) =>
+      workers.routers[0].transports.find((t) => t.produceOptions.has(id))!.produceOptions.get(id)!;
+
+    expect(options(screen).keyFrameRequestDelay).toBe(SfuGateway.SCREEN_KEYFRAME_DELAY_MS);
+    expect(options(cam).keyFrameRequestDelay).toBeUndefined();
+  });
+
   it('неизвестный вид и неизвестное назначение отвергаются порознь', async () => {
     const { s, transportId } = await withTransport('эфир', 'a');
     expect(await gw.handleProduce(sock(s), { transportId, kind: 'текст', source: 'mic' })).toEqual({

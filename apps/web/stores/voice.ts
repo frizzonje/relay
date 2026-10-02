@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { VoicePresence } from '@relay/shared';
 import type { MessageKey, Vars } from '@/lib/i18n/translate';
+import type { MotionPreset, QualityPreset, ScreenMode } from '@/lib/voice/screen-profile';
 
 /**
  * Статус подключения хранится ключом словаря, а не готовой фразой: текст
@@ -121,7 +122,7 @@ export interface TileNet {
  */
 export type UplinkStatus = 'ok' | 'cpu' | 'bandwidth';
 
-export type ScreenMode = 'quality' | 'fps';
+export type { ScreenMode } from '@/lib/voice/screen-profile';
 
 /** Состояние панели «Голос подключён» (обновляется при замере пинга). */
 export interface VoicePing {
@@ -141,6 +142,14 @@ interface VoiceState {
   camOn: boolean;
   screenOn: boolean;
   screenMode: ScreenMode;
+  /** Пресеты трансляции под каждый режим (вкладка «Трансляция» в настройках). */
+  screenQuality: QualityPreset;
+  screenMotion: MotionPreset;
+  /**
+   * Каким путём идёт звонок: через медиасервер или напрямую. У трансляции
+   * потолки разные, и тумблер в панели показывает реальные цифры.
+   */
+  callVia: 'sfu' | 'p2p' | null;
   /** Статус подключения для шапки/панели голоса (см. VoiceStatus). */
   status: VoiceStatus;
   presence: VoicePresence;
@@ -191,8 +200,16 @@ interface VoiceState {
   kicked: boolean;
 
   setTiles: (tiles: VoiceTile[]) => void;
-  setMedia: (m: Partial<Pick<VoiceState, 'micOn' | 'camOn' | 'screenOn' | 'screenMode'>>) => void;
+  setMedia: (
+    m: Partial<
+      Pick<
+        VoiceState,
+        'micOn' | 'camOn' | 'screenOn' | 'screenMode' | 'screenQuality' | 'screenMotion'
+      >
+    >,
+  ) => void;
   setStatus: (status: VoiceStatus) => void;
+  setCallVia: (via: 'sfu' | 'p2p' | null) => void;
   setPresence: (presence: VoicePresence) => void;
   setMyId: (id: string | null) => void;
   setPing: (ping: VoicePing) => void;
@@ -220,6 +237,9 @@ export const useVoiceStore = create<VoiceState>((set) => ({
   camOn: false,
   screenOn: false,
   screenMode: 'quality',
+  screenQuality: '1440p30',
+  screenMotion: '1080p60',
+  callVia: null,
   status: null,
   presence: {},
   myId: null,
@@ -247,6 +267,7 @@ export const useVoiceStore = create<VoiceState>((set) => ({
   setTiles: (tiles) => set({ tiles }),
   setMedia: (m) => set(m),
   setStatus: (status) => set({ status }),
+  setCallVia: (callVia) => set({ callVia }),
   setPresence: (presence) => set({ presence }),
   setMyId: (id) => set({ myId: id }),
   setPing: (ping) => set({ ping }),

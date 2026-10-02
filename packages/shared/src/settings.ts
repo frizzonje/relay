@@ -821,6 +821,29 @@ export const SETTINGS: readonly SettingSpec[] = [
     max: 8000,
     client: true,
   },
+  // Трансляция экрана. Потолок высоты — сколько стример вправе снять, битрейт —
+  // сколько уходит на одного зрителя в верхнем слое. Это деньги владельца:
+  // каждый, кто нажал «Смотреть», — ещё один такой поток с медиасервера.
+  // Умолчания — те, ради которых трансляция и затевалась (1440p, до 10 Мбит/с).
+  {
+    key: 'voice.screenMaxHeight',
+    group: 'voice',
+    kind: 'select',
+    fallback: '1440',
+    applies: 'new',
+    options: ['720', '1080', '1440'],
+    client: true,
+  },
+  {
+    key: 'voice.screenBitrateKbps',
+    group: 'voice',
+    kind: 'number',
+    fallback: 10000,
+    applies: 'new',
+    min: 1000,
+    max: 20000,
+    client: true,
+  },
   {
     key: 'voice.noiseSuppressionDefault',
     group: 'voice',

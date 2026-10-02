@@ -7,7 +7,9 @@ import { cn } from '@/lib/utils';
 import { springTab } from '@/lib/motion';
 import { useDismiss } from '@/lib/use-dismiss';
 import { useUiStore } from '@/stores/ui';
-import { useVoiceStore } from '@/stores/voice';
+import { useVoiceStore, type ScreenMode } from '@/stores/voice';
+import { useSetting } from '@/stores/config';
+import { resolveProfile, type ScreenProfile } from '@/lib/voice/screen-profile';
 import {
   toggleMic,
   toggleCamera,
@@ -336,6 +338,29 @@ function SegToggle({ children }: { children: ReactNode }) {
 }
 
 /**
+ * Что режим трансляции даст прямо сейчас: пресет человека под потолками
+ * владельца и транспорта. Тумблер показывает цифры, а не абстрактные
+ * «качество/ФПС», — человек видит, с чем выходит в эфир.
+ */
+function useScreenProfiles(): Record<ScreenMode, ScreenProfile> {
+  const quality = useVoiceStore((s) => s.screenQuality);
+  const motion = useVoiceStore((s) => s.screenMotion);
+  const via = useVoiceStore((s) => s.callVia);
+  const maxHeight = Number(useSetting<string>('voice.screenMaxHeight'));
+  const maxBitrate = useSetting<number>('voice.screenBitrateKbps') * 1000;
+  const of = (mode: ScreenMode) =>
+    resolveProfile({
+      mode,
+      quality,
+      motion,
+      transport: via === 'p2p' ? 'mesh' : 'sfu',
+      maxHeight,
+      maxBitrate,
+    });
+  return { quality: of('quality'), fps: of('fps') };
+}
+
+/**
  * Панель управления звонком (#controls, index.html:1581-1590). Видна в голосовом
  * виде: микрофон, камера, демонстрация экрана (+тумблер Качество/ФПС во время
  * трансляции), отключение. Всё завязано на mesh-менеджер (lib/voice.ts).
@@ -353,6 +378,7 @@ export function Controls() {
   // него нет вовсе — кнопки не прячем «на всякий случай», а убираем: кнопка,
   // которая ничего не сделает, объясняет хуже, чем её отсутствие с подписью.
   const listenOnly = useVoiceStore((s) => s.listenOnly);
+  const profiles = useScreenProfiles();
 
   if (view !== 'voice') return null;
 
@@ -422,6 +448,13 @@ export function Controls() {
               key={mode}
               type="button"
               aria-pressed={screenMode === mode}
+              title={t(
+                mode === 'quality' ? 'controls.screen.quality.title' : 'controls.screen.fps.title',
+                {
+                  height: profiles[mode].height,
+                  fps: profiles[mode].fps,
+                },
+              )}
               onClick={() => setScreenMode(mode)}
               className={cn(
                 'relative rounded-[23px] px-4 py-[9px] text-xs font-bold uppercase tracking-[0.04em] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong active:scale-[0.94]',
@@ -437,7 +470,9 @@ export function Controls() {
                 />
               )}
               <span className="relative">
-                {t(mode === 'quality' ? 'controls.screen.quality' : 'controls.screen.fps')}
+                {mode === 'quality'
+                  ? t('controls.screen.quality', { height: profiles.quality.height })
+                  : t('controls.screen.fps', { fps: profiles.fps.fps })}
               </span>
             </button>
           ))}
