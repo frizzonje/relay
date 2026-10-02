@@ -75,6 +75,7 @@ interface LayersPayload {
  * Хендшейк стандартный для mediasoup, все запросы с ack-ответом:
  *   connect → `welcome` (capabilities роутера + кто уже в комнате)
  *   `create-transport` → `connect-transport` → `produce` / `consume` / `resume`
+ *   (и `pause` — придержать подписку, которую зритель сейчас не видит)
  * плюс серверные `peer-joined` / `new-producer` / `producer-closed` / `peer-left`
  * и `snapshot` — тот же снимок комнаты, что в `welcome`, по запросу.
  *
@@ -526,6 +527,31 @@ export class SfuGateway implements OnGatewayConnection {
     } catch (err) {
       this.logger.warn(`resume failed for ${peer.id}: ${String(err)}`);
       return fail('resume-failed');
+    }
+  }
+
+  /**
+   * Перестать слать подписчику дорожку, не закрывая подписку. Так зритель
+   * трансляции, свернувший её плитку (развернул другую), не тянет с сервера
+   * поток, которого не видит, а вернувшись — получает его обратно за ключевой
+   * кадр, без новой подписки. Обратный ход — тот же `resume`.
+   */
+  @SubscribeMessage('pause')
+  async handlePause(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ConsumerPayload,
+  ): Promise<Ack> {
+    const peer = this.peers.get(client.id);
+    if (!peer) return fail('no-peer');
+    const id = typeof payload?.consumerId === 'string' ? payload.consumerId : '';
+    const consumer = peer.consumers.get(id);
+    if (!consumer) return fail('no-consumer');
+    try {
+      await consumer.pause();
+      return { ok: true };
+    } catch (err) {
+      this.logger.warn(`pause failed for ${peer.id}: ${String(err)}`);
+      return fail('pause-failed');
     }
   }
 

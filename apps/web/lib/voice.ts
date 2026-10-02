@@ -92,6 +92,7 @@ import {
   setTileScreen,
   setTileState,
   setTileVideoOn,
+  setTileWatch,
   syncPeerRoles,
   tileOf,
 } from '@/lib/voice/tiles';
@@ -102,6 +103,7 @@ import {
 export {
   clearFocus,
   PEER_VOL_MAX,
+  reportTileView,
   setFocus,
   setPeerScreenVolume,
   setPeerVolume,
@@ -205,6 +207,7 @@ const host: TransportHost = {
   removeTile,
   setTileState,
   setTileNet,
+  setTileWatch,
   cleanupPeerAudio,
   attachRemoteAudio,
   detachRemoteAudio,
@@ -651,6 +654,19 @@ export function setListenOnly(on: boolean) {
 }
 
 /**
+ * «Смотреть» трансляцию собеседника и обратно. Решение — за транспортом: через
+ * медиасервер поток к зрителю не идёт, пока он не попросил, а в прямых
+ * каналах идёт каждому и так (там кнопки нет вовсе).
+ */
+export function watchStream(peerId: string) {
+  tx().watch?.(peerId);
+}
+
+export function unwatchStream(peerId: string) {
+  tx().unwatch?.(peerId);
+}
+
+/**
  * Комната, в которой дирижёр держит эфир прямо сейчас, — или `null`.
  *
  * Вопрос, на который она отвечает, ровно один: «занят ли эфир кем-то ещё».
@@ -953,6 +969,7 @@ export function initVoice() {
     dropAudio: cleanupPeerAudio,
     setGain: setPeerGain,
     focusChanged: (id) => tx().focusChanged?.(id),
+    viewChanged: (id, px) => tx().viewChanged?.(id, px),
   });
   // Микшер снимает узлы ушедшего сам, а вот «когда он в последний раз говорил»
   // — это уже обводка плитки, и живёт она здесь.

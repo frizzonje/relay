@@ -787,6 +787,55 @@ describe('ответ на каждый запрос', () => {
   });
 });
 
+describe('пауза подписки', () => {
+  /**
+   * Зритель развернул другую плитку — трансляцию, которую он не видит,
+   * сервер ему не шлёт. Вернулся — тот же consumer продолжает, без новой
+   * подписки.
+   */
+  it('pause придерживает подписку, resume отпускает', async () => {
+    const a = await publishing('эфир', 'a', 'screen');
+    const b = await withTransport('эфир', 'b');
+    const ack = await gw.handleConsume(sock(b.s), {
+      transportId: b.transportId,
+      producerId: a.producerId,
+      rtpCapabilities: { codecs: [] },
+    });
+    const consumerId = (ack as { consumer: { id: string } }).consumer.id;
+    const consumer = workers.routers[0].transports.flatMap((t) => t.consumed)[0];
+    await gw.handleResume(sock(b.s), { consumerId });
+
+    expect(await gw.handlePause(sock(b.s), { consumerId })).toEqual({ ok: true });
+    expect(consumer.paused).toBe(true);
+    await gw.handleResume(sock(b.s), { consumerId });
+    expect(consumer.paused).toBe(false);
+  });
+
+  it('чужую или несуществующую подписку не придержать', async () => {
+    const b = await withTransport('эфир', 'b');
+    expect(await gw.handlePause(sock(b.s), { consumerId: 'нет-такой' })).toEqual({
+      ok: false,
+      error: 'no-consumer',
+    });
+  });
+
+  it('сорвавшаяся пауза — отказ, а не повисший запрос', async () => {
+    const a = await publishing('эфир', 'a', 'screen');
+    const b = await withTransport('эфир', 'b');
+    const ack = await gw.handleConsume(sock(b.s), {
+      transportId: b.transportId,
+      producerId: a.producerId,
+      rtpCapabilities: { codecs: [] },
+    });
+    const consumerId = (ack as { consumer: { id: string } }).consumer.id;
+    workers.routers[0].transports.flatMap((t) => t.consumed)[0].failResume = true;
+    await expect(gw.handlePause(sock(b.s), { consumerId })).resolves.toEqual({
+      ok: false,
+      error: 'pause-failed',
+    });
+  });
+});
+
 describe('снимок комнаты по запросу', () => {
   /**
    * Вернувшаяся после обрыва сессия сверяется по нему: события за обрыв

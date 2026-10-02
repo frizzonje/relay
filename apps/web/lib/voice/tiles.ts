@@ -20,6 +20,8 @@ export interface TileSurroundings {
   setGain(peerId: string, kind: 'voice' | 'screen', value: number): void;
   /** Крупный план сменился: SFU по этому поводу перекладывает слой simulcast. */
   focusChanged(id: string | null): void;
+  /** Плитка трансляции сменила размер на экране: SFU выбирает по нему слой. */
+  viewChanged(id: string, px: number): void;
 }
 
 // Пока дирижёр не собрал сцену, плитки молчат в пустоту, а не падают: модуль
@@ -28,6 +30,7 @@ let around: TileSurroundings = {
   dropAudio: () => {},
   setGain: () => {},
   focusChanged: () => {},
+  viewChanged: () => {},
 };
 
 export function initTiles(surroundings: TileSurroundings): void {
@@ -158,6 +161,14 @@ export function setTileVideoOn(id: string, on: boolean) {
   const t = tiles.get(id);
   if (!t || t.videoOn === on) return;
   tiles.set(id, { ...t, videoOn: on });
+  syncTiles();
+}
+
+export function setTileWatch(id: string, watch: 'offered' | 'watching' | null) {
+  const t = tiles.get(id);
+  const next = watch ?? undefined;
+  if (!t || t.watch === next) return;
+  tiles.set(id, { ...t, watch: next });
   syncTiles();
 }
 
@@ -314,6 +325,14 @@ export function setPeerScreenVolume(peerId: string, vol: number) {
 }
 
 // ─── Крупный план ─────────────────────────────────────────────────────────
+
+/**
+ * Высота плитки трансляции в пикселях устройства (0 — её не видно). Плитка
+ * меряет себя сама; решать, какой слой ей нужен, — транспорту.
+ */
+export function reportTileView(id: string, px: number) {
+  around.viewChanged(id, px);
+}
 
 export function toggleFocus(id: string) {
   if (focusedTileId === id) clearFocus();

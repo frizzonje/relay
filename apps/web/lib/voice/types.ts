@@ -39,6 +39,8 @@ export interface TransportHost {
   removeTile(id: string): void;
   setTileState(id: string, state: MessageKey | ''): void;
   setTileNet(id: string, net: TileNet): void;
+  /** Трансляция собеседника: предложена, смотрим или её нет (см. VoiceTile.watch). */
+  setTileWatch(id: string, watch: 'offered' | 'watching' | null): void;
   /** Снять узлы микшера, оставив плитку (пересборка соединения с тем же пиром). */
   cleanupPeerAudio(peerId: string): void;
   /**
@@ -131,6 +133,18 @@ export interface VoiceTransport {
    * Mesh шлёт всем одно и то же и метод не реализует.
    */
   focusChanged?(id: string | null): void;
+  /**
+   * «Смотреть» / «Перестать смотреть» трансляцию собеседника. Только SFU: там
+   * поток к зрителю не идёт, пока он не попросил, — это и бережёт канал
+   * медиасервера. В mesh трансляция идёт каждому и так.
+   */
+  watch?(peerId: string): void;
+  /**
+   * Плитка трансляции собеседника заняла на экране столько пикселей по высоте
+   * (0 — не видна). SFU выбирает по этому слой simulcast и паузу.
+   */
+  viewChanged?(peerId: string, px: number): void;
+  unwatch?(peerId: string): void;
   /** Сокет переподключился с НОВЫМ id — прежние соединения мертвы. */
   reset(): void;
   /**

@@ -71,6 +71,11 @@ export class FakeConsumer extends Emitter {
     this.paused = false;
   }
 
+  async pause(): Promise<void> {
+    if (this.failResume) throw new Error('consumer closed');
+    this.paused = true;
+  }
+
   async setPreferredLayers(layers: unknown): Promise<void> {
     this.preferred = layers;
   }

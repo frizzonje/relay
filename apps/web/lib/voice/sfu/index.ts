@@ -490,7 +490,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         void subscriber.consume(peerId, producer);
       });
       s.on('producer-closed', ({ producerId }: { producerId: string }) => {
-        subscriber.dropConsumer(producerId);
+        subscriber.producerClosed(producerId);
       });
       s.on('peer-left', ({ peerId }: { peerId: string }) => {
         host.setStatus('voice.status.peerLeft', {
@@ -558,6 +558,18 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
 
     focusChanged(id) {
       subscriber.setFocus(id);
+    },
+
+    watch(peerId) {
+      void subscriber.watch(peerId);
+    },
+
+    viewChanged(peerId, px) {
+      subscriber.setView(peerId, px);
+    },
+
+    unwatch(peerId) {
+      subscriber.unwatch(peerId);
     },
 
     reset() {

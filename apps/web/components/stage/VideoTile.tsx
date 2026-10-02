@@ -12,6 +12,9 @@ import {
   kickGuest,
   setPeerVolume,
   setPeerScreenVolume,
+  reportTileView,
+  unwatchStream,
+  watchStream,
 } from '@/lib/voice';
 import { useAudioUnlockStore } from '@/stores/audio-unlock';
 import { useVoiceStore, type TileNet, type VoiceTile } from '@/stores/voice';
@@ -37,6 +40,9 @@ const OUTRO_MS = 1600;
 // Поля по краям кадра считаем заметными от 4% расхождения пропорций — ниже это
 // уже мера погрешности округления, а не «чёрные полосы».
 const LETTERBOX_TOLERANCE = 0.04;
+
+// Сколько размер плитки трансляции должен простоять, прежде чем по нему сменят слой.
+const VIEW_SETTLE_MS = 300;
 
 // Выше 200% ползунок физически «тормозит»: 200 единиц драга дают только 100%
 // прироста (вместо 1:1) — тот же путь мышкой требует вдвое больше усилия,
@@ -463,6 +469,29 @@ export const VideoTile = memo(function VideoTile({
     return () => ro.disconnect();
   }, [fitContain]);
 
+  // Трансляцию, которую смотрим, медиасервер шлёт слоем по размеру плитки:
+  // в сетке хватает 720p, 1440p — тому, у кого она крупная (развернул, на весь
+  // экран, ретина). Меряем в пикселях устройства — их и видно. Свёрнутая
+  // плитка (развёрнута другая) — ноль: такую сервер не шлёт вовсе. Размер
+  // сообщаем, когда он устоялся: анимация разворота даёт десятки промежуточных,
+  // и каждый был бы запросом к серверу и сменой слоя.
+  useEffect(() => {
+    const el = tileRef.current;
+    if (tile.isLocal || tile.watch !== 'watching' || !el) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const report = (cssHeight: number) => {
+      if (timer) clearTimeout(timer);
+      const px = Math.round(cssHeight * (window.devicePixelRatio || 1));
+      timer = setTimeout(() => reportTileView(tile.id, px), VIEW_SETTLE_MS);
+    };
+    const ro = new ResizeObserver(([entry]) => report(entry.contentRect.height));
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      if (timer) clearTimeout(timer);
+    };
+  }, [tile.id, tile.isLocal, tile.watch]);
+
   // Иконка кнопки полноэкранного режима отражает состояние. Слушаем и
   // webkit-префиксное событие — WebKit (Safari/WKWebView) шлёт его вместо
   // стандартного `fullscreenchange`.
@@ -671,6 +700,49 @@ export const VideoTile = memo(function VideoTile({
           novideo && !outro && 'invisible',
         )}
       />
+
+      {/* Трансляция через медиасервер идёт к зрителю только по его просьбе: пока
+          он не нажал, на плитке — предложение посмотреть, а не чёрный кадр. */}
+      {!tile.isLocal && tile.watch === 'offered' && (
+        <motion.div
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, ease: 'easeOut' }}
+          className="absolute inset-0 z-[3] flex flex-col items-center justify-end gap-2.5 bg-[linear-gradient(to_top,rgba(0,0,0,0.6),transparent_62%)] pb-12"
+        >
+          <span className="flex items-center gap-1.5 rounded-full bg-black/55 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-white/85 backdrop-blur-[6px]">
+            <span className="h-1.5 w-1.5 rounded-full bg-danger motion-safe:animate-pulse" />
+            {t('tile.watch.live')}
+          </span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              watchStream(tile.id);
+            }}
+            className="flex items-center gap-2 rounded-[10px] bg-accent-strong px-4 py-2 text-[13px] font-bold text-bg-app shadow-[0_6px_22px_rgba(0,0,0,0.45)] outline-none transition hover:brightness-110 focus-visible:ring-2 focus-visible:ring-line-strong active:scale-[0.95]"
+          >
+            <Icon name="screen-share" className="text-[16px]" />
+            {t('tile.watch')}
+          </button>
+        </motion.div>
+      )}
+
+      {/* Перестать смотреть — рядом с «во весь экран», тоже по наведению */}
+      {!tile.isLocal && tile.watch === 'watching' && (
+        <button
+          type="button"
+          title={t('tile.unwatch')}
+          aria-label={t('tile.unwatch')}
+          onClick={(e) => {
+            e.stopPropagation();
+            unwatchStream(tile.id);
+          }}
+          className="absolute left-[48px] top-2.5 z-[4] grid h-[30px] w-[30px] place-items-center rounded-md bg-black/55 text-white opacity-0 transition group-hover:opacity-90 hover:!opacity-100 hover:!bg-black/85 active:scale-[0.88]"
+        >
+          <Icon name="eye-off" className="text-lg" />
+        </button>
+      )}
 
       {/* Кнопка «во весь экран» (видна при наведении) */}
       <button
