@@ -67,6 +67,12 @@ export interface PersonOptions {
    * встав между ним и конструктором раньше него.
    */
   initScript?: () => void;
+  /**
+   * Плотность пикселей экрана. Трансляция выбирает слой по высоте плитки в
+   * пикселях устройства, и проверить «крупно — верхний слой» в окне стенда
+   * можно только на «ретине».
+   */
+  deviceScaleFactor?: number;
 }
 
 /**
@@ -85,6 +91,7 @@ export async function person(
     ignoreHTTPSErrors: true,
     ...(options.mobile ? devices['Pixel 7'] : {}),
     ...(options.permissions ? { permissions: options.permissions } : {}),
+    ...(options.deviceScaleFactor ? { deviceScaleFactor: options.deviceScaleFactor } : {}),
   });
   await ctx.addCookies([{ name: 'relay-lang', value: 'en', url: BASE }]);
   if (options.initScript) await ctx.addInitScript(options.initScript);
