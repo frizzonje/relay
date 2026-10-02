@@ -1,11 +1,12 @@
 'use client';
 
-import type { Device, Producer, Transport } from 'mediasoup-client/types';
+import type { Device, Producer, RtpCodecCapability, Transport } from 'mediasoup-client/types';
 import type { UplinkStatus } from '@/stores/voice';
 import { setting } from '@/stores/config';
 import type { TransportHost } from '../types';
 import { readSendVideo, readStats, worseUplink, type SendVideo } from '../stats';
 import { sfuScreenEncodings } from '../screen-profile';
+import { isH264, pickScreenCodec } from './screen-codec';
 import {
   AUDIO_ENCODINGS,
   CAM_ENCODINGS,
@@ -137,6 +138,26 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
       if (source === 'screen') await retuneScreen();
       return true;
     }
+    // Трансляции — аппаратный кодировщик, если он есть (см. screen-codec.ts).
+    const codec =
+      source === 'screen' ? await pickScreenCodec(dev, host.screenProfile()) : undefined;
+    if (codec) {
+      const ok = await produceWith(source, track, codec);
+      if (ok) return true;
+      // H264 не поднялся (движок передумал, отказал кодировщик) — трансляция
+      // важнее кодека: уходим, как раньше, на умолчании.
+      host.diag('sfu produce fallback', `${source} ${codec.mimeType} → default`);
+    }
+    return produceWith(source, track);
+  }
+
+  async function produceWith(
+    source: Source,
+    track: MediaStreamTrack,
+    codec?: RtpCodecCapability,
+  ): Promise<boolean> {
+    const transport = sendTransport();
+    if (!transport) return false;
     // appData уходит в `produce` на сервер — по нему остальные узнают роль
     // дорожки, а не гадают по порядку.
     const isScreen = source === 'screen';
@@ -144,6 +165,7 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
       const producer = await transport.produce({
         track,
         appData: { source },
+        ...(codec ? { codec } : {}),
         // Дорожкой владеет приложение, а не производитель: mediasoup-client по
         // умолчанию (stopTracks: true) останавливает трек при закрытии
         // producer'а, и любой разбор транспорта — переезд, реконнект сокета,
@@ -160,7 +182,7 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
           track.kind === 'audio'
             ? AUDIO_ENCODINGS
             : isScreen
-              ? sfuScreenEncodings(host.screenProfile(), trackHeight(track))
+              ? screenEncodings(track, codec)
               : camEncodings(),
         ...(track.kind === 'audio'
           ? {
@@ -183,6 +205,17 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
       host.diag('sfu produce failed', `${source} ${String((err as Error)?.message ?? err)}`);
       return false;
     }
+  }
+
+  /**
+   * Слои трансляции. Временные слои (`L1T3`) просим только у VP8: аппаратный
+   * H264 их часто не умеет, а неизвестный `scalabilityMode` движок вправе
+   * отвергнуть вместе со всей публикацией.
+   */
+  function screenEncodings(track: MediaStreamTrack, codec?: RtpCodecCapability) {
+    const layers = sfuScreenEncodings(host.screenProfile(), trackHeight(track));
+    if (!isH264(codec)) return layers;
+    return layers.map(({ scalabilityMode: _, ...layer }) => layer);
   }
 
   /** Закрыть свой producer и сказать серверу — иначе он останется висеть. */

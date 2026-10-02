@@ -53,7 +53,10 @@ describe('трансляция и приоритеты', () => {
     appData: { source: string };
   };
 
-  function setup(screenOn = true) {
+  function setup(
+    screenOn = true,
+    codecs: { kind: string; mimeType: string }[] = [{ kind: 'video', mimeType: 'video/VP8' }],
+  ) {
     const mic = { kind: 'audio', readyState: 'live' } as unknown as MediaStreamTrack;
     const screen = {
       kind: 'video',
@@ -61,7 +64,7 @@ describe('трансляция и приоритеты', () => {
       getSettings: () => ({ height: 1440 }),
     } as unknown as MediaStreamTrack;
     let release: (() => void) | null = null;
-    const produce = vi.fn(async (opts: ProduceOpts) => {
+    const produce = vi.fn(async (opts: ProduceOpts & { codec?: { mimeType: string } }) => {
       // Сервер отвечает не сразу — ровно в это окно и влезает вторая публикация.
       if (opts.appData.source === 'screen') await new Promise<void>((r) => (release = r));
       return {
@@ -86,7 +89,7 @@ describe('трансляция и приоритеты', () => {
     const publisher = createPublisher({
       host,
       sendTransport: () => ({ produce }) as unknown as Transport,
-      device: () => ({ canProduce: () => true }) as unknown as Device,
+      device: () => ({ canProduce: () => true, rtpCapabilities: { codecs } }) as unknown as Device,
       ask: vi.fn(async () => null),
     });
     return { publisher, produce, release: () => release?.() };
@@ -123,5 +126,83 @@ describe('трансляция и приоритеты', () => {
 
     expect(produce.mock.calls.filter(([o]) => o.appData.source === 'screen')).toHaveLength(1);
     expect(publisher.count()).toBe(1);
+  });
+});
+
+describe('кодировщик трансляции', () => {
+  const h264 = { kind: 'video', mimeType: 'video/H264' };
+  const screen = {
+    kind: 'video',
+    readyState: 'live',
+    getSettings: () => ({ height: 1440 }),
+  } as unknown as MediaStreamTrack;
+
+  function setup(powerEfficient: boolean, failH264 = false) {
+    vi.stubGlobal('navigator', {
+      userAgent: 'Chrome/140',
+      mediaCapabilities: {
+        encodingInfo: vi.fn(async () => ({ supported: true, smooth: true, powerEfficient })),
+      },
+    });
+    const produce = vi.fn(
+      async (opts: { codec?: { mimeType: string }; encodings?: Record<string, unknown>[] }) => {
+        if (failH264 && opts.codec) throw new Error('encoder refused');
+        return {
+          id: 'p',
+          kind: 'video',
+          track: screen,
+          closed: false,
+          rtpParameters: { codecs: [{ mimeType: opts.codec?.mimeType ?? 'video/VP8' }] },
+          close: vi.fn(),
+        };
+      },
+    );
+    const host = {
+      localStream: () => null,
+      screenAudioTrack: () => null,
+      videoTrack: () => screen,
+      screenOn: () => true,
+      screenProfile: () => ({ height: 1440, fps: 30, bitrate: 8_000_000 }),
+      screenDegradation: () => 'maintain-resolution',
+      diag: vi.fn(),
+    } as unknown as TransportHost;
+    const publisher = createPublisher({
+      host,
+      sendTransport: () => ({ produce }) as unknown as Transport,
+      device: () =>
+        ({
+          canProduce: () => true,
+          rtpCapabilities: { codecs: [{ kind: 'video', mimeType: 'video/VP8' }, h264] },
+        }) as unknown as Device,
+      ask: vi.fn(async () => null),
+    });
+    return { publisher, produce, host };
+  }
+
+  it('аппаратный H264 есть — трансляция уходит им, без временных слоёв', async () => {
+    const { publisher, produce } = setup(true);
+    await publisher.syncVideo();
+    const opts = produce.mock.calls[0][0];
+    expect(opts.codec).toEqual(h264);
+    expect(opts.encodings?.every((e) => !('scalabilityMode' in e))).toBe(true);
+    expect(opts.encodings).toHaveLength(2);
+    vi.unstubAllGlobals();
+  });
+
+  it('кодирует только процессор — остаёмся на умолчании (VP8)', async () => {
+    const { publisher, produce } = setup(false);
+    await publisher.syncVideo();
+    expect(produce.mock.calls[0][0].codec).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
+  it('H264 не поднялся — трансляция всё равно уходит, на умолчании', async () => {
+    const { publisher, produce, host } = setup(true, true);
+    await publisher.syncVideo();
+    expect(produce).toHaveBeenCalledTimes(2);
+    expect(produce.mock.calls[1][0].codec).toBeUndefined();
+    expect(publisher.count()).toBe(1);
+    expect(host.diag).toHaveBeenCalledWith('sfu produce fallback', 'screen video/H264 → default');
+    vi.unstubAllGlobals();
   });
 });

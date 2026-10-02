@@ -111,10 +111,23 @@ describe('кодировки', () => {
   });
 
   it('mesh: один слой с потолком профиля', () => {
-    expect(meshScreenEncoding({ height: 800, fps: 60, bitrate: 4_000_000 })).toEqual({
+    expect(meshScreenEncoding({ height: 800, fps: 60, bitrate: 4_000_000 }, 800)).toEqual({
       maxBitrate: 4_000_000,
       maxFramerate: 60,
       scaleResolutionDownBy: 1,
     });
+  });
+
+  /**
+   * Захват не послушался `max` (WebKit, Firefox, отказ applyConstraints) и
+   * отдаёт родные 1440p. Потолок владельца держит кодировщик.
+   */
+  it('захват выше профиля — кодировщик сам ужимает его до потолка', () => {
+    const [low, full] = sfuScreenEncodings({ height: 1080, fps: 60, bitrate: 8_000_000 }, 1440);
+    expect(full.scaleResolutionDownBy).toBeCloseTo(1440 / 1080);
+    expect(low.scaleResolutionDownBy).toBe(2);
+    expect(
+      meshScreenEncoding({ height: 800, fps: 60, bitrate: 4_000_000 }, 1440).scaleResolutionDownBy,
+    ).toBe(1.8);
   });
 });

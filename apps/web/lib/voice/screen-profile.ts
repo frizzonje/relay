@@ -136,6 +136,17 @@ export interface ScreenEncoding {
 }
 
 /**
+ * Во сколько раз ужать кадр, чтобы он влез в профиль. Захват обычно уже
+ * прижат ограничениями (`captureConstraints`), но не везде: WebKit и Firefox
+ * умеют проигнорировать `max` у экрана, а `applyConstraints` на лету может и
+ * отказать. Потолок владельца не должен зависеть от того, послушался ли
+ * захват, — поэтому он же стоит и в кодировщике.
+ */
+function fitScale(trackHeight: number, height: number): number {
+  return trackHeight > height ? trackHeight / height : 1;
+}
+
+/**
  * Кодировки SFU: два слоя simulcast — нижний для плитки, верхний для того,
  * кто развернул трансляцию. Слоёв всегда два: их число задаётся при создании
  * producer'а и потом не меняется, а смена режима на лету меняет высоту кадра.
@@ -144,7 +155,8 @@ export interface ScreenEncoding {
  * бывает и ниже профиля, и тогда нижний слой — половина кадра, а не 720p.
  */
 export function sfuScreenEncodings(profile: ScreenProfile, trackHeight: number): ScreenEncoding[] {
-  const full = trackHeight > 0 ? trackHeight : profile.height;
+  const source = trackHeight > 0 ? trackHeight : profile.height;
+  const full = Math.min(source, profile.height);
   const lowHeight = full > LOW_LAYER_HEIGHT ? LOW_LAYER_HEIGHT : Math.max(1, Math.round(full / 2));
   const lowFps = Math.min(profile.fps, LOW_LAYER_MAX_FPS);
   const lowBitrate = Math.max(
@@ -156,22 +168,26 @@ export function sfuScreenEncodings(profile: ScreenProfile, trackHeight: number):
       rid: 'l',
       maxBitrate: Math.min(lowBitrate, profile.bitrate),
       maxFramerate: lowFps,
-      scaleResolutionDownBy: full / lowHeight,
+      scaleResolutionDownBy: source / lowHeight,
       scalabilityMode: 'L1T3',
     },
     {
       rid: 'f',
       maxBitrate: profile.bitrate,
       maxFramerate: profile.fps,
-      scaleResolutionDownBy: 1,
+      scaleResolutionDownBy: fitScale(source, profile.height),
       scalabilityMode: 'L1T3',
     },
   ];
 }
 
 /** Кодировка mesh: один слой — у каждого собеседника свой поток и так. */
-export function meshScreenEncoding(profile: ScreenProfile): ScreenEncoding {
-  return { maxBitrate: profile.bitrate, maxFramerate: profile.fps, scaleResolutionDownBy: 1 };
+export function meshScreenEncoding(profile: ScreenProfile, trackHeight: number): ScreenEncoding {
+  return {
+    maxBitrate: profile.bitrate,
+    maxFramerate: profile.fps,
+    scaleResolutionDownBy: fitScale(trackHeight, profile.height),
+  };
 }
 
 /** Что кодировщику беречь при нехватке канала или процессора. */

@@ -124,14 +124,17 @@ export function createSenders(host: TransportHost): Senders {
       const params = sender.getParameters();
       if (!params.encodings || !params.encodings.length) params.encodings = [{}];
       if (isScreen) {
-        const { maxBitrate, maxFramerate } = meshScreenEncoding(host.screenProfile());
-        params.encodings[0].maxBitrate = maxBitrate;
-        params.encodings[0].maxFramerate = maxFramerate;
+        const height = sender.track?.getSettings().height ?? 0;
+        const layer = meshScreenEncoding(host.screenProfile(), height);
+        params.encodings[0].maxBitrate = layer.maxBitrate;
+        params.encodings[0].maxFramerate = layer.maxFramerate;
+        params.encodings[0].scaleResolutionDownBy = layer.scaleResolutionDownBy;
       } else {
         params.encodings[0].maxBitrate = videoMaxBitrate();
         // Камера и экран делят слот: кадры, оставленные трансляцией, камере
         // не нужны — у неё свой предел в захвате.
         delete params.encodings[0].maxFramerate;
+        params.encodings[0].scaleResolutionDownBy = 1;
       }
       // Экран — по выбору пользователя (тумблер Качество/ФПС); камера — сбалансированно
       params.degradationPreference = isScreen ? host.screenDegradation() : 'balanced';
