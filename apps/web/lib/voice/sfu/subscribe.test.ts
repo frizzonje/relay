@@ -98,7 +98,7 @@ describe('трансляция по кнопке «Смотреть»', () => {
   });
 
   it('«Перестать смотреть» снимает подписки и снова предлагает', async () => {
-    const { subscriber, watch } = setup();
+    const { subscriber, watch, asked } = setup();
     subscriber.addPeer('a', 'Аня');
     await subscriber.consume('a', info('a', 'mic'));
     await subscriber.consume('a', info('a', 'screen'));
@@ -108,6 +108,22 @@ describe('трансляция по кнопке «Смотреть»', () => {
 
     expect(subscriber.entries().map((e) => e.source)).toEqual(['mic']);
     expect(watch.get('a')).toBe('offered');
+    // Закрыть у себя мало: сервер слал бы поток дальше в пустоту.
+    expect(asked('close-consumer')).toEqual([{ consumerId: 'c-a:screen' }]);
+  });
+
+  it('«Перестать» посреди подписки — поток не приходит, серверу сказано', async () => {
+    const { subscriber, asked } = setup();
+    subscriber.addPeer('a', 'Аня');
+    await subscriber.consume('a', info('a', 'screen'));
+
+    const watching = subscriber.watch('a');
+    subscriber.unwatch('a');
+    await watching;
+
+    expect(subscriber.entries()).toEqual([]);
+    expect(asked('close-consumer')).toEqual([{ consumerId: 'c-a:screen' }]);
+    expect(asked('resume')).toHaveLength(0);
   });
 
   /**

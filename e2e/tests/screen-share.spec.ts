@@ -110,6 +110,27 @@ function received(page: Page) {
   });
 }
 
+/** Байты, принятые всеми соединениями страницы, — то, что реально идёт по сети. */
+function bytesIn(page: Page) {
+  return page.evaluate(async () => {
+    const pcs = (window as unknown as { __pcs: RTCPeerConnection[] }).__pcs;
+    let bytes = 0;
+    for (const pc of pcs) {
+      (await pc.getStats()).forEach((r) => {
+        if (r.type === 'transport') bytes += r.bytesReceived ?? 0;
+      });
+    }
+    return bytes;
+  });
+}
+
+/** Сколько байт пришло за `ms`. */
+async function flow(page: Page, ms: number) {
+  const before = await bytesIn(page);
+  await page.waitForTimeout(ms);
+  return (await bytesIn(page)) - before;
+}
+
 test('трансляция: два слоя, поток только по «Смотреть», слой по размеру плитки', async ({
   browser,
 }) => {
@@ -176,10 +197,17 @@ test('трансляция: два слоя, поток только по «См
   await expect.poll(async () => (await received(boris)).height, { timeout: 30_000 }).toBe(low);
 
   // «Перестать смотреть» — кадры больше не идут, кнопка «Смотреть» вернулась.
+  // И не только кадры: поток не должен идти и по сети — подписку закрыл
+  // сервер, а не одна лишь вкладка зрителя. Сравниваем с тем, что шло во время
+  // просмотра: после остаётся только голос.
+  const watchingFlow = await flow(boris, 3_000);
   await tile(boris, her).hover();
   await boris.getByRole('button', { name: 'Stop watching' }).click();
   await expect(watch).toBeVisible({ timeout: 10_000 });
   const stopped = (await received(boris)).frames;
-  await boris.waitForTimeout(3_000);
+  await boris.waitForTimeout(1_000);
+  const idleFlow = await flow(boris, 3_000);
+  console.log('байт за 3 с: смотрит', watchingFlow, '— перестал', idleFlow);
   expect((await received(boris)).frames).toBeLessThanOrEqual(stopped);
+  expect(idleFlow).toBeLessThan(watchingFlow / 4);
 });

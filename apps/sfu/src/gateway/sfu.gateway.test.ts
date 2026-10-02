@@ -836,6 +836,33 @@ describe('пауза подписки', () => {
   });
 });
 
+describe('снятие подписки', () => {
+  /**
+   * «Перестать смотреть»: клиент закрыл consumer у себя, но поток шёл бы и
+   * дальше, пока сервер о нём не узнает, — и каждое новое «Смотреть»
+   * добавляло бы ещё один такой.
+   */
+  it('close-consumer закрывает подписку на сервере', async () => {
+    const a = await publishing('эфир', 'a', 'screen');
+    const b = await withTransport('эфир', 'b');
+    const ack = await gw.handleConsume(sock(b.s), {
+      transportId: b.transportId,
+      producerId: a.producerId,
+      rtpCapabilities: { codecs: [] },
+    });
+    const consumerId = (ack as { consumer: { id: string } }).consumer.id;
+    const consumer = workers.routers[0].transports.flatMap((t) => t.consumed)[0];
+
+    expect(gw.handleCloseConsumer(sock(b.s), { consumerId })).toEqual({ ok: true });
+    expect(consumer.closed).toBe(true);
+    // Второй раз — её уже нет: ни паузы, ни повторного закрытия.
+    expect(gw.handleCloseConsumer(sock(b.s), { consumerId })).toEqual({
+      ok: false,
+      error: 'no-consumer',
+    });
+  });
+});
+
 describe('снимок комнаты по запросу', () => {
   /**
    * Вернувшаяся после обрыва сессия сверяется по нему: события за обрыв

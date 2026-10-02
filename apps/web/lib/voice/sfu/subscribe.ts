@@ -279,6 +279,19 @@ export function createSubscriber({
     }
   }
 
+  /**
+   * Перестать слушать дорожку по своей воле — и сказать об этом серверу.
+   * `dropConsumer` закрывает подписку только у нас: когда дорожку закрыл сам
+   * собеседник или разобран весь транспорт, сервер это знает и так, а здесь
+   * нет — и слал бы поток дальше, в транспорт, где его никто не принимает.
+   */
+  function release(producerId: string) {
+    const entry = consumers.get(producerId);
+    if (!entry) return;
+    void ask('close-consumer', { consumerId: entry.consumer.id });
+    dropConsumer(producerId);
+  }
+
   return {
     async consume(peerId, info) {
       if (isStream(info.source)) {
@@ -335,6 +348,13 @@ export function createSubscriber({
         return;
       } finally {
         consuming.delete(info.id);
+      }
+      // Пока подписка шла, зритель успел нажать «Перестать смотреть»: снимать
+      // ему было ещё нечего, и поток иначе пошёл бы к тому, кто от него отказался.
+      if (isStream(c.source) && !watching.has(peerId)) {
+        void ask('close-consumer', { consumerId: consumer.id });
+        consumer.close();
+        return;
       }
       consumers.set(c.producerId, { producerId: c.producerId, consumer, peerId, source: c.source });
       // Единственное доказательство, что пакеты реально пошли: дорожка consumer'а
@@ -398,7 +418,7 @@ export function createSubscriber({
     unwatch(peerId) {
       if (!watching.delete(peerId)) return;
       for (const entry of [...consumers.values()]) {
-        if (entry.peerId === peerId && isStream(entry.source)) dropConsumer(entry.producerId);
+        if (entry.peerId === peerId && isStream(entry.source)) release(entry.producerId);
       }
       // Подписка, ещё ждущая транспорта, тоже больше не нужна.
       for (let i = pending.length - 1; i >= 0; i--) {

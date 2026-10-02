@@ -556,6 +556,27 @@ export class SfuGateway implements OnGatewayConnection {
   }
 
   /**
+   * Снять подписку по просьбе зрителя («Перестать смотреть»). Закрыть consumer
+   * только у себя клиенту мало: mediasoup-client серверу об этом не говорит, и
+   * сервер слал бы поток дальше — в транспорт, где его уже никто не принимает.
+   * Каждое «Смотреть» после этого добавляло бы ещё один такой поток.
+   */
+  @SubscribeMessage('close-consumer')
+  handleCloseConsumer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ConsumerPayload,
+  ): Ack {
+    const peer = this.peers.get(client.id);
+    if (!peer) return fail('no-peer');
+    const id = typeof payload?.consumerId === 'string' ? payload.consumerId : '';
+    const consumer = peer.consumers.get(id);
+    if (!consumer) return fail('no-consumer');
+    consumer.close();
+    peer.consumers.delete(id);
+    return { ok: true };
+  }
+
+  /**
    * Adaptive subscription: крупной плитке — верхний слой simulcast, мелкой
    * нижний. Ради этого simulcast и включается (шаг D плана).
    */
