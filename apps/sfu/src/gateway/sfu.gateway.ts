@@ -75,7 +75,8 @@ interface LayersPayload {
  * Хендшейк стандартный для mediasoup, все запросы с ack-ответом:
  *   connect → `welcome` (capabilities роутера + кто уже в комнате)
  *   `create-transport` → `connect-transport` → `produce` / `consume` / `resume`
- * плюс серверные `peer-joined` / `new-producer` / `producer-closed` / `peer-left`.
+ * плюс серверные `peer-joined` / `new-producer` / `producer-closed` / `peer-left`
+ * и `snapshot` — тот же снимок комнаты, что в `welcome`, по запросу.
  *
  * Про авторизацию: sfu не знает ни пароля сайта, ни закрытых серверов, ни
  * гостевых ссылок — он проверяет подпись токена от api и пускает ровно в ту
@@ -113,16 +114,15 @@ export class SfuGateway implements OnGatewayConnection {
   private readonly parked = new Map<string, { peer: Peer; timer: ReturnType<typeof setTimeout> }>();
 
   /**
-   * Потолки на участника. Транспортов ему нужно ровно два (send и recv), плюс
+   * Потолок транспортов на участника. Нужно ему ровно два (send и recv), плюс
    * запас на пересборку: клиент строит новые до того, как сервер закроет старые.
    * Портов транспорты больше не едят (все живут на WebRtcServer воркера), но
    * каждый — это ICE/DTLS-состояние в однопоточном воркере, и цикл
    * переподключений у одного клиента иначе раздувал бы его для всей комнаты.
-   * Дорожек четыре по числу ролей (mic/cam/screen/screen-audio), запас — на
-   * пересоздание видео при смене камера↔экран.
+   * Дорожкам отдельный потолок не нужен: на роль их одна (см. `produce`), а
+   * ролей четыре.
    */
   private static readonly MAX_TRANSPORTS_PER_PEER = 6;
-  private static readonly MAX_PRODUCERS_PER_PEER = 6;
 
   @WebSocketServer()
   server!: Server;
@@ -344,16 +344,21 @@ export class SfuGateway implements OnGatewayConnection {
       ? (payload.source as ProducerSource)
       : null;
     if (!source) return fail('bad-source');
-    if (peer.producers.size >= SfuGateway.MAX_PRODUCERS_PER_PEER) {
-      this.logger.warn(`produce refused for ${peer.id}: ${peer.producers.size} already`);
-      return fail('too-many-producers');
-    }
     try {
       const producer = await transport.produce({
         kind,
         rtpParameters: payload?.rtpParameters as types.RtpParameters,
         appData: { source, peerId: peer.id },
       });
+      // На роль — одна дорожка: клиент держит по producer'у на роль, и второй
+      // той же роли значит, что ответ на прошлый до него не дошёл (сокет
+      // моргнул посреди `produce`). Прежний остался бы у нас сиротой без RTP —
+      // у остальных чёрной плиткой или немым микрофоном. Новый его заменяет.
+      // Сверяемся уже после ожидания: два встречных `produce` иначе оба
+      // проскочили бы проверку.
+      for (const old of [...peer.producers.values()]) {
+        if (producerInfo(old).source === source) this.dropProducer(client, peer, old);
+      }
       peer.producers.set(producer.id, producer);
       producer.on('transportclose', () => peer.producers.delete(producer.id));
       client
@@ -376,12 +381,32 @@ export class SfuGateway implements OnGatewayConnection {
     const id = typeof payload?.producerId === 'string' ? payload.producerId : '';
     const producer = peer.producers.get(id);
     if (!producer) return fail('no-producer');
+    this.dropProducer(client, peer, producer);
+    return { ok: true };
+  }
+
+  private dropProducer(client: Socket, peer: Peer, producer: types.Producer): void {
     producer.close();
-    peer.producers.delete(id);
+    peer.producers.delete(producer.id);
     // Своих consumer'ов остальные закроют сами по этому событию — mediasoup
     // закрывает их на той стороне, но клиенту нужно снять плитку/дорожку.
-    client.to(roomKey(peer.room)).emit('producer-closed', { peerId: peer.id, producerId: id });
-    return { ok: true };
+    client
+      .to(roomKey(peer.room))
+      .emit('producer-closed', { peerId: peer.id, producerId: producer.id });
+  }
+
+  /**
+   * Снимок комнаты, как в `welcome`. Нужен вернувшейся после обрыва сессии:
+   * события за обрыв socket.io доиграл, а ответы на запросы, бывшие в полёте,
+   * пропали — клиент сверяет по снимку, на что он так и не подписался.
+   */
+  @SubscribeMessage('snapshot')
+  handleSnapshot(
+    @ConnectedSocket() client: Socket,
+  ): Ack<{ peers: ReturnType<RoomsService['producersFor']> }> {
+    const peer = this.peers.get(client.id);
+    if (!peer) return fail('no-peer');
+    return { ok: true, peers: this.rooms.producersFor(peer) };
   }
 
   @SubscribeMessage('consume')

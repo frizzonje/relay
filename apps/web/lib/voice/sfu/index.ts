@@ -8,6 +8,7 @@ import type { TransportHost, VoiceTransport } from '../types';
 import {
   type Ack,
   type ConsumerLayers,
+  type PeerSnapshot,
   type ProducerInfo,
   type Source,
   type WelcomePayload,
@@ -57,6 +58,9 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
   let device: Device | null = null;
   let sendTransport: Transport | null = null;
   let recvTransport: Transport | null = null;
+  // Идёт ступень 2: она сама публикует и подписывается заново, и сверка после
+  // обрыва поверх неё только наплодила бы дубли (см. `resync`).
+  let rebuilding = false;
 
   // Свои дорожки живут отдельным предметом: их заводит, подменяет и закрывает
   // только он, а транспорт спрашивает у нас — лестница его пересобирает.
@@ -287,6 +291,15 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
    * с точки зрения витрины никто никуда не уходил.
    */
   async function rebuildTransports() {
+    rebuilding = true;
+    try {
+      await rebuildNow();
+    } finally {
+      rebuilding = false;
+    }
+  }
+
+  async function rebuildNow() {
     // Та же сверка с сессией, что и во входе (см. `onWelcome`): ступень идёт
     // через несколько ожиданий, и разобрать звонок за это время успевают.
     const session = sock;
@@ -329,6 +342,30 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     }
     for (const { peerId, info } of wanted) await subscriber.consume(peerId, info);
     await subscriber.drainPending();
+  }
+
+  /**
+   * Сессия вернулась после обрыва сигналинга. События за обрыв socket.io
+   * доиграл, а ответы на запросы, бывшие в полёте, пропали: socket.io-client
+   * отклоняет их, как только сокет рвётся. Раньше это покрывал полный
+   * перезаход, теперь сессия идёт дальше — и не дошедшая подписка значила бы
+   * «его не слышно» до конца звонка, а не дошедшая публикация — камеру,
+   * которую никто не видит. Поэтому сверяемся: своё публикуем, чего не хватает
+   * (живые дорожки это не трогает, а сироту той же роли сервер заменит),
+   * чужое добираем по снимку комнаты (на что уже подписаны — пропустится).
+   */
+  async function resync() {
+    if (rebuilding || !ladder.isUp() || ladder.gaveUp()) return;
+    const session = sock;
+    const stale = () => sock !== session;
+    await publisher.publishLocal();
+    if (stale()) return;
+    const res = await ask<{ peers: PeerSnapshot[] }>('snapshot', {});
+    if (!res || stale()) return;
+    for (const peer of res.peers) {
+      if (subscriber.nameOf(peer.peerId) === undefined) subscriber.addPeer(peer.peerId, peer.name);
+      for (const producer of peer.producers) await subscriber.consume(peer.peerId, producer);
+    }
   }
 
   // ── Реализация интерфейса ─────────────────────────────────────────────
@@ -407,13 +444,21 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         // Посреди звонка это очередная попытка переподключения — ждём дальше,
         // сдаётся лестница по своему окну. На входе же отказ окончательный, и
         // сокет надо остановить: иначе он дозвонится сам и войдёт в звонок, от
-        // которого мы уже отказались.
-        if (ladder.isUp()) return;
+        // которого мы уже отказались. Так же и после того, как лестница
+        // сдалась: новую сессию заведёт дирижёр, а этот сокет иначе долбил бы
+        // лежащий медиасервер раз в пару секунд, мимо паузы круга ожидания.
+        if (ladder.isUp() && !ladder.gaveUp()) return;
         ladder.giveUp('setup');
         s.disconnect();
       });
 
       s.on('connect', () => {
+        // Сдались, пока он дозванивался: вход заводит дирижёр, а этот сокет —
+        // уже ничей (см. `connect_error`).
+        if (ladder.gaveUp()) {
+          s.disconnect();
+          return;
+        }
         if (!connectedOnce) {
           connectedOnce = true;
           return;
@@ -422,6 +467,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         // пропущенные за обрыв события socket.io уже доиграл.
         if (s.recovered) {
           ladder.signalingBack();
+          void resync();
           return;
         }
         // Сервер нас не помнит (окно вышло, медиасервер перезапускался) — наши

@@ -297,21 +297,35 @@ describe('дорожки', () => {
     ).toEqual({ ok: false, error: 'bad-source' });
   });
 
-  it('потолок в шесть дорожек на участника', async () => {
+  /**
+   * Клиент держит по дорожке на роль. Второй `produce` той же роли значит, что
+   * ответ на первый пропал по дороге (сокет моргнул), и клиент публикует
+   * заново. Первый без замены остался бы сиротой без RTP: у остальных — чёрная
+   * плитка рядом с живой.
+   */
+  it('на роль — одна дорожка: повторная публикация заменяет прежнюю', async () => {
     const { s, transportId } = await withTransport('эфир', 'a');
-    for (let i = 0; i < 6; i++) {
-      const ack = await gw.handleProduce(sock(s), {
-        transportId,
-        kind: 'audio',
-        rtpParameters: {},
-        source: 'mic',
-      });
-      expect(ack.ok, `#${i}`).toBe(true);
-    }
-    expect(await gw.handleProduce(sock(s), { transportId, kind: 'audio', source: 'mic' })).toEqual({
-      ok: false,
-      error: 'too-many-producers',
-    });
+    const other = await connect('эфир', 'b');
+    const cam = { transportId, kind: 'video', rtpParameters: {}, source: 'cam' };
+    const first = await gw.handleProduce(sock(s), cam);
+    await gw.handleProduce(sock(s), { ...cam, kind: 'audio', source: 'mic' });
+    other.clear();
+
+    const second = await gw.handleProduce(sock(s), cam);
+
+    if (!first.ok || !second.ok) throw new Error('produce не прошёл');
+    const produced = workers.routers[0].transports[0].produced;
+    expect(produced.find((p) => p.id === first.id)?.closed).toBe(true);
+    expect(other.last('producer-closed')).toEqual({ peerId: 'a', producerId: first.id });
+    // Чужая роль не задета, и новичку видна ровно одна камера.
+    const fresh = await connect('эфир', 'c');
+    const a = (
+      fresh.last('welcome') as {
+        peers: { peerId: string; producers: { id: string; source: string }[] }[];
+      }
+    ).peers.find((p) => p.peerId === 'a')!;
+    expect(a.producers.map((p) => p.source).sort()).toEqual(['cam', 'mic']);
+    expect(a.producers.find((p) => p.source === 'cam')?.id).toBe(second.id);
   });
 
   it('сбой produce — отказ, а не исключение', async () => {
@@ -755,5 +769,23 @@ describe('ответ на каждый запрос', () => {
       ok: false,
       error: 'resume-failed',
     });
+  });
+});
+
+describe('снимок комнаты по запросу', () => {
+  /**
+   * Вернувшаяся после обрыва сессия сверяется по нему: события за обрыв
+   * socket.io доиграл, а ответы на запросы, бывшие в полёте, пропали.
+   */
+  it('отдаёт чужие дорожки, как welcome, и только своему участнику', async () => {
+    const a = await publishing('эфир', 'a', 'mic');
+    const b = await connect('эфир', 'b');
+    expect(gw.handleSnapshot(sock(b))).toEqual({
+      ok: true,
+      peers: [
+        { peerId: 'a', name: 'a', producers: [{ id: a.producerId, kind: 'audio', source: 'mic' }] },
+      ],
+    });
+    expect(gw.handleSnapshot(sock(io.connect()))).toEqual({ ok: false, error: 'no-peer' });
   });
 });
