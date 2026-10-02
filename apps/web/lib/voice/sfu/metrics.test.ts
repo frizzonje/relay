@@ -37,6 +37,7 @@ function setup(entries: ConsumerEntry[]) {
     setTileNet: vi.fn(),
     setPing: vi.fn(),
     setUplink: vi.fn(),
+    setScreenSend: vi.fn(),
     setTileState: vi.fn(),
     diag: vi.fn(),
   } as unknown as TransportHost;
@@ -56,6 +57,7 @@ function setup(entries: ConsumerEntry[]) {
     ask,
     transports: () => [],
     uplink: async () => 'ok',
+    screenSend: async () => null,
     broken: () => false,
     isUp: () => true,
     gaveUp: () => false,

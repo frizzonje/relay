@@ -102,6 +102,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     ask,
     transports: () => [recvTransport, sendTransport],
     uplink: () => publisher.uplink(),
+    screenSend: () => publisher.screenSend(),
     broken: mediaBroken,
     isUp: ladder.isUp,
     gaveUp: ladder.gaveUp,
@@ -519,6 +520,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       if (!sock) return; // в медиасервер мы не ходили — разбирать нечего
       teardown();
       host.setUplink('ok');
+      host.setScreenSend(null);
     },
 
     publishVideo() {

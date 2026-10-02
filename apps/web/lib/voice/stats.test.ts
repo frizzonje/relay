@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { emptySnapshot, netDelta, readStats, toHistory, worseUplink } from './stats';
+import { emptySnapshot, netDelta, readSendVideo, readStats, toHistory, worseUplink } from './stats';
 
 /**
  * Отчёт `getStats()` — это `ReadonlyMap` с `forEach` и `get`, ровно то, чем
@@ -194,5 +194,69 @@ describe('worseUplink', () => {
     expect(worseUplink('ok', 'cpu')).toBe('cpu');
     expect(worseUplink('cpu', 'bandwidth')).toBe('bandwidth');
     expect(worseUplink('ok', 'ok')).toBe('ok');
+  });
+});
+
+describe('readSendVideo', () => {
+  /**
+   * У трансляции два слоя simulcast. Плашка показывает верхний из тех, что
+   * реально идут, а битрейт — сумму всех: столько уходит с аплинка.
+   */
+  it('верхний живой слой, сумма байтов и признак видеокарты', () => {
+    const send = readSendVideo(
+      report(
+        { id: 'codec', type: 'codec', mimeType: 'video/VP8' },
+        {
+          type: 'outbound-rtp',
+          kind: 'video',
+          rid: 'l',
+          frameWidth: 1280,
+          frameHeight: 720,
+          framesPerSecond: 30,
+          bytesSent: 1000,
+          codecId: 'codec',
+        },
+        {
+          type: 'outbound-rtp',
+          kind: 'video',
+          rid: 'f',
+          frameWidth: 2560,
+          frameHeight: 1440,
+          framesPerSecond: 44.6,
+          bytesSent: 9000,
+          codecId: 'codec',
+          powerEfficientEncoder: true,
+          qualityLimitationReason: 'none',
+        },
+      ),
+    );
+    expect(send).toEqual({
+      width: 2560,
+      height: 1440,
+      fps: 45,
+      bytesSent: 10_000,
+      codec: 'VP8',
+      hardware: true,
+      limit: 'ok',
+    });
+  });
+
+  it('слой без кадров (выключен под нагрузкой) не считается верхним', () => {
+    const send = readSendVideo(
+      report(
+        { type: 'outbound-rtp', kind: 'video', frameHeight: 720, bytesSent: 10 },
+        {
+          type: 'outbound-rtp',
+          kind: 'video',
+          bytesSent: 5,
+          qualityLimitationReason: 'cpu',
+        },
+      ),
+    );
+    expect(send).toMatchObject({ height: 720, hardware: null, limit: 'cpu', bytesSent: 15 });
+  });
+
+  it('видео ещё не пошло — плашке нечего показать', () => {
+    expect(readSendVideo(report({ type: 'outbound-rtp', kind: 'audio', bytesSent: 1 }))).toBeNull();
   });
 });

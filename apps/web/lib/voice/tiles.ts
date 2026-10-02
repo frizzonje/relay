@@ -3,7 +3,7 @@
 import type { VoicePresence } from '@relay/shared';
 import { useIdentityStore } from '@/stores/identity';
 import { readPref, setPref } from '@/lib/prefs';
-import { useVoiceStore, type TileNet, type VoiceTile } from '@/stores/voice';
+import { useVoiceStore, type TileNet, type TileSend, type VoiceTile } from '@/stores/voice';
 import type { MessageKey } from '@/lib/i18n/translate';
 
 /**
@@ -161,6 +161,20 @@ export function setTileVideoOn(id: string, on: boolean) {
   const t = tiles.get(id);
   if (!t || t.videoOn === on) return;
   tiles.set(id, { ...t, videoOn: on });
+  syncTiles();
+}
+
+export function setTileSend(id: string, send: TileSend | null) {
+  const t = tiles.get(id);
+  if (!t) return;
+  const next = send ?? undefined;
+  const same =
+    t.send === next ||
+    (!!t.send &&
+      !!next &&
+      (Object.keys(next) as (keyof TileSend)[]).every((k) => t.send![k] === next[k]));
+  if (same) return;
+  tiles.set(id, { ...t, send: next });
   syncTiles();
 }
 

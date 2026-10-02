@@ -4,7 +4,7 @@ import type { Device, Producer, Transport } from 'mediasoup-client/types';
 import type { UplinkStatus } from '@/stores/voice';
 import { setting } from '@/stores/config';
 import type { TransportHost } from '../types';
-import { readStats, worseUplink } from '../stats';
+import { readSendVideo, readStats, worseUplink, type SendVideo } from '../stats';
 import { sfuScreenEncodings } from '../screen-profile';
 import {
   AUDIO_ENCODINGS,
@@ -77,6 +77,8 @@ export interface Publisher {
   count(): number;
   /** Здоровье своего аплинка — там же, где в mesh: qualityLimitationReason. */
   uplink(): Promise<UplinkStatus>;
+  /** Что реально уходит с трансляции экрана; null — её нет. */
+  screenSend(): Promise<SendVideo | null>;
 }
 
 /** Высота кадра, который снимается сейчас: от неё считается нижний слой экрана. */
@@ -290,6 +292,16 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
         }
       }
       return worst;
+    },
+
+    async screenSend() {
+      const producer = producers.get('screen');
+      if (!producer || producer.closed) return null;
+      try {
+        return readSendVideo(await producer.getStats());
+      } catch {
+        return null; // закрылся между тиками
+      }
     },
   };
 }

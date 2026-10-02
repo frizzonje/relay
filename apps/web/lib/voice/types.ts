@@ -2,7 +2,7 @@
 
 import type { SfxName } from '@/lib/sfx';
 import type { MessageKey, Vars } from '@/lib/i18n/translate';
-import type { TileNet, UplinkStatus, VoicePing } from '@/stores/voice';
+import type { TileNet, TileSend, UplinkStatus, VoicePing } from '@/stores/voice';
 import type { ScreenProfile } from './screen-profile';
 
 /**
@@ -39,6 +39,8 @@ export interface TransportHost {
   removeTile(id: string): void;
   setTileState(id: string, state: MessageKey | ''): void;
   setTileNet(id: string, net: TileNet): void;
+  /** Что реально уходит со своей трансляции (null — не транслируем). */
+  setScreenSend(send: TileSend | null): void;
   /** Трансляция собеседника: предложена, смотрим или её нет (см. VoiceTile.watch). */
   setTileWatch(id: string, watch: 'offered' | 'watching' | null): void;
   /** Снять узлы микшера, оставив плитку (пересборка соединения с тем же пиром). */

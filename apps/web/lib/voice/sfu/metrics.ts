@@ -2,13 +2,14 @@
 
 import type { Transport } from 'mediasoup-client/types';
 import type { TransportHost } from '../types';
-import { gradeQuality, pingGrade } from '../quality';
+import { gradeQuality, kbps, pingGrade } from '../quality';
 import {
   netDelta,
   readStats,
   sumStats,
   toHistory,
   type NetSnapshot,
+  type SendVideo,
   type StatsSnapshot,
 } from '../stats';
 import type { Ask } from './protocol';
@@ -40,6 +41,8 @@ export interface MetricsDeps {
   transports(): (Transport | null)[];
   /** Здоровье своего аплинка знает публикация: producer'ы у неё. */
   uplink(): Promise<UplinkStatus>;
+  /** Что уходит с трансляции экрана — тоже у публикации. */
+  screenSend(): Promise<SendVideo | null>;
   /** Развалилась ли связь с сервером. */
   broken(): boolean;
   /** Встали ли мы хоть раз и не сдались ли уже. */
@@ -74,6 +77,7 @@ export function createMetrics({
   ask,
   transports,
   uplink,
+  screenSend,
   broken,
   isUp,
   gaveUp,
@@ -86,6 +90,32 @@ export function createMetrics({
   // Входящий звук по consumerId: сколько байт видели в прошлый раз, когда они
   // в последний раз росли и сколько раз мы уже будили эту дорожку.
   const audioFlow = new Map<string, { bytes: number; since: number; kicks: number }>();
+  // Байты своей трансляции на прошлом тике — для битрейта на плашке.
+  let sentBefore: { bytes: number; at: number } | null = null;
+
+  /** Плашка на своей плитке трансляции: что реально уходит, а не что заказано. */
+  async function updateScreenSend() {
+    const send = await screenSend();
+    if (!send) {
+      sentBefore = null;
+      host.setScreenSend(null);
+      return;
+    }
+    const now = Date.now();
+    const rate =
+      sentBefore && send.bytesSent >= sentBefore.bytes
+        ? kbps(send.bytesSent, sentBefore.bytes, now - sentBefore.at)
+        : null;
+    sentBefore = { bytes: send.bytesSent, at: now };
+    host.setScreenSend({
+      height: send.height,
+      fps: send.fps,
+      kbps: rate,
+      codec: send.codec,
+      hardware: send.hardware,
+      limit: send.limit,
+    });
+  }
 
   function dim() {
     for (const peerId of subscriber.peerIds()) {
@@ -305,6 +335,7 @@ export function createMetrics({
       // этого тика описывал бы дорожки, которых уже нет.
       updatePeerQuality(rtt, snaps);
       host.setUplink(await uplink());
+      await updateScreenSend();
       await monitorAudioFlow(snaps);
     },
 
@@ -313,6 +344,7 @@ export function createMetrics({
     reset() {
       netHistory.clear();
       audioFlow.clear();
+      sentBefore = null;
     },
   };
 }

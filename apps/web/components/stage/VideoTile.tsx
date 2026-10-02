@@ -17,7 +17,7 @@ import {
   watchStream,
 } from '@/lib/voice';
 import { useAudioUnlockStore } from '@/stores/audio-unlock';
-import { useVoiceStore, type TileNet, type VoiceTile } from '@/stores/voice';
+import { useVoiceStore, type TileNet, type TileSend, type VoiceTile } from '@/stores/voice';
 import { useDismiss } from '@/lib/use-dismiss';
 import { useT } from '@/lib/i18n';
 import type { MessageKey } from '@/lib/i18n';
@@ -276,6 +276,38 @@ function AmbientWash({ videoRef }: { videoRef: React.RefObject<HTMLVideoElement 
       // (globals.css) проявляет заливку; после анимации остаётся базовый opacity-50.
       className="pointer-events-none absolute inset-0 h-full w-full scale-110 object-cover opacity-50 blur-[44px] motion-safe:animate-[washIn_400ms_ease-out]"
     />
+  );
+}
+
+/**
+ * Плашка своей трансляции: что реально уходит зрителям — верхний слой как он
+ * есть, а не как заказан. Урезал движок кадр или кадры (не тянет процессор,
+ * узкий аплинк) — плашка желтеет, и это видно сразу, без захода в настройки.
+ */
+function SendBadge({ send }: { send: TileSend }) {
+  const t = useT();
+  const parts = [`${send.height}p`];
+  if (send.fps != null) parts.push(t('tile.send.fps', { fps: send.fps }));
+  if (send.kbps != null) parts.push(t('tile.send.mbps', { mbps: (send.kbps / 1000).toFixed(1) }));
+  if (send.codec) parts.push(send.codec);
+  if (send.hardware != null) parts.push(t(send.hardware ? 'tile.send.hw' : 'tile.send.sw'));
+  const limited = send.limit !== 'ok';
+  return (
+    <div
+      title={t(limited ? UPLINK_PILL[send.limit as 'cpu' | 'bandwidth'].title : 'tile.send.title')}
+      className={cn(
+        'absolute right-2.5 top-2.5 z-[2] flex items-center gap-1.5 rounded-[8px] bg-black/55 px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.08em] tabular-nums backdrop-blur-[6px]',
+        limited ? 'text-warn' : 'text-text-muted',
+      )}
+    >
+      <span
+        className={cn(
+          'h-1.5 w-1.5 rounded-full motion-safe:animate-pulse',
+          limited ? 'bg-warn' : 'bg-danger',
+        )}
+      />
+      {parts.join(' · ')}
+    </div>
   );
 }
 
@@ -761,6 +793,8 @@ export const VideoTile = memo(function VideoTile({
         <div className="absolute right-2.5 top-2.5 z-[2] rounded-[8px] bg-black/65 px-2.5 py-1 text-xs font-semibold text-text-dim backdrop-blur-[6px]">
           {t(tile.state)}
         </div>
+      ) : tile.isLocal && tile.screen && tile.send ? (
+        <SendBadge send={tile.send} />
       ) : quality !== 'tile.quality.audio' ? (
         <div className="absolute right-2.5 top-2.5 z-[2] rounded-[8px] bg-black/55 px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-text-muted backdrop-blur-[6px]">
           {videoRes ?? t(quality)}
