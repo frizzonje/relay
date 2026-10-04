@@ -1,5 +1,6 @@
 'use client';
 
+import { useSyncExternalStore } from 'react';
 import { motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
 import { springTab } from '@/lib/motion';
@@ -7,6 +8,7 @@ import { useT, type MessageKey } from '@/lib/i18n';
 import { useVoiceStore } from '@/stores/voice';
 import { useSetting } from '@/stores/config';
 import { setScreenMode, setScreenSetup } from '@/lib/voice';
+import { WEBKIT_SCREEN_MAX_FPS, isWebKit } from '@/lib/voice/engine';
 import {
   SCREEN_FPS,
   SCREEN_HEIGHTS,
@@ -33,6 +35,30 @@ const MODES: { id: ScreenMode; title: MessageKey; hint: MessageKey }[] = [
   },
   { id: 'fps', title: 'settings.stream.mode.fps', hint: 'settings.stream.mode.fps.hint' },
 ];
+
+interface EngineCap {
+  width: number;
+  height: number;
+  fps: number;
+}
+
+const noSubscribe = () => () => {};
+
+/**
+ * Больше чего этот движок экран не снимет, — только у WebKit: размер экрана
+ * в точках и 30 к/с (lib/voice/engine.ts). Строкой, чтобы снимок был
+ * стабильным; на сервере — пусто.
+ */
+function useEngineCap(): EngineCap | null {
+  const raw = useSyncExternalStore(
+    noSubscribe,
+    () => (isWebKit() ? `${screen.width}x${screen.height}` : ''),
+    () => '',
+  );
+  if (!raw) return null;
+  const [width, height] = raw.split('x').map(Number);
+  return { width, height, fps: WEBKIT_SCREEN_MAX_FPS };
+}
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
@@ -132,12 +158,14 @@ function ModeCard({
   active,
   maxHeight,
   maxBitrate,
+  engine,
 }: {
   mode: ScreenMode;
   title: MessageKey;
   active: boolean;
   maxHeight: number;
   maxBitrate: number;
+  engine: EngineCap | null;
 }) {
   const t = useT();
   const setups = useVoiceStore((s) => s.screenSetups);
@@ -198,6 +226,14 @@ function ModeCard({
               {t('settings.stream.cappedTo', { height: live.height })}
             </span>
           )}
+          {engine && (live.height > engine.height || live.fps > engine.fps) && (
+            <span className="rounded-[6px] bg-warn/10 px-1.5 py-px font-mono text-[10px] uppercase tracking-[0.08em] text-warn">
+              {t('settings.stream.engineCap', {
+                height: Math.min(live.height, engine.height),
+                fps: Math.min(live.fps, engine.fps),
+              })}
+            </span>
+          )}
         </div>
         <p className="text-[12px] leading-relaxed text-text-muted">{t(noteFor(setup, mode))}</p>
       </div>
@@ -210,10 +246,16 @@ export function StreamSettings() {
   const mode = useVoiceStore((s) => s.screenMode);
   const maxHeight = Number(useSetting<string>('voice.screenMaxHeight'));
   const maxBitrate = useSetting<number>('voice.screenBitrateKbps') * 1000;
+  const engine = useEngineCap();
 
   return (
     <div className="flex flex-col gap-5">
       <p className="text-[12.5px] leading-relaxed text-text-muted">{t('settings.stream.intro')}</p>
+      {engine && (
+        <p className="rounded-[10px] border border-warn/30 bg-warn/10 px-3 py-2 text-[12.5px] leading-relaxed text-warn">
+          {t('settings.stream.engine', { width: engine.width, height: engine.height })}
+        </p>
+      )}
       <div>
         <SectionLabel>{t('settings.stream.modes')}</SectionLabel>
         <p className="mb-2 text-[12px] leading-relaxed text-text-faint">
@@ -232,6 +274,7 @@ export function StreamSettings() {
               active={mode === m.id}
               maxHeight={maxHeight}
               maxBitrate={maxBitrate}
+              engine={engine}
             />
           ))}
         </div>

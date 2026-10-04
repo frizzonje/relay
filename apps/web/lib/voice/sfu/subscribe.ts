@@ -5,7 +5,6 @@ import { tx } from '@/lib/i18n';
 import type { TransportHost } from '../types';
 import {
   AUDIO_SLOT,
-  SCREEN_LOW_LAYER_PX,
   SCREEN_TOP_LAYER,
   TOP_SPATIAL_LAYER,
   type Ask,
@@ -196,30 +195,31 @@ export function createSubscriber({
   }
 
   /**
-   * Трансляция — слой по размеру плитки, а не по крупному плану: в плитке
-   * хватает нижнего слоя (до 720p), верхний (1440p) нужен тому, у кого
-   * трансляция действительно крупная — развёрнута, на весь экран, одна на
-   * сцене, на ретина-экране. Невидимую плитку (развёрнута другая) сервер не
-   * шлёт вовсе. Пока размер плитки неизвестен — нижний слой: дешёвое
-   * умолчание лучше дорогого.
+   * Трансляция — всегда верхний слой, то есть ровно то, что выбрал стример:
+   * поставил 2K — зритель получает 2K, в плитке любого размера (решение
+   * владельца 2026-10-04; раньше плитке ниже 792 пикселей доставался нижний
+   * слой 720p, и выбор стримера у зрителя на Windows не менялся вовсе).
+   * Нижний слой остался запасным: медиасервер сам переводит на него зрителя,
+   * чей канал верхний не тянет, и сам же возвращает обратно.
+   *
+   * Невидимую плитку (развёрнута другая) сервер не шлёт вовсе — это не
+   * экономия качества, а поток, которого никто не видит.
    *
    * Отвечает, нужно ли отпускать подписку с паузы (её задаёт протокол входа).
    */
   function applyScreenView(peerId: string, consumer: Consumer): boolean {
-    const px = viewPx.get(peerId);
     const asked = screenAsked.get(consumer.id) ?? { layer: null, paused: true };
     screenAsked.set(consumer.id, asked);
-    if (px === 0) {
+    if (viewPx.get(peerId) === 0) {
       if (!asked.paused) {
         asked.paused = true;
         void ask('pause', { consumerId: consumer.id });
       }
       return false;
     }
-    const layer = px !== undefined && px > SCREEN_LOW_LAYER_PX ? SCREEN_TOP_LAYER : 0;
-    if (asked.layer !== layer) {
-      asked.layer = layer;
-      void ask('preferred-layers', { consumerId: consumer.id, spatialLayer: layer });
+    if (asked.layer !== SCREEN_TOP_LAYER) {
+      asked.layer = SCREEN_TOP_LAYER;
+      void ask('preferred-layers', { consumerId: consumer.id, spatialLayer: SCREEN_TOP_LAYER });
     }
     if (!asked.paused) return false;
     asked.paused = false;

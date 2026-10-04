@@ -105,6 +105,12 @@ describe('захват', () => {
       frameRate: { ideal: 30, max: 30 },
     });
   });
+
+  it('WebKit — без высоты: больше точек экрана он не снимет, а `max` до кадра путает', () => {
+    expect(captureConstraints({ height: 1440, fps: 60, bitrate: 1 }, true)).toEqual({
+      frameRate: { ideal: 60, max: 60 },
+    });
+  });
 });
 
 describe('кодировки', () => {
@@ -129,6 +135,36 @@ describe('кодировки', () => {
     const [low] = sfuScreenEncodings({ height: 720, fps: 60, bitrate: 4_500_000 }, 720);
     expect(low.scaleResolutionDownBy).toBe(2);
     expect(low.maxBitrate).toBe(375_000);
+  });
+
+  /**
+   * Safari на ретине 2560×1600: выбраны 1440p60, снимается 800p30. Битрейт
+   * 1440p60 и запасной 720p под полным 800p — это ~14 Мбит/с за два почти
+   * одинаковых потока: канал не тянет, верхний слой гаснет, зритель в мыле.
+   */
+  it('снимается меньше профиля — битрейт и запасной слой под реальный кадр', () => {
+    const p = { height: 1440, fps: 60, bitrate: setupBitrate(1440, 60) };
+    const [low, full] = sfuScreenEncodings(p, 800, 30);
+    expect(full).toMatchObject({ scaleResolutionDownBy: 1, maxBitrate: setupBitrate(800, 30) });
+    expect(full.maxBitrate).toBe(3_500_000);
+    expect(low.scaleResolutionDownBy).toBe(2);
+    expect(low.maxBitrate).toBeLessThan(full.maxBitrate / 4);
+    // Кадров меньше выбранного — битрейт под них, даже при полной высоте.
+    expect(
+      sfuScreenEncodings({ height: 1080, fps: 60, bitrate: 8_500_000 }, 1080, 30)[1].maxBitrate,
+    ).toBe(setupBitrate(1080, 30));
+    // Потолок профиля (владельца) по-прежнему главнее.
+    expect(
+      sfuScreenEncodings({ height: 1440, fps: 30, bitrate: 2_000_000 }, 1080, 30)[1].maxBitrate,
+    ).toBe(2_000_000);
+    expect(
+      meshScreenEncoding({ height: 720, fps: 60, bitrate: 4_000_000 }, 682, 30).maxBitrate,
+    ).toBe(setupBitrate(682, 30));
+  });
+
+  it('запасной слой 720p — только под кадром хотя бы в полтора раза выше', () => {
+    expect(sfuScreenEncodings(p1440, 1080)[0].scaleResolutionDownBy).toBe(1.5);
+    expect(sfuScreenEncodings(p1440, 1050)[0].scaleResolutionDownBy).toBe(2);
   });
 
   it('высота кадра ещё неизвестна — считаем от профиля', () => {

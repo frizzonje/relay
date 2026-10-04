@@ -19,6 +19,7 @@ import type { ReactNode } from 'react';
 import { APP_NAME } from '@relay/shared';
 import { Background } from '@/components/layout/Background';
 import { getLocale, getT } from '@/lib/i18n/server';
+import { buildId } from '@/lib/build-id';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
 import { Providers } from './providers';
 
@@ -48,6 +49,9 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
       <head>
         {/* Применяем сохранённую тему до отрисовки — иначе светлая мигнёт тёмным. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        {/* С какой сборки загружена страница — по нему она узнаёт, что
+            сервер обновился, а она нет (lib/freshness.ts). */}
+        <meta name="relay-build" content={buildId()} />
       </head>
       <body>
         <Background />

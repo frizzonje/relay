@@ -1,6 +1,7 @@
 'use client';
 
 import type { Device, RtpCodecCapability } from 'mediasoup-client/types';
+import { isWebKit } from '../engine';
 import type { ScreenProfile } from '../screen-profile';
 
 /**
@@ -24,11 +25,6 @@ import type { ScreenProfile } from '../screen-profile';
  */
 
 const CANDIDATE = 'video/h264';
-
-function isWebKit(): boolean {
-  const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
-  return /AppleWebKit\//.test(ua) && !/Chrome\/|Chromium\/|Edg\//.test(ua);
-}
 
 /**
  * Кодек для трансляции или `undefined` — тогда mediasoup-client берёт свой

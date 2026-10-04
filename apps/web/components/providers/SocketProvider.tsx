@@ -13,6 +13,7 @@ import { initVoice, relabelSelf } from '@/lib/voice';
 import { initCall } from '@/lib/call';
 import { initHotkeys } from '@/lib/hotkeys';
 import { initDesktopBridge } from '@/lib/desktop';
+import { initFreshness } from '@/lib/freshness';
 import { isNarrowNow } from '@/lib/use-mobile';
 import { useUiStore, myName } from '@/stores/ui';
 import { useChatStore } from '@/stores/chat';
@@ -598,6 +599,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       dm().reload();
     };
     socket.on('connect', onConnect);
+    // Сервер обновился, а страница осталась на старом бандле — подтянуть новый.
+    const stopFreshness = initFreshness(socket);
 
     // Смена открытого текстового канала: подписка/отписка на сервере. Плюс
     // пересчёт «смотрю ли я в канал» — он зависит ещё и от `view` (сетка голоса
@@ -744,6 +747,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       // Именной `off` — снимаем СВОЙ обработчик, а не все чужие заодно (см.
       // комментарий у `onCallState`/`onConnect` выше).
       socket.off('disconnect', onDisconnect);
+      stopFreshness();
       socket.off('chat-reaction');
       socket.off('chat-edited');
       socket.off('chat-deleted');

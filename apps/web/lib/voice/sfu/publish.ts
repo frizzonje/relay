@@ -3,9 +3,12 @@
 import type { Device, Producer, RtpCodecCapability, Transport } from 'mediasoup-client/types';
 import type { UplinkStatus } from '@/stores/voice';
 import { setting } from '@/stores/config';
+import { SDP_START_BITRATE_KBPS } from '@/lib/sdp';
 import type { TransportHost } from '../types';
 import { readSendVideo, readStats, worseUplink, type SendVideo } from '../stats';
-import { sfuScreenEncodings } from '../screen-profile';
+import { sfuScreenEncodings, type ScreenProfile } from '../screen-profile';
+import { createScreenTelemetry } from '../screen-telemetry';
+import { describeSender, setSenderParameters } from '../sender-params';
 import { isH264, pickScreenCodec } from './screen-codec';
 import {
   AUDIO_ENCODINGS,
@@ -39,6 +42,19 @@ function micCodecOptions(): typeof MIC_CODEC_OPTIONS {
   return {
     ...MIC_CODEC_OPTIONS,
     opusMaxAverageBitrate: setting<number>('voice.audioBitrateKbps') * 1000,
+  };
+}
+
+/**
+ * Стартовая оценка канала под трансляцию. Без неё движок начинает с 300 кбит/с
+ * и разгоняется осторожно: верхний слой включался секунд через десять, а
+ * зритель всё это время смотрел мыло (стенд 2026-10-04: со стартом верхний
+ * слой идёт с третьей секунды). Тот же старт, что в mesh, но не выше профиля:
+ * 720p незачем начинать с четырёх мегабит.
+ */
+function screenCodecOptions(profile: ScreenProfile) {
+  return {
+    videoGoogleStartBitrate: Math.min(SDP_START_BITRATE_KBPS, Math.round(profile.bitrate / 1000)),
   };
 }
 
@@ -82,9 +98,13 @@ export interface Publisher {
   screenSend(): Promise<SendVideo | null>;
 }
 
-/** Высота кадра, который снимается сейчас: от неё считается нижний слой экрана. */
+/** Высота и кадры того, что снимается сейчас: от них считаются слои и битрейт экрана. */
 function trackHeight(track: MediaStreamTrack): number {
   return track.getSettings?.().height ?? 0;
+}
+
+function trackFps(track: MediaStreamTrack): number {
+  return track.getSettings?.().frameRate ?? 0;
 }
 
 export function createPublisher({ host, sendTransport, device, ask }: PublishDeps): Publisher {
@@ -95,6 +115,8 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
   // проверку «уже течёт»: сервер оставлял вторую, а первая так и кодировалась
   // у нас сиротой — для экрана это двойная нагрузка на процессор и аплинк.
   const inflight = new Map<Source, Promise<boolean>>();
+  // Что реально уходит с трансляции — по слоям, в серверный лог.
+  const telemetry = createScreenTelemetry((event, detail) => host.diag(event, detail));
 
   async function produce(source: Source, track: MediaStreamTrack): Promise<boolean> {
     const pending = inflight.get(source);
@@ -193,7 +215,9 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
               codecOptions:
                 source === 'screen-audio' ? SCREEN_AUDIO_CODEC_OPTIONS : micCodecOptions(),
             }
-          : {}),
+          : isScreen
+            ? { codecOptions: screenCodecOptions(host.screenProfile()) }
+            : {}),
       });
       producers.set(source, producer);
       // Какой кодек реально согласовали — виден в консоли обеих сторон и на
@@ -217,7 +241,7 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
    * отвергнуть вместе со всей публикацией.
    */
   function screenEncodings(track: MediaStreamTrack, codec?: RtpCodecCapability) {
-    const layers = sfuScreenEncodings(host.screenProfile(), trackHeight(track));
+    const layers = sfuScreenEncodings(host.screenProfile(), trackHeight(track), trackFps(track));
     if (!isH264(codec)) return layers;
     return layers.map(({ scalabilityMode: _, ...layer }) => layer);
   }
@@ -265,20 +289,26 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
     const producer = producers.get('screen');
     const sender = producer?.rtpSender;
     if (!producer || !sender || !producer.track) return;
-    const wanted = sfuScreenEncodings(host.screenProfile(), trackHeight(producer.track));
-    try {
-      const params = sender.getParameters();
-      params.encodings.forEach((encoding, i) => {
-        const layer = wanted[Math.min(i, wanted.length - 1)];
-        encoding.maxBitrate = layer.maxBitrate;
-        encoding.maxFramerate = layer.maxFramerate;
-        encoding.scaleResolutionDownBy = layer.scaleResolutionDownBy;
-      });
-      params.degradationPreference = host.screenDegradation();
-      await sender.setParameters(params);
-    } catch (err) {
-      console.warn('[sfu] setParameters failed:', err);
-    }
+    const wanted = sfuScreenEncodings(
+      host.screenProfile(),
+      trackHeight(producer.track),
+      trackFps(producer.track),
+    );
+    const failed = await setSenderParameters(
+      sender,
+      (params) => {
+        params.encodings.forEach((encoding, i) => {
+          const layer = wanted[Math.min(i, wanted.length - 1)];
+          encoding.maxBitrate = layer.maxBitrate;
+          encoding.maxFramerate = layer.maxFramerate;
+          encoding.scaleResolutionDownBy = layer.scaleResolutionDownBy;
+        });
+      },
+      host.screenDegradation(),
+    );
+    // Что движок принял на самом деле — рядом с тем, что просили: отказ здесь
+    // и есть «поменял настройку — ничего не изменилось».
+    host.diag('screen enc', describeSender(sender, failed));
   }
 
   return {
@@ -333,9 +363,14 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
 
     async screenSend() {
       const producer = producers.get('screen');
-      if (!producer || producer.closed) return null;
+      if (!producer || producer.closed) {
+        telemetry.tx(null);
+        return null;
+      }
       try {
-        return readSendVideo(await producer.getStats());
+        const report = await producer.getStats();
+        telemetry.tx(report);
+        return readSendVideo(report);
       } catch {
         return null; // закрылся между тиками
       }

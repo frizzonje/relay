@@ -15,9 +15,10 @@ import {
  * Трансляция экрана через медиасервер — docs/plans/screen-share.md.
  *
  * Что здесь проверяется по-настоящему, а не на словах: стример отдаёт два слоя
- * simulcast (720p для плиток и полный кадр); к зрителю поток не идёт, пока он
- * не нажал «Смотреть»; в плитке приходит нижний слой, в развёрнутой — верхний;
- * «Перестать смотреть» снимает поток. Экрана в контейнере нет, поэтому
+ * simulcast (запасной 720p и полный кадр); к зрителю поток не идёт, пока он
+ * не нажал «Смотреть»; нажал — получает полный кадр, что в плитке, что
+ * развёрнутым (выбрал стример 2K — зритель видит 2K); «Перестать смотреть»
+ * снимает поток. Экрана в контейнере нет, поэтому
  * `getDisplayMedia` подменён анимированным canvas 2560×1440@60 — путь от
  * дорожки до кодировщика и сервера при этом тот же.
  *
@@ -131,7 +132,7 @@ async function flow(page: Page, ms: number) {
   return (await bytesIn(page)) - before;
 }
 
-test('трансляция: два слоя, поток только по «Смотреть», слой по размеру плитки', async ({
+test('трансляция: два слоя, поток только по «Смотреть», зрителю — полный кадр', async ({
   browser,
 }) => {
   test.setTimeout(240_000);
@@ -144,11 +145,11 @@ test('трансляция: два слоя, поток только по «См
     permissions: ['microphone'],
     initScript: fakeScreenAndSpy,
   });
-  // «Ретина»: плитка, развёрнутая на сцену, выше 792 пикселей устройства.
+  // Обычный монитор, без ретины: плитка в сетке заметно ниже кадра стримера —
+  // и всё равно зритель получает полный кадр.
   const boris = await person(browser, him, {
     permissions: ['microphone'],
     initScript: fakeScreenAndSpy,
-    deviceScaleFactor: 2,
   });
 
   await createServer(anya, home, unique('текстовый'));
@@ -181,20 +182,24 @@ test('трансляция: два слоя, поток только по «См
   await boris.waitForTimeout(3_000);
   expect((await received(boris)).frames).toBe(0);
 
-  // «Смотреть» — в плитке нижний слой.
+  // «Смотреть» — сразу полный кадр, прямо в плитке. Медиасервер начинает с
+  // осторожной оценки канала и может первые секунды отдать запасной слой.
   await watch.click();
-  await expect.poll(async () => (await received(boris)).height, { timeout: 30_000 }).toBe(low);
+  await expect.poll(async () => (await received(boris)).height, { timeout: 30_000 }).toBe(high);
 
-  // Развернул на сцену — верхний слой.
+  // Развернул на сцену и свернул обратно — кадр тот же. Ждём, а не смотрим
+  // мгновенно: программный VP8 в контейнере временами душит верхний слой до
+  // пары кадров, и медиасервер на это время честно переводит зрителя на
+  // запасной — но обязан вернуть, как только верхний ожил.
   await tile(boris, her).click();
   await expect
     .poll(async () => (await received(boris)).height, { timeout: 30_000 })
-    .toBeGreaterThan(low);
-  console.log('развёрнуто у зрителя:', await received(boris));
-
-  // Свернул обратно — снова нижний.
+    .toBe(high);
   await boris.getByRole('button', { name: `${her}: collapse` }).click();
-  await expect.poll(async () => (await received(boris)).height, { timeout: 30_000 }).toBe(low);
+  await expect
+    .poll(async () => (await received(boris)).height, { timeout: 30_000 })
+    .toBe(high);
+  console.log('у зрителя:', await received(boris));
 
   // «Перестать смотреть» — кадры больше не идут, кнопка «Смотреть» вернулась.
   // И не только кадры: поток не должен идти и по сети — подписку закрыл
