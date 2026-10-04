@@ -311,6 +311,13 @@ const SFU_RETRY_MS = 5000;
  */
 const SFU_RETRY_MAX_MS = 30_000;
 let sfuRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Выдержка перед тревогой об обрыве сокета api: моргание сети короче неё
+// человек не должен замечать вовсе (см. обработчик `disconnect`).
+const SERVER_LOST_ALARM_MS = 3000;
+let serverLostTimer: ReturnType<typeof setTimeout> | null = null;
+// Сказали ли о потере — тогда и о возвращении скажем.
+let serverLostAnnounced = false;
 // Сколько попыток подряд медиасервер не дался (пропуска нет или транспорт не
 // встал). Растит паузу: 5 → 10 → 20 → 30 с. Сбрасывается, только когда
 // транспорт действительно встал (`onTransportUp`), и на свежем заходе. Раньше
@@ -1049,6 +1056,11 @@ export function initVoice() {
   s.on('connect', () => {
     // Свой id нужен, чтобы пометить себя в составе голосовых каналов
     useVoiceStore.getState().setMyId(s.id ?? null);
+    // Обрыв кончился: тревогу, если ещё не прозвучала, уже не поднимаем.
+    const announced = serverLostAnnounced;
+    if (serverLostTimer) clearTimeout(serverLostTimer);
+    serverLostTimer = null;
+    serverLostAnnounced = false;
     if (!room) return;
     // Сессия восстановлена после кратковременного обрыва (socket.io connection
     // state recovery): id и комнаты те же, сервер не выкидывал нас из канала,
@@ -1059,6 +1071,8 @@ export function initVoice() {
     if (s.recovered) {
       setStatus('voice.status.connected', { room });
       tx().resync?.();
+      // О потере сказали — скажем и о возвращении; не говорили — и незачем.
+      if (announced) toast(msg('voice.toast.serverBack'));
       return;
     }
     // Полноценный реконнект: у сокета новый id — все старые соединения мертвы,
@@ -1083,8 +1097,18 @@ export function initVoice() {
   s.on('disconnect', () => {
     if (!room) return;
     setStatus('voice.status.serverLost');
-    toast(msg('voice.toast.serverLost'));
-    sfx().play('connLost'); // обрыв связи
+    // Тревога — с выдержкой. Моргание сети socket.io возвращает за секунду-
+    // другую с тем же id, и звонок за это время не прерывается вовсе; тост и
+    // звук обрыва на каждое такое моргание делали исправный звонок похожим на
+    // сломанный. Не вернулись за выдержку — говорим, как раньше.
+    if (serverLostTimer) clearTimeout(serverLostTimer);
+    serverLostTimer = setTimeout(() => {
+      serverLostTimer = null;
+      if (!room || s.connected) return;
+      serverLostAnnounced = true;
+      toast(msg('voice.toast.serverLost'));
+      sfx().play('connLost'); // обрыв связи
+    }, SERVER_LOST_ALARM_MS);
   });
 
   // Метрики связи — целиком дело транспорта: он один знает, что и у кого мерить.

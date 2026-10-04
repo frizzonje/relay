@@ -133,6 +133,11 @@ export class RoomsService {
     return true;
   }
 
+  /** Числится ли этот объект участника в своей комнате (а не его новый вход). */
+  has(peer: Peer): boolean {
+    return this.rooms.get(peer.room)?.peers.get(peer.id) === peer;
+  }
+
   peers(roomId: string): Peer[] {
     return [...(this.rooms.get(roomId)?.peers.values() ?? [])];
   }

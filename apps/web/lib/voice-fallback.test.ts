@@ -28,6 +28,7 @@ const ticketRequests = vi.fn();
 const sockets = {
   id: 'self',
   connected: true,
+  recovered: false,
   emit: vi.fn(),
   on: vi.fn(),
   off: vi.fn(),
@@ -486,5 +487,42 @@ describe('смена режима канала', () => {
     expect(sfuCalls).toEqual([]);
     expect(joins()).toHaveLength(2);
     expect(joins()[1][1]).toMatchObject({ transport: 'p2p' });
+  });
+});
+
+/**
+ * Моргание сокета api. Сессию socket.io возвращает за секунду-другую с тем же
+ * id, звонок при этом не прерывается вовсе, — а человек получал тост «потеряли
+ * сервер» и звук обрыва на каждое такое моргание. Звонок, который сообщает о
+ * поломке каждые десять минут и тут же работает дальше, ощущается сломанным.
+ */
+describe('моргание сокета api', () => {
+  it('вернулся за пару секунд — молчим', async () => {
+    await voice.joinVoice('room-sfu', 'SFU-канал');
+    vi.mocked(toast).mockClear();
+    sockets.connected = false;
+    handlers['disconnect']();
+    await vi.advanceTimersByTimeAsync(1500);
+    sockets.connected = true;
+    sockets.recovered = true;
+    handlers['connect']();
+    await vi.advanceTimersByTimeAsync(10_000);
+    sockets.recovered = false;
+    expect(vi.mocked(toast)).not.toHaveBeenCalled();
+  });
+
+  it('не вернулся — говорим, как и раньше', async () => {
+    await voice.joinVoice('room-sfu', 'SFU-канал');
+    vi.mocked(toast).mockClear();
+    sockets.connected = false;
+    handlers['disconnect']();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(vi.mocked(toast)).toHaveBeenCalledTimes(1);
+    // Вернулся после объявленного обрыва — об этом тоже скажут.
+    sockets.connected = true;
+    sockets.recovered = true;
+    handlers['connect']();
+    sockets.recovered = false;
+    expect(vi.mocked(toast)).toHaveBeenCalledTimes(2);
   });
 });

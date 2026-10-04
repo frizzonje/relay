@@ -53,6 +53,8 @@ export class FakeConsumer extends Emitter {
   readonly id = nextId('consumer');
   paused: boolean;
   preferred: unknown;
+  /** Consumer закрылся под руками (producer ушёл между consume и resume). */
+  failResume = false;
   readonly rtpParameters = { codecs: [{ mimeType: 'video/VP8' }] };
 
   constructor(
@@ -65,6 +67,7 @@ export class FakeConsumer extends Emitter {
   }
 
   async resume(): Promise<void> {
+    if (this.failResume) throw new Error('consumer closed');
     this.paused = false;
   }
 
@@ -195,6 +198,7 @@ export class FakeSocket {
   readonly emitted: Emitted[] = [];
   readonly rooms = new Set<string>();
   disconnected = false;
+  private readonly listeners = new Map<string, ((...args: unknown[]) => void)[]>();
 
   constructor(
     readonly id: string,
@@ -203,7 +207,20 @@ export class FakeSocket {
       auth: Record<string, unknown>;
       headers: Record<string, string | undefined>;
     },
+    /** Сессия восстановлена socket.io после обрыва: тот же id, те же комнаты. */
+    readonly recovered = false,
   ) {}
+
+  on(event: string, fn: (...args: unknown[]) => void): this {
+    (this.listeners.get(event) ?? this.listeners.set(event, []).get(event)!).push(fn);
+    return this;
+  }
+
+  /** Соединение закрылось — с той причиной, которую назвал бы socket.io. */
+  drop(reason: string): void {
+    this.disconnected = true;
+    for (const fn of this.listeners.get('disconnect') ?? []) fn(reason);
+  }
 
   async join(room: string): Promise<void> {
     this.rooms.add(room);
@@ -249,13 +266,27 @@ export class FakeIo {
   private readonly roomMembers = new Map<string, Set<string>>();
   private n = 0;
 
-  connect(opts: { token?: unknown; ua?: string; id?: string } = {}): FakeSocket {
-    const sock = new FakeSocket(opts.id ?? `sock-${++this.n}`, this, {
-      auth: opts.token === undefined ? {} : { token: opts.token },
-      headers: { 'user-agent': opts.ua },
-    });
+  connect(
+    opts: { token?: unknown; ua?: string; id?: string; recovered?: boolean } = {},
+  ): FakeSocket {
+    const sock = new FakeSocket(
+      opts.id ?? `sock-${++this.n}`,
+      this,
+      {
+        auth: opts.token === undefined ? {} : { token: opts.token },
+        headers: { 'user-agent': opts.ua },
+      },
+      opts.recovered ?? false,
+    );
+    // Восстановленный сокет приходит новым объектом под прежним id — рассылка
+    // по id дальше доходит до него, а не до мёртвого.
     this.sockets.set(sock.id, sock);
     return sock;
+  }
+
+  /** Рассылка от имени сервера (`server.to(room)`); room может быть и id сокета. */
+  to(room: string) {
+    return { emit: (event: string, data?: unknown) => this.deliver(room, event, data) };
   }
 
   addToRoom(room: string, id: string): void {
@@ -263,7 +294,9 @@ export class FakeIo {
   }
 
   deliver(room: string, event: string, data: unknown, except?: string): void {
-    for (const id of this.roomMembers.get(room) ?? []) {
+    // Как в socket.io: каждый сокет сидит в комнате имени своего id.
+    const members = this.roomMembers.get(room) ?? (this.sockets.has(room) ? [room] : []);
+    for (const id of members) {
       if (id === except) continue;
       this.sockets.get(id)?.emit(event, data);
     }

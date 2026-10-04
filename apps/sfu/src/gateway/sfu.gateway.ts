@@ -2,7 +2,6 @@ import {
   ConnectedSocket,
   MessageBody,
   OnGatewayConnection,
-  OnGatewayDisconnect,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
@@ -24,6 +23,13 @@ type Ack<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
 function fail(error: string): { ok: false; error: string } {
   return { ok: false, error };
 }
+
+/**
+ * Обрывы, после которых socket.io восстанавливает сессию (тот же список, что у
+ * него внутри). Остальные причины — уход по чьей-то воле: клиент закрыл сокет
+ * сам или его выгнал сервер, — и ждать такого назад незачем.
+ */
+const RECOVERABLE = new Set(['transport error', 'transport close', 'forced close', 'ping timeout']);
 
 interface CreateTransportPayload {
   direction?: unknown;
@@ -69,7 +75,8 @@ interface LayersPayload {
  * Хендшейк стандартный для mediasoup, все запросы с ack-ответом:
  *   connect → `welcome` (capabilities роутера + кто уже в комнате)
  *   `create-transport` → `connect-transport` → `produce` / `consume` / `resume`
- * плюс серверные `peer-joined` / `new-producer` / `producer-closed` / `peer-left`.
+ * плюс серверные `peer-joined` / `new-producer` / `producer-closed` / `peer-left`
+ * и `snapshot` — тот же снимок комнаты, что в `welcome`, по запросу.
  *
  * Про авторизацию: sfu не знает ни пароля сайта, ни закрытых серверов, ни
  * гостевых ссылок — он проверяет подпись токена от api и пускает ровно в ту
@@ -80,22 +87,42 @@ interface LayersPayload {
   cors: {
     origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim()) : '*',
   },
+  // Сокет сигналинга рвётся от любой смены сетевого пути, а медиа по UDP
+  // переживает такое само. Раньше сессия умирала вместе с сокетом — и моргание
+  // сети стоило человеку 13–50 секунд тишины и полного перезахода. Теперь
+  // socket.io возвращает тот же id с теми же комнатами и доигрывает пропущенные
+  // рассылки, а сессию на это время держим мы (`RESUME_GRACE_MS`).
+  connectionStateRecovery: { maxDisconnectionDuration: 20_000 },
+  // Тихую смерть сети (без разрыва соединения) сокет узнаёт только по
+  // сердцебиению, а после него сессию ещё держим. С умолчаниями socket.io
+  // (25 + 20 с) замёрзшая плитка ушедшего висела бы у остальных больше
+  // минуты; так обрыв замечается за 20 с, а с удержанием выходит не дольше,
+  // чем было до удержания.
+  pingInterval: 10_000,
+  pingTimeout: 10_000,
 })
-export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class SfuGateway implements OnGatewayConnection {
   private readonly logger = new Logger(SfuGateway.name);
   private readonly peers = new Map<string, Peer>();
 
   /**
-   * Потолки на участника. Транспортов ему нужно ровно два (send и recv), плюс
+   * Сессии, чей сокет оборвался и ещё может вернуться, — по id сокета. Окно
+   * длиннее окна восстановления socket.io: сокет, восстановленный на последней
+   * его секунде, должен застать свою сессию.
+   */
+  static readonly RESUME_GRACE_MS = 25_000;
+  private readonly parked = new Map<string, { peer: Peer; timer: ReturnType<typeof setTimeout> }>();
+
+  /**
+   * Потолок транспортов на участника. Нужно ему ровно два (send и recv), плюс
    * запас на пересборку: клиент строит новые до того, как сервер закроет старые.
    * Портов транспорты больше не едят (все живут на WebRtcServer воркера), но
    * каждый — это ICE/DTLS-состояние в однопоточном воркере, и цикл
    * переподключений у одного клиента иначе раздувал бы его для всей комнаты.
-   * Дорожек четыре по числу ролей (mic/cam/screen/screen-audio), запас — на
-   * пересоздание видео при смене камера↔экран.
+   * Дорожкам отдельный потолок не нужен: на роль их одна (см. `produce`), а
+   * ролей четыре.
    */
   private static readonly MAX_TRANSPORTS_PER_PEER = 6;
-  private static readonly MAX_PRODUCERS_PER_PEER = 6;
 
   @WebSocketServer()
   server!: Server;
@@ -103,6 +130,16 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
   constructor(private readonly rooms: RoomsService) {}
 
   async handleConnection(client: Socket): Promise<void> {
+    // Свой слушатель, а не `handleDisconnect` Nest: тот не называет причину, а
+    // от неё зависит всё — моргание сети держим, уход по своей воле нет. И
+    // вешаем ДО первого ожидания: обрыв посреди входа тоже надо увидеть.
+    client.on('disconnect', (reason: string) => this.onDisconnect(client, reason));
+
+    if (client.recovered) {
+      this.resume(client);
+      return;
+    }
+
     const claims = verifySfuToken(client.handshake.auth?.token);
     if (!claims) {
       // Отказ обязан попасть в лог: клиент после него молча уедет в p2p, и
@@ -119,8 +156,16 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
       room: claims.room,
       listen: claims.listen,
     });
+    // Сокет мог оборваться, пока заводилась комната, — тогда его `disconnect`
+    // уже прошёл мимо (участника ещё не было), и, не убери мы его здесь, он
+    // остался бы в комнате призраком: с плиткой у всех и без единой дорожки.
+    if (client.disconnected) {
+      this.rooms.leave(peer);
+      return;
+    }
     this.peers.set(client.id, peer);
     await client.join(roomKey(claims.room));
+    if (client.disconnected) return; // его обрыв уже разобрал `onDisconnect`
     // Всё, что нужно клиенту, чтобы стартовать: capabilities для device.load()
     // и снимок комнаты, по которому он подпишется на уже идущие дорожки.
     client.emit('welcome', {
@@ -134,10 +179,48 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
     );
   }
 
-  handleDisconnect(client: Socket): void {
+  /**
+   * Восстановленный сокет — продолжение прежней сессии: тот же id, те же
+   * комнаты, пропущенное доиграно. Ни нового `welcome`, ни проверки пропуска:
+   * пропуск живёт минуту, а звонок — часы, и подлинность здесь доказывает сама
+   * восстановленная сессия (её id знает только тот, кому её выдали).
+   */
+  private resume(client: Socket): void {
+    const parked = this.parked.get(client.id);
+    if (!parked || !this.rooms.has(parked.peer)) {
+      // Окно вышло или место уже занял его же новый вход. Клиент сдастся и
+      // войдёт заново — с новым пропуском и с нуля.
+      client.emit('sfu-error', { error: 'session-lost' });
+      client.disconnect(true);
+      return;
+    }
+    clearTimeout(parked.timer);
+    this.parked.delete(client.id);
+    this.peers.set(client.id, parked.peer);
+    this.logger.log(`peer ${parked.peer.id} resumed in "${parked.peer.room}"`);
+  }
+
+  private onDisconnect(client: Socket, reason: string): void {
     const peer = this.peers.get(client.id);
     if (!peer) return;
     this.peers.delete(client.id);
+    if (!RECOVERABLE.has(reason)) {
+      this.release(peer);
+      return;
+    }
+    // Транспорты и дорожки не трогаем: медиа, скорее всего, идёт и сейчас.
+    // Остальным тоже ничего не говорим — для них никто никуда не уходил.
+    const timer = setTimeout(() => {
+      this.parked.delete(client.id);
+      this.release(peer);
+    }, SfuGateway.RESUME_GRACE_MS);
+    timer.unref?.();
+    this.parked.set(client.id, { peer, timer });
+    this.logger.log(`peer ${peer.id} lost signaling (${reason}) in "${peer.room}", holding`);
+  }
+
+  /** Участник ушёл насовсем: снять его и сказать комнате. */
+  private release(peer: Peer): void {
     // Ушёл ли он на самом деле. Быстрый перезаход (прыжки по каналам, круг
     // ожидания вернувшегося сервера) открывает НОВЫЙ сокет под тем же peerId —
     // id участника это id его сокета в api, а тот при смене канала не меняется.
@@ -152,7 +235,7 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.log(`peer ${peer.id} disconnected in "${peer.room}" (already out of the room)`);
       return;
     }
-    client.to(roomKey(peer.room)).emit('peer-left', { peerId: peer.id });
+    this.server.to(roomKey(peer.room)).emit('peer-left', { peerId: peer.id });
     this.logger.log(`peer ${peer.id} left "${peer.room}"`);
   }
 
@@ -261,16 +344,21 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
       ? (payload.source as ProducerSource)
       : null;
     if (!source) return fail('bad-source');
-    if (peer.producers.size >= SfuGateway.MAX_PRODUCERS_PER_PEER) {
-      this.logger.warn(`produce refused for ${peer.id}: ${peer.producers.size} already`);
-      return fail('too-many-producers');
-    }
     try {
       const producer = await transport.produce({
         kind,
         rtpParameters: payload?.rtpParameters as types.RtpParameters,
         appData: { source, peerId: peer.id },
       });
+      // На роль — одна дорожка: клиент держит по producer'у на роль, и второй
+      // той же роли значит, что ответ на прошлый до него не дошёл (сокет
+      // моргнул посреди `produce`). Прежний остался бы у нас сиротой без RTP —
+      // у остальных чёрной плиткой или немым микрофоном. Новый его заменяет.
+      // Сверяемся уже после ожидания: два встречных `produce` иначе оба
+      // проскочили бы проверку.
+      for (const old of [...peer.producers.values()]) {
+        if (producerInfo(old).source === source) this.dropProducer(client, peer, old);
+      }
       peer.producers.set(producer.id, producer);
       producer.on('transportclose', () => peer.producers.delete(producer.id));
       client
@@ -293,12 +381,32 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const id = typeof payload?.producerId === 'string' ? payload.producerId : '';
     const producer = peer.producers.get(id);
     if (!producer) return fail('no-producer');
+    this.dropProducer(client, peer, producer);
+    return { ok: true };
+  }
+
+  private dropProducer(client: Socket, peer: Peer, producer: types.Producer): void {
     producer.close();
-    peer.producers.delete(id);
+    peer.producers.delete(producer.id);
     // Своих consumer'ов остальные закроют сами по этому событию — mediasoup
     // закрывает их на той стороне, но клиенту нужно снять плитку/дорожку.
-    client.to(roomKey(peer.room)).emit('producer-closed', { peerId: peer.id, producerId: id });
-    return { ok: true };
+    client
+      .to(roomKey(peer.room))
+      .emit('producer-closed', { peerId: peer.id, producerId: producer.id });
+  }
+
+  /**
+   * Снимок комнаты, как в `welcome`. Нужен вернувшейся после обрыва сессии:
+   * события за обрыв socket.io доиграл, а ответы на запросы, бывшие в полёте,
+   * пропали — клиент сверяет по снимку, на что он так и не подписался.
+   */
+  @SubscribeMessage('snapshot')
+  handleSnapshot(
+    @ConnectedSocket() client: Socket,
+  ): Ack<{ peers: ReturnType<RoomsService['producersFor']> }> {
+    const peer = this.peers.get(client.id);
+    if (!peer) return fail('no-peer');
+    return { ok: true, peers: this.rooms.producersFor(peer) };
   }
 
   @SubscribeMessage('consume')
@@ -350,8 +458,11 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // Какой слой simulcast реально доехал. Клиент просит слой сам
       // (`preferred-layers`), но получает то, что решил сервер по битрейту —
       // в тултипе качества честнее показывать факт, а не заявку.
+      // Слать — сессии (комнате её id), а не объекту сокета: сокет мог
+      // смениться восстановленным, и событие ушло бы в мёртвый. Рассылку же
+      // socket.io ещё и доиграет, если она пришлась на сам обрыв.
       consumer.on('layerschange', (layers) => {
-        client.emit('consumer-layers', {
+        this.server.to(client.id).emit('consumer-layers', {
           consumerId: consumer.id,
           spatialLayer: layers?.spatialLayer ?? null,
           temporalLayer: layers?.temporalLayer ?? null,
@@ -359,7 +470,7 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
       });
       consumer.on('producerclose', () => {
         peer.consumers.delete(consumer.id);
-        client.emit('producer-closed', { peerId: owner.id, producerId });
+        this.server.to(client.id).emit('producer-closed', { peerId: owner.id, producerId });
       });
       const source = producerInfo(producer).source;
       // Вторая половина пары к строчке `produce`: она говорит, что дорожка
@@ -395,8 +506,16 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const id = typeof payload?.consumerId === 'string' ? payload.consumerId : '';
     const consumer = peer.consumers.get(id);
     if (!consumer) return fail('no-consumer');
-    await consumer.resume();
-    return { ok: true };
+    // Исключение Nest в ack не превращает: клиент ждал бы ответа свои 10 с, а
+    // вход подписывается на соседей по одному — вставала бы вся очередь.
+    // Срывается resume, когда дорожку закрыли между `consume` и ним.
+    try {
+      await consumer.resume();
+      return { ok: true };
+    } catch (err) {
+      this.logger.warn(`resume failed for ${peer.id}: ${String(err)}`);
+      return fail('resume-failed');
+    }
   }
 
   /**
@@ -416,11 +535,16 @@ export class SfuGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const spatialLayer = Number(payload?.spatialLayer);
     if (!Number.isInteger(spatialLayer) || spatialLayer < 0) return fail('bad-layer');
     const temporalLayer = Number(payload?.temporalLayer);
-    await consumer.setPreferredLayers({
-      spatialLayer,
-      ...(Number.isInteger(temporalLayer) && temporalLayer >= 0 ? { temporalLayer } : {}),
-    });
-    return { ok: true };
+    try {
+      await consumer.setPreferredLayers({
+        spatialLayer,
+        ...(Number.isInteger(temporalLayer) && temporalLayer >= 0 ? { temporalLayer } : {}),
+      });
+      return { ok: true };
+    } catch (err) {
+      this.logger.warn(`preferred-layers failed for ${peer.id}: ${String(err)}`);
+      return fail('layers-failed');
+    }
   }
 
   private transportOf(peer: Peer, id: unknown): types.WebRtcTransport | undefined {

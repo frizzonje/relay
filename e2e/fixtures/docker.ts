@@ -46,3 +46,10 @@ export const API_CONTAINER = process.env.E2E_API_CONTAINER || 'relay-api-1';
  */
 export const restartContainer = (name: string): Promise<number> =>
   ask(`/containers/${encodeURIComponent(name)}/restart?t=0`);
+
+/**
+ * Имя контейнера Caddy. Его перезапуск рвёт ВСЕ веб-сокеты стенда разом — и api,
+ * и медиасервера, — а медиа не трогает: RTP идёт в медиасервер мимо прокси.
+ * Ровно так выглядит моргание сети у человека посреди звонка.
+ */
+export const CADDY_CONTAINER = process.env.E2E_CADDY_CONTAINER || 'relay-caddy-1';

@@ -231,6 +231,8 @@ export function createMetrics({
     const now = Date.now();
     const wake: { entry: ConsumerEntry; secs: number }[] = [];
     let worstKick = 0;
+    // Дорожки, по которым звук идёт: хоть одна — и наш путь до сервера жив.
+    let flowing = 0;
 
     for (const entry of subscriber.entries()) {
       if (entry.consumer.kind !== 'audio' || entry.consumer.closed) continue;
@@ -240,11 +242,15 @@ export function createMetrics({
       const prev = audioFlow.get(entry.consumer.id);
       if (!prev || bytes > prev.bytes) {
         audioFlow.set(entry.consumer.id, { bytes, since: now, kicks: 0 });
+        flowing += 1;
         // Молчал, а теперь пошёл — снять с плитки надпись, которую поставили мы.
         if (prev?.kicks) subscriber.sayTileState(entry.peerId);
         continue;
       }
-      if (now - prev.since <= SILENCE_MS) continue;
+      if (now - prev.since <= SILENCE_MS) {
+        if (!prev.kicks) flowing += 1; // пауза короче порога — ещё не молчание
+        continue;
+      }
 
       // Байты не растут дольше порога. Отметку времени двигаем сразу: она же и
       // не даёт лестнице сорваться в цикл — следующая попытка не раньше чем
@@ -273,6 +279,14 @@ export function createMetrics({
     }
     // Ступени 2 и 3 — общие: чинится не дорожка, а путь до сервера. Поэтому и
     // одна попытка на тик, сколько бы дорожек ни молчало.
+    //
+    // И только когда не слышно НИКОГО. Путь до сервера у нас один на всех: если
+    // по нему доходит хоть чей-то звук, он жив, а молчит сам собеседник — у
+    // него отвалилась сеть, заснул телефон. Пересобирать в ответ свои
+    // транспорты значит заглушить себя для всей комнаты, и делал это раньше
+    // каждый слушатель разом (overhype, 29.09: один телефон — и у всех ICE
+    // restart с пересборкой). Его плитка и так говорит «переподключение».
+    if (flowing > 0) return;
     if (worstKick === 2) {
       host.diag('sfu silence', 'stage 2: restart-ice');
       await restartIce();

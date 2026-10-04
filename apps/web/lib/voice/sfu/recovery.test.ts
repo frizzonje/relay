@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createLadder, type Ladder } from './recovery';
+import { createLadder, SIGNALING_GRACE_MS, type Ladder } from './recovery';
 import type { TransportHost } from '../types';
 
 /**
@@ -19,10 +19,12 @@ function makeHost() {
     setStatus: vi.fn(),
     diag: vi.fn(),
     transportLost: vi.fn(),
+    transportUp: vi.fn(),
   } as unknown as TransportHost & {
     setStatus: ReturnType<typeof vi.fn>;
     diag: ReturnType<typeof vi.fn>;
     transportLost: ReturnType<typeof vi.fn>;
+    transportUp: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -158,7 +160,7 @@ describe('лестница SFU', () => {
     up();
     connected = false;
     ladder.signalingLost();
-    await vi.advanceTimersByTimeAsync(RECOVER_WINDOW_MS);
+    await vi.advanceTimersByTimeAsync(SIGNALING_GRACE_MS);
     expect(host.transportLost).toHaveBeenCalledWith('lost');
 
     // И то же самое, но сокет успел вернуться.
@@ -168,8 +170,25 @@ describe('лестница SFU', () => {
     connected = false;
     ladder.signalingLost();
     connected = true;
-    await vi.advanceTimersByTimeAsync(RECOVER_WINDOW_MS);
+    await vi.advanceTimersByTimeAsync(SIGNALING_GRACE_MS);
     expect(host.transportLost).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Сокет теперь переподключается сам, а медиасервер держит сессию, пока
+   * socket.io её восстанавливает. Сдаться на восьмой секунде значило бы бросить
+   * сессию, которая вот-вот вернётся, и уйти в полный перезаход — с тишиной.
+   */
+  it('сигналинг ждём дольше окна ступени: возврат на 12-й секунде — не обрыв', async () => {
+    up();
+    connected = false;
+    ladder.signalingLost();
+    await vi.advanceTimersByTimeAsync(12_000);
+    connected = true;
+    ladder.signalingBack();
+    await vi.advanceTimersByTimeAsync(SIGNALING_GRACE_MS);
+    expect(host.transportLost).not.toHaveBeenCalled();
+    expect(host.transportUp).toHaveBeenCalled();
   });
 
   it('сдались один раз — дирижёра второй раз не зовём и сторожа не заводим', async () => {

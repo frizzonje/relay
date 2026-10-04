@@ -88,6 +88,11 @@ export function createSubscriber({
   // Подписаться на них в тот момент нельзя, а забыть — значит остаться без
   // звука до конца звонка (см. ниже).
   const pending: { peerId: string; info: ProducerInfo }[] = [];
+  // Подписки, которые уже идут. Одна и та же дорожка приезжает к нам разными
+  // путями почти разом — `new-producer`, снимок комнаты, очередь, — а запись в
+  // `consumers` появляется только после двух ожиданий, и проверка по ней
+  // пропускает обе: сервер послушно отдаёт копию.
+  const consuming = new Set<string>();
 
   function tracksOf(peerId: string, kind: 'audio' | 'video'): MediaStreamTrack[] {
     return [...consumers.values()]
@@ -196,7 +201,7 @@ export function createSubscriber({
     async consume(peerId, info) {
       // На один producer — один consumer. Иначе `drainPending` подписался бы
       // второй раз на то, что уже слушаем, и сервер послушно отдал бы копию.
-      if (consumers.has(info.id)) return;
+      if (consumers.has(info.id) || consuming.has(info.id)) return;
       const transport = recvTransport();
       const dev = device();
       if (!transport || !dev) {
@@ -211,20 +216,22 @@ export function createSubscriber({
         host.diag('sfu consume deferred', `${info.source} from ${peerId}`);
         return;
       }
-      const res = await ask<{ consumer: ConsumerPayload }>('consume', {
-        transportId: transport.id,
-        producerId: info.id,
-        rtpCapabilities: dev.rtpCapabilities,
-      });
-      if (!res) {
-        // Отказ в подписке — это «его дорожка есть, но у меня её нет», а на
-        // десктоп-оболочке консоли никто не видит. Веху обязан увидеть сервер.
-        host.diag('sfu consume denied', `${info.source} ${info.kind}`);
-        return;
-      }
-      const c = res.consumer;
+      consuming.add(info.id);
+      let c: ConsumerPayload;
       let consumer: Consumer;
       try {
+        const res = await ask<{ consumer: ConsumerPayload }>('consume', {
+          transportId: transport.id,
+          producerId: info.id,
+          rtpCapabilities: dev.rtpCapabilities,
+        });
+        if (!res) {
+          // Отказ в подписке — это «его дорожка есть, но у меня её нет», а на
+          // десктоп-оболочке консоли никто не видит. Веху обязан увидеть сервер.
+          host.diag('sfu consume denied', `${info.source} ${info.kind}`);
+          return;
+        }
+        c = res.consumer;
         consumer = await transport.consume({
           id: c.id,
           producerId: c.producerId,
@@ -235,6 +242,8 @@ export function createSubscriber({
         console.error('[sfu] consume failed:', err);
         host.diag('sfu consume failed', `${info.source} ${String((err as Error)?.message ?? err)}`);
         return;
+      } finally {
+        consuming.delete(info.id);
       }
       consumers.set(c.producerId, { producerId: c.producerId, consumer, peerId, source: c.source });
       // Единственное доказательство, что пакеты реально пошли: дорожка consumer'а
@@ -317,6 +326,7 @@ export function createSubscriber({
 
     clear() {
       pending.length = 0;
+      consuming.clear();
       consumers.forEach((e) => e.consumer.close());
       consumers.clear();
       names.clear();
