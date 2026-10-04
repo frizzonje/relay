@@ -286,15 +286,24 @@ function AmbientWash({ videoRef }: { videoRef: React.RefObject<HTMLVideoElement 
  */
 function SendBadge({ send }: { send: TileSend }) {
   const t = useT();
-  const parts = [`${send.height}p`];
+  const parts = send.height ? [`${send.height}p`] : [];
   if (send.fps != null) parts.push(t('tile.send.fps', { fps: send.fps }));
   if (send.kbps != null) parts.push(t('tile.send.mbps', { mbps: (send.kbps / 1000).toFixed(1) }));
   if (send.codec) parts.push(send.codec);
   if (send.hardware != null) parts.push(t(send.hardware ? 'tile.send.hw' : 'tile.send.sw'));
+  // Некому отправлять — из канала не уходит ничего, и плашка не делает вид,
+  // что идёт эфир: только размер захвата и прямая пометка.
+  if (send.idle) parts.push(t('tile.send.idle'));
   const limited = send.limit !== 'ok';
   return (
     <div
-      title={t(limited ? UPLINK_PILL[send.limit as 'cpu' | 'bandwidth'].title : 'tile.send.title')}
+      title={t(
+        send.idle
+          ? 'tile.send.idle.title'
+          : limited
+            ? UPLINK_PILL[send.limit as 'cpu' | 'bandwidth'].title
+            : 'tile.send.title',
+      )}
       className={cn(
         'absolute right-2.5 top-2.5 z-[2] flex items-center gap-1.5 rounded-[8px] bg-black/55 px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.08em] tabular-nums backdrop-blur-[6px]',
         limited ? 'text-warn' : 'text-text-muted',
@@ -302,8 +311,9 @@ function SendBadge({ send }: { send: TileSend }) {
     >
       <span
         className={cn(
-          'h-1.5 w-1.5 rounded-full motion-safe:animate-pulse',
-          limited ? 'bg-warn' : 'bg-danger',
+          'h-1.5 w-1.5 rounded-full',
+          !send.idle && 'motion-safe:animate-pulse',
+          send.idle ? 'bg-text-faint' : limited ? 'bg-warn' : 'bg-danger',
         )}
       />
       {parts.join(' · ')}

@@ -38,6 +38,8 @@ function setup(entries: ConsumerEntry[]) {
     setPing: vi.fn(),
     setUplink: vi.fn(),
     setScreenSend: vi.fn(),
+    screenOn: () => false,
+    videoTrack: () => null,
     setTileState: vi.fn(),
     diag: vi.fn(),
   } as unknown as TransportHost;

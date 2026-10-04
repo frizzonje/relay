@@ -61,15 +61,14 @@ describe('профиль трансляции', () => {
     );
   });
 
-  it('mesh — выбор человека, прижатый к 800p и 4 Мбит/с', () => {
+  it('mesh — выбор человека, прижатый к 720p и 4 Мбит/с', () => {
     const mesh = { ...base, transport: 'mesh' as const };
-    expect(resolveProfile(mesh)).toEqual({ height: 800, fps: 30, bitrate: 3_500_000 });
+    expect(resolveProfile(mesh)).toEqual({ height: 720, fps: 30, bitrate: 3_000_000 });
     expect(resolveProfile({ ...mesh, mode: 'fps' })).toEqual({
-      height: 800,
+      height: 720,
       fps: 60,
       bitrate: 4_000_000,
     });
-    expect(resolveProfile({ ...mesh, maxHeight: 720 }).height).toBe(720);
   });
 
   it('мусор в потолках не ломает профиль: берётся выбор как есть', () => {

@@ -40,7 +40,7 @@ export const INSTALL_HEIGHTS = SCREEN_HEIGHTS;
  * аплинка стримера, и на троих это уже три потока. Поэтому выбор человека там
  * прижимается к своему потолку по высоте и битрейту.
  */
-const MESH_MAX_HEIGHT = 800;
+const MESH_MAX_HEIGHT = 720;
 const MESH_MAX_BITRATE = 4_000_000;
 
 /** Нижний слой SFU — то, что зритель получает в плитке, а не на весь экран. */

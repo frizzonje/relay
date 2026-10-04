@@ -94,6 +94,8 @@ export interface TileSend {
   hardware: boolean | null;
   /** Что режет трансляцию прямо сейчас. */
   limit: UplinkStatus;
+  /** Отправлять некому (в прямом канале никого) — не уходит ничего. */
+  idle?: boolean;
 }
 
 /**

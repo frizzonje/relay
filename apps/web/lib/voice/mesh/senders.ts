@@ -34,7 +34,7 @@ const SCREEN_AUDIO_MAX_BITRATE = 256_000;
  * снимок настроек приезжает после первого кадра, и число, снятое на старте,
  * осталось бы вчерашним до перезагрузки вкладки. Демонстрацию экрана эта
  * настройка не трогает: у трансляции свой профиль (`host.screenProfile()`), а в
- * mesh — свой потолок 800p60, см. screen-profile.ts.
+ * mesh — свой потолок 720p, см. screen-profile.ts.
  */
 function videoMaxBitrate(): number {
   return setting<number>('voice.videoBitrateKbps') * 1000;
