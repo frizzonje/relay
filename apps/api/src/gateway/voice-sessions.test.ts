@@ -427,6 +427,15 @@ describe('сигналинг', () => {
     expect(b.last('ice-candidate')).toEqual({ from: 'a', candidate: { candidate: 'host' } });
   });
 
+  /** «Смотреть» в прямом канале: зритель просит стримера слать ему трансляцию. */
+  it('screen-watch доходит стримеру, и «on» — только настоящее true', async () => {
+    const { gw, a, b } = await pair();
+    gw.handleScreenWatch(asSocket(b), { to: 'a', on: true });
+    expect(a.last('screen-watch')).toEqual({ from: 'b', on: true });
+    gw.handleScreenWatch(asSocket(b), { to: 'a', on: 'да' });
+    expect(a.last('screen-watch')).toEqual({ from: 'b', on: false });
+  });
+
   it('в чужую комнату сигнал не пересылают', async () => {
     const { gw, server, a } = await pair();
     const outsider = connect(gw, server, { id: 'outsider' });

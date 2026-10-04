@@ -211,3 +211,54 @@ test('трансляция: два слоя, поток только по «См
   expect((await received(boris)).frames).toBeLessThanOrEqual(stopped);
   expect(idleFlow).toBeLessThan(watchingFlow / 4);
 });
+
+/**
+ * Прямой канал: трансляция идёт с аплинка стримера каждому зрителю отдельно,
+ * поэтому и здесь — только тем, кто нажал «Смотреть». Пока никто не смотрит,
+ * плашка стримера честно говорит, что ничего не уходит.
+ */
+test('прямой канал: трансляция закрыта, пока зритель не нажал «Смотреть»', async ({ browser }) => {
+  test.setTimeout(240_000);
+  const home = unique('Студия');
+  const room = unique('эфир');
+  const her = unique('Аня');
+  const him = unique('Борис');
+
+  const anya = await person(browser, her, {
+    permissions: ['microphone'],
+    initScript: fakeScreenAndSpy,
+  });
+  const boris = await person(browser, him, {
+    permissions: ['microphone'],
+    initScript: fakeScreenAndSpy,
+  });
+
+  await createServer(anya, home, unique('текстовый'));
+  await createVoiceChannel(anya, room, 'p2p');
+  await openServer(boris, home);
+  await joinVoice(anya, room, her);
+  await joinVoice(boris, room, him);
+  await connected(anya);
+  await connected(boris);
+
+  await anya.getByRole('button', { name: 'Share the screen' }).click();
+  await expect(anya.getByText(/nobody watching/)).toBeVisible({ timeout: 20_000 });
+
+  const watch = boris.getByRole('button', { name: 'Watch', exact: true });
+  await expect(watch).toBeVisible({ timeout: 20_000 });
+  await boris.waitForTimeout(3_000);
+  expect((await received(boris)).frames).toBe(0);
+
+  await watch.click();
+  await expect
+    .poll(async () => (await received(boris)).frames, { timeout: 30_000 })
+    .toBeGreaterThan(0);
+  // Захват 2560×1440, потолок прямого канала — 720 строк.
+  await expect.poll(async () => (await received(boris)).height, { timeout: 30_000 }).toBe(720);
+  await expect(anya.getByText(/720p · \d+ fps · [\d.]+ Mbit\/s/)).toBeVisible({ timeout: 20_000 });
+
+  await tile(boris, her).hover();
+  await boris.getByRole('button', { name: 'Stop watching' }).click();
+  await expect(watch).toBeVisible({ timeout: 10_000 });
+  await expect(anya.getByText(/nobody watching/)).toBeVisible({ timeout: 20_000 });
+});

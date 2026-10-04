@@ -31,8 +31,8 @@ export function mergeSendVideo(list: (SendVideo | null)[]): SendVideo | null {
 
 export interface ScreenSendMeter {
   /**
-   * Показания этого тика. `nobody` — отправлять некому (в прямом канале никого):
-   * тогда не уходит ничего, и плашка говорит об этом прямо.
+   * Показания этого тика. `nobody` — отправлять некому (в прямом канале никто
+   * не смотрит): тогда не уходит ничего, и плашка говорит об этом прямо.
    */
   report(send: SendVideo | null, nobody?: boolean): void;
   reset(): void;

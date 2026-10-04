@@ -52,6 +52,14 @@ function combinedConnState(pc: RTCPeerConnection): PeerConnState {
 
 export function createMeshTransport(host: TransportHost): VoiceTransport {
   const peers = new Map<string, Peer>();
+  // «Смотреть» в прямом канале. Трансляция идёт с нашего аплинка каждому
+  // зрителю отдельно, поэтому шлём её только тем, кто попросил (`watchers`).
+  // Сами мы смотрим тех, кто в `watching`; `streaming` — кто из собеседников
+  // сейчас показывает экран. Выбор держится, пока собеседник в канале: показ
+  // перезапустился — зритель остаётся зрителем.
+  const watchers = new Set<string>();
+  const watching = new Set<string>();
+  const streaming = new Set<string>();
 
   let room: string | null = null;
   let iceServers: IceServer[] = [{ urls: ['stun:stun.l.google.com:19302'] }];
@@ -59,6 +67,21 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
 
   const socket = () => getSocket();
   const senders = createSenders(host);
+
+  /** Своё видео собеседнику: трансляцию — только если он её смотрит. */
+  function sendMediaTo(peerId: string, pc: RTCPeerConnection) {
+    if (host.screenOn()) {
+      if (watchers.has(peerId)) senders.sendScreenTo(peerId, pc);
+    } else if (host.camOn()) senders.sendVideoTo(peerId, pc);
+  }
+
+  /** Сказать плитке, что с трансляцией собеседника: есть ли она и смотрим ли. */
+  function sayWatch(peerId: string) {
+    host.setTileWatch(
+      peerId,
+      !streaming.has(peerId) ? null : watching.has(peerId) ? 'watching' : 'offered',
+    );
+  }
   const ladder = createLadder({
     host,
     peer: (peerId) => {
@@ -80,10 +103,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     peer: (peerId) => peers.get(peerId) ?? null,
     dropConnection,
     createPeer: (peerId, name) => createPeer(peerId, name, false), // мы — отвечающая сторона
-    sendMedia: (peerId, pc) => {
-      if (host.screenOn()) senders.sendScreenTo(peerId, pc);
-      else if (host.camOn()) senders.sendVideoTo(peerId, pc);
-    },
+    sendMedia: sendMediaTo,
   });
   const silence = createSilence({ host, signalingUp });
   const metrics = createMetrics({
@@ -97,6 +117,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
         ]),
       ),
     inRoom: () => room !== null,
+    receivesScreen: (peerId) => watchers.has(peerId),
     repair: (peerId, fix) => {
       const peer = peers.get(peerId);
       if (!peer) return;
@@ -157,10 +178,7 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     // Если же мы отвечаем на чужой offer, добавление видео здесь потребовало бы
     // встречного offer'а, а он после answer срабатывает не на всех браузерах —
     // отдаём своё видео отвечающей стороной уже после ответа (обработчик 'offer').
-    if (initiator) {
-      if (host.screenOn()) senders.sendScreenTo(peerId, pc);
-      else if (host.camOn()) senders.sendVideoTo(peerId, pc);
-    }
+    if (initiator) sendMediaTo(peerId, pc);
 
     // Обещание наружу — по той же причине, что и у сокет-обработчиков ниже.
     pc.onnegotiationneeded = () => negotiation.offerTo(peerId, pc);
@@ -219,6 +237,8 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     // Плитка появляется сразу, со статусом — а не в момент прихода медиа
     host.addTile(peerId, name, null, false);
     host.setTileState(peerId, 'tile.state.connecting');
+    // Показ собеседника мог объявиться раньше плитки — предложение на неё.
+    sayWatch(peerId);
     // Сторож и на ПЕРВОЕ соединение: offer мог не доехать, ICE — не собраться, а
     // сам по себе такой pc из 'connecting' не выйдет никогда. Окно шире обычного —
     // холодный старт с TURN бывает небыстрым.
@@ -242,6 +262,10 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
   }
 
   function removePeer(peerId: string) {
+    // Ушёл — уносит и выбор: вернётся, и трансляцию снова предложим.
+    watchers.delete(peerId);
+    watching.delete(peerId);
+    streaming.delete(peerId);
     if (!peers.has(peerId)) return;
     dropConnection(peerId);
     ladder.forget(peerId);
@@ -291,6 +315,16 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
 
       s.on('ice-candidate', (msg) => negotiation.onCandidate(msg));
 
+      // Зритель нажал «Смотреть» (или «Перестать») на нашей трансляции.
+      s.on('screen-watch', ({ from, on }) => {
+        if (on) watchers.add(from);
+        else watchers.delete(from);
+        const peer = peers.get(from);
+        if (!room || !peer || !host.screenOn()) return;
+        if (on) senders.sendScreenTo(from, peer.pc);
+        else senders.stopScreen(from);
+      });
+
       s.on('peer-left', ({ id }) => {
         const peer = peers.get(id);
         host.setStatus('voice.status.peerLeft', { name: peer?.name || tx('voice.peer.fallback') });
@@ -316,6 +350,9 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
       if (!room) return; // нас тут и не было — выходить нечего
       peers.forEach((peer) => peer.pc.close());
       peers.clear();
+      watchers.clear();
+      watching.clear();
+      streaming.clear();
       ladder.forgetAll();
       negotiation.forgetAll();
       senders.forgetAll();
@@ -334,7 +371,30 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
     },
 
     publishScreen() {
-      peers.forEach((peer, id) => senders.sendScreenTo(id, peer.pc));
+      // Тем, кто не смотрит, — ничего: и камеры в общем слоте тоже (показ её сменил).
+      peers.forEach((peer, id) => {
+        if (watchers.has(id)) senders.sendScreenTo(id, peer.pc);
+        else senders.stopScreen(id);
+      });
+    },
+
+    watch(peerId) {
+      if (watching.has(peerId)) return;
+      watching.add(peerId);
+      socket().emit('screen-watch', { to: peerId, on: true });
+      sayWatch(peerId);
+    },
+
+    unwatch(peerId) {
+      if (!watching.delete(peerId)) return;
+      socket().emit('screen-watch', { to: peerId, on: false });
+      sayWatch(peerId);
+    },
+
+    peerScreen(peerId, on) {
+      if (on) streaming.add(peerId);
+      else streaming.delete(peerId);
+      sayWatch(peerId);
     },
 
     unpublishScreen() {

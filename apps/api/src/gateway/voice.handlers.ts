@@ -302,6 +302,14 @@ export class VoiceHandlers {
   iceCandidate(client: AppSocket, payload: SignalPayload) {
     this.relay(client, 'ice-candidate', payload?.to, { candidate: payload?.candidate });
   }
+  /**
+   * «Смотреть» в прямом канале: зритель просит стримера слать ему трансляцию
+   * (или перестать). Медиасервера здесь нет — поток идёт с аплинка стримера
+   * каждому отдельно, и слать его тем, кто не смотрит, значит жечь чужой канал.
+   */
+  screenWatch(client: AppSocket, payload: SignalPayload) {
+    this.relay(client, 'screen-watch', payload?.to, { on: payload?.on === true });
+  }
   mediaUpdate(
     client: AppSocket,
     payload: { camOn?: unknown; screenOn?: unknown; micOn?: unknown; deafened?: unknown },

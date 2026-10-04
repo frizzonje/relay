@@ -51,6 +51,8 @@ export interface MetricsDeps {
   peers(): Map<string, MetricsPeer>;
   /** Мы в звонке? Вне его цифрам некуда ехать. */
   inRoom(): boolean;
+  /** Смотрит ли собеседник нашу трансляцию — только таким она и уходит. */
+  receivesScreen(peerId: string): boolean;
   /** Починить связь, в которой звук был и пропал. Чинит лестница, не метрики. */
   repair(peerId: string, fix: SilenceFix): void;
 }
@@ -63,7 +65,14 @@ export interface Metrics {
   reset(): void;
 }
 
-export function createMetrics({ host, silence, peers, inRoom, repair }: MetricsDeps): Metrics {
+export function createMetrics({
+  host,
+  silence,
+  peers,
+  inRoom,
+  receivesScreen,
+  repair,
+}: MetricsDeps): Metrics {
   const netHistory = new Map<string, NetSnapshot>();
   // Плашка своей трансляции: напрямую поток уходит каждому собеседнику свой,
   // и на плашке — их сумма, а не размер захвата.
@@ -87,8 +96,9 @@ export function createMetrics({ host, silence, peers, inRoom, repair }: MetricsD
         const report = await peer.pc.getStats();
         snaps.set(id, readStats(report));
         // Видео-sender в mesh общий у камеры и экрана: при идущей трансляции
-        // исходящее видео — это она.
-        if (host.screenOn()) sends.push(readSendVideo(report));
+        // исходящее видео — это она. Тем, кто не смотрит, она не уходит, а их
+        // отчёт хранит застывшие цифры прошлого — его не считаем.
+        if (host.screenOn() && receivesScreen(id)) sends.push(readSendVideo(report));
       } catch {
         /* getStats может кинуть на закрывающемся pc — пропускаем пира */
       }
@@ -180,7 +190,7 @@ export function createMetrics({ host, silence, peers, inRoom, repair }: MetricsD
       if (!inRoom()) return;
       const table = peers();
       const { snaps, sends } = await collect(table);
-      sendMeter.report(mergeSendVideo(sends), table.size === 0);
+      sendMeter.report(mergeSendVideo(sends), ![...table.keys()].some((id) => receivesScreen(id)));
       updatePing(table, snaps);
       // Палочки — до сторожа: сторож чинит связь, и после его ступени снимок
       // этого тика описывал бы соединение, которого уже нет.
