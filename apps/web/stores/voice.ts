@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { VoicePresence } from '@relay/shared';
 import type { MessageKey, Vars } from '@/lib/i18n/translate';
-import type { MotionPreset, QualityPreset, ScreenMode } from '@/lib/voice/screen-profile';
+import { DEFAULT_SETUP, type ScreenMode, type ScreenSetup } from '@/lib/voice/screen-profile';
 
 /**
  * Статус подключения хранится ключом словаря, а не готовой фразой: текст
@@ -168,9 +168,8 @@ interface VoiceState {
   camOn: boolean;
   screenOn: boolean;
   screenMode: ScreenMode;
-  /** Пресеты трансляции под каждый режим (вкладка «Трансляция» в настройках). */
-  screenQuality: QualityPreset;
-  screenMotion: MotionPreset;
+  /** Разрешение и кадры трансляции под каждый режим (вкладка «Трансляция»). */
+  screenSetups: Record<ScreenMode, ScreenSetup>;
   /**
    * Каким путём идёт звонок: через медиасервер или напрямую. У трансляции
    * потолки разные, и тумблер в панели показывает реальные цифры.
@@ -227,12 +226,7 @@ interface VoiceState {
 
   setTiles: (tiles: VoiceTile[]) => void;
   setMedia: (
-    m: Partial<
-      Pick<
-        VoiceState,
-        'micOn' | 'camOn' | 'screenOn' | 'screenMode' | 'screenQuality' | 'screenMotion'
-      >
-    >,
+    m: Partial<Pick<VoiceState, 'micOn' | 'camOn' | 'screenOn' | 'screenMode' | 'screenSetups'>>,
   ) => void;
   setStatus: (status: VoiceStatus) => void;
   setCallVia: (via: 'sfu' | 'p2p' | null) => void;
@@ -263,8 +257,7 @@ export const useVoiceStore = create<VoiceState>((set) => ({
   camOn: false,
   screenOn: false,
   screenMode: 'quality',
-  screenQuality: '1440p30',
-  screenMotion: '1080p60',
+  screenSetups: { ...DEFAULT_SETUP },
   callVia: null,
   status: null,
   presence: {},

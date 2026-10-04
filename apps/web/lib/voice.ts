@@ -60,8 +60,7 @@ export {
   refreshCameras,
   setCamera,
   setScreenMode,
-  setScreenMotion,
-  setScreenQuality,
+  setScreenSetup,
   toggleCamera,
   toggleScreen,
 } from '@/lib/voice/camera';

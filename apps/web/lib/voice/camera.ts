@@ -13,17 +13,15 @@ import { useVoiceStore, type ScreenMode } from '@/stores/voice';
 import { setting } from '@/stores/config';
 import { setTileScreen } from '@/lib/voice/tiles';
 import {
-  DEFAULT_MOTION_PRESET,
-  DEFAULT_QUALITY_PRESET,
+  DEFAULT_SETUP,
   captureConstraints,
-  isMotionPreset,
-  isQualityPreset,
+  formatSetup,
+  parseSetup,
   resolveProfile,
   screenContentHint,
   screenDegradation as degradationFor,
-  type MotionPreset,
-  type QualityPreset,
   type ScreenProfile,
+  type ScreenSetup,
 } from '@/lib/voice/screen-profile';
 
 /**
@@ -83,8 +81,7 @@ let camTrack: MediaStreamTrack | null = null;
 let screenTrack: MediaStreamTrack | null = null;
 let screenAudioTrack: MediaStreamTrack | null = null;
 let screenMode: ScreenMode = 'quality';
-let screenQuality: QualityPreset = DEFAULT_QUALITY_PRESET;
-let screenMotion: MotionPreset = DEFAULT_MOTION_PRESET;
+let screenSetups: Record<ScreenMode, ScreenSetup> = { ...DEFAULT_SETUP };
 
 /** Идёт ли с нас камера. */
 export function isCamOn(): boolean {
@@ -197,11 +194,13 @@ export async function setCamera(deviceId: string) {
 // ─────────────────────────────────────────────────────────────────────────
 
 // Выбор живёт в браузере, как и остальные медиа-предпочтения: режим — тот, с
-// которым человек начинал прошлую трансляцию, пресеты — из вкладки
-// «Трансляция» в настройках.
+// которым человек начинал прошлую трансляцию, разрешение и кадры каждого
+// режима — из вкладки «Трансляция» в настройках (строкой `1440p30`).
 const SCREEN_MODE_KEY = 'relay-screen-mode';
-const SCREEN_QUALITY_KEY = 'relay-screen-quality';
-const SCREEN_MOTION_KEY = 'relay-screen-motion';
+const SCREEN_SETUP_KEYS: Record<ScreenMode, string> = {
+  quality: 'relay-screen-quality',
+  fps: 'relay-screen-motion',
+};
 
 function readPref(key: string): string | null {
   return typeof localStorage === 'undefined' ? null : localStorage.getItem(key);
@@ -214,23 +213,22 @@ function writePref(key: string, value: string) {
 /** Поднять выбор из браузера в модуль и в стор (при старте приложения). */
 export function loadScreenPrefs() {
   const mode = readPref(SCREEN_MODE_KEY);
-  const quality = readPref(SCREEN_QUALITY_KEY);
-  const motion = readPref(SCREEN_MOTION_KEY);
   if (mode === 'quality' || mode === 'fps') screenMode = mode;
-  if (isQualityPreset(quality)) screenQuality = quality;
-  if (isMotionPreset(motion)) screenMotion = motion;
-  useVoiceStore.getState().setMedia({ screenMode, screenQuality, screenMotion });
+  screenSetups = {
+    quality: parseSetup(readPref(SCREEN_SETUP_KEYS.quality)) ?? DEFAULT_SETUP.quality,
+    fps: parseSetup(readPref(SCREEN_SETUP_KEYS.fps)) ?? DEFAULT_SETUP.fps,
+  };
+  useVoiceStore.getState().setMedia({ screenMode, screenSetups });
 }
 
 /**
- * Профиль трансляции прямо сейчас: режим и пресет человека, прижатые к
+ * Профиль трансляции прямо сейчас: режим и его настройка, прижатые к
  * потолкам владельца и к транспорту. Его читают и захват, и оба транспорта.
  */
 export function currentScreenProfile(): ScreenProfile {
   return resolveProfile({
     mode: screenMode,
-    quality: screenQuality,
-    motion: screenMotion,
+    setups: screenSetups,
     transport: around.transport(),
     maxHeight: Number(setting<string>('voice.screenMaxHeight')),
     maxBitrate: setting<number>('voice.screenBitrateKbps') * 1000,
@@ -269,20 +267,14 @@ export function setScreenMode(mode: ScreenMode) {
   void retuneScreen();
 }
 
-export function setScreenQuality(preset: QualityPreset) {
-  if (preset === screenQuality) return;
-  screenQuality = preset;
-  writePref(SCREEN_QUALITY_KEY, preset);
-  useVoiceStore.getState().setMedia({ screenQuality });
-  if (screenMode === 'quality') void retuneScreen();
-}
-
-export function setScreenMotion(preset: MotionPreset) {
-  if (preset === screenMotion) return;
-  screenMotion = preset;
-  writePref(SCREEN_MOTION_KEY, preset);
-  useVoiceStore.getState().setMedia({ screenMotion });
-  if (screenMode === 'fps') void retuneScreen();
+/** Разрешение и/или кадры режима — из вкладки «Трансляция». */
+export function setScreenSetup(mode: ScreenMode, change: Partial<ScreenSetup>) {
+  const next = { ...screenSetups[mode], ...change };
+  if (next.height === screenSetups[mode].height && next.fps === screenSetups[mode].fps) return;
+  screenSetups = { ...screenSetups, [mode]: next };
+  writePref(SCREEN_SETUP_KEYS[mode], formatSetup(next));
+  useVoiceStore.getState().setMedia({ screenSetups });
+  if (screenMode === mode) void retuneScreen();
 }
 
 /**

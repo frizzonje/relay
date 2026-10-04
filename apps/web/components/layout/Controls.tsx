@@ -338,21 +338,19 @@ function SegToggle({ children }: { children: ReactNode }) {
 }
 
 /**
- * Что режим трансляции даст прямо сейчас: пресет человека под потолками
- * владельца и транспорта. Тумблер показывает цифры, а не абстрактные
- * «качество/ФПС», — человек видит, с чем выходит в эфир.
+ * Что режим трансляции даст прямо сейчас: выбор человека под потолками
+ * владельца и транспорта. Цифры — в подсказке тумблера: на самих кнопках они
+ * читались как две отдельные настройки («800P | 60 FPS»), а не как два режима.
  */
 function useScreenProfiles(): Record<ScreenMode, ScreenProfile> {
-  const quality = useVoiceStore((s) => s.screenQuality);
-  const motion = useVoiceStore((s) => s.screenMotion);
+  const setups = useVoiceStore((s) => s.screenSetups);
   const via = useVoiceStore((s) => s.callVia);
   const maxHeight = Number(useSetting<string>('voice.screenMaxHeight'));
   const maxBitrate = useSetting<number>('voice.screenBitrateKbps') * 1000;
   const of = (mode: ScreenMode) =>
     resolveProfile({
       mode,
-      quality,
-      motion,
+      setups,
       transport: via === 'p2p' ? 'mesh' : 'sfu',
       maxHeight,
       maxBitrate,
@@ -470,9 +468,7 @@ export function Controls() {
                 />
               )}
               <span className="relative">
-                {mode === 'quality'
-                  ? t('controls.screen.quality', { height: profiles.quality.height })
-                  : t('controls.screen.fps', { fps: profiles.fps.fps })}
+                {t(mode === 'quality' ? 'controls.screen.quality' : 'controls.screen.fps')}
               </span>
             </button>
           ))}

@@ -2,56 +2,46 @@
  * Профили трансляции экрана: что снимать, сколько слать и какими слоями.
  *
  * Лист без состояния и зависимостей — всё, что зависит от человека (режим,
- * выбранные пресеты), от владельца (потолки инсталляции) и от транспорта,
+ * разрешение и кадры каждого режима), от владельца (потолки инсталляции) и от транспорта,
  * приходит аргументами. Поэтому одна и та же таблица кормит и захват
  * (`camera.ts`), и оба транспорта, и тесты.
  *
  * Два режима — две разные задачи, а не два положения одной ручки:
  * «Картинка» — текст, код, документы: разрешение важнее кадров, и при
  * нехватке канала кодировщик бросает кадры, а не резкость. «Плавность» — игры
- * и видео: наоборот. Поэтому у каждого режима свой набор пресетов.
+ * и видео: наоборот. Разрешение и кадры у каждого режима свои и выбираются
+ * порознь; режим же решает, чем жертвовать, когда канала или процессора мало.
  *
  * См. docs/plans/screen-share.md.
  */
 
 export type ScreenMode = 'quality' | 'fps';
-export type QualityPreset = '1440p30' | '1440p45' | '1080p30';
-export type MotionPreset = '1080p60' | '720p60';
-export type ScreenPreset = QualityPreset | MotionPreset;
 
-export const QUALITY_PRESETS: readonly QualityPreset[] = ['1440p30', '1440p45', '1080p30'];
-export const MOTION_PRESETS: readonly MotionPreset[] = ['1080p60', '720p60'];
-export const DEFAULT_QUALITY_PRESET: QualityPreset = '1440p30';
-export const DEFAULT_MOTION_PRESET: MotionPreset = '1080p60';
-
-/** Потолки высоты, которые владелец может выставить в панели (`voice.screenMaxHeight`). */
-export const INSTALL_HEIGHTS = [720, 1080, 1440] as const;
-
-interface PresetSpec {
+/** Что человек выбрал для режима: разрешение и кадры — порознь, любые сочетания. */
+export interface ScreenSetup {
   height: number;
   fps: number;
-  /** Верхний слой, бит/с. Потолок: статичный экран кодировщик и сам шлёт скромнее. */
-  bitrate: number;
 }
 
-// Битрейт — под VP8, самый прожорливый из наших кодеков: H264 и VP9 на той же
-// картинке укладываются в меньшее, так что запас им не вредит. 45 кадров на
-// мониторе 60 Гц ложатся неровно (кадр держится то один такт, то два), поэтому
-// это опция, а не умолчание: для текста и кода 30 хватает с запасом.
-const PRESETS: Record<ScreenPreset, PresetSpec> = {
-  '1440p30': { height: 1440, fps: 30, bitrate: 8_000_000 },
-  '1440p45': { height: 1440, fps: 45, bitrate: 10_000_000 },
-  '1080p30': { height: 1080, fps: 30, bitrate: 5_000_000 },
-  '1080p60': { height: 1080, fps: 60, bitrate: 8_000_000 },
-  '720p60': { height: 720, fps: 60, bitrate: 4_500_000 },
+export const SCREEN_HEIGHTS = [720, 1080, 1440] as const;
+export const SCREEN_FPS = [30, 45, 60] as const;
+
+/** Картинка — резкость для текста и кода; плавность — кадры для игр и видео. */
+export const DEFAULT_SETUP: Readonly<Record<ScreenMode, ScreenSetup>> = {
+  quality: { height: 1440, fps: 30 },
+  fps: { height: 1080, fps: 60 },
 };
+
+/** Потолки высоты, которые владелец может выставить в панели (`voice.screenMaxHeight`). */
+export const INSTALL_HEIGHTS = SCREEN_HEIGHTS;
 
 /**
  * Mesh — прямые соединения: каждый собеседник получает свой поток прямо с
- * аплинка стримера, и на троих это уже три потока. Поэтому потолок здесь свой и
- * один на оба режима; режим решает только, чем жертвовать при нехватке канала.
+ * аплинка стримера, и на троих это уже три потока. Поэтому выбор человека там
+ * прижимается к своему потолку по высоте и битрейту.
  */
-const MESH: PresetSpec = { height: 800, fps: 60, bitrate: 4_000_000 };
+const MESH_MAX_HEIGHT = 800;
+const MESH_MAX_BITRATE = 4_000_000;
 
 /** Нижний слой SFU — то, что зритель получает в плитке, а не на весь экран. */
 const LOW_LAYER_HEIGHT = 720;
@@ -68,48 +58,58 @@ export interface ScreenProfile {
 
 export interface ProfileInput {
   mode: ScreenMode;
-  quality: QualityPreset;
-  motion: MotionPreset;
+  /** Выбор человека под каждый режим (вкладка «Трансляция»). */
+  setups: Readonly<Record<ScreenMode, ScreenSetup>>;
   transport: 'mesh' | 'sfu';
   /** Потолки инсталляции: `voice.screenMaxHeight` и `voice.screenBitrateKbps`. */
   maxHeight: number;
   maxBitrate: number;
 }
 
-export function isQualityPreset(v: unknown): v is QualityPreset {
-  return QUALITY_PRESETS.includes(v as QualityPreset);
+/** `1440p30` — так выбор хранится в браузере (и так его писали прежние версии). */
+export function formatSetup(setup: ScreenSetup): string {
+  return `${setup.height}p${setup.fps}`;
 }
 
-export function isMotionPreset(v: unknown): v is MotionPreset {
-  return MOTION_PRESETS.includes(v as MotionPreset);
-}
-
-export function presetSpec(preset: ScreenPreset): Readonly<PresetSpec> {
-  return PRESETS[preset];
+export function parseSetup(raw: string | null): ScreenSetup | null {
+  const m = raw?.match(/^(\d+)p(\d+)$/);
+  if (!m) return null;
+  const height = Number(m[1]);
+  const fps = Number(m[2]);
+  const known =
+    (SCREEN_HEIGHTS as readonly number[]).includes(height) &&
+    (SCREEN_FPS as readonly number[]).includes(fps);
+  return known ? { height, fps } : null;
 }
 
 /**
- * Итоговый профиль: пресет режима, прижатый к потолкам инсталляции.
- *
- * Прижатая высота тянет за собой и битрейт — пропорционально площади кадра:
- * 1440p, урезанный владельцем до 1080p, не должен жечь битрейт 1440p на
- * картинку, в которой почти вдвое меньше точек.
+ * Битрейт верхнего слоя под кадр и кадры. Опорная точка — 1440p30 за 8 Мбит/с
+ * (под VP8, самый прожорливый из наших кодеков: H264 на той же картинке
+ * укладывается в меньшее, так что запас ему не вредит). Растёт медленнее
+ * площади и кадров: мелкому кадру на точку нужно больше, а соседние кадры
+ * экрана похожи друг на друга. Округление — до полумегабита.
+ */
+export function setupBitrate(height: number, fps: number): number {
+  const area = (height / 1440) ** 2;
+  const raw = 8_000_000 * area ** 0.75 * (fps / 30) ** 0.7;
+  return Math.round(raw / 500_000) * 500_000;
+}
+
+/**
+ * Итоговый профиль: выбор человека для режима, прижатый к потолкам
+ * инсталляции и транспорта. Урезанная высота тянет за собой и битрейт: 1440p,
+ * урезанный владельцем до 1080p, не должен жечь битрейт 1440p.
  */
 export function resolveProfile(input: ProfileInput): ScreenProfile {
-  const base =
-    input.transport === 'mesh'
-      ? MESH
-      : PRESETS[input.mode === 'fps' ? input.motion : input.quality];
-  const cap =
-    Number.isFinite(input.maxHeight) && input.maxHeight > 0 ? input.maxHeight : base.height;
-  const height = Math.min(base.height, cap);
-  const area = (height / base.height) ** 2;
-  const ceiling = input.maxBitrate > 0 ? input.maxBitrate : Infinity;
-  return {
-    height,
-    fps: base.fps,
-    bitrate: Math.round(Math.min(base.bitrate * area, ceiling)),
-  };
+  const setup = input.setups[input.mode];
+  const caps = [setup.height];
+  if (Number.isFinite(input.maxHeight) && input.maxHeight > 0) caps.push(input.maxHeight);
+  if (input.transport === 'mesh') caps.push(MESH_MAX_HEIGHT);
+  const height = Math.min(...caps);
+  let bitrate = setupBitrate(height, setup.fps);
+  if (input.maxBitrate > 0) bitrate = Math.min(bitrate, input.maxBitrate);
+  if (input.transport === 'mesh') bitrate = Math.min(bitrate, MESH_MAX_BITRATE);
+  return { height, fps: setup.fps, bitrate };
 }
 
 /**

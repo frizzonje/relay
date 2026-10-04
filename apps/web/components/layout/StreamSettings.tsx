@@ -6,24 +6,23 @@ import { springTab } from '@/lib/motion';
 import { useT, type MessageKey } from '@/lib/i18n';
 import { useVoiceStore } from '@/stores/voice';
 import { useSetting } from '@/stores/config';
-import { setScreenMode, setScreenMotion, setScreenQuality } from '@/lib/voice';
+import { setScreenMode, setScreenSetup } from '@/lib/voice';
 import {
-  DEFAULT_MOTION_PRESET,
-  DEFAULT_QUALITY_PRESET,
-  MOTION_PRESETS,
-  QUALITY_PRESETS,
-  presetSpec,
+  SCREEN_FPS,
+  SCREEN_HEIGHTS,
+  resolveProfile,
   type ScreenMode,
-  type ScreenPreset,
+  type ScreenSetup,
 } from '@/lib/voice/screen-profile';
 
 /**
  * Вкладка «Трансляция»: с чем стример выходит в эфир.
  *
- * Режим — это задача (текст или движение), пресет — сколько под неё не жалко
- * аплинка и процессора. Выбор живёт в браузере и применяется к идущей
- * трансляции сразу, без перезапуска показа. Потолок владельца главнее:
- * пресет выше него не прячем, а честно говорим, до чего его урежут.
+ * Два режима — две задачи: «Картинка» держит резкость и при нехватке канала
+ * бросает кадры, «Плавность» — наоборот. Разрешение и кадры у каждого свои и
+ * выбираются порознь, любым сочетанием. Выбор живёт в браузере и применяется
+ * к идущей трансляции сразу. Потолок владельца главнее: что выше него, выбрать
+ * нельзя, и это сказано прямо на кнопке.
  */
 
 const MODES: { id: ScreenMode; title: MessageKey; hint: MessageKey }[] = [
@@ -34,14 +33,6 @@ const MODES: { id: ScreenMode; title: MessageKey; hint: MessageKey }[] = [
   },
   { id: 'fps', title: 'settings.stream.mode.fps', hint: 'settings.stream.mode.fps.hint' },
 ];
-
-const PRESET_HINTS: Record<ScreenPreset, MessageKey> = {
-  '1440p30': 'settings.stream.preset.1440p30.hint',
-  '1440p45': 'settings.stream.preset.1440p45.hint',
-  '1080p30': 'settings.stream.preset.1080p30.hint',
-  '1080p60': 'settings.stream.preset.1080p60.hint',
-  '720p60': 'settings.stream.preset.720p60.hint',
-};
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
@@ -66,103 +57,60 @@ function Dot({ on }: { on: boolean }) {
   );
 }
 
-function ModePicker() {
-  const t = useT();
-  const mode = useVoiceStore((s) => s.screenMode);
-  return (
-    <div
-      role="radiogroup"
-      aria-label={t('settings.stream.mode')}
-      className="grid grid-cols-2 gap-2 max-sm:grid-cols-1"
-    >
-      {MODES.map((m) => (
-        <button
-          key={m.id}
-          type="button"
-          role="radio"
-          aria-checked={mode === m.id}
-          onClick={() => setScreenMode(m.id)}
-          className={cn(
-            'relative rounded-[10px] border px-3.5 py-3 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong',
-            mode === m.id
-              ? 'border-line-strong text-text-header'
-              : 'border-line bg-bg-elev/60 text-text hover:bg-bg-hover',
-          )}
-        >
-          {/* Подложка выбранного режима переезжает, как у тумблера в панели звонка. */}
-          {mode === m.id && (
-            <motion.span
-              layoutId="stream-mode"
-              transition={springTab}
-              className="absolute inset-0 rounded-[10px] bg-bg-active"
-            />
-          )}
-          <span className="relative block text-[14px] font-semibold">{t(m.title)}</span>
-          <span className="relative mt-0.5 block text-[12px] text-text-muted">{t(m.hint)}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function PresetList<P extends ScreenPreset>({
+/** Ряд кнопок-сегментов: подложка выбранного переезжает, как у тумблера в панели звонка. */
+function Segments<V extends number>({
+  id,
   label,
-  presets,
+  options,
   value,
-  fallback,
+  format,
+  blocked,
   onPick,
-  cap,
 }: {
+  id: string;
   label: string;
-  presets: readonly P[];
-  value: P;
-  fallback: P;
-  onPick: (preset: P) => void;
-  cap: number;
+  options: readonly V[];
+  value: V;
+  format: (v: V) => string;
+  /** Подсказка, почему вариант недоступен; undefined — доступен. */
+  blocked: (v: V) => string | undefined;
+  onPick: (v: V) => void;
 }) {
-  const t = useT();
   return (
-    <div>
-      <SectionLabel>{label}</SectionLabel>
-      <div role="radiogroup" aria-label={label} className="flex flex-col gap-1.5">
-        {presets.map((p) => {
-          const spec = presetSpec(p);
-          const capped = spec.height > cap;
+    <div className="flex items-center justify-between gap-4 max-sm:flex-col max-sm:items-start max-sm:gap-1.5">
+      <span className="text-[13px] text-text-muted">{label}</span>
+      <div
+        role="radiogroup"
+        aria-label={label}
+        className="flex gap-0.5 rounded-[10px] border border-line bg-black/[0.22] p-0.5 max-sm:w-full"
+      >
+        {options.map((v) => {
+          const why = blocked(v);
+          const on = v === value;
           return (
             <button
-              key={p}
+              key={v}
               type="button"
               role="radio"
-              aria-checked={value === p}
-              onClick={() => onPick(p)}
+              aria-checked={on}
+              disabled={!!why}
+              title={why}
+              onClick={() => onPick(v)}
               className={cn(
-                'flex items-start gap-3 rounded-[10px] border px-3.5 py-2.5 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong',
-                value === p
-                  ? 'border-line-strong bg-bg-active'
-                  : 'border-line bg-bg-elev/60 hover:bg-bg-hover',
+                // Одна ширина у всех сегментов — обе группы встают ровной колонкой.
+                'relative w-[76px] rounded-[8px] py-1.5 max-sm:w-auto max-sm:flex-1 font-mono text-[12.5px] font-semibold tabular-nums outline-none transition-colors focus-visible:ring-2 focus-visible:ring-line-strong',
+                on ? 'text-bg-app' : 'text-text-muted hover:text-text-header',
+                why && 'cursor-not-allowed opacity-35 hover:text-text-muted',
               )}
             >
-              <Dot on={value === p} />
-              <span className="min-w-0 flex-1">
-                <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                  <span className="font-mono text-[13.5px] font-semibold tabular-nums text-text-header">
-                    {t('settings.stream.preset', { height: spec.height, fps: spec.fps })}
-                  </span>
-                  {p === fallback && (
-                    <span className="rounded-[6px] bg-white/[0.06] px-1.5 py-px font-mono text-[10px] uppercase tracking-[0.08em] text-text-faint">
-                      {t('settings.stream.default')}
-                    </span>
-                  )}
-                  {capped && (
-                    <span className="rounded-[6px] bg-warn/10 px-1.5 py-px font-mono text-[10px] uppercase tracking-[0.08em] text-warn">
-                      {t('settings.stream.cappedTo', { height: cap })}
-                    </span>
-                  )}
-                </span>
-                <span className="mt-0.5 block text-[12px] text-text-muted">
-                  {t(PRESET_HINTS[p])}
-                </span>
-              </span>
+              {on && (
+                <motion.span
+                  layoutId={id}
+                  transition={springTab}
+                  className="absolute inset-0 rounded-[8px] bg-accent-strong"
+                />
+              )}
+              <span className="relative">{format(v)}</span>
             </button>
           );
         })}
@@ -171,35 +119,123 @@ function PresetList<P extends ScreenPreset>({
   );
 }
 
+/** Под выбором — во что он обойдётся и о чём стоит знать. */
+function noteFor(setup: ScreenSetup, mode: ScreenMode): MessageKey {
+  if (setup.height >= 1440 && setup.fps >= 60) return 'settings.stream.note.heavy';
+  if (setup.fps === 45) return 'settings.stream.note.fps45';
+  return mode === 'quality' ? 'settings.stream.mode.quality.hint' : 'settings.stream.mode.fps.hint';
+}
+
+function ModeCard({
+  mode,
+  title,
+  active,
+  maxHeight,
+  maxBitrate,
+}: {
+  mode: ScreenMode;
+  title: MessageKey;
+  active: boolean;
+  maxHeight: number;
+  maxBitrate: number;
+}) {
+  const t = useT();
+  const setups = useVoiceStore((s) => s.screenSetups);
+  const setup = setups[mode];
+  // Что реально уйдёт через медиасервер — с потолками владельца.
+  const live = resolveProfile({ mode, setups, transport: 'sfu', maxHeight, maxBitrate });
+  const overCap = (h: number) =>
+    Number.isFinite(maxHeight) && maxHeight > 0 && h > maxHeight
+      ? t('settings.stream.capTitle', { height: maxHeight })
+      : undefined;
+
+  return (
+    <div
+      className={cn(
+        'rounded-[12px] border transition-colors',
+        active ? 'border-line-strong bg-bg-active/50' : 'border-line bg-bg-elev/60',
+      )}
+    >
+      <button
+        type="button"
+        role="radio"
+        aria-checked={active}
+        onClick={() => setScreenMode(mode)}
+        className="flex w-full items-start gap-3 rounded-t-[12px] px-3.5 pb-2 pt-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-line-strong"
+      >
+        <Dot on={active} />
+        <span className="text-[14px] font-semibold text-text-header">{t(title)}</span>
+      </button>
+      <div className="flex flex-col gap-2 px-3.5 pb-3 pl-[44px] max-sm:pl-3.5">
+        <Segments
+          id={`stream-${mode}-height`}
+          label={t('settings.stream.height')}
+          options={SCREEN_HEIGHTS}
+          value={setup.height as (typeof SCREEN_HEIGHTS)[number]}
+          format={(h) => `${h}p`}
+          blocked={overCap}
+          onPick={(height) => setScreenSetup(mode, { height })}
+        />
+        <Segments
+          id={`stream-${mode}-fps`}
+          label={t('settings.stream.fps')}
+          options={SCREEN_FPS}
+          value={setup.fps as (typeof SCREEN_FPS)[number]}
+          format={(fps) => t('settings.stream.fpsValue', { fps })}
+          blocked={() => undefined}
+          onPick={(fps) => setScreenSetup(mode, { fps })}
+        />
+        <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[12px]">
+          <span className="font-mono tabular-nums text-text-header">
+            {t('settings.stream.summary', {
+              height: live.height,
+              fps: live.fps,
+              mbps: (live.bitrate / 1_000_000).toFixed(1),
+            })}
+          </span>
+          {live.height < setup.height && (
+            <span className="rounded-[6px] bg-warn/10 px-1.5 py-px font-mono text-[10px] uppercase tracking-[0.08em] text-warn">
+              {t('settings.stream.cappedTo', { height: live.height })}
+            </span>
+          )}
+        </div>
+        <p className="text-[12px] leading-relaxed text-text-muted">{t(noteFor(setup, mode))}</p>
+      </div>
+    </div>
+  );
+}
+
 export function StreamSettings() {
   const t = useT();
-  const quality = useVoiceStore((s) => s.screenQuality);
-  const motion = useVoiceStore((s) => s.screenMotion);
-  const cap = Number(useSetting<string>('voice.screenMaxHeight')) || Infinity;
+  const mode = useVoiceStore((s) => s.screenMode);
+  const maxHeight = Number(useSetting<string>('voice.screenMaxHeight'));
+  const maxBitrate = useSetting<number>('voice.screenBitrateKbps') * 1000;
 
   return (
     <div className="flex flex-col gap-5">
       <p className="text-[12.5px] leading-relaxed text-text-muted">{t('settings.stream.intro')}</p>
       <div>
-        <SectionLabel>{t('settings.stream.mode')}</SectionLabel>
-        <ModePicker />
+        <SectionLabel>{t('settings.stream.modes')}</SectionLabel>
+        <p className="mb-2 text-[12px] leading-relaxed text-text-faint">
+          {t('settings.stream.modes.hint')}
+        </p>
+        <div
+          role="radiogroup"
+          aria-label={t('settings.stream.modes')}
+          className="flex flex-col gap-2"
+        >
+          {MODES.map((m) => (
+            <ModeCard
+              key={m.id}
+              mode={m.id}
+              title={m.title}
+              active={mode === m.id}
+              maxHeight={maxHeight}
+              maxBitrate={maxBitrate}
+            />
+          ))}
+        </div>
       </div>
-      <PresetList
-        label={t('settings.stream.quality')}
-        presets={QUALITY_PRESETS}
-        value={quality}
-        fallback={DEFAULT_QUALITY_PRESET}
-        onPick={setScreenQuality}
-        cap={cap}
-      />
-      <PresetList
-        label={t('settings.stream.motion')}
-        presets={MOTION_PRESETS}
-        value={motion}
-        fallback={DEFAULT_MOTION_PRESET}
-        onPick={setScreenMotion}
-        cap={cap}
-      />
       <p className="text-[12px] leading-relaxed text-text-faint">{t('settings.stream.mesh')}</p>
     </div>
   );

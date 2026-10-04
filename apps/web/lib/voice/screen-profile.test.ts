@@ -1,69 +1,97 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_SETUP,
   captureConstraints,
   meshScreenEncoding,
+  parseSetup,
   resolveProfile,
+  setupBitrate,
   sfuScreenEncodings,
   type ProfileInput,
 } from './screen-profile';
 
 const base: ProfileInput = {
   mode: 'quality',
-  quality: '1440p30',
-  motion: '1080p60',
+  setups: DEFAULT_SETUP,
   transport: 'sfu',
   maxHeight: 1440,
-  maxBitrate: 10_000_000,
+  maxBitrate: 20_000_000,
 };
 
+const withSetup = (mode: 'quality' | 'fps', height: number, fps: number): ProfileInput => ({
+  ...base,
+  mode,
+  setups: { ...DEFAULT_SETUP, [mode]: { height, fps } },
+});
+
 describe('профиль трансляции', () => {
-  it('режим выбирает свой пресет: картинка — 1440p30, плавность — 1080p60', () => {
+  it('по умолчанию: картинка — 1440p30, плавность — 1080p60', () => {
     expect(resolveProfile(base)).toEqual({ height: 1440, fps: 30, bitrate: 8_000_000 });
-    expect(resolveProfile({ ...base, mode: 'fps' })).toEqual({
-      height: 1080,
-      fps: 60,
-      bitrate: 8_000_000,
-    });
+    expect(resolveProfile({ ...base, mode: 'fps' })).toMatchObject({ height: 1080, fps: 60 });
   });
 
-  it('1440p45 — опция для тех, кому мало 30', () => {
-    expect(resolveProfile({ ...base, quality: '1440p45' })).toMatchObject({
-      height: 1440,
-      fps: 45,
-    });
+  it('разрешение и кадры — любым сочетанием, в любом режиме', () => {
+    expect(resolveProfile(withSetup('quality', 1080, 45))).toMatchObject({ height: 1080, fps: 45 });
+    expect(resolveProfile(withSetup('fps', 1440, 60))).toMatchObject({ height: 1440, fps: 60 });
+    expect(resolveProfile(withSetup('fps', 720, 30))).toMatchObject({ height: 720, fps: 30 });
   });
 
   /**
-   * Потолок высоты — деньги владельца. Урезанный кадр не должен жечь битрейт
-   * исходного пресета: точек в нём меньше пропорционально площади.
+   * Битрейт растёт с кадром и кадрами, но медленнее их: опорные точки —
+   * те, что проверены на стенде и в прежней таблице пресетов.
    */
-  it('потолок инсталляции режет высоту, а битрейт — по площади кадра', () => {
-    const p = resolveProfile({ ...base, maxHeight: 1080 });
-    expect(p.height).toBe(1080);
-    expect(p.fps).toBe(30);
-    expect(p.bitrate).toBe(Math.round(8_000_000 * (1080 / 1440) ** 2));
+  it('битрейт — от кадра и кадров', () => {
+    expect(setupBitrate(1440, 30)).toBe(8_000_000);
+    expect(setupBitrate(1440, 45)).toBe(10_500_000);
+    expect(setupBitrate(1440, 60)).toBe(13_000_000);
+    expect(setupBitrate(1080, 60)).toBe(8_500_000);
+    expect(setupBitrate(1080, 30)).toBe(5_000_000);
+    expect(setupBitrate(720, 60)).toBe(4_500_000);
   });
 
-  it('потолок битрейта инсталляции главнее пресета', () => {
-    expect(resolveProfile({ ...base, quality: '1440p45', maxBitrate: 6_000_000 }).bitrate).toBe(
-      6_000_000,
+  /** Потолок высоты — деньги владельца: урезанный кадр не жжёт битрейт исходного. */
+  it('потолок инсталляции режет высоту, а битрейт считается от урезанной', () => {
+    const p = resolveProfile({ ...base, maxHeight: 1080 });
+    expect(p).toEqual({ height: 1080, fps: 30, bitrate: setupBitrate(1080, 30) });
+  });
+
+  it('потолок битрейта инсталляции главнее выбора', () => {
+    expect(resolveProfile({ ...withSetup('fps', 1440, 60), maxBitrate: 10_000_000 }).bitrate).toBe(
+      10_000_000,
     );
   });
 
-  it('mesh — свой потолок 800p60 в обоих режимах', () => {
+  it('mesh — выбор человека, прижатый к 800p и 4 Мбит/с', () => {
     const mesh = { ...base, transport: 'mesh' as const };
-    expect(resolveProfile(mesh)).toMatchObject({ height: 800, fps: 60 });
-    expect(resolveProfile({ ...mesh, mode: 'fps' })).toMatchObject({ height: 800, fps: 60 });
-    // Владелец урезал до 720 — mesh тоже ниже.
+    expect(resolveProfile(mesh)).toEqual({ height: 800, fps: 30, bitrate: 3_500_000 });
+    expect(resolveProfile({ ...mesh, mode: 'fps' })).toEqual({
+      height: 800,
+      fps: 60,
+      bitrate: 4_000_000,
+    });
     expect(resolveProfile({ ...mesh, maxHeight: 720 }).height).toBe(720);
   });
 
-  it('мусор в потолках не ломает профиль: берётся пресет как есть', () => {
+  it('мусор в потолках не ломает профиль: берётся выбор как есть', () => {
     expect(resolveProfile({ ...base, maxHeight: NaN, maxBitrate: 0 })).toEqual({
       height: 1440,
       fps: 30,
       bitrate: 8_000_000,
     });
+  });
+});
+
+describe('выбор в браузере', () => {
+  it('читается из строки `1440p30` — в том числе записанной прежними версиями', () => {
+    expect(parseSetup('1440p45')).toEqual({ height: 1440, fps: 45 });
+    expect(parseSetup('720p60')).toEqual({ height: 720, fps: 60 });
+  });
+
+  it('неизвестное и мусор — null, тогда берётся умолчание', () => {
+    expect(parseSetup('2160p60')).toBeNull();
+    expect(parseSetup('1080p25')).toBeNull();
+    expect(parseSetup('много')).toBeNull();
+    expect(parseSetup(null)).toBeNull();
   });
 });
 
