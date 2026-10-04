@@ -116,12 +116,13 @@ export function resolveProfile(input: ProfileInput): ScreenProfile {
  * Ограничения захвата. `max`, а не `ideal`: с `ideal` движок волен отдать и
  * больше, и меньше, а здесь нужно ровно «не больше профиля» — экран 4K
  * ужимается до него, экран 1080p так и остаётся 1080p, а не растягивается.
- * Ширина — под 16:9 той же высоты: сверхширокий монитор впишется в ту же
- * площадь кадра, а не раздует её на треть.
+ *
+ * Только высота, без ширины: «720p» — это 720 строк, и человек ждёт именно их.
+ * Потолок по ширине (16:9 от высоты) окну шире 16:9 срезал высоту — окно
+ * 1,88:1 уходило как 682p вместо 720p.
  */
 export function captureConstraints(profile: ScreenProfile): MediaTrackConstraints {
   return {
-    width: { max: Math.round((profile.height * 16) / 9) },
     height: { max: profile.height },
     frameRate: { ideal: profile.fps, max: profile.fps },
   };

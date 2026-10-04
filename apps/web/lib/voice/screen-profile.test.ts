@@ -95,10 +95,13 @@ describe('выбор в браузере', () => {
 });
 
 describe('захват', () => {
-  it('ограничения — потолок, а не пожелание: max по высоте, ширине и кадрам', () => {
-    expect(captureConstraints({ height: 1440, fps: 30, bitrate: 1 })).toEqual({
-      width: { max: 2560 },
-      height: { max: 1440 },
+  /**
+   * Только высота: потолок по ширине окну шире 16:9 срезал высоту, и при
+   * выборе 720p уходило 682p.
+   */
+  it('ограничения — потолок, а не пожелание: max по высоте и кадрам, ширина свободна', () => {
+    expect(captureConstraints({ height: 720, fps: 30, bitrate: 1 })).toEqual({
+      height: { max: 720 },
       frameRate: { ideal: 30, max: 30 },
     });
   });
