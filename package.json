@@ -10,6 +10,8 @@
   },
   "pnpm": {
     "overrides": {
+      "brace-expansion@>=2.0.0 <3": "^2.1.6",
+      "engine.io": "^6.6.10",
       "multer": "^2.3.0",
       "postcss": "^8.5.26",
       "qs": "^6.16.0",
