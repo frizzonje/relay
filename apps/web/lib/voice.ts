@@ -323,8 +323,10 @@ const SFU_RETRY_MAX_MS = 30_000;
 let sfuRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Выдержка перед тревогой об обрыве сокета api: моргание сети короче неё
-// человек не должен замечать вовсе (см. обработчик `disconnect`).
-const SERVER_LOST_ALARM_MS = 3000;
+// человек не должен замечать вовсе (см. обработчик `disconnect`). С запасом над
+// паузой между попытками сокета (до 2 с, lib/socket.ts): сервер, вернувшийся
+// за пару секунд, сокет успевает застать, пока тревога ещё молчит.
+const SERVER_LOST_ALARM_MS = 4000;
 let serverLostTimer: ReturnType<typeof setTimeout> | null = null;
 // Сказали ли о потере — тогда и о возвращении скажем.
 let serverLostAnnounced = false;
