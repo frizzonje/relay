@@ -4,6 +4,7 @@ import type { Transport } from 'mediasoup-client/types';
 import type { TransportHost } from '../types';
 import { gradeQuality, pingGrade } from '../quality';
 import { createScreenSendMeter } from '../screen-send';
+import { createScreenTelemetry } from '../screen-telemetry';
 import {
   netDelta,
   readStats,
@@ -13,7 +14,7 @@ import {
   type SendVideo,
   type StatsSnapshot,
 } from '../stats';
-import type { Ask } from './protocol';
+import { SCREEN_TOP_LAYER, TOP_SPATIAL_LAYER, type Ask } from './protocol';
 import type { ConsumerEntry, Subscriber } from './subscribe';
 import type { UplinkStatus } from '@/stores/voice';
 
@@ -93,6 +94,8 @@ export function createMetrics({
   const audioFlow = new Map<string, { bytes: number; since: number; kicks: number }>();
   // Плашка на своей плитке трансляции: что реально уходит, а не что заказано.
   const sendMeter = createScreenSendMeter(host);
+  // Что доходит до нас с чужих трансляций — в серверный лог (см. screen-telemetry.ts).
+  const telemetry = createScreenTelemetry((event, detail) => host.diag(event, detail));
 
   function dim() {
     for (const peerId of subscriber.peerIds()) {
@@ -162,13 +165,22 @@ export function createMetrics({
    */
   async function collectConsumerStats(): Promise<Map<string, StatsSnapshot>> {
     const snaps = new Map<string, StatsSnapshot>();
+    const watched = new Set<string>();
     for (const entry of subscriber.entries()) {
       if (entry.consumer.closed) continue;
       try {
-        snaps.set(entry.producerId, readStats(await entry.consumer.getStats()));
+        const report = await entry.consumer.getStats();
+        snaps.set(entry.producerId, readStats(report));
+        if (entry.source === 'screen') {
+          watched.add(entry.peerId);
+          telemetry.rx(entry.peerId, report, subscriber.layerOf(entry.consumer.id));
+        }
       } catch {
         /* consumer мог закрыться между тиками */
       }
+    }
+    for (const peerId of subscriber.peerIds()) {
+      if (!watched.has(peerId)) telemetry.rx(peerId, null, null);
     }
     return snaps;
   }
@@ -194,9 +206,19 @@ export function createMetrics({
       const delta = netDelta(netHistory.get(peerId), snap, now);
       netHistory.set(peerId, toHistory(snap, now));
 
-      // Слой берём с камеры: у демонстрации он один, показывать нечего.
+      // Слой — той картинки, что на плитке: трансляция главнее камеры. У
+      // трансляции слоёв два, и её верхний — это «исходный», как у камеры
+      // третий: подпись в тултипе одна на оба случая.
+      const screen = mine.find((e) => e.source === 'screen');
       const cam = mine.find((e) => e.source === 'cam');
-      const layer = cam ? subscriber.layerOf(cam.consumer.id) : null;
+      const screenLayer = screen ? subscriber.layerOf(screen.consumer.id) : null;
+      const layer = screen
+        ? screenLayer === SCREEN_TOP_LAYER
+          ? TOP_SPATIAL_LAYER
+          : screenLayer
+        : cam
+          ? subscriber.layerOf(cam.consumer.id)
+          : null;
 
       host.setTileNet(peerId, {
         grade: gradeQuality(rtt, delta.lossPct ?? 0),
@@ -322,6 +344,7 @@ export function createMetrics({
       netHistory.clear();
       audioFlow.clear();
       sendMeter.reset();
+      telemetry.reset();
     },
   };
 }

@@ -173,7 +173,7 @@ describe('трансляция по кнопке «Смотреть»', () => {
   });
 });
 
-describe('слой трансляции по размеру плитки', () => {
+describe('слой трансляции', () => {
   async function watching() {
     const env = setup();
     env.subscriber.addPeer('a', 'Аня');
@@ -181,20 +181,19 @@ describe('слой трансляции по размеру плитки', () =>
     return env;
   }
 
-  it('размер ещё неизвестен — нижний слой: дешёвое умолчание лучше дорогого', async () => {
+  it('зритель сразу просит верхний слой — то, что выбрал стример', async () => {
     const { subscriber, asked } = await watching();
     await subscriber.watch('a');
-    expect(asked('preferred-layers')).toEqual([{ consumerId: 'c-a:screen', spatialLayer: 0 }]);
+    expect(asked('preferred-layers')).toEqual([{ consumerId: 'c-a:screen', spatialLayer: 1 }]);
     expect(asked('resume')).toHaveLength(1);
   });
 
-  it('крупная плитка — верхний слой, обратно в сетку — нижний', async () => {
+  it('размер плитки слой не меняет: и в сетке, и развёрнутой — верхний', async () => {
     const { subscriber, asked } = await watching();
     await subscriber.watch('a');
     subscriber.setView('a', 1600);
-    subscriber.setView('a', 1600); // тот же размер — без лишнего запроса
     subscriber.setView('a', 400);
-    expect(asked('preferred-layers').map((p) => p.spatialLayer)).toEqual([0, 1, 0]);
+    expect(asked('preferred-layers').map((p) => p.spatialLayer)).toEqual([1]);
   });
 
   /**

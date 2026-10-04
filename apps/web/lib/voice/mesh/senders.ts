@@ -4,6 +4,7 @@ import { boostVideoBitrate, boostAudioBitrate } from '@/lib/sdp';
 import { setting } from '@/stores/config';
 import type { TransportHost } from '../types';
 import { meshScreenEncoding } from '../screen-profile';
+import { describeSender, setSenderParameters } from '../sender-params';
 
 /**
  * Потолки битрейта и публикация своих дорожек в одно соединение.
@@ -120,27 +121,32 @@ export function createSenders(host: TransportHost): Senders {
   }
 
   async function tuneVideoSender(sender: RTCRtpSender, isScreen: boolean) {
-    try {
-      const params = sender.getParameters();
-      if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-      if (isScreen) {
-        const height = sender.track?.getSettings().height ?? 0;
-        const layer = meshScreenEncoding(host.screenProfile(), height);
-        params.encodings[0].maxBitrate = layer.maxBitrate;
-        params.encodings[0].maxFramerate = layer.maxFramerate;
-        params.encodings[0].scaleResolutionDownBy = layer.scaleResolutionDownBy;
-      } else {
-        params.encodings[0].maxBitrate = videoMaxBitrate();
-        // Камера и экран делят слот: кадры, оставленные трансляцией, камере
-        // не нужны — у неё свой предел в захвате.
-        delete params.encodings[0].maxFramerate;
-        params.encodings[0].scaleResolutionDownBy = 1;
-      }
+    const captured = isScreen ? sender.track?.getSettings() : undefined;
+    const failed = await setSenderParameters(
+      sender,
+      (params) => {
+        if (isScreen) {
+          const layer = meshScreenEncoding(
+            host.screenProfile(),
+            captured?.height ?? 0,
+            captured?.frameRate ?? 0,
+          );
+          params.encodings[0].maxBitrate = layer.maxBitrate;
+          params.encodings[0].maxFramerate = layer.maxFramerate;
+          params.encodings[0].scaleResolutionDownBy = layer.scaleResolutionDownBy;
+        } else {
+          params.encodings[0].maxBitrate = videoMaxBitrate();
+          // Камера и экран делят слот: кадры, оставленные трансляцией, камере
+          // не нужны — у неё свой предел в захвате.
+          delete params.encodings[0].maxFramerate;
+          params.encodings[0].scaleResolutionDownBy = 1;
+        }
+      },
       // Экран — по выбору пользователя (тумблер Качество/ФПС); камера — сбалансированно
-      params.degradationPreference = isScreen ? host.screenDegradation() : 'balanced';
-      await sender.setParameters(params);
-    } catch (err) {
-      console.warn('setParameters failed:', err);
+      isScreen ? host.screenDegradation() : 'balanced',
+    );
+    if (isScreen) {
+      host.diag('screen enc', describeSender(sender, failed));
     }
   }
 

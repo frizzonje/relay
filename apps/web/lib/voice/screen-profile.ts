@@ -43,7 +43,7 @@ export const INSTALL_HEIGHTS = SCREEN_HEIGHTS;
 const MESH_MAX_HEIGHT = 720;
 const MESH_MAX_BITRATE = 4_000_000;
 
-/** Нижний слой SFU — то, что зритель получает в плитке, а не на весь экран. */
+/** Запасной слой SFU — на него медиасервер переводит зрителя, когда канал не тянет полный. */
 const LOW_LAYER_HEIGHT = 720;
 const LOW_LAYER_MAX_FPS = 30;
 const LOW_LAYER_BITRATE = 1_500_000; // 720p30 экрана
@@ -120,12 +120,19 @@ export function resolveProfile(input: ProfileInput): ScreenProfile {
  * Только высота, без ширины: «720p» — это 720 строк, и человек ждёт именно их.
  * Потолок по ширине (16:9 от высоты) окну шире 16:9 срезал высоту — окно
  * 1,88:1 уходило как 682p вместо 720p.
+ *
+ * WebKit (`sizeless`) высоты не получает. Больше размера экрана в точках он
+ * всё равно не снимает (1280×800 на ретине 2560×1600 — проверено на Safari 27
+ * 2026-10-04), а `max` до первого кадра сверяет с заглушкой 640×480: первые
+ * секунды трансляция шла 768×480. Если снятое выше профиля, его ужмёт
+ * кодировщик (`fitScale`).
  */
-export function captureConstraints(profile: ScreenProfile): MediaTrackConstraints {
-  return {
-    height: { max: profile.height },
-    frameRate: { ideal: profile.fps, max: profile.fps },
-  };
+export function captureConstraints(
+  profile: ScreenProfile,
+  sizeless = false,
+): MediaTrackConstraints {
+  const frameRate = { ideal: profile.fps, max: profile.fps };
+  return sizeless ? { frameRate } : { height: { max: profile.height }, frameRate };
 }
 
 export interface ScreenEncoding {
@@ -148,17 +155,40 @@ function fitScale(trackHeight: number, height: number): number {
 }
 
 /**
- * Кодировки SFU: два слоя simulcast — нижний для плитки, верхний для того,
- * кто развернул трансляцию. Слоёв всегда два: их число задаётся при создании
- * producer'а и потом не меняется, а смена режима на лету меняет высоту кадра.
- *
- * `trackHeight` — что реально снимается сейчас (`getSettings().height`): экран
- * бывает и ниже профиля, и тогда нижний слой — половина кадра, а не 720p.
+ * Битрейт верхнего слоя под то, что уходит на самом деле. Снятое бывает
+ * ниже профиля — экран меньше выбранного или движок не даёт больше (Safari:
+ * 800p30 при выбранных 1440p60), — и битрейт выбранного профиля на таком кадре
+ * не прибавляет резкости, а только просит у канала лишние мегабиты: движок
+ * не получает их, выключает верхний слой, и зритель ловит мыло и фризы на
+ * переключениях. `fps` — кадры захвата (`getSettings().frameRate`), 0 — неизвестно.
  */
-export function sfuScreenEncodings(profile: ScreenProfile, trackHeight: number): ScreenEncoding[] {
+function fitBitrate(profile: ScreenProfile, height: number, fps: number): number {
+  const frames = fps > 0 ? Math.min(fps, profile.fps) : profile.fps;
+  if (height >= profile.height && frames >= profile.fps) return profile.bitrate;
+  return Math.min(profile.bitrate, Math.max(LOW_LAYER_MIN_BITRATE, setupBitrate(height, frames)));
+}
+
+/**
+ * Кодировки SFU: два слоя simulcast — запасной и полный кадр. Слоёв всегда
+ * два: их число задаётся при создании producer'а и потом не меняется, а смена
+ * режима на лету меняет высоту кадра.
+ *
+ * `trackHeight` и `trackFps` — что реально снимается сейчас (`getSettings()`):
+ * экран бывает ниже профиля. Запасной слой — 720p, только если полный кадр
+ * хотя бы в полтора раза выше; иначе половина кадра. Запасной 720p под полным
+ * 800p (Safari) был почти тем же кадром за те же деньги: канал платил за два
+ * одинаковых потока, а при нехватке зрителю не на что было отступить.
+ */
+export function sfuScreenEncodings(
+  profile: ScreenProfile,
+  trackHeight: number,
+  trackFps = 0,
+): ScreenEncoding[] {
   const source = trackHeight > 0 ? trackHeight : profile.height;
   const full = Math.min(source, profile.height);
-  const lowHeight = full > LOW_LAYER_HEIGHT ? LOW_LAYER_HEIGHT : Math.max(1, Math.round(full / 2));
+  const fullBitrate = fitBitrate(profile, full, trackFps);
+  const lowHeight =
+    full >= LOW_LAYER_HEIGHT * 1.5 ? LOW_LAYER_HEIGHT : Math.max(1, Math.round(full / 2));
   const lowFps = Math.min(profile.fps, LOW_LAYER_MAX_FPS);
   const lowBitrate = Math.max(
     LOW_LAYER_MIN_BITRATE,
@@ -167,14 +197,14 @@ export function sfuScreenEncodings(profile: ScreenProfile, trackHeight: number):
   return [
     {
       rid: 'l',
-      maxBitrate: Math.min(lowBitrate, profile.bitrate),
+      maxBitrate: Math.min(lowBitrate, fullBitrate),
       maxFramerate: lowFps,
       scaleResolutionDownBy: source / lowHeight,
       scalabilityMode: 'L1T3',
     },
     {
       rid: 'f',
-      maxBitrate: profile.bitrate,
+      maxBitrate: fullBitrate,
       maxFramerate: profile.fps,
       scaleResolutionDownBy: fitScale(source, profile.height),
       scalabilityMode: 'L1T3',
@@ -183,9 +213,14 @@ export function sfuScreenEncodings(profile: ScreenProfile, trackHeight: number):
 }
 
 /** Кодировка mesh: один слой — у каждого собеседника свой поток и так. */
-export function meshScreenEncoding(profile: ScreenProfile, trackHeight: number): ScreenEncoding {
+export function meshScreenEncoding(
+  profile: ScreenProfile,
+  trackHeight: number,
+  trackFps = 0,
+): ScreenEncoding {
+  const full = trackHeight > 0 ? Math.min(trackHeight, profile.height) : profile.height;
   return {
-    maxBitrate: profile.bitrate,
+    maxBitrate: fitBitrate(profile, full, trackFps),
     maxFramerate: profile.fps,
     scaleResolutionDownBy: fitScale(trackHeight, profile.height),
   };

@@ -12,6 +12,8 @@ import {
 import { useVoiceStore, type ScreenMode } from '@/stores/voice';
 import { setting } from '@/stores/config';
 import { setTileScreen } from '@/lib/voice/tiles';
+import { diag } from '@/lib/voice/diag';
+import { isWebKit } from '@/lib/voice/engine';
 import {
   DEFAULT_SETUP,
   captureConstraints,
@@ -197,6 +199,10 @@ export async function setCamera(deviceId: string) {
 // которым человек начинал прошлую трансляцию, разрешение и кадры каждого
 // режима — из вкладки «Трансляция» в настройках (строкой `1440p30`).
 const SCREEN_MODE_KEY = 'relay-screen-mode';
+// Через сколько после старта трансляции захват приводится к профилю второй раз.
+const SCREEN_SETTLE_MS = 1500;
+// Сказали ли уже, что движок снимает меньше выбранного, — раз за вкладку.
+let engineCapWarned = false;
 const SCREEN_SETUP_KEYS: Record<ScreenMode, string> = {
   quality: 'relay-screen-quality',
   fps: 'relay-screen-motion',
@@ -240,6 +246,71 @@ export function screenDegradation(): RTCDegradationPreference {
 }
 
 /**
+ * Что снимает захват на самом деле — рядом с тем, что у него просили. Движки
+ * вправе ограничения экрана не выполнить (WebKit, Firefox), и тогда цифра
+ * в настройках расходится с кадром: без этой строки это не отличить от
+ * урезанного кодировщиком кадра.
+ */
+function reportCapture(track: MediaStreamTrack, error?: unknown) {
+  const s = track.getSettings() as MediaTrackSettings & { displaySurface?: string };
+  const caps = captureCaps(track);
+  const profile = currentScreenProfile();
+  const failed = error ? ` failed: ${String((error as Error)?.message ?? error).slice(0, 60)}` : '';
+  diag(
+    'screen cap',
+    `want ≤${profile.height}p${profile.fps} ${screenMode} got ${s.width ?? '?'}x${s.height ?? '?'}` +
+      `@${s.frameRate != null ? Math.round(s.frameRate) : '?'} ${s.displaySurface ?? ''} ` +
+      `caps ≤${caps.width || '?'}x${caps.height || '?'}@${caps.fps || '?'} ` +
+      `hint=${track.contentHint || 'none'}${failed}`,
+  );
+}
+
+/** Больше чего захват не снимет вовсе — по словам самого движка; 0 — не говорит. */
+function captureCaps(track: MediaStreamTrack): { width: number; height: number; fps: number } {
+  type Range = { max?: number } | undefined;
+  let caps: { width?: Range; height?: Range; frameRate?: Range } = {};
+  try {
+    caps = (track.getCapabilities?.() ?? {}) as typeof caps;
+  } catch {
+    /* движок без getCapabilities — молчим */
+  }
+  return {
+    width: caps.width?.max ?? 0,
+    height: caps.height?.max ?? 0,
+    fps: Math.round(caps.frameRate?.max ?? 0),
+  };
+}
+
+/**
+ * WebKit снимает экран не выше размера в точках и не чаще 30 кадров, что бы ни
+ * выбрал человек: на ретине 2560×1600 при выбранных 1440p60 уходит 800p30.
+ * Плашка на плитке честно показывает 800p, но без объяснения это выглядит как
+ * сломанные настройки («ставлю 2K — у зрителя 620p», 2026-10-04). Говорим один
+ * раз — и где взять больше.
+ */
+function warnEngineCap(track: MediaStreamTrack) {
+  if (engineCapWarned || !isWebKit()) return;
+  const caps = captureCaps(track);
+  const profile = currentScreenProfile();
+  if (!caps.height || !caps.fps) return;
+  if (caps.height >= profile.height && caps.fps >= profile.fps) return;
+  engineCapWarned = true;
+  toast(
+    msg('voice.toast.screenEngineCap', {
+      width: caps.width,
+      height: caps.height,
+      fps: caps.fps,
+      want: formatSetup(profile),
+      got: formatSetup({
+        height: Math.min(caps.height, profile.height),
+        fps: Math.min(caps.fps, profile.fps),
+      }),
+    }),
+    { duration: 15_000 },
+  );
+}
+
+/**
  * Привести идущую трансляцию к текущему профилю: захват (размер, кадры),
  * подсказку кодировщику и — через транспорт — кодировки. Без перезапуска
  * показа и без пересогласования SDP.
@@ -248,14 +319,18 @@ async function retuneScreen() {
   const track = screenTrack;
   if (!screenOn || !track) return;
   track.contentHint = screenContentHint(screenMode);
+  let failed: unknown;
   try {
-    await track.applyConstraints(captureConstraints(currentScreenProfile()));
+    await track.applyConstraints(captureConstraints(currentScreenProfile(), isWebKit()));
   } catch (err) {
     // Движок не умеет пересобрать захват на лету — кодировки всё равно
     // поменяем: битрейт и кадры решают больше, чем размер исходника.
     console.warn('[screen] applyConstraints failed:', err);
+    failed = err;
   }
   if (screenTrack !== track) return; // пока ждали, показ остановили
+  reportCapture(track, failed);
+  warnEngineCap(track);
   around.retune();
 }
 
@@ -372,7 +447,7 @@ async function startScreen() {
   notifyScreenPicker(true);
   try {
     display = await navigator.mediaDevices.getDisplayMedia({
-      video: captureConstraints(currentScreenProfile()),
+      video: captureConstraints(currentScreenProfile(), isWebKit()),
       audio: nativeAudio ? false : screenAudioConstraints(),
       ...DISPLAY_OPTIONS,
     } as DisplayMediaStreamOptions);
@@ -392,6 +467,7 @@ async function startScreen() {
 
   screenTrack = display.getVideoTracks()[0];
   screenTrack.contentHint = screenContentHint(screenMode);
+  reportCapture(screenTrack);
 
   if (nativeAudio) {
     // Нативный захват без голосов relay. Может вернуть null (нативный путь
@@ -443,6 +519,15 @@ async function startScreen() {
 
   // местную плитку не зеркалим и показываем целиком (см. .tile.local.screen)
   setTileScreen('local', true);
+
+  // Второй раз — когда пошли кадры: размер исходника движки узнают только
+  // с первым кадром (WebKit до него сверяет `max` с заглушкой 640×480), а
+  // слои и битрейт считаются от того, что реально снимается. Строка
+  // `screen cap` покажет, что вышло.
+  const started = screenTrack;
+  setTimeout(() => {
+    if (screenOn && screenTrack === started) void retuneScreen();
+  }, SCREEN_SETTLE_MS);
 }
 
 function stopScreen() {
