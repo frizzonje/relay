@@ -644,6 +644,8 @@
   "outdated.reload": "Reload",
   "outdated.server.body": "This installation runs an older relay than the app you are knocking with. Nothing on your side fixes that — only whoever runs this server can update it.",
   "outdated.server.title": "This server is out of date",
+  "update.ready": "relay has been updated. Reload to get the new version.",
+  "update.reload": "Reload",
   "pins.action.pin": "Pin",
   "pins.action.unpin": "Unpin",
   "pins.count": {
