@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils';
 export type IconName = keyof typeof GLYPHS;
 
 /** Значки, которые рисуются заливкой, а не обводкой. */
-const FILLED = new Set<IconName>(['more-horizontal']);
+const FILLED = new Set<IconName>(['more-horizontal', 'play']);
 
 const GLYPHS = {
   'arrow-down': (
@@ -178,6 +178,11 @@ const GLYPHS = {
   ),
   paperclip: (
     <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+  ),
+  // Залитый, а не контур: на кнопке «Смотреть» он главный знак, контуром
+  // треугольник в 16px читается как стрелка.
+  play: (
+    <path d="M7 4.7a1.2 1.2 0 0 1 1.83-1.02l11.1 7.3a1.2 1.2 0 0 1 0 2.02l-11.1 7.3A1.2 1.2 0 0 1 7 19.3z" />
   ),
   paste: (
     <>
