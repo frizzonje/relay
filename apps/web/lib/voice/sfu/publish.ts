@@ -1,15 +1,17 @@
 'use client';
 
-import type { Device, Producer, Transport } from 'mediasoup-client/types';
+import type { Device, Producer, RtpCodecCapability, Transport } from 'mediasoup-client/types';
 import type { UplinkStatus } from '@/stores/voice';
 import { setting } from '@/stores/config';
 import type { TransportHost } from '../types';
-import { readStats, worseUplink } from '../stats';
+import { readSendVideo, readStats, worseUplink, type SendVideo } from '../stats';
+import { sfuScreenEncodings } from '../screen-profile';
+import { isH264, pickScreenCodec } from './screen-codec';
 import {
+  AUDIO_ENCODINGS,
   CAM_ENCODINGS,
   MIC_CODEC_OPTIONS,
   SCREEN_AUDIO_CODEC_OPTIONS,
-  SCREEN_ENCODINGS,
   type Ask,
   type Source,
 } from './protocol';
@@ -76,12 +78,43 @@ export interface Publisher {
   count(): number;
   /** Здоровье своего аплинка — там же, где в mesh: qualityLimitationReason. */
   uplink(): Promise<UplinkStatus>;
+  /** Что реально уходит с трансляции экрана; null — её нет. */
+  screenSend(): Promise<SendVideo | null>;
+}
+
+/** Высота кадра, который снимается сейчас: от неё считается нижний слой экрана. */
+function trackHeight(track: MediaStreamTrack): number {
+  return track.getSettings?.().height ?? 0;
 }
 
 export function createPublisher({ host, sendTransport, device, ask }: PublishDeps): Publisher {
   const producers = new Map<Source, Producer>();
+  // Публикации, которые уже идут, по роли. Роль публикуют с разных сторон почти
+  // разом — вход, сверка после обрыва, тумблер камеры, — а в `producers` она
+  // попадает только после ответа сервера. Без этой записи обе проходили
+  // проверку «уже течёт»: сервер оставлял вторую, а первая так и кодировалась
+  // у нас сиротой — для экрана это двойная нагрузка на процессор и аплинк.
+  const inflight = new Map<Source, Promise<boolean>>();
 
   async function produce(source: Source, track: MediaStreamTrack): Promise<boolean> {
+    const pending = inflight.get(source);
+    if (pending) {
+      // Дождаться той публикации и подменить в ней дорожку — как с живой.
+      await pending;
+      const live = producers.get(source);
+      if (live && live.track !== track) await live.replaceTrack({ track }).catch(() => {});
+      return !!live;
+    }
+    const run = produceNow(source, track);
+    inflight.set(source, run);
+    try {
+      return await run;
+    } finally {
+      inflight.delete(source);
+    }
+  }
+
+  async function produceNow(source: Source, track: MediaStreamTrack): Promise<boolean> {
     const transport = sendTransport();
     const dev = device();
     if (!transport || !dev) {
@@ -102,8 +135,33 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
     const live = producers.get(source);
     if (live) {
       await live.replaceTrack({ track }).catch(() => {});
+      if (source === 'screen') await retuneScreen();
       return true;
     }
+    // Трансляции — аппаратный кодировщик, если он есть (см. screen-codec.ts).
+    const codec =
+      source === 'screen' ? await pickScreenCodec(dev, host.screenProfile()) : undefined;
+    // Пока движок отвечал про кодировщик, показ успели остановить: публиковать
+    // нечего, а опубликованная мёртвая дорожка висела бы у зрителей замёрзшим
+    // кадром до следующей сверки.
+    if (track.readyState === 'ended') return false;
+    if (codec) {
+      const ok = await produceWith(source, track, codec);
+      if (ok) return true;
+      // H264 не поднялся (движок передумал, отказал кодировщик) — трансляция
+      // важнее кодека: уходим, как раньше, на умолчании.
+      host.diag('sfu produce fallback', `${source} ${codec.mimeType} → default`);
+    }
+    return produceWith(source, track);
+  }
+
+  async function produceWith(
+    source: Source,
+    track: MediaStreamTrack,
+    codec?: RtpCodecCapability,
+  ): Promise<boolean> {
+    const transport = sendTransport();
+    if (!transport) return false;
     // appData уходит в `produce` на сервер — по нему остальные узнают роль
     // дорожки, а не гадают по порядку.
     const isScreen = source === 'screen';
@@ -111,6 +169,7 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
       const producer = await transport.produce({
         track,
         appData: { source },
+        ...(codec ? { codec } : {}),
         // Дорожкой владеет приложение, а не производитель: mediasoup-client по
         // умолчанию (stopTracks: true) останавливает трек при закрытии
         // producer'а, и любой разбор транспорта — переезд, реконнект сокета,
@@ -118,9 +177,17 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
         // публикация падала с «track ended», и звонок оставался в тишине до
         // перезахода. Гасят дорожки только их владельцы: mic.ts и camera.ts.
         stopTracks: false,
-        ...(track.kind === 'video'
-          ? { encodings: isScreen ? SCREEN_ENCODINGS : camEncodings() }
-          : {}),
+        // Экран — два слоя simulcast под профиль трансляции: нижний для
+        // плитки, верхний для того, кто развернул (см. screen-profile.ts).
+        // Голос и звук трансляции — с высоким приоритетом: стример льёт
+        // десяток мегабит, и на забитом аплинке голос иначе рвался бы наравне
+        // с картинкой (в mesh так с самого начала, см. setAudioSenderBitrate).
+        encodings:
+          track.kind === 'audio'
+            ? AUDIO_ENCODINGS
+            : isScreen
+              ? screenEncodings(track, codec)
+              : camEncodings(),
         ...(track.kind === 'audio'
           ? {
               codecOptions:
@@ -142,6 +209,17 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
       host.diag('sfu produce failed', `${source} ${String((err as Error)?.message ?? err)}`);
       return false;
     }
+  }
+
+  /**
+   * Слои трансляции. Временные слои (`L1T3`) просим только у VP8: аппаратный
+   * H264 их часто не умеет, а неизвестный `scalabilityMode` движок вправе
+   * отвергнуть вместе со всей публикацией.
+   */
+  function screenEncodings(track: MediaStreamTrack, codec?: RtpCodecCapability) {
+    const layers = sfuScreenEncodings(host.screenProfile(), trackHeight(track));
+    if (!isH264(codec)) return layers;
+    return layers.map(({ scalabilityMode: _, ...layer }) => layer);
   }
 
   /** Закрыть свой producer и сказать серверу — иначе он останется висеть. */
@@ -177,16 +255,25 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
   }
 
   /**
-   * Тумблер «качество/ФПС» демонстрации. Слои тут ни при чём: mediasoup рулит
-   * producer'ом, но под ним остаётся обычный `RTCRtpSender`, и предпочтение
-   * кодировщика ставится ровно так же, как в mesh — иначе один и тот же тумблер
-   * в двух режимах делал бы разное.
+   * Привести кодировки экрана к профилю трансляции: битрейт и кадры каждого
+   * слоя, масштаб нижнего (кадр мог смениться — другой режим, другое окно) и
+   * что беречь при нехватке. Слоёв столько же, сколько было при создании:
+   * число кодировок `setParameters` менять не даёт. Тот же тумблер в mesh
+   * ставится тем же `setParameters` — иначе в двух режимах он делал бы разное.
    */
   async function retuneScreen() {
-    const sender = producers.get('screen')?.rtpSender;
-    if (!sender) return;
+    const producer = producers.get('screen');
+    const sender = producer?.rtpSender;
+    if (!producer || !sender || !producer.track) return;
+    const wanted = sfuScreenEncodings(host.screenProfile(), trackHeight(producer.track));
     try {
       const params = sender.getParameters();
+      params.encodings.forEach((encoding, i) => {
+        const layer = wanted[Math.min(i, wanted.length - 1)];
+        encoding.maxBitrate = layer.maxBitrate;
+        encoding.maxFramerate = layer.maxFramerate;
+        encoding.scaleResolutionDownBy = layer.scaleResolutionDownBy;
+      });
       params.degradationPreference = host.screenDegradation();
       await sender.setParameters(params);
     } catch (err) {
@@ -242,6 +329,16 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
         }
       }
       return worst;
+    },
+
+    async screenSend() {
+      const producer = producers.get('screen');
+      if (!producer || producer.closed) return null;
+      try {
+        return readSendVideo(await producer.getStats());
+      } catch {
+        return null; // закрылся между тиками
+      }
     },
   };
 }

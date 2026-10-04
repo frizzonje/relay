@@ -3,8 +3,10 @@
 import type { UplinkStatus } from '@/stores/voice';
 import type { TransportHost } from '../types';
 import { gradeQuality, pingGrade } from '../quality';
+import { createScreenSendMeter, mergeSendVideo } from '../screen-send';
 import {
   netDelta,
+  readSendVideo,
   readStats,
   toHistory,
   worseUplink,
@@ -49,6 +51,8 @@ export interface MetricsDeps {
   peers(): Map<string, MetricsPeer>;
   /** Мы в звонке? Вне его цифрам некуда ехать. */
   inRoom(): boolean;
+  /** Смотрит ли собеседник нашу трансляцию — только таким она и уходит. */
+  receivesScreen(peerId: string): boolean;
   /** Починить связь, в которой звук был и пропал. Чинит лестница, не метрики. */
   repair(peerId: string, fix: SilenceFix): void;
 }
@@ -61,8 +65,18 @@ export interface Metrics {
   reset(): void;
 }
 
-export function createMetrics({ host, silence, peers, inRoom, repair }: MetricsDeps): Metrics {
+export function createMetrics({
+  host,
+  silence,
+  peers,
+  inRoom,
+  receivesScreen,
+  repair,
+}: MetricsDeps): Metrics {
   const netHistory = new Map<string, NetSnapshot>();
+  // Плашка своей трансляции: напрямую поток уходит каждому собеседнику свой,
+  // и на плашке — их сумма, а не размер захвата.
+  const sendMeter = createScreenSendMeter(host);
 
   /**
    * Один снимок с каждого соединения за тик — и три читателя на него.
@@ -73,17 +87,23 @@ export function createMetrics({ host, silence, peers, inRoom, repair }: MetricsD
    * времени, и сторож видел байты, которых палочки в том же тике уже не
    * видели. Свести такие показания в одну картину нельзя в принципе.
    */
-  async function collect(table: Map<string, MetricsPeer>): Promise<Map<string, StatsSnapshot>> {
+  async function collect(table: Map<string, MetricsPeer>) {
     const snaps = new Map<string, StatsSnapshot>();
+    const sends: ReturnType<typeof readSendVideo>[] = [];
     for (const [id, peer] of table) {
       if (!peer.connected) continue;
       try {
-        snaps.set(id, readStats(await peer.pc.getStats()));
+        const report = await peer.pc.getStats();
+        snaps.set(id, readStats(report));
+        // Видео-sender в mesh общий у камеры и экрана: при идущей трансляции
+        // исходящее видео — это она. Тем, кто не смотрит, она не уходит, а их
+        // отчёт хранит застывшие цифры прошлого — его не считаем.
+        if (host.screenOn() && receivesScreen(id)) sends.push(readSendVideo(report));
       } catch {
         /* getStats может кинуть на закрывающемся pc — пропускаем пира */
       }
     }
-    return snaps;
+    return { snaps, sends };
   }
 
   function updatePing(table: Map<string, MetricsPeer>, snaps: Map<string, StatsSnapshot>) {
@@ -169,7 +189,8 @@ export function createMetrics({ host, silence, peers, inRoom, repair }: MetricsD
     async tick() {
       if (!inRoom()) return;
       const table = peers();
-      const snaps = await collect(table);
+      const { snaps, sends } = await collect(table);
+      sendMeter.report(mergeSendVideo(sends), ![...table.keys()].some((id) => receivesScreen(id)));
       updatePing(table, snaps);
       // Палочки — до сторожа: сторож чинит связь, и после его ступени снимок
       // этого тика описывал бы соединение, которого уже нет.
@@ -191,6 +212,8 @@ export function createMetrics({ host, silence, peers, inRoom, repair }: MetricsD
 
     reset() {
       netHistory.clear();
+      sendMeter.reset();
+      host.setScreenSend(null);
     },
   };
 }

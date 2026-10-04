@@ -45,18 +45,22 @@ export { refreshSpeakers, resumeVoiceAudio, setSpeaker } from '@/lib/voice/outpu
 import {
   currentScreenMode,
   currentVideoTrack,
+  currentScreenProfile,
   initCamera,
+  loadScreenPrefs,
   isCamOn,
   isScreenOn,
   screenAudio,
   screenDegradation,
   teardownVideo,
+  transportChanged,
 } from '@/lib/voice/camera';
 
 export {
   refreshCameras,
   setCamera,
   setScreenMode,
+  setScreenSetup,
   toggleCamera,
   toggleScreen,
 } from '@/lib/voice/camera';
@@ -86,7 +90,9 @@ import {
   setTileNet,
   setTileScreen,
   setTileState,
+  setTileSend,
   setTileVideoOn,
+  setTileWatch,
   syncPeerRoles,
   tileOf,
 } from '@/lib/voice/tiles';
@@ -97,6 +103,7 @@ import {
 export {
   clearFocus,
   PEER_VOL_MAX,
+  reportTileView,
   setFocus,
   setPeerScreenVolume,
   setPeerVolume,
@@ -194,11 +201,14 @@ const host: TransportHost = {
   camOn: () => isCamOn(),
   screenOn: () => isScreenOn(),
   screenDegradation: () => screenDegradation(),
+  screenProfile: () => currentScreenProfile(),
 
   addTile,
   removeTile,
   setTileState,
   setTileNet,
+  setTileWatch,
+  setScreenSend: (send) => setTileSend('local', send),
   cleanupPeerAudio,
   attachRemoteAudio,
   detachRemoteAudio,
@@ -313,8 +323,10 @@ const SFU_RETRY_MAX_MS = 30_000;
 let sfuRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Выдержка перед тревогой об обрыве сокета api: моргание сети короче неё
-// человек не должен замечать вовсе (см. обработчик `disconnect`).
-const SERVER_LOST_ALARM_MS = 3000;
+// человек не должен замечать вовсе (см. обработчик `disconnect`). С запасом над
+// паузой между попытками сокета (до 2 с, lib/socket.ts): сервер, вернувшийся
+// за пару секунд, сокет успевает застать, пока тревога ещё молчит.
+const SERVER_LOST_ALARM_MS = 4000;
 let serverLostTimer: ReturnType<typeof setTimeout> | null = null;
 // Сказали ли о потере — тогда и о возвращении скажем.
 let serverLostAnnounced = false;
@@ -338,6 +350,7 @@ function leaveTransports() {
   sfuTransport?.leave();
   transport = null;
   roomMode = null;
+  useVoiceStore.getState().setCallVia(null);
 }
 
 /**
@@ -380,6 +393,9 @@ async function enterRoom(target: string, route: Route, gen: number) {
   if (transport && transport !== next) transport.leave();
   transport = next;
   roomMode = route.mode;
+  useVoiceStore.getState().setCallVia(route.mode);
+  // Потолок трансляции у транспортов разный — идущий показ подстраиваем.
+  transportChanged();
   if (route.mode === 'p2p') {
     // Канал прямой — ждать медиасервер ему незачем, даже если ждали.
     cancelSfuRetry();
@@ -638,6 +654,19 @@ export function setListenOnly(on: boolean) {
   setMicOn(false);
   useVoiceStore.getState().setListenOnly(true);
   syncMediaState();
+}
+
+/**
+ * «Смотреть» трансляцию собеседника и обратно. Решение — за транспортом: через
+ * медиасервер поток к зрителю не идёт, пока он не попросил, а в прямых
+ * каналах идёт каждому и так (там кнопки нет вовсе).
+ */
+export function watchStream(peerId: string) {
+  tx().watch?.(peerId);
+}
+
+export function unwatchStream(peerId: string) {
+  tx().unwatch?.(peerId);
 }
 
 /**
@@ -928,6 +957,7 @@ export function initVoice() {
   // инсталляции. Раньше это состояние поднимала только модалка настроек, и
   // включённый push-to-talk оживал лишь после того, как её откроют.
   loadMediaPrefs();
+  loadScreenPrefs();
 
   // Подключили/отключили устройство — обновляем списки в сторе
   navigator.mediaDevices?.addEventListener?.('devicechange', () => {
@@ -942,6 +972,7 @@ export function initVoice() {
     dropAudio: cleanupPeerAudio,
     setGain: setPeerGain,
     focusChanged: (id) => tx().focusChanged?.(id),
+    viewChanged: (id, px) => tx().viewChanged?.(id, px),
   });
   // Микшер снимает узлы ушедшего сам, а вот «когда он в последний раз говорил»
   // — это уже обводка плитки, и живёт она здесь.
@@ -966,6 +997,7 @@ export function initVoice() {
     publish: (what) => (what === 'camera' ? tx().publishVideo() : tx().publishScreen()),
     unpublish: (what) => (what === 'camera' ? tx().unpublishVideo() : tx().unpublishScreen()),
     retune: () => tx().retuneVideo(),
+    transport: () => (roomMode === 'sfu' ? 'sfu' : 'mesh'),
     syncStore: syncMediaState,
     announce: broadcastMediaState,
   });
@@ -989,6 +1021,7 @@ export function initVoice() {
     // кадр целиком (а не обрезает по краям), а погасший флаг — сигнал «показ
     // окончен», по которому крупный план сам возвращается в сетку.
     setTileScreen(from, peerScreen);
+    tx().peerScreen?.(from, peerScreen);
   });
 
   // Собеседник сменил тег — обновляем подпись его плитки и имя пира.

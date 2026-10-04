@@ -1050,6 +1050,12 @@ export interface IcePayload {
   candidate: IceCandidatePayload;
 }
 
+/** Прямой канал: смотрю ли я трансляцию адресата («Смотреть» / «Перестать»). */
+export interface ScreenWatchPayload {
+  to: string;
+  on: boolean;
+}
+
 export interface ChatJoinPayload {
   room: string;
   name?: string;
@@ -1335,6 +1341,7 @@ export interface ClientToServerEvents {
   offer: (payload: OfferPayload) => void;
   answer: (payload: AnswerPayload) => void;
   'ice-candidate': (payload: IcePayload) => void;
+  'screen-watch': (payload: ScreenWatchPayload) => void;
   'chat-join': (payload: ChatJoinPayload) => void;
   'chat-leave': () => void;
   'chat-message': (payload: ChatMessagePayload) => void;
@@ -1483,6 +1490,11 @@ export interface IceRelay {
   candidate: IceCandidatePayload;
 }
 
+export interface ScreenWatchRelay {
+  from: string;
+  on: boolean;
+}
+
 // ── Дозвон ──────────────────────────────────────────────────────────────────
 
 /** Участник вызова так, как его показывают собеседнику: лицо и подпись. */
@@ -1588,6 +1600,7 @@ export interface ServerToClientEvents {
   offer: (payload: OfferRelay) => void;
   answer: (payload: AnswerRelay) => void;
   'ice-candidate': (payload: IceRelay) => void;
+  'screen-watch': (payload: ScreenWatchRelay) => void;
   'voice-presence': (presence: VoicePresence) => void;
   /**
    * Кто сейчас на связи во всей инсталляции — снимок на подключении. Приходит

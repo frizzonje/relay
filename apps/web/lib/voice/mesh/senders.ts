@@ -3,6 +3,7 @@
 import { boostVideoBitrate, boostAudioBitrate } from '@/lib/sdp';
 import { setting } from '@/stores/config';
 import type { TransportHost } from '../types';
+import { meshScreenEncoding } from '../screen-profile';
 
 /**
  * Потолки битрейта и публикация своих дорожек в одно соединение.
@@ -20,8 +21,6 @@ import type { TransportHost } from '../types';
 // Потолки битрейта (SDP задаёт предел кодеку, setParameters — sender'у)
 // ─────────────────────────────────────────────────────────────────────────
 
-const SCREEN_MAX_BITRATE = 8_000_000;
-
 // Потолок звука демонстрации (музыка/фильм) — заметно жирнее голоса: там
 // слышно разницу.
 const SCREEN_AUDIO_MAX_BITRATE = 256_000;
@@ -33,8 +32,9 @@ const SCREEN_AUDIO_MAX_BITRATE = 256_000;
  *
  * Спрашиваем в момент, когда дорожку настраивают, а не при загрузке модуля:
  * снимок настроек приезжает после первого кадра, и число, снятое на старте,
- * осталось бы вчерашним до перезагрузки вкладки. Демонстрацию экрана настройка
- * не трогает намеренно — она про камеру и голос, а текст в мыле нечитаем.
+ * осталось бы вчерашним до перезагрузки вкладки. Демонстрацию экрана эта
+ * настройка не трогает: у трансляции свой профиль (`host.screenProfile()`), а в
+ * mesh — свой потолок 720p, см. screen-profile.ts.
  */
 function videoMaxBitrate(): number {
   return setting<number>('voice.videoBitrateKbps') * 1000;
@@ -123,7 +123,19 @@ export function createSenders(host: TransportHost): Senders {
     try {
       const params = sender.getParameters();
       if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-      params.encodings[0].maxBitrate = isScreen ? SCREEN_MAX_BITRATE : videoMaxBitrate();
+      if (isScreen) {
+        const height = sender.track?.getSettings().height ?? 0;
+        const layer = meshScreenEncoding(host.screenProfile(), height);
+        params.encodings[0].maxBitrate = layer.maxBitrate;
+        params.encodings[0].maxFramerate = layer.maxFramerate;
+        params.encodings[0].scaleResolutionDownBy = layer.scaleResolutionDownBy;
+      } else {
+        params.encodings[0].maxBitrate = videoMaxBitrate();
+        // Камера и экран делят слот: кадры, оставленные трансляцией, камере
+        // не нужны — у неё свой предел в захвате.
+        delete params.encodings[0].maxFramerate;
+        params.encodings[0].scaleResolutionDownBy = 1;
+      }
       // Экран — по выбору пользователя (тумблер Качество/ФПС); камера — сбалансированно
       params.degradationPreference = isScreen ? host.screenDegradation() : 'balanced';
       await sender.setParameters(params);

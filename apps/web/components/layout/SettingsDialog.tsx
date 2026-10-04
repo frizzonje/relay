@@ -9,6 +9,7 @@ import { Switch } from '@/components/ui/switch';
 import { springTab, tabPanel } from '@/lib/motion';
 import { AboutPanel } from '@/components/layout/AboutPanel';
 import { DevicesPanel } from '@/components/layout/DevicesPanel';
+import { StreamSettings } from '@/components/layout/StreamSettings';
 import {
   checkForUpdates,
   installUpdate,
@@ -46,10 +47,11 @@ import {
   getMicLevel,
 } from '@/lib/voice';
 
-type Tab = 'av' | 'appearance' | 'hotkeys' | 'app' | 'account' | 'about';
+type Tab = 'av' | 'stream' | 'appearance' | 'hotkeys' | 'app' | 'account' | 'about';
 
 const TABS: { id: Tab; label: MessageKey; desktopOnly?: boolean }[] = [
   { id: 'av', label: 'settings.tab.av' },
+  { id: 'stream', label: 'settings.tab.stream' },
   { id: 'appearance', label: 'settings.tab.appearance' },
   { id: 'hotkeys', label: 'settings.tab.hotkeys' },
   // Настройки самой оболочки (автозапуск): в браузере показывать нечего.
@@ -728,6 +730,8 @@ export function SettingsDialog({
                     />
                   </div>
                 </div>
+              ) : tab === 'stream' ? (
+                <StreamSettings />
               ) : tab === 'appearance' ? (
                 <div className="flex flex-col gap-5">
                   <LanguageSelect />

@@ -76,8 +76,16 @@ class FakePC {
   }
   addTrack(t: unknown) {
     this.tracks.push(t);
-    return { track: t };
+    const sender = {
+      track: t,
+      replaceTrack: async (next: unknown) => {
+        sender.track = next;
+      },
+    };
+    this.senders.push(sender);
+    return sender;
   }
+  senders: { track: unknown }[] = [];
   getSenders() {
     return [];
   }
@@ -129,6 +137,8 @@ const fakeStream = {
   getAudioTracks: () => [audioTrack],
   getVideoTracks: () => [],
   getTracks: () => [audioTrack],
+  addTrack: vi.fn(),
+  removeTrack: vi.fn(),
 };
 
 let voice: typeof import('@/lib/voice');
@@ -334,6 +344,65 @@ describe('mesh — метрики', () => {
 
     await vi.advanceTimersByTimeAsync(3000);
     expect(pc.statCalls).toBe(0);
+  });
+});
+
+/**
+ * «Смотреть» в прямом канале. Трансляция идёт с аплинка стримера каждому
+ * зрителю отдельно — слать её тем, кто её не открывал, значит жечь его канал
+ * впустую. Поэтому поток уходит только тем, кто попросил.
+ */
+describe('mesh — трансляция по кнопке «Смотреть»', () => {
+  const tileWatch = async (id: string) => {
+    const { useVoiceStore } = await import('@/stores/voice');
+    return useVoiceStore.getState().tiles.find((t) => t.id === id)?.watch;
+  };
+  const sentVideo = (pc: FakePC) =>
+    pc.senders.filter((s) => (s.track as { kind?: string } | null)?.kind === 'video');
+
+  const screenTrack = {
+    kind: 'video',
+    contentHint: '',
+    getSettings: () => ({ height: 720, displaySurface: 'monitor' }),
+    applyConstraints: vi.fn(async () => {}),
+    addEventListener: vi.fn(),
+    stop: vi.fn(),
+  };
+
+  it('зритель: показ собеседника предлагается, «Смотреть» просит его у стримера', async () => {
+    await callWith('aaa');
+    await fire('media-update', { from: 'aaa', camOn: false, screenOn: true });
+    expect(await tileWatch('aaa')).toBe('offered');
+
+    voice.watchStream('aaa');
+    expect(emitted('screen-watch')).toEqual([['screen-watch', { to: 'aaa', on: true }]]);
+    expect(await tileWatch('aaa')).toBe('watching');
+
+    voice.unwatchStream('aaa');
+    expect(emitted('screen-watch').at(-1)).toEqual(['screen-watch', { to: 'aaa', on: false }]);
+    expect(await tileWatch('aaa')).toBe('offered');
+
+    await fire('media-update', { from: 'aaa', camOn: false, screenOn: false });
+    expect(await tileWatch('aaa')).toBeUndefined();
+  });
+
+  it('стример: экран уходит только тому, кто попросил, и перестаёт по просьбе', async () => {
+    const pc = await callWith('aaa');
+    pc.setState('connected');
+    (navigator.mediaDevices as { getDisplayMedia?: unknown }).getDisplayMedia = vi.fn(async () => ({
+      getVideoTracks: () => [screenTrack],
+      getAudioTracks: () => [],
+    }));
+    await voice.toggleScreen();
+    expect(sentVideo(pc)).toHaveLength(0);
+
+    await fire('screen-watch', { from: 'aaa', on: true });
+    expect(sentVideo(pc).map((s) => s.track)).toEqual([screenTrack]);
+
+    await fire('screen-watch', { from: 'aaa', on: false });
+    await Promise.resolve();
+    expect(pc.senders.some((s) => s.track === screenTrack)).toBe(false);
+    await voice.toggleScreen();
   });
 });
 

@@ -575,6 +575,7 @@ C→S join {room, name?, clientId?, transport: 'p2p'|'sfu'}
 | C→S | `leave` | — | |
 | C→S / S→C | `offer`, `answer` | `{to, sdp}` / `{from, name?, sdp}` | только mesh; ретранслируется адресату в той же комнате |
 | C→S / S→C | `ice-candidate` | `{to, candidate}` / `{from, candidate}` | то же |
+| C→S / S→C | `screen-watch` | `{to, on}` / `{from, on}` | только mesh: зритель нажал «Смотреть» (`on: true`) или «Перестать» — стример шлёт экран только тем, кто смотрит |
 | C→S | `media-update` | `{camOn, screenOn, micOn?, deafened?}` | слать после `join` и при каждом изменении |
 | S→C | `media-update` | то же + `from` | соседям по комнате |
 | S→C | `voice-presence` | `Record<room, VoicePeer[]>` | состав всех видимых комнат, при каждом изменении (раз в 80 мс) |

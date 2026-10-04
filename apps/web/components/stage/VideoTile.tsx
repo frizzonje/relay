@@ -12,9 +12,12 @@ import {
   kickGuest,
   setPeerVolume,
   setPeerScreenVolume,
+  reportTileView,
+  unwatchStream,
+  watchStream,
 } from '@/lib/voice';
 import { useAudioUnlockStore } from '@/stores/audio-unlock';
-import { useVoiceStore, type TileNet, type VoiceTile } from '@/stores/voice';
+import { useVoiceStore, type TileNet, type TileSend, type VoiceTile } from '@/stores/voice';
 import { useDismiss } from '@/lib/use-dismiss';
 import { useT } from '@/lib/i18n';
 import type { MessageKey } from '@/lib/i18n';
@@ -37,6 +40,14 @@ const OUTRO_MS = 1600;
 // Поля по краям кадра считаем заметными от 4% расхождения пропорций — ниже это
 // уже мера погрешности округления, а не «чёрные полосы».
 const LETTERBOX_TOLERANCE = 0.04;
+
+// Сколько размер плитки трансляции должен простоять, прежде чем по нему сменят слой.
+const VIEW_SETTLE_MS = 300;
+
+// Сколько ждём первый кадр трансляции молча. Обычно он приходит за секунду-две;
+// дольше — уже не «грузится», и зрителю надо сказать, что дело в сети, а не в
+// кнопке, которую он нажал.
+const STREAM_SLOW_MS = 8000;
 
 // Выше 200% ползунок физически «тормозит»: 200 единиц драга дают только 100%
 // прироста (вместо 1:1) — тот же путь мышкой требует вдвое больше усилия,
@@ -274,6 +285,183 @@ function AmbientWash({ videoRef }: { videoRef: React.RefObject<HTMLVideoElement 
 }
 
 /**
+ * Обложка чужой трансляции до первого кадра. Сначала — предложение посмотреть
+ * (поток не идёт, пока зритель не попросит), после нажатия — загрузка, пока не
+ * придёт картинка. Без неё зритель после нажатия секунду-другую смотрел на ту же
+ * аватарку или на чёрный кадр и не понимал, сработало ли вообще.
+ */
+function StreamCover({ tile, phase }: { tile: VoiceTile; phase: 'offered' | 'loading' }) {
+  const t = useT();
+  const loading = phase === 'loading';
+  const [slow, setSlow] = useState(false);
+
+  useEffect(() => {
+    if (!loading) {
+      setSlow(false);
+      return;
+    }
+    const id = window.setTimeout(() => setSlow(true), STREAM_SLOW_MS);
+    return () => window.clearTimeout(id);
+  }, [loading]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      // Уходит мягче, чем приходит: под ней проявляется первый кадр.
+      exit={{ opacity: 0, transition: { duration: 0.45, ease: 'easeOut' } }}
+      transition={{ duration: 0.25 }}
+      // Под чипом имени и кнопками плитки (они ниже по разметке, слой тот же):
+      // обложка подкладывается под них, а не гасит их.
+      className="@container absolute inset-0 z-[2] flex items-center justify-center overflow-hidden bg-[radial-gradient(120%_110%_at_50%_0%,#2b2e34_0%,#18191d_55%,#0e0f11_100%)]"
+    >
+      <div aria-hidden className="stream-dots pointer-events-none absolute inset-0" />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute h-[70%] w-[50%] rounded-full bg-white/[0.06] blur-[60px]"
+      />
+      {loading && (
+        <div
+          aria-hidden
+          className="stream-sweep pointer-events-none absolute inset-y-0 left-0 w-1/2"
+        />
+      )}
+
+      <div className="relative flex flex-col items-center gap-5 px-4 text-center @max-[15rem]:gap-3">
+        {/* На мелкой плитке аватар не влезает вместе с кнопкой — остаётся кнопка. */}
+        <div className="relative @max-[15rem]:hidden">
+          {loading && (
+            <>
+              <span
+                aria-hidden
+                className="absolute -inset-[7px] rounded-full border-[3px] border-white/10"
+              />
+              <span aria-hidden className="stream-spinner absolute -inset-[7px] rounded-full" />
+            </>
+          )}
+          <div
+            className={cn(
+              'rounded-full shadow-[0_10px_30px_rgba(0,0,0,0.5)] ring-2 transition-[box-shadow] duration-300',
+              loading ? 'ring-white/10' : 'ring-danger/80',
+            )}
+          >
+            {tile.fingerprint ? (
+              <Identicon fingerprint={tile.fingerprint} size={56} />
+            ) : (
+              <div
+                className="h-14 w-14 rounded-full"
+                style={{ background: avatarGradient(tile.name) }}
+              />
+            )}
+          </div>
+          {!loading && (
+            <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-[5px] bg-danger px-1.5 py-px font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-white shadow-[0_2px_8px_rgba(0,0,0,0.45)]">
+              {t('tile.watch.live')}
+            </span>
+          )}
+        </div>
+
+        <AnimatePresence mode="wait" initial={false}>
+          {loading ? (
+            <motion.div
+              key="loading"
+              role="status"
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="flex max-w-[280px] flex-col items-center gap-1"
+            >
+              <span className="flex items-center gap-2 text-left text-[13px] @max-[15rem]:text-[12px] font-semibold text-white/90">
+                {/* Аватара на мелкой плитке нет — колесо встаёт рядом с подписью. */}
+                <span
+                  aria-hidden
+                  className="relative hidden h-4 w-4 shrink-0 rounded-full border-[3px] border-white/10 @max-[15rem]:inline-block"
+                >
+                  <span className="stream-spinner absolute -inset-[3px] rounded-full" />
+                </span>
+                <span>
+                  {t('tile.watch.loading')}
+                  <span className="vp-dots inline-block w-[1.2em] text-left" />
+                </span>
+              </span>
+              {slow && (
+                <motion.span
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="text-[12px] leading-snug text-white/55 @max-[15rem]:hidden"
+                >
+                  {t('tile.watch.slow')}
+                </motion.span>
+              )}
+            </motion.div>
+          ) : (
+            <motion.button
+              key="watch"
+              type="button"
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              transition={{ duration: 0.2 }}
+              onClick={(e) => {
+                e.stopPropagation();
+                watchStream(tile.id);
+              }}
+              className="flex items-center gap-2 rounded-full bg-accent-strong py-2 pl-3.5 pr-[18px] text-[13px] font-bold text-bg-app shadow-[0_8px_28px_rgba(0,0,0,0.5)] outline-none transition-[transform,filter] hover:scale-[1.04] hover:brightness-110 focus-visible:ring-2 focus-visible:ring-white/60 active:scale-[0.96]"
+            >
+              <Icon name="play" className="text-[14px]" />
+              {t('tile.watch')}
+            </motion.button>
+          )}
+        </AnimatePresence>
+      </div>
+    </motion.div>
+  );
+}
+
+/**
+ * Плашка своей трансляции: что реально уходит зрителям — верхний слой как он
+ * есть, а не как заказан. Урезал движок кадр или кадры (не тянет процессор,
+ * узкий аплинк) — плашка желтеет, и это видно сразу, без захода в настройки.
+ */
+function SendBadge({ send }: { send: TileSend }) {
+  const t = useT();
+  const parts = send.height ? [`${send.height}p`] : [];
+  if (send.fps != null) parts.push(t('tile.send.fps', { fps: send.fps }));
+  if (send.kbps != null) parts.push(t('tile.send.mbps', { mbps: (send.kbps / 1000).toFixed(1) }));
+  if (send.codec) parts.push(send.codec);
+  if (send.hardware != null) parts.push(t(send.hardware ? 'tile.send.hw' : 'tile.send.sw'));
+  // Некому отправлять — из канала не уходит ничего, и плашка не делает вид,
+  // что идёт эфир: только размер захвата и прямая пометка.
+  if (send.idle) parts.push(t('tile.send.idle'));
+  const limited = send.limit !== 'ok';
+  return (
+    <div
+      title={t(
+        send.idle
+          ? 'tile.send.idle.title'
+          : limited
+            ? UPLINK_PILL[send.limit as 'cpu' | 'bandwidth'].title
+            : 'tile.send.title',
+      )}
+      className={cn(
+        'absolute right-2.5 top-2.5 z-[2] flex items-center gap-1.5 rounded-[8px] bg-black/55 px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.08em] tabular-nums backdrop-blur-[6px]',
+        limited ? 'text-warn' : 'text-text-muted',
+      )}
+    >
+      <span
+        className={cn(
+          'h-1.5 w-1.5 rounded-full',
+          !send.idle && 'motion-safe:animate-pulse',
+          send.idle ? 'bg-text-faint' : limited ? 'bg-warn' : 'bg-danger',
+        )}
+      />
+      {parts.join(' · ')}
+    </div>
+  );
+}
+
+/**
  * Видеоплитка участника. Привязывает поток к <video srcObject>, сама следит
  * за треками (watchStream/updateTileMedia) — показывает видео или аватарку.
  * Кнопка-«развернуть» — настоящий Fullscreen API; клик по телу плитки —
@@ -349,6 +537,15 @@ export const VideoTile = memo(function VideoTile({
   // Своя плитка: videoOn — единственный источник истины (избегаем гонки с addtrack).
   // Чужая плитка: videoOn === false от сигнала перекрывает hasVideo (замёрзший кадр).
   const novideo = tile.isLocal ? tile.videoOn !== true : !hasVideo || tile.videoOn === false;
+  // Обложка чужой трансляции: пока зритель не нажал «Смотреть» — предложение,
+  // после — загрузка до первого кадра.
+  const cover: 'offered' | 'loading' | null = tile.isLocal
+    ? null
+    : tile.watch === 'offered'
+      ? 'offered'
+      : tile.watch === 'watching' && novideo && !outro
+        ? 'loading'
+        : null;
   // Полный экран любой природы (нативный API или CSS-фолбэк) против «крупного
   // плана» вообще — включая театр-режим внутри сцены.
   const fullscreen = isFs || cssFs;
@@ -462,6 +659,29 @@ export const VideoTile = memo(function VideoTile({
     ro.observe(el);
     return () => ro.disconnect();
   }, [fitContain]);
+
+  // Трансляцию, которую смотрим, медиасервер шлёт слоем по размеру плитки:
+  // в сетке хватает 720p, 1440p — тому, у кого она крупная (развернул, на весь
+  // экран, ретина). Меряем в пикселях устройства — их и видно. Свёрнутая
+  // плитка (развёрнута другая) — ноль: такую сервер не шлёт вовсе. Размер
+  // сообщаем, когда он устоялся: анимация разворота даёт десятки промежуточных,
+  // и каждый был бы запросом к серверу и сменой слоя.
+  useEffect(() => {
+    const el = tileRef.current;
+    if (tile.isLocal || tile.watch !== 'watching' || !el) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const report = (cssHeight: number) => {
+      if (timer) clearTimeout(timer);
+      const px = Math.round(cssHeight * (window.devicePixelRatio || 1));
+      timer = setTimeout(() => reportTileView(tile.id, px), VIEW_SETTLE_MS);
+    };
+    const ro = new ResizeObserver(([entry]) => report(entry.contentRect.height));
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      if (timer) clearTimeout(timer);
+    };
+  }, [tile.id, tile.isLocal, tile.watch]);
 
   // Иконка кнопки полноэкранного режима отражает состояние. Слушаем и
   // webkit-префиксное событие — WebKit (Safari/WKWebView) шлёт его вместо
@@ -672,6 +892,26 @@ export const VideoTile = memo(function VideoTile({
         )}
       />
 
+      <AnimatePresence>
+        {cover && <StreamCover key="stream-cover" tile={tile} phase={cover} />}
+      </AnimatePresence>
+
+      {/* Перестать смотреть — рядом с «во весь экран», тоже по наведению */}
+      {!tile.isLocal && tile.watch === 'watching' && (
+        <button
+          type="button"
+          title={t('tile.unwatch')}
+          aria-label={t('tile.unwatch')}
+          onClick={(e) => {
+            e.stopPropagation();
+            unwatchStream(tile.id);
+          }}
+          className="absolute left-[48px] top-2.5 z-[4] grid h-[30px] w-[30px] place-items-center rounded-md bg-black/55 text-white opacity-0 transition group-hover:opacity-90 hover:!opacity-100 hover:!bg-black/85 active:scale-[0.88]"
+        >
+          <Icon name="eye-off" className="text-lg" />
+        </button>
+      )}
+
       {/* Кнопка «во весь экран» (видна при наведении) */}
       <button
         type="button"
@@ -689,6 +929,8 @@ export const VideoTile = memo(function VideoTile({
         <div className="absolute right-2.5 top-2.5 z-[2] rounded-[8px] bg-black/65 px-2.5 py-1 text-xs font-semibold text-text-dim backdrop-blur-[6px]">
           {t(tile.state)}
         </div>
+      ) : tile.isLocal && tile.screen && tile.send ? (
+        <SendBadge send={tile.send} />
       ) : quality !== 'tile.quality.audio' ? (
         <div className="absolute right-2.5 top-2.5 z-[2] rounded-[8px] bg-black/55 px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-text-muted backdrop-blur-[6px]">
           {videoRes ?? t(quality)}

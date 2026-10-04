@@ -2,7 +2,8 @@
 
 import type { SfxName } from '@/lib/sfx';
 import type { MessageKey, Vars } from '@/lib/i18n/translate';
-import type { TileNet, UplinkStatus, VoicePing } from '@/stores/voice';
+import type { TileNet, TileSend, UplinkStatus, VoicePing } from '@/stores/voice';
+import type { ScreenProfile } from './screen-profile';
 
 /**
  * Шов между дирижёром (`lib/voice.ts`) и транспортом медиа.
@@ -29,6 +30,8 @@ export interface TransportHost {
   screenOn(): boolean;
   /** Тумблер «качество/ФПС» демонстрации — влияет на degradationPreference. */
   screenDegradation(): RTCDegradationPreference;
+  /** Профиль трансляции: потолок кадра, кадров и битрейта (см. screen-profile.ts). */
+  screenProfile(): ScreenProfile;
 
   // ── Витрина (плитки, статусы, метрики) ─────────────────────────────────
   addTile(id: string, name: string, stream: MediaStream | null, isLocal: boolean): void;
@@ -36,6 +39,10 @@ export interface TransportHost {
   removeTile(id: string): void;
   setTileState(id: string, state: MessageKey | ''): void;
   setTileNet(id: string, net: TileNet): void;
+  /** Что реально уходит со своей трансляции (null — не транслируем). */
+  setScreenSend(send: TileSend | null): void;
+  /** Трансляция собеседника: предложена, смотрим или её нет (см. VoiceTile.watch). */
+  setTileWatch(id: string, watch: 'offered' | 'watching' | null): void;
   /** Снять узлы микшера, оставив плитку (пересборка соединения с тем же пиром). */
   cleanupPeerAudio(peerId: string): void;
   /**
@@ -128,6 +135,23 @@ export interface VoiceTransport {
    * Mesh шлёт всем одно и то же и метод не реализует.
    */
   focusChanged?(id: string | null): void;
+  /**
+   * «Смотреть» / «Перестать смотреть» трансляцию собеседника. Поток к зрителю
+   * не идёт, пока он не попросил: через медиасервер это бережёт канал
+   * сервера, напрямую — аплинк стримера (там поток у каждого зрителя свой).
+   */
+  watch?(peerId: string): void;
+  /**
+   * Плитка трансляции собеседника заняла на экране столько пикселей по высоте
+   * (0 — не видна). SFU выбирает по этому слой simulcast и паузу.
+   */
+  viewChanged?(peerId: string, px: number): void;
+  unwatch?(peerId: string): void;
+  /**
+   * Собеседник начал или закончил показ экрана (его `media-update`). SFU это
+   * узнаёт по дорожкам сервера сам; mesh — только так.
+   */
+  peerScreen?(peerId: string, on: boolean): void;
   /** Сокет переподключился с НОВЫМ id — прежние соединения мертвы. */
   reset(): void;
   /**

@@ -73,9 +73,14 @@ export const CAM_ENCODINGS = [
   { rid: 'f', maxBitrate: 1_800_000, scalabilityMode: 'L1T3' },
 ];
 
-// Демонстрация экрана — наоборот, один жирный слой: текст в мыле нечитаем,
-// деградация «в мыло» тут хуже, чем просадка ФПС.
-export const SCREEN_ENCODINGS = [{ maxBitrate: 8_000_000, scalabilityMode: 'L1T3' }];
+// Демонстрация экрана — два слоя под профиль трансляции, их считает
+// `screen-profile.ts`: размер и кадры там зависят от режима и от владельца.
+
+// Звук — первым в очередь на аплинке: и приоритет кодировщика, и DSCP-метка.
+export const AUDIO_ENCODINGS = [{ priority: 'high', networkPriority: 'high' }] as {
+  priority: RTCPriorityType;
+  networkPriority: RTCPriorityType;
+}[];
 
 // Потолки Opus те же, что в mesh: голос на «discord-уровне», звук демонстрации
 // (музыка/фильм) заметно жирнее — там слышно разницу.
@@ -92,6 +97,15 @@ export const SCREEN_AUDIO_CODEC_OPTIONS = {
 
 /** Верхний слой simulcast (индекс), он же «дай максимум». */
 export const TOP_SPATIAL_LAYER = 2;
+
+/** У трансляции слоёв два (см. screen-profile.ts): верхний — первый. */
+export const SCREEN_TOP_LAYER = 1;
+/**
+ * С какой высоты плитки (в пикселях устройства) трансляции нужен верхний
+ * слой. Нижний — 720p; до ~10 % растяжения его не отличить, дальше буквы
+ * начинают плыть.
+ */
+export const SCREEN_LOW_LAYER_PX = 792;
 
 // Слот аудио-дорожки для микшера. Дирижёр различает голос и звук демонстрации
 // по порядку этого ключа (в mesh туда идёт `mid`) — здесь мы роль ЗНАЕМ точно,

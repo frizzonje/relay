@@ -88,6 +88,9 @@ interface StatsRecord {
   codecId?: string;
   mimeType?: string;
   qualityLimitationReason?: string;
+  rid?: string;
+  powerEfficientEncoder?: boolean;
+  encoderImplementation?: string;
 }
 
 /**
@@ -183,6 +186,52 @@ export function readStats(input: RTCStatsReport | RTCStatsReport[]): StatsSnapsh
     }
   }
   return snap;
+}
+
+/** Что реально уходит со своей трансляции: верхний живой слой и сумма всех. */
+export interface SendVideo {
+  width: number;
+  height: number;
+  fps: number | null;
+  /** Байты всех слоёв накопленным итогом — для кбит/с за интервал. */
+  bytesSent: number;
+  codec: string | null;
+  /** Кодирует видеокарта (`powerEfficientEncoder`); null — движок не говорит. */
+  hardware: boolean | null;
+  limit: UplinkStatus;
+}
+
+/**
+ * Разобрать отчёт своего видео-sender'а. Слоёв simulcast у трансляции два, и
+ * показывать надо верхний из тех, что реально идут: слой, который движок
+ * выключил под нагрузкой, в отчёте есть, но кадров в нём нет.
+ */
+export function readSendVideo(report: RTCStatsReport): SendVideo | null {
+  let top: StatsRecord | null = null;
+  let bytesSent = 0;
+  let limit: UplinkStatus = 'ok';
+  report.forEach((raw) => {
+    const r = raw as StatsRecord;
+    if (r.type !== 'outbound-rtp' || (r.kind ?? r.mediaType) !== 'video') return;
+    bytesSent += r.bytesSent ?? 0;
+    limit = worseUplink(limit, limitReason(r.qualityLimitationReason));
+    if (!r.frameHeight) return;
+    if (!top || r.frameHeight > (top.frameHeight ?? 0)) top = r;
+  });
+  const best = top as StatsRecord | null;
+  if (!best) return null;
+  const mime = best.codecId
+    ? (report.get(best.codecId) as StatsRecord | undefined)?.mimeType
+    : undefined;
+  return {
+    width: best.frameWidth ?? 0,
+    height: best.frameHeight ?? 0,
+    fps: best.framesPerSecond != null ? Math.round(best.framesPerSecond) : null,
+    bytesSent,
+    codec: mime ? (mime.split('/')[1]?.toUpperCase() ?? null) : null,
+    hardware: typeof best.powerEfficientEncoder === 'boolean' ? best.powerEfficientEncoder : null,
+    limit,
+  };
 }
 
 /** Снимок счётчиков с прошлого тика: потери/приём — для % за интервал, байты — для кбит/с. */

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { VoicePresence } from '@relay/shared';
 import type { MessageKey, Vars } from '@/lib/i18n/translate';
+import { DEFAULT_SETUP, type ScreenMode, type ScreenSetup } from '@/lib/voice/screen-profile';
 
 /**
  * Статус подключения хранится ключом словаря, а не готовой фразой: текст
@@ -52,6 +53,14 @@ export interface VoiceTile {
    */
   hasScreenAudio?: boolean;
   /**
+   * Трансляция собеседника: `offered` — он показывает экран, а мы не смотрим
+   * (поток к нам не идёт, на плитке кнопка «Смотреть»); `watching` — смотрим.
+   * Нет поля — трансляции нет. Так и через медиасервер, и в прямом канале.
+   */
+  watch?: 'offered' | 'watching';
+  /** Своя плитка трансляции: что реально уходит (в прямом канале — сумма по зрителям). */
+  send?: TileSend;
+  /**
    * Качество связи с собеседником (per-peer getStats): grade для «палочек» +
    * сырые метрики для тултипа. undefined — пока не измерено / своя плитка.
    */
@@ -67,6 +76,25 @@ export interface VoiceTile {
   guest?: boolean;
   /** Гость-слушатель: слышит канал, но своего медиа не отдаёт (канал под паролем). */
   listen?: boolean;
+}
+
+/**
+ * Что реально уходит со своей трансляции — плашка на своей плитке экрана. Не
+ * заявка профиля, а факт из `getStats`: если движок урезал кадр или кадры,
+ * человек должен это видеть, а не верить надписи в настройках.
+ */
+export interface TileSend {
+  height: number;
+  fps: number | null;
+  /** Исходящий битрейт трансляции (все слои), кбит/с; null — нет базы. */
+  kbps: number | null;
+  codec: string | null;
+  /** Кодирует видеокарта; null — движок не говорит. */
+  hardware: boolean | null;
+  /** Что режет трансляцию прямо сейчас. */
+  limit: UplinkStatus;
+  /** Отправлять некому (в прямом канале никто не смотрит) — не уходит ничего. */
+  idle?: boolean;
 }
 
 /**
@@ -121,7 +149,7 @@ export interface TileNet {
  */
 export type UplinkStatus = 'ok' | 'cpu' | 'bandwidth';
 
-export type ScreenMode = 'quality' | 'fps';
+export type { ScreenMode } from '@/lib/voice/screen-profile';
 
 /** Состояние панели «Голос подключён» (обновляется при замере пинга). */
 export interface VoicePing {
@@ -141,6 +169,13 @@ interface VoiceState {
   camOn: boolean;
   screenOn: boolean;
   screenMode: ScreenMode;
+  /** Разрешение и кадры трансляции под каждый режим (вкладка «Трансляция»). */
+  screenSetups: Record<ScreenMode, ScreenSetup>;
+  /**
+   * Каким путём идёт звонок: через медиасервер или напрямую. У трансляции
+   * потолки разные, и тумблер в панели показывает реальные цифры.
+   */
+  callVia: 'sfu' | 'p2p' | null;
   /** Статус подключения для шапки/панели голоса (см. VoiceStatus). */
   status: VoiceStatus;
   presence: VoicePresence;
@@ -191,8 +226,11 @@ interface VoiceState {
   kicked: boolean;
 
   setTiles: (tiles: VoiceTile[]) => void;
-  setMedia: (m: Partial<Pick<VoiceState, 'micOn' | 'camOn' | 'screenOn' | 'screenMode'>>) => void;
+  setMedia: (
+    m: Partial<Pick<VoiceState, 'micOn' | 'camOn' | 'screenOn' | 'screenMode' | 'screenSetups'>>,
+  ) => void;
   setStatus: (status: VoiceStatus) => void;
+  setCallVia: (via: 'sfu' | 'p2p' | null) => void;
   setPresence: (presence: VoicePresence) => void;
   setMyId: (id: string | null) => void;
   setPing: (ping: VoicePing) => void;
@@ -220,6 +258,8 @@ export const useVoiceStore = create<VoiceState>((set) => ({
   camOn: false,
   screenOn: false,
   screenMode: 'quality',
+  screenSetups: { ...DEFAULT_SETUP },
+  callVia: null,
   status: null,
   presence: {},
   myId: null,
@@ -247,6 +287,7 @@ export const useVoiceStore = create<VoiceState>((set) => ({
   setTiles: (tiles) => set({ tiles }),
   setMedia: (m) => set(m),
   setStatus: (status) => set({ status }),
+  setCallVia: (callVia) => set({ callVia }),
   setPresence: (presence) => set({ presence }),
   setMyId: (id) => set({ myId: id }),
   setPing: (ping) => set({ ping }),

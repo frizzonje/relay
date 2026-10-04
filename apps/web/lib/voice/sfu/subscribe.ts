@@ -5,6 +5,8 @@ import { tx } from '@/lib/i18n';
 import type { TransportHost } from '../types';
 import {
   AUDIO_SLOT,
+  SCREEN_LOW_LAYER_PX,
+  SCREEN_TOP_LAYER,
   TOP_SPATIAL_LAYER,
   type Ask,
   type ConsumerPayload,
@@ -43,9 +45,19 @@ export interface SubscribeDeps {
 }
 
 export interface Subscriber {
+  /**
+   * Подписаться на дорожку — если она нам нужна. Трансляцию (экран и её звук)
+   * берём, только когда зритель нажал «Смотреть»; до того лишь запоминаем, что
+   * она есть, и говорим об этом плитке.
+   */
   consume(peerId: string, info: ProducerInfo): Promise<void>;
+  /** Собеседник закрыл дорожку (а не мы перестали её слушать). */
+  producerClosed(producerId: string): void;
+  watch(peerId: string): Promise<void>;
+  unwatch(peerId: string): void;
   /** Подписаться на всё, что объявилось, пока транспорт ещё не стоял. */
   drainPending(): Promise<void>;
+  /** Перестать слушать дорожку. Сама дорожка у собеседника может и жить дальше. */
   dropConsumer(producerId: string): void;
   /** Собеседник появился: плитка, имя, надпись. Дорожки приедут следом. */
   addPeer(peerId: string, name: string): void;
@@ -56,6 +68,11 @@ export interface Subscriber {
   entries(): ConsumerEntry[];
   /** Крупный план сменился — перекладываем слои simulcast. */
   setFocus(id: string | null): void;
+  /**
+   * Сколько пикселей устройства по высоте занимает плитка трансляции
+   * собеседника (0 — её не видно). По нему выбирается слой и пауза.
+   */
+  setView(peerId: string, px: number): void;
   /** Сервер сообщил, какой слой реально отдаёт по этому consumer'у. */
   layerReported(consumerId: string, spatialLayer: number | null): void;
   layerOf(consumerId: string): number | null;
@@ -93,6 +110,28 @@ export function createSubscriber({
   // `consumers` появляется только после двух ожиданий, и проверка по ней
   // пропускает обе: сервер послушно отдаёт копию.
   const consuming = new Set<string>();
+  // Высота плитки трансляции на экране зрителя в пикселях устройства — по
+  // собеседнику; и что мы уже попросили у сервера для каждой подписки экрана.
+  const viewPx = new Map<string, number>();
+  const screenAsked = new Map<string, { layer: number | null; paused: boolean }>();
+  // Трансляции, которые идут в комнате, — объявленные, смотрим мы их или нет:
+  // по собеседнику, по producerId. По ним «Смотреть» знает, на что подписаться,
+  // а «Перестать смотреть» — что снова предложить.
+  const streams = new Map<string, Map<string, ProducerInfo>>();
+  // Чьи трансляции смотрим. Выбор держится, пока собеседник в канале: показ
+  // перезапустился (сменил окно, моргнула сеть и дорожку заменили) — зритель
+  // остаётся зрителем, и нажимать «Смотреть» второй раз ему не нужно.
+  const watching = new Set<string>();
+
+  function isStream(source: Source): boolean {
+    return source === 'screen' || source === 'screen-audio';
+  }
+
+  /** Сказать плитке, что с трансляцией собеседника: есть ли она и смотрим ли. */
+  function sayWatch(peerId: string) {
+    if (!streams.get(peerId)?.size) host.setTileWatch(peerId, null);
+    else host.setTileWatch(peerId, watching.has(peerId) ? 'watching' : 'offered');
+  }
 
   function tracksOf(peerId: string, kind: 'audio' | 'video'): MediaStreamTrack[] {
     return [...consumers.values()]
@@ -156,12 +195,45 @@ export function createSubscriber({
     track.addEventListener('unmute', onRtp);
   }
 
+  /**
+   * Трансляция — слой по размеру плитки, а не по крупному плану: в плитке
+   * хватает нижнего слоя (до 720p), верхний (1440p) нужен тому, у кого
+   * трансляция действительно крупная — развёрнута, на весь экран, одна на
+   * сцене, на ретина-экране. Невидимую плитку (развёрнута другая) сервер не
+   * шлёт вовсе. Пока размер плитки неизвестен — нижний слой: дешёвое
+   * умолчание лучше дорогого.
+   *
+   * Отвечает, нужно ли отпускать подписку с паузы (её задаёт протокол входа).
+   */
+  function applyScreenView(peerId: string, consumer: Consumer): boolean {
+    const px = viewPx.get(peerId);
+    const asked = screenAsked.get(consumer.id) ?? { layer: null, paused: true };
+    screenAsked.set(consumer.id, asked);
+    if (px === 0) {
+      if (!asked.paused) {
+        asked.paused = true;
+        void ask('pause', { consumerId: consumer.id });
+      }
+      return false;
+    }
+    const layer = px !== undefined && px > SCREEN_LOW_LAYER_PX ? SCREEN_TOP_LAYER : 0;
+    if (asked.layer !== layer) {
+      asked.layer = layer;
+      void ask('preferred-layers', { consumerId: consumer.id, spatialLayer: layer });
+    }
+    if (!asked.paused) return false;
+    asked.paused = false;
+    return true;
+  }
+
   // Плитка на весь экран просит верхний слой, остальные — нижний. Без этого
   // simulcast бессмысленен: сервер по умолчанию отдаёт максимум всем.
   function applyLayers(peerId: string, consumer: Consumer) {
     if (consumer.kind !== 'video') return;
-    // Демонстрация экрана идёт одним слоем — просить у неё нечего.
-    if (consumers.get(consumer.producerId)?.source === 'screen') return;
+    if (consumers.get(consumer.producerId)?.source === 'screen') {
+      if (applyScreenView(peerId, consumer)) void ask('resume', { consumerId: consumer.id });
+      return;
+    }
     const spatialLayer = !focusedId || focusedId === peerId ? TOP_SPATIAL_LAYER : 0;
     void ask('preferred-layers', { consumerId: consumer.id, spatialLayer });
   }
@@ -180,11 +252,21 @@ export function createSubscriber({
     host.setTileState(peerId, linked() ? '' : 'tile.state.connecting');
   }
 
+  // Протокол требует именно такого порядка: consumer приходит на паузе, трек
+  // подключён — только теперь просим пустить пакеты. Не дошло — дорожка так и
+  // останется на паузе навсегда, и это неотличимо от «прислали чёрный кадр».
+  async function resumeConsumer(consumer: Consumer, source: Source, peerId: string) {
+    if (!(await ask('resume', { consumerId: consumer.id }))) {
+      host.diag('sfu resume failed', `${source} from ${peerId}`);
+    }
+  }
+
   function dropConsumer(producerId: string) {
     const entry = consumers.get(producerId);
     if (!entry) return;
     consumers.delete(producerId);
     gotLayer.delete(entry.consumer.id);
+    screenAsked.delete(entry.consumer.id);
     entry.consumer.close();
     // Дорожки не стало — плитке нужен новый объект потока, иначе она об этом не
     // узнает (`removetrack` скриптовый `removeTrack()` тоже не порождает) и
@@ -197,8 +279,30 @@ export function createSubscriber({
     }
   }
 
+  /**
+   * Перестать слушать дорожку по своей воле — и сказать об этом серверу.
+   * `dropConsumer` закрывает подписку только у нас: когда дорожку закрыл сам
+   * собеседник или разобран весь транспорт, сервер это знает и так, а здесь
+   * нет — и слал бы поток дальше, в транспорт, где его никто не принимает.
+   */
+  function release(producerId: string) {
+    const entry = consumers.get(producerId);
+    if (!entry) return;
+    void ask('close-consumer', { consumerId: entry.consumer.id });
+    dropConsumer(producerId);
+  }
+
   return {
     async consume(peerId, info) {
+      if (isStream(info.source)) {
+        let known = streams.get(peerId);
+        if (!known) streams.set(peerId, (known = new Map()));
+        known.set(info.id, info);
+        sayWatch(peerId);
+        // Не смотрим — поток к нам не идёт вовсе: медиасервер не тратит на нас
+        // канал, а мы — декодер. Ради этого кнопка и есть.
+        if (!watching.has(peerId)) return;
+      }
       // На один producer — один consumer. Иначе `drainPending` подписался бы
       // второй раз на то, что уже слушаем, и сервер послушно отдал бы копию.
       if (consumers.has(info.id) || consuming.has(info.id)) return;
@@ -245,6 +349,13 @@ export function createSubscriber({
       } finally {
         consuming.delete(info.id);
       }
+      // Пока подписка шла, зритель успел нажать «Перестать смотреть»: снимать
+      // ему было ещё нечего, и поток иначе пошёл бы к тому, кто от него отказался.
+      if (isStream(c.source) && !watching.has(peerId)) {
+        void ask('close-consumer', { consumerId: consumer.id });
+        consumer.close();
+        return;
+      }
       consumers.set(c.producerId, { producerId: c.producerId, consumer, peerId, source: c.source });
       // Единственное доказательство, что пакеты реально пошли: дорожка consumer'а
       // рождается `muted` и снимает мут первым же дошедшим RTP. Без этой вехи
@@ -253,6 +364,13 @@ export function createSubscriber({
       if (c.kind === 'video') reportRtp(consumer.track, c.source, peerId);
 
       syncTileVideo(peerId);
+
+      // Трансляцию, плитку которой зритель сейчас не видит, с паузы не
+      // отпускаем вовсе: отпустит её `setView`, когда плитка покажется.
+      if (c.kind === 'video' && c.source === 'screen') {
+        if (applyScreenView(peerId, consumer)) await resumeConsumer(consumer, c.source, peerId);
+        return;
+      }
 
       if (c.kind === 'audio') {
         // Звук — в тот же микшер, что и в mesh: громкость по собеседнику, VAD,
@@ -267,12 +385,7 @@ export function createSubscriber({
         applyLayers(peerId, consumer);
       }
 
-      // Протокол требует именно такого порядка: consumer приходит на паузе, трек
-      // подключён — только теперь просим пустить пакеты. Не дошло — дорожка так и
-      // останется на паузе навсегда, и это неотличимо от «прислали чёрный кадр».
-      if (!(await ask('resume', { consumerId: consumer.id }))) {
-        host.diag('sfu resume failed', `${c.source} from ${peerId}`);
-      }
+      await resumeConsumer(consumer, c.source, peerId);
     },
 
     async drainPending() {
@@ -281,6 +394,38 @@ export function createSubscriber({
     },
 
     dropConsumer,
+
+    producerClosed(producerId) {
+      for (const [peerId, known] of streams) {
+        if (!known.delete(producerId)) continue;
+        if (!known.size) streams.delete(peerId);
+        sayWatch(peerId);
+      }
+      dropConsumer(producerId);
+    },
+
+    async watch(peerId) {
+      if (watching.has(peerId)) return;
+      watching.add(peerId);
+      sayWatch(peerId);
+      // Экран вперёд звука: картинка — то, ради чего нажимали.
+      const known = [...(streams.get(peerId)?.values() ?? [])].sort(
+        (a, b) => Number(a.source !== 'screen') - Number(b.source !== 'screen'),
+      );
+      for (const info of known) await this.consume(peerId, info);
+    },
+
+    unwatch(peerId) {
+      if (!watching.delete(peerId)) return;
+      for (const entry of [...consumers.values()]) {
+        if (entry.peerId === peerId && isStream(entry.source)) release(entry.producerId);
+      }
+      // Подписка, ещё ждущая транспорта, тоже больше не нужна.
+      for (let i = pending.length - 1; i >= 0; i--) {
+        if (pending[i].peerId === peerId && isStream(pending[i].info.source)) pending.splice(i, 1);
+      }
+      sayWatch(peerId);
+    },
 
     addPeer(peerId, name) {
       const shown = name || tx('voice.peer.fallback');
@@ -295,6 +440,9 @@ export function createSubscriber({
       }
       names.delete(peerId);
       shownVideo.delete(peerId);
+      viewPx.delete(peerId);
+      streams.delete(peerId);
+      watching.delete(peerId);
       host.removeTile(peerId);
     },
 
@@ -309,6 +457,16 @@ export function createSubscriber({
     setFocus(id) {
       focusedId = id;
       for (const entry of consumers.values()) applyLayers(entry.peerId, entry.consumer);
+    },
+
+    setView(peerId, px) {
+      if (viewPx.get(peerId) === px) return;
+      viewPx.set(peerId, px);
+      for (const entry of consumers.values()) {
+        if (entry.peerId === peerId && entry.source === 'screen') {
+          applyLayers(entry.peerId, entry.consumer);
+        }
+      }
     },
 
     layerReported(consumerId, spatialLayer) {
@@ -327,6 +485,10 @@ export function createSubscriber({
     clear() {
       pending.length = 0;
       consuming.clear();
+      streams.clear();
+      watching.clear();
+      viewPx.clear();
+      screenAsked.clear();
       consumers.forEach((e) => e.consumer.close());
       consumers.clear();
       names.clear();

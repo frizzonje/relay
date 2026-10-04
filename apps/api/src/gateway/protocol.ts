@@ -125,6 +125,8 @@ export interface SignalPayload {
   to?: unknown;
   sdp?: unknown;
   candidate?: unknown;
+  /** `screen-watch`: смотрит ли отправитель трансляцию адресата. */
+  on?: unknown;
 }
 
 export interface ChatPayload {

@@ -890,6 +890,11 @@ export class SignalingGateway
     this.voiceHandlers.iceCandidate(client, payload);
   }
 
+  @SubscribeMessage('screen-watch')
+  handleScreenWatch(@ConnectedSocket() client: AppSocket, @MessageBody() payload: SignalPayload) {
+    this.voiceHandlers.screenWatch(client, payload);
+  }
+
   @SubscribeMessage('media-update')
   handleMediaUpdate(
     @ConnectedSocket() client: AppSocket,

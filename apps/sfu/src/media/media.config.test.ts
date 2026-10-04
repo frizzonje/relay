@@ -32,11 +32,11 @@ afterEach(() => {
 });
 
 describe('кодеки роутера', () => {
-  it('H264 объявлен профилем, который отдают все — включая WebKit', () => {
+  it('H264 объявлен профилем, который отдают все — включая WebKit, и уровнем под 1440p60', () => {
     const h264 = MEDIA_CODECS.find((c) => c.mimeType === 'video/H264')!;
     // Прежний Main 5.0 (4d0032) WebKit для WebRTC не предлагает — с ним видео с
     // десктопной оболочки на macOS молча не уходило, а звук шёл.
-    expect(h264.parameters!['profile-level-id']).toBe('42e01f');
+    expect(h264.parameters!['profile-level-id']).toBe('42e033');
     expect(h264.parameters!['level-asymmetry-allowed']).toBe(1);
     expect(h264.parameters!['packetization-mode']).toBe(1);
   });

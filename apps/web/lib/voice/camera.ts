@@ -10,7 +10,19 @@ import {
   stopNativeScreenAudio,
 } from '@/lib/desktop-screen-audio';
 import { useVoiceStore, type ScreenMode } from '@/stores/voice';
+import { setting } from '@/stores/config';
 import { setTileScreen } from '@/lib/voice/tiles';
+import {
+  DEFAULT_SETUP,
+  captureConstraints,
+  formatSetup,
+  parseSetup,
+  resolveProfile,
+  screenContentHint,
+  screenDegradation as degradationFor,
+  type ScreenProfile,
+  type ScreenSetup,
+} from '@/lib/voice/screen-profile';
 
 /**
  * Камера и демонстрация экрана — два источника, делящих один видео-слот.
@@ -35,6 +47,11 @@ export interface CameraSurroundings {
   publish(what: 'camera' | 'screen'): void;
   unpublish(what: 'camera' | 'screen'): void;
   retune(): void;
+  /**
+   * Каким транспортом идёт звонок. От него зависит потолок трансляции: прямые
+   * соединения шлют каждому свой поток, и 1440p там не по карману.
+   */
+  transport(): 'mesh' | 'sfu';
   /** Витрина и собеседники: у нас включилось/выключилось видео. */
   syncStore(): void;
   announce(): void;
@@ -46,6 +63,7 @@ let around: CameraSurroundings = {
   publish: () => {},
   unpublish: () => {},
   retune: () => {},
+  transport: () => 'mesh',
   syncStore: () => {},
   announce: () => {},
 };
@@ -63,6 +81,7 @@ let camTrack: MediaStreamTrack | null = null;
 let screenTrack: MediaStreamTrack | null = null;
 let screenAudioTrack: MediaStreamTrack | null = null;
 let screenMode: ScreenMode = 'quality';
+let screenSetups: Record<ScreenMode, ScreenSetup> = { ...DEFAULT_SETUP };
 
 /** Идёт ли с нас камера. */
 export function isCamOn(): boolean {
@@ -93,11 +112,6 @@ const VIDEO_CONSTRAINTS: MediaTrackConstraints = {
   frameRate: { max: 30 },
 };
 
-const SCREEN_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
-  width: { ideal: 1920 },
-  height: { ideal: 1080 },
-  frameRate: { ideal: 60, max: 60 },
-};
 // echoCancellation: true — лекарство от «кенты слышат сами себя». При захвате
 // системного/вкладочного звука в микс попадают голоса собеседников, которые
 // играют из ДИНАМИКОВ ведущего; без AEC мы шлём их обратно — и каждый слышит
@@ -111,6 +125,34 @@ const SCREEN_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   noiseSuppression: false,
   autoGainControl: false,
 };
+
+/**
+ * `restrictOwnAudio` (свежий Chrome) вырезает из захвата звук, который играет
+ * сама страница, — то есть ровно голоса собеседников. Там, где движок его
+ * знает, просим и его: если он реально включился (см. `startScreen`),
+ * эхоподавление со звука трансляции снимаем — оно мнёт музыку и звук игры.
+ */
+function screenAudioConstraints(): MediaTrackConstraints {
+  const supported = navigator.mediaDevices.getSupportedConstraints?.() as
+    | Record<string, boolean>
+    | undefined;
+  return supported?.restrictOwnAudio
+    ? ({ ...SCREEN_AUDIO_CONSTRAINTS, restrictOwnAudio: true } as MediaTrackConstraints)
+    : SCREEN_AUDIO_CONSTRAINTS;
+}
+
+/**
+ * Пожелания к окну выбора источника. Движок, который их не знает, молча
+ * пропускает: `selfBrowserSurface` прячет из списка нашу же вкладку (показ
+ * себя самого — бесконечный коридор зеркал), `surfaceSwitching` даёт сменить
+ * окно, не останавливая трансляцию, `systemAudio` — предложить звук всего
+ * экрана, а не только вкладки.
+ */
+const DISPLAY_OPTIONS = {
+  selfBrowserSurface: 'exclude',
+  surfaceSwitching: 'include',
+  systemAudio: 'include',
+} as const;
 // ─── Камера: список устройств и выбор (модалка настроек) ───────────────────
 /** Обновляет список камер (videoinput) и активную камеру в сторе. */
 async function refreshCameraInfo() {
@@ -151,21 +193,96 @@ export async function setCamera(deviceId: string) {
 // Демонстрация экрана: режим качество/ФПС
 // ─────────────────────────────────────────────────────────────────────────
 
-export function screenDegradation(): RTCDegradationPreference {
-  return screenMode === 'fps' ? 'maintain-framerate' : 'maintain-resolution';
+// Выбор живёт в браузере, как и остальные медиа-предпочтения: режим — тот, с
+// которым человек начинал прошлую трансляцию, разрешение и кадры каждого
+// режима — из вкладки «Трансляция» в настройках (строкой `1440p30`).
+const SCREEN_MODE_KEY = 'relay-screen-mode';
+const SCREEN_SETUP_KEYS: Record<ScreenMode, string> = {
+  quality: 'relay-screen-quality',
+  fps: 'relay-screen-motion',
+};
+
+function readPref(key: string): string | null {
+  return typeof localStorage === 'undefined' ? null : localStorage.getItem(key);
 }
-function screenContentHint(): string {
-  return screenMode === 'fps' ? 'motion' : 'detail';
+
+function writePref(key: string, value: string) {
+  if (typeof localStorage !== 'undefined') localStorage.setItem(key, value);
+}
+
+/** Поднять выбор из браузера в модуль и в стор (при старте приложения). */
+export function loadScreenPrefs() {
+  const mode = readPref(SCREEN_MODE_KEY);
+  if (mode === 'quality' || mode === 'fps') screenMode = mode;
+  screenSetups = {
+    quality: parseSetup(readPref(SCREEN_SETUP_KEYS.quality)) ?? DEFAULT_SETUP.quality,
+    fps: parseSetup(readPref(SCREEN_SETUP_KEYS.fps)) ?? DEFAULT_SETUP.fps,
+  };
+  useVoiceStore.getState().setMedia({ screenMode, screenSetups });
+}
+
+/**
+ * Профиль трансляции прямо сейчас: режим и его настройка, прижатые к
+ * потолкам владельца и к транспорту. Его читают и захват, и оба транспорта.
+ */
+export function currentScreenProfile(): ScreenProfile {
+  return resolveProfile({
+    mode: screenMode,
+    setups: screenSetups,
+    transport: around.transport(),
+    maxHeight: Number(setting<string>('voice.screenMaxHeight')),
+    maxBitrate: setting<number>('voice.screenBitrateKbps') * 1000,
+  });
+}
+
+export function screenDegradation(): RTCDegradationPreference {
+  return degradationFor(screenMode);
+}
+
+/**
+ * Привести идущую трансляцию к текущему профилю: захват (размер, кадры),
+ * подсказку кодировщику и — через транспорт — кодировки. Без перезапуска
+ * показа и без пересогласования SDP.
+ */
+async function retuneScreen() {
+  const track = screenTrack;
+  if (!screenOn || !track) return;
+  track.contentHint = screenContentHint(screenMode);
+  try {
+    await track.applyConstraints(captureConstraints(currentScreenProfile()));
+  } catch (err) {
+    // Движок не умеет пересобрать захват на лету — кодировки всё равно
+    // поменяем: битрейт и кадры решают больше, чем размер исходника.
+    console.warn('[screen] applyConstraints failed:', err);
+  }
+  if (screenTrack !== track) return; // пока ждали, показ остановили
+  around.retune();
 }
 
 export function setScreenMode(mode: ScreenMode) {
   if (mode === screenMode) return;
   screenMode = mode;
+  writePref(SCREEN_MODE_KEY, mode);
   useVoiceStore.getState().setMedia({ screenMode });
-  // Применяем к уже идущей трансляции без переподписания SDP
-  if (!screenOn || !screenTrack) return;
-  screenTrack.contentHint = screenContentHint();
-  around.retune();
+  void retuneScreen();
+}
+
+/** Разрешение и/или кадры режима — из вкладки «Трансляция». */
+export function setScreenSetup(mode: ScreenMode, change: Partial<ScreenSetup>) {
+  const next = { ...screenSetups[mode], ...change };
+  if (next.height === screenSetups[mode].height && next.fps === screenSetups[mode].fps) return;
+  screenSetups = { ...screenSetups, [mode]: next };
+  writePref(SCREEN_SETUP_KEYS[mode], formatSetup(next));
+  useVoiceStore.getState().setMedia({ screenSetups });
+  if (screenMode === mode) void retuneScreen();
+}
+
+/**
+ * Транспорт сменился посреди трансляции (вошли в канал другого режима) —
+ * потолок у него свой.
+ */
+export function transportChanged() {
+  void retuneScreen();
 }
 
 // Что сейчас уходит собеседникам в общий видео-sender
@@ -255,9 +372,10 @@ async function startScreen() {
   notifyScreenPicker(true);
   try {
     display = await navigator.mediaDevices.getDisplayMedia({
-      video: SCREEN_VIDEO_CONSTRAINTS,
-      audio: nativeAudio ? false : SCREEN_AUDIO_CONSTRAINTS,
-    });
+      video: captureConstraints(currentScreenProfile()),
+      audio: nativeAudio ? false : screenAudioConstraints(),
+      ...DISPLAY_OPTIONS,
+    } as DisplayMediaStreamOptions);
   } catch (err) {
     const e = err as { name?: string } | null;
     // Пользователь просто закрыл выбор источника — это не ошибка, молчим
@@ -273,7 +391,7 @@ async function startScreen() {
   if (camOn) stopCamera();
 
   screenTrack = display.getVideoTracks()[0];
-  screenTrack.contentHint = screenContentHint();
+  screenTrack.contentHint = screenContentHint(screenMode);
 
   if (nativeAudio) {
     // Нативный захват без голосов relay. Может вернуть null (нативный путь
@@ -291,8 +409,14 @@ async function startScreen() {
       // всего экрана/окна ('monitor'/'window') тащит системный микс с голосами из
       // динамиков — там EC оставляем включённым (из SCREEN_AUDIO_CONSTRAINTS) как
       // защиту от «кенты слышат сами себя». Неизвестный источник → не трогаем.
+      // Исключение — движок, который сам вырезал из захвата звук нашей страницы
+      // (`restrictOwnAudio` вступил в силу): голосов собеседников в миксе нет,
+      // и эхоподавлению там нечего делать, кроме как портить звук.
       const surface = (screenTrack.getSettings() as MediaTrackSettings).displaySurface;
-      if (surface === 'browser') {
+      const ownAudioCut =
+        (screenAudioTrack.getSettings() as { restrictOwnAudio?: boolean }).restrictOwnAudio ===
+        true;
+      if (surface === 'browser' || ownAudioCut) {
         void screenAudioTrack
           .applyConstraints({
             echoCancellation: false,

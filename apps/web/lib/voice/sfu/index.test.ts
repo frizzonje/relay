@@ -130,6 +130,7 @@ function makeHost() {
     transportLost: vi.fn(),
     transportUp: vi.fn(),
     setUplink: vi.fn(),
+    setScreenSend: vi.fn(),
     setTileState: vi.fn(),
     setTileNet: vi.fn(),
   } as unknown as TransportHost & {

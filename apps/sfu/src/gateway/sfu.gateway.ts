@@ -75,6 +75,7 @@ interface LayersPayload {
  * Хендшейк стандартный для mediasoup, все запросы с ack-ответом:
  *   connect → `welcome` (capabilities роутера + кто уже в комнате)
  *   `create-transport` → `connect-transport` → `produce` / `consume` / `resume`
+ *   (и `pause` — придержать подписку, которую зритель сейчас не видит)
  * плюс серверные `peer-joined` / `new-producer` / `producer-closed` / `peer-left`
  * и `snapshot` — тот же снимок комнаты, что в `welcome`, по запросу.
  *
@@ -123,6 +124,9 @@ export class SfuGateway implements OnGatewayConnection {
    * ролей четыре.
    */
   private static readonly MAX_TRANSPORTS_PER_PEER = 6;
+
+  /** Не чаще раза в столько ключевой кадр трансляции экрана (см. `produce`). */
+  static readonly SCREEN_KEYFRAME_DELAY_MS = 1000;
 
   @WebSocketServer()
   server!: Server;
@@ -349,6 +353,14 @@ export class SfuGateway implements OnGatewayConnection {
         kind,
         rtpParameters: payload?.rtpParameters as types.RtpParameters,
         appData: { source, peerId: peer.id },
+        // Ключевой кадр трансляции — сотни килобайт. Просит его каждый зритель
+        // с потерями и каждый, кто только что нажал «Смотреть», и без выдержки
+        // их просьбы складывались в очередь жирных кадров для всех сразу —
+        // всплеск, после которого теряют пакеты уже все. Раз в секунду хватает:
+        // новый зритель ждёт первого кадра не дольше неё.
+        ...(source === 'screen'
+          ? { keyFrameRequestDelay: SfuGateway.SCREEN_KEYFRAME_DELAY_MS }
+          : {}),
       });
       // На роль — одна дорожка: клиент держит по producer'у на роль, и второй
       // той же роли значит, что ответ на прошлый до него не дошёл (сокет
@@ -516,6 +528,52 @@ export class SfuGateway implements OnGatewayConnection {
       this.logger.warn(`resume failed for ${peer.id}: ${String(err)}`);
       return fail('resume-failed');
     }
+  }
+
+  /**
+   * Перестать слать подписчику дорожку, не закрывая подписку. Так зритель
+   * трансляции, свернувший её плитку (развернул другую), не тянет с сервера
+   * поток, которого не видит, а вернувшись — получает его обратно за ключевой
+   * кадр, без новой подписки. Обратный ход — тот же `resume`.
+   */
+  @SubscribeMessage('pause')
+  async handlePause(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ConsumerPayload,
+  ): Promise<Ack> {
+    const peer = this.peers.get(client.id);
+    if (!peer) return fail('no-peer');
+    const id = typeof payload?.consumerId === 'string' ? payload.consumerId : '';
+    const consumer = peer.consumers.get(id);
+    if (!consumer) return fail('no-consumer');
+    try {
+      await consumer.pause();
+      return { ok: true };
+    } catch (err) {
+      this.logger.warn(`pause failed for ${peer.id}: ${String(err)}`);
+      return fail('pause-failed');
+    }
+  }
+
+  /**
+   * Снять подписку по просьбе зрителя («Перестать смотреть»). Закрыть consumer
+   * только у себя клиенту мало: mediasoup-client серверу об этом не говорит, и
+   * сервер слал бы поток дальше — в транспорт, где его уже никто не принимает.
+   * Каждое «Смотреть» после этого добавляло бы ещё один такой поток.
+   */
+  @SubscribeMessage('close-consumer')
+  handleCloseConsumer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ConsumerPayload,
+  ): Ack {
+    const peer = this.peers.get(client.id);
+    if (!peer) return fail('no-peer');
+    const id = typeof payload?.consumerId === 'string' ? payload.consumerId : '';
+    const consumer = peer.consumers.get(id);
+    if (!consumer) return fail('no-consumer');
+    consumer.close();
+    peer.consumers.delete(id);
+    return { ok: true };
   }
 
   /**

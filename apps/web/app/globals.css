@@ -378,6 +378,36 @@
     background: var(--color-ok);
   }
 
+  /* Обложка чужой трансляции (VideoTile → StreamCover). Колесо загрузки —
+     дуга с хвостом вокруг аватара: conic-градиент, вырезанный маской в кольцо. */
+  .stream-spinner {
+    background: conic-gradient(
+      from 0deg,
+      transparent 0%,
+      rgb(232 234 237 / 0.9) 24%,
+      transparent 25%
+    );
+    -webkit-mask: radial-gradient(
+      farthest-side,
+      transparent calc(100% - 3px),
+      #000 calc(100% - 2.5px)
+    );
+    mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+    animation: streamSpin 1.1s linear infinite;
+  }
+  /* Блик, проходящий по обложке, пока поток не дошёл. */
+  .stream-sweep {
+    background: linear-gradient(100deg, transparent, rgb(255 255 255 / 0.05), transparent);
+    animation: streamSweep 2.2s ease-in-out infinite;
+  }
+  /* Сетка точек — фактура «экрана» под обложкой, гаснет к краям. */
+  .stream-dots {
+    background-image: radial-gradient(rgb(255 255 255 / 0.06) 1px, transparent 1px);
+    background-size: 14px 14px;
+    -webkit-mask: radial-gradient(closest-side, #000, transparent);
+    mask: radial-gradient(closest-side, #000, transparent);
+  }
+
   /* Анимированное многоточие «…» в подписи панели голоса (vp-sub.waiting). */
   .vp-dots::after {
     content: '';
@@ -487,6 +517,22 @@
   }
   to {
     opacity: 0.5;
+  }
+}
+/* Колесо загрузки трансляции (.stream-spinner). Своё, а не `spin` Tailwind:
+   тот кладёт @keyframes, только если где-то стоит animate-spin. */
+@keyframes streamSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Блик по обложке трансляции, пока ждём первый кадр (.stream-sweep). */
+@keyframes streamSweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
   }
 }
 /* Тихое «дыхание» аватара на плитке без видео */
