@@ -108,7 +108,11 @@ flowchart LR
   не знает) и только там, где браузер умеет (Chromium, WebKit; Firefox — нет,
   откат на Opus). Идёт поверх потолка голоса, ~×2 трафика голоса.
 - Потолки: голос — `voice.audioBitrateKbps` (128), камера — `voice.videoBitrateKbps`
-  (2500), экран — 8 Мбит/с, звук экрана — 256 кбит/с.
+  (2500), экран — 720p и 4 Мбит/с (каждому зрителю свой поток с аплинка
+  стримера), звук экрана — 256 кбит/с.
+- Экран уходит только тем, кто нажал «Смотреть»: зритель шлёт `screen-watch`
+  ([protocol.md](protocol.md#92-события)), стример добавляет ему видеодорожку
+  или снимает её. Остальным — ничего, аплинк стримера на них не тратится.
 
 ### Восстановление
 
@@ -142,7 +146,8 @@ flowchart LR
   комнату не заводит второй роутер (`creating` в
   [`rooms.service.ts`](../apps/sfu/src/media/rooms.service.ts)).
 - **Кодеки** ([`media.config.ts`](../apps/sfu/src/media/media.config.ts)): Opus
-  48 кГц стерео, VP8, VP9 (profile 2), H.264 `42e01f` — последний ради WebKit.
+  48 кГц стерео, VP8, VP9 (profile 2), H.264 Constrained Baseline `42e033` —
+  ради WebKit; уровень 5.1, чтобы аппаратному кодировщику хватило на 1440p60.
 - **Транспорты** живут на `WebRtcServer` своего воркера: каждый воркер слушает
   один порт — первый свободный по порядку от `SFU_RTC_MIN_PORT`, UDP и TCP, — все
   его транспорты на нём, различаются по ICE ufrag. Порт, занятый чужим процессом
@@ -155,7 +160,8 @@ flowchart LR
 - **Доступ** — только по пропуску из api: `auth.token` = токен `sfu-token`,
   проверка HMAC на `SFU_SECRET` ([`apps/sfu/src/token.ts`](../apps/sfu/src/token.ts)).
   В пропуске комната, `peerId` (= `socket.id` в api), имя и флаг `listen`.
-- Лимиты на участника: 6 транспортов, 6 producer'ов.
+- Лимиты на участника: 6 транспортов; producer — один на роль (`source`),
+  повторный `produce` той же роли заменяет прежний.
 
 ### Протокол медиасервера
 
@@ -176,6 +182,9 @@ Socket.io на пути `/sfu/` (Caddy проксирует на `:3100`). Вс�
 | S→C | `producer-closed` | `{peerId, producerId}` | |
 | C→S | `consume` | `{transportId, producerId, rtpCapabilities}` → `{consumer}` | consumer создаётся на паузе |
 | C→S | `resume` | `{consumerId}` | снять с паузы, когда клиент готов |
+| C→S | `pause` | `{consumerId}` | поставить на паузу: плитку трансляции не видно (развёрнута другая) |
+| C→S | `close-consumer` | `{consumerId}` | закрыть подписку на сервере — «Перестать смотреть» |
+| C→S | `snapshot` | → `{peers: {peerId, name, producers}[]}` | кто что шлёт сейчас; сверка после восстановленной сессии |
 | C→S | `preferred-layers` | `{consumerId, spatialLayer, temporalLayer?}` | какой слой simulcast хочется |
 | S→C | `consumer-layers` | `{consumerId, spatialLayer, temporalLayer}` | какой слой реально едет |
 | S→C | `peer-joined` / `peer-left` | `{peerId, name}` / `{peerId}` | |
@@ -184,7 +193,9 @@ Socket.io на пути `/sfu/` (Caddy проксирует на `:3100`). Вс�
 `welcome` → `Device.load(routerRtpCapabilities)` → send- и recv-транспорты →
 `produce` своих дорожек ([`sfu/publish.ts`](../apps/web/lib/voice/sfu/publish.ts)) →
 `consume` каждого чужого producer'а и `resume`
-([`sfu/subscribe.ts`](../apps/web/lib/voice/sfu/subscribe.ts)).
+([`sfu/subscribe.ts`](../apps/web/lib/voice/sfu/subscribe.ts)). Трансляцию экрана
+клиент не берёт сам: на плитке кнопка «Смотреть», `consume` — по нажатию,
+`close-consumer` — по «Перестать смотреть».
 
 ### Кодирование
 
@@ -193,7 +204,11 @@ Socket.io на пути `/sfu/` (Caddy проксирует на `:3100`). Вс�
 - **Камера** — simulcast в три слоя: ¼ (150 кбит/с), ½ (500 кбит/с), полный
   (до 1,8 Мбит/с, под потолком `voice.videoBitrateKbps`), `L1T3`. Маленькой
   плитке клиент просит нижний слой, развёрнутой — верхний.
-- **Экран** — один слой до 8 Мбит/с: мыло в тексте хуже, чем просадка FPS.
+- **Экран** — профиль из [`screen-profile.ts`](../apps/web/lib/voice/screen-profile.ts):
+  разрешение 720p/1080p/1440p и 30/45/60 к/с выбирает стример, потолки —
+  владелец (`voice.screenMaxHeight`, `voice.screenBitrateKbps`). Два слоя
+  simulcast: верхний — как выбрано, нижний — 720p. Плитке ниже 792 пикселей
+  устройства едет нижний. H.264 там, где кодировщик аппаратный, иначе VP8.
 - Голос — те же потолки Opus, что в mesh.
 - RED в SFU нет: mediasoup не знает `audio/red`; от потерь спасает in-band FEC,
   который говорящий наращивает под худшего слушателя (см.
