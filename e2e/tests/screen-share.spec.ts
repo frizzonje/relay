@@ -192,13 +192,9 @@ test('трансляция: два слоя, поток только по «См
   // пары кадров, и медиасервер на это время честно переводит зрителя на
   // запасной — но обязан вернуть, как только верхний ожил.
   await tile(boris, her).click();
-  await expect
-    .poll(async () => (await received(boris)).height, { timeout: 30_000 })
-    .toBe(high);
+  await expect.poll(async () => (await received(boris)).height, { timeout: 30_000 }).toBe(high);
   await boris.getByRole('button', { name: `${her}: collapse` }).click();
-  await expect
-    .poll(async () => (await received(boris)).height, { timeout: 30_000 })
-    .toBe(high);
+  await expect.poll(async () => (await received(boris)).height, { timeout: 30_000 }).toBe(high);
   console.log('у зрителя:', await received(boris));
 
   // «Перестать смотреть» — кадры больше не идут, кнопка «Смотреть» вернулась.
