@@ -234,6 +234,12 @@ fn main() {
         .setup(|app| {
             let handle = app.handle().clone();
 
+            // Окно создаём сами (в конфиге `create: false`): только у билдера
+            // есть `on_new_window`, а без него WKWebView/WebView2 молча глотают
+            // клик по `<a target="_blank">` — ссылку из чата можно было только
+            // скопировать руками.
+            build_main_window(&handle)?;
+
             // Запоминаем стартовый URL окна — это и есть экран выбора сервера
             // (навигация на сервер случится позже, по клику в пикере).
             if let Some(win) = handle.get_webview_window("main") {
@@ -787,6 +793,48 @@ async fn native_update_flow(app: AppHandle, announce: bool) {
             }
         }
     }
+}
+
+/// Главное окно по конфигу + маршрутизация ссылок, просящих новое окно.
+///
+/// Чужой origin (ссылка в чате) уходит в системный браузер: внутри оболочки
+/// человек бы ушёл с relay без дороги назад, а чужая страница сидела бы рядом
+/// с мостом событий. Свой origin (вложения, скачивание из лайтбокса) остаётся
+/// как было — отказ: системный браузер без куки сессии получил бы 401.
+fn build_main_window(app: &AppHandle) -> tauri::Result<()> {
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .cloned()
+        .ok_or_else(|| tauri::Error::WindowNotFound)?;
+
+    // Origin текущей страницы. Снимаем на старте загрузки, а не спрашиваем у
+    // окна в колбэке: тот вызывается на главном потоке посреди обработки
+    // события webview, и синхронный `url()` оттуда — лишний риск.
+    let page_origin: std::sync::Arc<Mutex<Option<url::Origin>>> = Default::default();
+    let on_load = page_origin.clone();
+
+    tauri::WebviewWindowBuilder::from_config(app, &config)?
+        .on_page_load(move |_, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                *on_load.lock().unwrap() = Some(payload.url().origin());
+            }
+        })
+        .on_new_window(move |url, _| {
+            let external = matches!(url.scheme(), "http" | "https")
+                && page_origin.lock().unwrap().as_ref() != Some(&url.origin());
+            if external {
+                if let Err(e) = tauri_plugin_opener::open_url(url.as_str(), None::<&str>) {
+                    ulog(&format!("open external link failed: {e}"));
+                }
+            }
+            tauri::webview::NewWindowResponse::Deny
+        })
+        .build()?;
+    Ok(())
 }
 
 /// Вернуть окно на локальный экран выбора сервера. Единственная дорога назад:
