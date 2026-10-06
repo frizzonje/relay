@@ -14,8 +14,10 @@
       "engine.io": "^6.6.10",
       "multer": "^2.3.0",
       "postcss": "^8.5.26",
+      "proxy-addr": "^2.0.8",
       "qs": "^6.16.0",
-      "sharp": "^0.35.4"
+      "sharp": "^0.35.5",
+      "source-map-js": "^1.2.2"
     }
   },
   "scripts": {
