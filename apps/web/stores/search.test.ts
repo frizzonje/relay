@@ -12,8 +12,8 @@ import type { ChatSearchResult, ChatWindowResult, SearchHit } from '@relay/share
  */
 
 const answers = vi.hoisted(() => ({ queue: [] as unknown[] }));
-vi.mock('@/lib/channels', () => ({
-  ask: vi.fn(async () => answers.queue.shift() ?? null),
+vi.mock('@/lib/request', () => ({
+  request: vi.fn(async () => answers.queue.shift() ?? null),
 }));
 const toasts = vi.hoisted(() => ({ shown: [] as string[] }));
 vi.mock('sonner', () => ({ toast: (text: string) => toasts.shown.push(text) }));

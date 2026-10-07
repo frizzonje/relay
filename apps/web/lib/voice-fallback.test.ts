@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+import { answeringWith } from '@/lib/testing/socket';
 import { toast } from 'sonner';
 import type { TransportHost } from './voice/types';
 
@@ -32,13 +33,13 @@ const sockets = {
   emit: vi.fn(),
   on: vi.fn(),
   off: vi.fn(),
-  timeout: () => ({
-    emitWithAck: ticketRequests.mockImplementation(() =>
+  timeout: answeringWith(
+    ticketRequests.mockImplementation(() =>
       ticketAnswer === TIMEOUT
         ? Promise.reject(new Error('operation has timed out'))
         : Promise.resolve(ticketAnswer),
     ),
-  }),
+  ),
 };
 const handlers: Record<string, (...a: unknown[]) => unknown> = {};
 sockets.on = vi.fn((event: string, h: (...a: unknown[]) => unknown) => {

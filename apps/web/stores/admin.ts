@@ -2,16 +2,9 @@ import { create } from 'zustand';
 import type {
   AdminAction,
   AdminActionResult,
-  AdminAuditResult,
-  AdminBansResult,
   AdminChangedRelay,
   AdminOverview,
-  AdminPasswordResult,
-  AdminPeopleResult,
   AdminPerson,
-  AdminResetResult,
-  AdminSetResult,
-  AdminStateResult,
   AuditCursor,
   AuditEntry,
   BanEntry,
@@ -20,7 +13,7 @@ import type {
   SettingValue,
   SettingsSnapshot,
 } from '@relay/shared';
-import { getSocket } from '@/lib/socket';
+import { request } from '@/lib/request';
 import { useOwnerStore } from '@/stores/owner';
 import type { AdminFieldError } from '@/lib/refusals';
 
@@ -46,37 +39,16 @@ import type { AdminFieldError } from '@/lib/refusals';
  * заведомо нет: ответ известен заранее.
  */
 
-/**
- * Сколько ждём ответа. У `socket.emit` с подтверждением своего срока нет вовсе,
- * и молчащий сервер оставил бы поле в «сохраняется» навсегда. Срок тот же, что
- * у списка переписок (stores/dm.ts), — цифра общая по смыслу, а не совпадение.
- */
-const ACK_TIMEOUT_MS = 6000;
-
 /** Ответ сервера либо наше собственное «он промолчал». */
 type Answered<T extends { ok: boolean }> = T | { ok: false; error: 'timeout' };
 
 /**
- * Спросить сервер и не ждать вечно. Все дороги панели — с ack, и у всех один и
- * тот же способ провала, поэтому срок живёт здесь, а не в каждой из них.
+ * Молчание сервера — ответ с причиной `timeout`. Срок у вопроса свой у каждого
+ * (lib/request), а здесь он лишь становится словами: у панели все дороги с
+ * ack, и поле, застывшее в «сохраняется», хуже честного «не ответил».
  */
-function ack<T extends { ok: boolean }>(
-  send: (cb: (res: T) => void) => void,
-): Promise<Answered<T>> {
-  return new Promise((resolve) => {
-    let answered = false;
-    const giveUp = setTimeout(() => {
-      if (answered) return;
-      answered = true;
-      resolve({ ok: false, error: 'timeout' });
-    }, ACK_TIMEOUT_MS);
-    send((res) => {
-      if (answered) return;
-      answered = true;
-      clearTimeout(giveUp);
-      resolve(res);
-    });
-  });
+async function answered<T extends { ok: boolean }>(asked: Promise<T | null>): Promise<Answered<T>> {
+  return (await asked) ?? { ok: false, error: 'timeout' };
 }
 
 /**
@@ -281,7 +253,7 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
       patch({ error: 'forbidden' });
       return;
     }
-    const res = await ack<AdminStateResult>((cb) => getSocket().emit('admin-state', cb));
+    const res = await answered(request('admin-state'));
     if (!res.ok) {
       patch({ error: res.error });
       return;
@@ -323,14 +295,10 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
       errors: without(s.errors, key),
     }));
 
-    const res = await ack<AdminSetResult>((cb) =>
+    const res = await answered(
       // `confirm` кладём, только когда его просили: посылать «нет» там, где
       // ничего не спрашивали, — способ однажды послать «да» опечаткой.
-      getSocket().emit(
-        'admin-set',
-        opts?.confirm ? { key, value, confirm: true } : { key, value },
-        cb,
-      ),
+      request('admin-set', opts?.confirm ? { key, value, confirm: true } : { key, value }),
     );
 
     // Нас обогнала следующая правка того же поля — этот ответ уже ни о чём:
@@ -382,9 +350,7 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
     // нажатием, и человек, сбрасывавший внешний вид, не должен заодно молча
     // узнать, что вернул срок хранения. Диалог рисует панель, а поле в запросе
     // — то, чем за это отвечают перед сервером.
-    const res = await ack<AdminResetResult>((cb) =>
-      getSocket().emit('admin-reset', { group, confirm: true }, cb),
-    );
+    const res = await answered(request('admin-reset', { group, confirm: true }));
     if (!res.ok) {
       patch({ error: res.error });
       return;
@@ -398,9 +364,7 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
   },
 
   setPassword: async (password) => {
-    const res = await ack<AdminPasswordResult>((cb) =>
-      getSocket().emit('admin-password', { password, confirm: true }, cb),
-    );
+    const res = await answered(request('admin-password', { password, confirm: true }));
     const key = passwordKey(get().catalog);
     if (!res.ok) {
       if (key) patch((s) => ({ errors: { ...s.errors, [key]: res.error } }));
@@ -416,10 +380,10 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
   loadPeople: async (query) => {
     const asked = query ?? get().peopleQuery;
     patch({ peopleQuery: asked, peopleBusy: true, listError: null });
-    const res = await ack<AdminPeopleResult>((cb) =>
+    const res = await answered(
       // Поиск серверный: людей может быть тысяча, и выбирать нужного из
       // привезённой тысячи — это привезти тысячу.
-      getSocket().emit('admin-people', asked ? { query: asked } : {}, cb),
+      request('admin-people', asked ? { query: asked } : {}),
     );
     // Пока летел ответ, человек дописал запрос. Страница по «ма» поверх
     // страницы по «маша» выглядит как поиск, который врёт через раз.
@@ -442,8 +406,8 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
     // и есть конец списка, а не повод спросить ещё раз.
     if (!cursor || peopleBusy) return;
     patch({ peopleBusy: true, listError: null });
-    const res = await ack<AdminPeopleResult>((cb) =>
-      getSocket().emit('admin-people', asked ? { query: asked, cursor } : { cursor }, cb),
+    const res = await answered(
+      request('admin-people', asked ? { query: asked, cursor } : { cursor }),
     );
     if (get().peopleQuery !== asked) return;
     if (!res.ok) {
@@ -459,7 +423,7 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
 
   loadBans: async () => {
     patch({ bansBusy: true, listError: null });
-    const res = await ack<AdminBansResult>((cb) => getSocket().emit('admin-bans', cb));
+    const res = await answered(request('admin-bans'));
     if (!res.ok) {
       patch({ bansBusy: false, listError: res.error });
       return;
@@ -515,7 +479,7 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
   loadAudit: async () => {
     patch({ auditBusy: true, auditError: null });
     // Без курсора — с самого верха: сервер отдаёт от свежих к старым.
-    const res = await ack<AdminAuditResult>((cb) => getSocket().emit('admin-audit', {}, cb));
+    const res = await answered(request('admin-audit', {}));
     if (!res.ok) {
       patch({ auditBusy: false, auditError: res.error });
       return;
@@ -535,9 +499,7 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
     // теряла бы соседку по этой миллисекунде — молча и навсегда.
     const cursor: AuditCursor = { at: last.at, id: last.id };
     patch({ auditBusy: true, auditError: null });
-    const res = await ack<AdminAuditResult>((cb) =>
-      getSocket().emit('admin-audit', { cursor }, cb),
-    );
+    const res = await answered(request('admin-audit', { cursor }));
     if (!res.ok) {
       patch({ auditBusy: false, auditError: res.error });
       return;
@@ -550,19 +512,15 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
   },
 
   runAction: async (action, opts) => {
-    const res = await ack<AdminActionResult>((cb) =>
-      getSocket().emit(
-        'admin-action',
-        {
-          action,
-          // Ничего лишнего в запросе: посылать «подтверждения нет» там, где
-          // ничего не спрашивали, — способ однажды послать «да» опечаткой.
-          ...(opts?.confirm ? { confirm: true } : {}),
-          ...(opts?.target ? { target: opts.target } : {}),
-          ...(opts?.values ? { values: opts.values } : {}),
-        },
-        cb,
-      ),
+    const res = await answered(
+      request('admin-action', {
+        action,
+        // Ничего лишнего в запросе: посылать «подтверждения нет» там, где
+        // ничего не спрашивали, — способ однажды послать «да» опечаткой.
+        ...(opts?.confirm ? { confirm: true } : {}),
+        ...(opts?.target ? { target: opts.target } : {}),
+        ...(opts?.values ? { values: opts.values } : {}),
+      }),
     );
     // Импорт меняет разом десятки полей, и снимок в панели после него —
     // вчерашний. Перечитываем состояние: иначе следующая правка легла бы поверх

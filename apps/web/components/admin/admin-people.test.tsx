@@ -23,7 +23,10 @@ import { shortFingerprint } from '@/lib/format';
  */
 
 const emit = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/socket', () => ({ getSocket: () => ({ emit }) }));
+vi.mock('@/lib/socket', async () => {
+  const { timeoutOf } = await import('@/lib/testing/socket');
+  return { getSocket: () => ({ emit, timeout: timeoutOf(emit) }) };
+});
 
 import { AdminDialog } from './AdminDialog';
 import { PeopleTab } from './PeopleTab';

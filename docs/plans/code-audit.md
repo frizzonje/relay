@@ -148,15 +148,21 @@ HTTP API устройств, которые api и web объявляли каж
 сверяется до `await`, N одновременных запросов проходят все. Тот же приём,
 что в `produce`: проверка после ожидания.
 
-**Три помощника ack в web (D2, R3).** `stores/admin.ts` (`ack`, 6 с),
-`lib/channels.ts` (`ask`, 6 с), `lib/voice/sfu/index.ts` (`ask`, 10 с),
-`lib/voice.ts` (`timeout(3000).emitWithAck`) — плюс 12 мест с
-`emit(…, (res) => …)` без срока вовсе (R3; `lib/call.ts` ×5, `ChatPanel.tsx`
-×2, `SocketProvider.tsx` ×2, `InviteDialog.tsx`, `lib/voice.ts`
-`guest-kick`, `stores/dm.ts`): при обрыве посреди запроса ответ не придёт, и
-то, что его ждёт, останется ждать навсегда. Один
-`request(event, payload, { timeoutMs })` в `lib/socket.ts`, типизированный
-`ClientToServerEvents`, как `ask` у SFU.
+**✅ Помощники ack в web (D2, R3).** Было пять способов спросить сервер:
+`ack` в `stores/admin.ts`, `ask` в `lib/channels.ts` (нетипизированный —
+событие строкой, тип ответа называл вызывающий), `ask` в `lib/moderation.ts`,
+ручные таймеры в `stores/dm.ts` и `InviteDialog.tsx`, `timeout().emitWithAck`
+в `lib/voice.ts`. Без срока вовсе ждали `dialCall` и `answerCall`
+(`lib/call.ts`) и `kickGuest` (`lib/voice.ts`): оборвись сокет посреди
+набора, экран дозвона пульсировал «дозваниваемся» до отбоя, которым нечего
+было отбить. Теперь одна дорога — `lib/request.ts`: тип ответа выводится из
+`ClientToServerEvents`, срок — встроенный `timeout()` socket.io. Он, в
+отличие от своего таймера, вынимает вопрос из буфера отправки, и брошенный
+набор не зазвонит у собеседника после реконнекта. Молчание на наборе — свой
+исход `silent` на экране вызова. Простым `emit` остались только команды, ответа
+на которые никто не ждёт (`call-cancel`, `call-decline`, `dm-join` на
+реконнекте): им доставка после реконнекта и нужна. `ask` у SFU — другой сокет
+и другой контракт, у него срок уже был.
 
 **Точные клоны jscpd, которые стоит убрать (D4):**
 `IdentityGate.tsx` ↔ `GuestStage.tsx` (30 строк), `DmThread.tsx` ↔

@@ -203,6 +203,7 @@
   "call.refusal.disabled": "Calls are turned off on this installation",
   "call.refusal.forbidden": "You can't call this person",
   "call.refusal.rate": "Too many calls — try again in a bit",
+  "call.refusal.silent": "The server did not answer — try again",
   "call.state.busy": "Busy — already in a call",
   "call.state.declined": "Declined the call",
   "call.state.noAnswer": "No answer",

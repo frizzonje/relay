@@ -227,6 +227,7 @@
   "call.refusal.disabled": "Звонки выключены на этой инсталляции",
   "call.refusal.forbidden": "Этому человеку нельзя позвонить",
   "call.refusal.rate": "Слишком много звонков — попробуйте позже",
+  "call.refusal.silent": "Сервер не ответил — попробуйте ещё раз",
   "call.state.busy": "Занято — уже разговаривает",
   "call.state.declined": "Отклонил вызов",
   "call.state.noAnswer": "Не ответили",

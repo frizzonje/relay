@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+import { answeringWith } from '@/lib/testing/socket';
 import { toast } from 'sonner';
 import type { TransportHost } from './voice/types';
 
@@ -32,12 +33,11 @@ const sockets = {
   emit: vi.fn(),
   on: vi.fn(),
   off: vi.fn(),
-  timeout: () => ({
-    emitWithAck: (_event: string, payload: { room: string }) =>
-      manual
-        ? new Promise<Ticket>((reply) => asked.push({ room: payload.room, reply }))
-        : Promise.resolve(ticketFor(payload.room)),
-  }),
+  timeout: answeringWith((_event: string, payload: { room: string }) =>
+    manual
+      ? new Promise<Ticket>((reply) => asked.push({ room: payload.room, reply }))
+      : Promise.resolve(ticketFor(payload.room)),
+  ),
 };
 const handlers: Record<string, (...a: unknown[]) => unknown> = {};
 sockets.on = vi.fn((event: string, h: (...a: unknown[]) => unknown) => {

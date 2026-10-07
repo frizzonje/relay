@@ -3,6 +3,7 @@
 import { toast } from 'sonner';
 import type { VoicePresence } from '@relay/shared';
 import { getSocket } from '@/lib/socket';
+import { request, requestWithin } from '@/lib/request';
 import { getSfx } from '@/lib/sfx';
 import { useUiStore, myName } from '@/stores/ui';
 import { loadClientId } from '@/lib/identity';
@@ -288,6 +289,12 @@ type Route =
   | { mode: 'sfu'; ticket: null; quiet: boolean };
 
 /**
+ * Срок ответа на пропуск — короче обычного: его ждёт человек, стоящий на входе
+ * в канал, а молчание и так уводит в круг переспросов.
+ */
+const SFU_TICKET_TIMEOUT_MS = 3000;
+
+/**
  * Спрашиваем у api пропуск в медиасервер для канала. Ответ и есть режим
  * канала: пропуск дали — sfu и сервер жив; `not-sfu` — канал прямой.
  *
@@ -298,19 +305,19 @@ type Route =
  * круг сам уведёт в p2p, если ответ окажется `not-sfu`.
  */
 async function requestRoute(targetRoom: string): Promise<Route> {
-  try {
-    // Имя — в запросе: `join` ещё не случился, серверу его больше взять неоткуда.
-    const res = await socket()
-      .timeout(3000)
-      .emitWithAck('sfu-token', { room: targetRoom, name: myName() });
-    if (res.ok) return { mode: 'sfu', ticket: { url: res.url, token: res.token } };
-    if (res.error === 'not-sfu') return { mode: 'p2p' };
-    diag('sfu-ticket denied', res.error);
-    return { mode: 'sfu', ticket: null, quiet: res.error !== 'unavailable' };
-  } catch {
+  // Имя — в запросе: `join` ещё не случился, серверу его больше взять неоткуда.
+  const res = await requestWithin(SFU_TICKET_TIMEOUT_MS, 'sfu-token', {
+    room: targetRoom,
+    name: myName(),
+  });
+  if (!res) {
     diag('sfu-ticket timeout');
     return { mode: 'sfu', ticket: null, quiet: true };
   }
+  if (res.ok) return { mode: 'sfu', ticket: { url: res.url, token: res.token } };
+  if (res.error === 'not-sfu') return { mode: 'p2p' };
+  diag('sfu-ticket denied', res.error);
+  return { mode: 'sfu', ticket: null, quiet: res.error !== 'unavailable' };
 }
 
 /** Первая пауза круга ожидания; дальше она растёт вдвое до потолка. */
@@ -575,8 +582,8 @@ function onPresence(presence: VoicePresence) {
  * Выгнать гостя из эфира. Право проверяет сервер (любой НЕ-гость, кому виден
  * канал); здесь — только отправка и внятный ответ человеку.
  */
-export function kickGuest(peerId: string, name: string) {
-  socket().emit('guest-kick', { id: peerId }, (res) => {
+export function kickGuest(peerId: string, name: string): void {
+  void request('guest-kick', { id: peerId }).then((res) => {
     if (res?.ok) toast(msg('members.kick.done', { name }));
     else if (res?.error === 'not-found') toast(msg('members.kick.gone', { name }));
     else toast.error(msg('members.kick.failed'));

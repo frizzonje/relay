@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { CallPerson, DmOpenResult } from '@relay/shared';
 
 /**
- * Экран исходящего вызова (задача 6 плана B). `lib/call.ts` и `lib/channels.ts`
+ * Экран исходящего вызова (задача 6 плана B). `lib/call.ts` и `lib/request.ts`
  * подделаны тем же приёмом, что в `DmPeerCard.test.tsx`: экрану важно, что
  * кнопки доходят до правильных действий, а не как устроен сам протокол —
  * машину дозвона проверяют `stores/ring.test.ts` и `lib/call.test.ts`.
@@ -16,12 +16,14 @@ vi.mock('@/lib/call', () => ({
   cancelCall: vi.fn(),
   ownedCall: vi.fn(() => null),
 }));
-vi.mock('@/lib/channels', () => ({ ask: vi.fn() }));
+vi.mock('@/lib/request', () => ({
+  request: vi.fn(),
+}));
 const openDm = vi.fn();
 vi.mock('@/stores/ui', () => ({ useUiStore: { getState: () => ({ openDm }) } }));
 
 const { dialCall, hangUp, ownedCall } = await import('@/lib/call');
-const { ask } = await import('@/lib/channels');
+const { request } = await import('@/lib/request');
 const { useRingStore } = await import('@/stores/ring');
 const { OutgoingCall } = await import('./OutgoingCall');
 
@@ -50,7 +52,7 @@ describe('экран исходящего вызова', () => {
       });
     vi.mocked(hangUp).mockReset();
     vi.mocked(ownedCall).mockReset().mockReturnValue(null);
-    vi.mocked(ask).mockReset();
+    (request as unknown as Mock).mockReset();
     openDm.mockReset();
     host = document.createElement('div');
     document.body.appendChild(host);
@@ -192,7 +194,8 @@ describe('экран исходящего вызова', () => {
         previewMine: false,
       },
     };
-    vi.mocked(ask).mockResolvedValue(conversation);
+    // `request` обобщён по всем событиям контракта — у подделки тип попроще.
+    (request as unknown as Mock).mockResolvedValue(conversation);
 
     markup();
     const writeButton = host.querySelectorAll('button')[0] as HTMLButtonElement;

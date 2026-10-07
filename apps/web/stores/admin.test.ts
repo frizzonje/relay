@@ -12,7 +12,10 @@ import type { AdminOverview, SettingSpec, SettingsSnapshot } from '@relay/shared
  */
 
 const emit = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/socket', () => ({ getSocket: () => ({ emit }) }));
+vi.mock('@/lib/socket', async () => {
+  const { timeoutOf } = await import('@/lib/testing/socket');
+  return { getSocket: () => ({ emit, timeout: timeoutOf(emit) }) };
+});
 
 import { useAdminStore } from './admin';
 import { useOwnerStore } from './owner';

@@ -5,10 +5,9 @@ import type {
   CallPerson,
   CallRefusal,
   CallStateRelay,
-  DmOpenResult,
 } from '@relay/shared';
 import { settled as ringSettled, step, type Ring, type RingState } from '@relay/shared';
-import { ask } from '@/lib/channels';
+import { request } from '@/lib/request';
 import {
   answerCall,
   cancelCall,
@@ -43,7 +42,12 @@ import type { MessageKey } from '@/lib/i18n';
  */
 
 /** Отказ ДО того, как что-либо зазвонило (ack `call-start`, кроме двух пунктов ниже). */
-type RingRefusal = Exclude<CallRefusal, 'busy' | 'offline'>;
+/**
+ * Отказ до звонка. `silent` — сервер не ответил на набор вовсе: это не причина
+ * из протокола, а наше собственное «не дождались», и врать вместо него «не в
+ * сети» про собеседника, о котором мы ничего не узнали, нельзя.
+ */
+type RingRefusal = Exclude<CallRefusal, 'busy' | 'offline'> | 'silent';
 
 /** Что нарисовано на экране исходящего вызова. */
 export interface OutgoingScreen {
@@ -56,10 +60,10 @@ export interface OutgoingScreen {
   ring: Ring;
   /**
    * Заполнено, только если экран открыт отказом, который случился РАНЬШЕ, чем
-   * что-либо зазвонило (`disabled`/`forbidden`/`rate`). `busy` и `offline` в
-   * эту переменную не попадают: они — настоящие исходы машины (`busy`,
-   * `failed`), и подпись для них берётся из той же таблицы, что и у обычного
-   * `call-ended` (см. `outgoingCaption`, пункты 2 и 3 брифа задачи 6).
+   * что-либо зазвонило (`disabled`/`forbidden`/`rate`/`silent`). `busy` и
+   * `offline` в эту переменную не попадают: они — настоящие исходы машины
+   * (`busy`, `failed`), и подпись для них берётся из той же таблицы, что и у
+   * обычного `call-ended` (см. `outgoingCaption`, пункты 2 и 3 брифа задачи 6).
    */
   refusal: RingRefusal | null;
 }
@@ -248,7 +252,11 @@ export const useRingStore = create<RingStoreState>((set, get) => ({
     // ждут. Сверка по отпечатку — на случай, если экран успели переоткрыть
     // на другого собеседника: тогда ack тоже не про то, что сейчас на экране.
     if (!current || current.peer.fingerprint !== peer.fingerprint) {
-      if (res.ok) hangUpCall();
+      if (res?.ok) hangUpCall();
+      return;
+    }
+    if (!res) {
+      set({ outgoing: refuse(current, 'silent', now) });
       return;
     }
     if (res.ok) {
@@ -326,7 +334,7 @@ export const useRingStore = create<RingStoreState>((set, get) => ({
     if (!current) return;
     endRing(current);
     set({ outgoing: null });
-    void ask<DmOpenResult>('dm-open', { fingerprint: current.peer.fingerprint }).then((res) => {
+    void request('dm-open', { fingerprint: current.peer.fingerprint }).then((res) => {
       if (res?.ok) {
         useUiStore
           .getState()
@@ -341,7 +349,11 @@ export const useRingStore = create<RingStoreState>((set, get) => ({
 }));
 
 /** Отказ ДО дозвона переводит машину в её терминальный исход — тем же `step`, что и настоящий конец. */
-function refuse(current: OutgoingScreen, error: CallRefusal, at: number): OutgoingScreen {
+function refuse(
+  current: OutgoingScreen,
+  error: CallRefusal | 'silent',
+  at: number,
+): OutgoingScreen {
   if (error === 'busy') return { ...current, ring: step(current.ring, { type: 'busy', at }) };
   // `offline` (отказ ДО вызова) и `failed` (исход `call-ended`, собеседник
   // пропал ПОСЛЕ того, как уже звонило) — два разных пути к одному и тому же
@@ -351,9 +363,10 @@ function refuse(current: OutgoingScreen, error: CallRefusal, at: number): Outgoi
   // а не из двух, которым однажды случится разойтись.
   if (error === 'offline')
     return { ...current, ring: step(current.ring, { type: 'peer-gone', at }) };
-  // `disabled` / `forbidden` / `rate` — набора не было вовсе: сервер отказал
-  // раньше, чем что-либо зазвонило. Машину не двигаем (она лгала бы, что
-  // «дозванивались») — экран решает по `refusal`, что показать.
+  // `disabled` / `forbidden` / `rate` / `silent` — набора не было вовсе: сервер
+  // отказал (или промолчал) раньше, чем что-либо зазвонило. Машину не двигаем
+  // (она лгала бы, что «дозванивались») — экран решает по `refusal`, что
+  // показать.
   return { ...current, ring: { ...current.ring, endedAt: at }, refusal: error };
 }
 
@@ -392,6 +405,7 @@ const REFUSAL_CAPTION: Record<RingRefusal, Caption> = {
   disabled: { key: 'call.refusal.disabled', color: 'text-text-faint' },
   forbidden: { key: 'call.refusal.forbidden', color: 'text-text-faint' },
   rate: { key: 'call.refusal.rate', color: 'text-text-faint' },
+  silent: { key: 'call.refusal.silent', color: 'text-text-faint' },
 };
 
 /**

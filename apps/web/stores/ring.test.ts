@@ -30,7 +30,9 @@ vi.mock('@/lib/call', () => ({
   // обратное явно (см. `owning()`).
   ownedCall: vi.fn((): string | null => null),
 }));
-vi.mock('@/lib/channels', () => ({ ask: vi.fn() }));
+vi.mock('@/lib/request', () => ({
+  request: vi.fn(),
+}));
 vi.mock('@/stores/ui', () => ({ useUiStore: { getState: vi.fn(() => ({ openDm: vi.fn() })) } }));
 
 const PEER: CallPerson = { fingerprint: 'ff', nick: 'Боря' };
@@ -40,10 +42,10 @@ async function fresh() {
   vi.clearAllMocks();
   const ring = await import('./ring');
   const call = await import('@/lib/call');
-  const channels = await import('@/lib/channels');
+  const server = await import('@/lib/request');
   const ui = await import('@/stores/ui');
   ring.useRingStore.getState().reset();
-  return { ring, call, channels, ui };
+  return { ring, call, server, ui };
 }
 
 type CallModule = typeof import('@/lib/call');
@@ -140,6 +142,23 @@ describe('дозвон: отказ ДО того, как что-либо заз�
     expect(ring.outgoingLive(screen!)).toBe(false);
   });
 
+  it('сервер промолчал — экран говорит это, а не «дозваниваемся» навсегда', async () => {
+    // Раньше ack `call-start` ждали без срока: оборвись сокет посреди набора,
+    // и экран пульсировал «дозваниваемся» до отбоя, которым к тому же нечего
+    // было отбить — номера вызова клиент так и не узнал.
+    const { ring, call } = await fresh();
+    vi.mocked(call.dialCall).mockResolvedValue(null);
+
+    await ring.useRingStore.getState().start(PEER);
+
+    const screen = ring.useRingStore.getState().outgoing!;
+    expect(ring.outgoingCaption(screen)).toEqual({
+      key: 'call.refusal.silent',
+      color: 'text-text-faint',
+    });
+    expect(ring.outgoingLive(screen)).toBe(false);
+  });
+
   it('«не в сети» до вызова и «пропал посреди дозвона» — одна и та же подпись', async () => {
     // Пункт 3 брифа задачи 6: два разных пути (`offline` из ack `call-start` и
     // `failed` из `call-ended`) обязаны сойтись в ОДНОЙ подписи, а не в двух
@@ -226,7 +245,7 @@ describe('дозвон: конец, не ставший разговором', (
 
 describe('«Написать вместо звонка»', () => {
   it('отбивает вызов РОВНО один раз и уводит в переписку', async () => {
-    const { ring, call, channels, ui } = await fresh();
+    const { ring, call, server, ui } = await fresh();
     answers(call, { ok: true, ringId: 'r1' });
     await ring.useRingStore.getState().start(PEER);
 
@@ -240,7 +259,7 @@ describe('«Написать вместо звонка»', () => {
         previewMine: false,
       },
     };
-    vi.mocked(channels.ask).mockResolvedValue(conversation);
+    vi.mocked(server.request).mockResolvedValue(conversation);
     const openDm = vi.fn();
     vi.mocked(ui.useUiStore.getState).mockReturnValue({ openDm } as never);
 
@@ -295,7 +314,7 @@ describe('экран, открытый набором с СОСЕДНЕГО ус
   });
 
   it('«Написать вместо звонка» кончает вызов РОВНО один раз', async () => {
-    const { ring, call, channels, ui } = await sibling();
+    const { ring, call, server, ui } = await sibling();
     const conversation: DmOpenResult = {
       ok: true,
       conversation: {
@@ -306,7 +325,7 @@ describe('экран, открытый набором с СОСЕДНЕГО ус
         previewMine: false,
       },
     };
-    vi.mocked(channels.ask).mockResolvedValue(conversation);
+    vi.mocked(server.request).mockResolvedValue(conversation);
     const openDm = vi.fn();
     vi.mocked(ui.useUiStore.getState).mockReturnValue({ openDm } as never);
 

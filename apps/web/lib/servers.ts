@@ -1,12 +1,7 @@
-import type {
-  QuotaScope,
-  ServerCreateResult,
-  ServerDeleteResult,
-  ServerStatsResult,
-} from '@relay/shared';
+import type { QuotaScope, ServerCreateResult } from '@relay/shared';
 import { toast } from 'sonner';
 import { getSocket } from '@/lib/socket';
-import { ask } from '@/lib/channels';
+import { request } from '@/lib/request';
 import { tx } from '@/lib/i18n';
 
 /**
@@ -28,7 +23,7 @@ export async function createServer(server: {
 }): Promise<ServerCreateResult | null> {
   const name = server.name.trim().slice(0, 32);
   if (!server.id || !name) return { ok: false, error: 'bad-name' };
-  const res = await ask<ServerCreateResult>('server-create', {
+  const res = await request('server-create', {
     id: server.id,
     name,
     emoji: server.emoji,
@@ -68,7 +63,7 @@ export function createRefusalText(
  */
 export async function deleteServer(id: string): Promise<boolean> {
   if (!id) return false;
-  const res = await ask<ServerDeleteResult>('server-delete', { id });
+  const res = await request('server-delete', { id });
   if (res?.ok) return true;
   toast(res ? serverRefusalText(res.error, res.occupants) : tx('server.noAnswer'));
   return false;
@@ -94,7 +89,7 @@ export async function serverStats(
   id: string,
 ): Promise<{ channels: number; messages: number; occupants: number } | null> {
   if (!id) return null;
-  const res = await ask<ServerStatsResult>('server-stats', { id });
+  const res = await request('server-stats', { id });
   return res?.ok
     ? { channels: res.channels, messages: res.messages, occupants: res.occupants }
     : null;

@@ -8,7 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const emit = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/socket', () => ({ getSocket: () => ({ emit }) }));
+vi.mock('@/lib/socket', async () => {
+  const { timeoutOf } = await import('@/lib/testing/socket');
+  return { getSocket: () => ({ emit, timeout: timeoutOf(emit) }) };
+});
 
 import { banAuthor, listBans, unban } from './moderation';
 

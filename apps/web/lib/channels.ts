@@ -1,14 +1,7 @@
-import type {
-  ChannelCreateResult,
-  ChannelDeleteResult,
-  ChannelRenameResult,
-  ChannelStatsResult,
-  ChannelType,
-  QuotaScope,
-  VoiceMode,
-} from '@relay/shared';
+import type { ChannelType, QuotaScope, VoiceMode } from '@relay/shared';
 import { toast } from 'sonner';
 import { getSocket } from '@/lib/socket';
+import { request } from '@/lib/request';
 import { MAIN_SERVER_ID } from '@/lib/constants';
 import { useServersStore } from '@/stores/servers';
 import { tx } from '@/lib/i18n';
@@ -23,9 +16,6 @@ import { tx } from '@/lib/i18n';
  * «канал по умолчанию», «это не ваш канал») человек должен увидеть, а не
  * гадать, почему строка осталась на месте.
  */
-
-/** Ack может не прийти вовсе (обрыв) — не ждём вечно. */
-const ACK_TIMEOUT_MS = 6000;
 
 /**
  * Завести канал в открытом сервере. Возвращает true, если сервер согласился;
@@ -48,7 +38,7 @@ export async function createChannel(
   }
   // Владельцем канала сервер запишет личность за этим сокетом (см. lib/socket)
   // — менять канал сможет только она.
-  const res = await ask<ChannelCreateResult>('channel-create', {
+  const res = await request('channel-create', {
     serverId,
     type,
     name: trimmed,
@@ -92,7 +82,7 @@ function refusalText(
  */
 export async function deleteChannel(id: string): Promise<boolean> {
   if (!id) return false;
-  const res = await ask<ChannelDeleteResult>('channel-delete', { id });
+  const res = await request('channel-delete', { id });
   if (res?.ok) return true;
   toast(res ? refusalText(res.error, res.occupants) : tx('channels.noAnswer'));
   return false;
@@ -102,7 +92,7 @@ export async function deleteChannel(id: string): Promise<boolean> {
 export async function renameChannel(id: string, name: string): Promise<boolean> {
   const trimmed = name.trim().slice(0, 32);
   if (!id || !trimmed) return false;
-  const res = await ask<ChannelRenameResult>('channel-rename', { id, name: trimmed });
+  const res = await request('channel-rename', { id, name: trimmed });
   if (res?.ok) return true;
   toast(res ? refusalText(res.error) : tx('channels.noAnswer'));
   return false;
@@ -112,7 +102,7 @@ export async function renameChannel(id: string, name: string): Promise<boolean> 
 export async function channelStats(
   id: string,
 ): Promise<{ occupants: number; messages: number } | null> {
-  const res = await ask<ChannelStatsResult>('channel-stats', { id });
+  const res = await request('channel-stats', { id });
   return res?.ok ? { occupants: res.occupants, messages: res.messages } : null;
 }
 
@@ -123,25 +113,4 @@ export async function channelStats(
 export function setChannelMode(id: string, mode: VoiceMode): void {
   if (!id) return;
   getSocket().emit('channel-mode', { id, mode });
-}
-
-/** Событие с ack и тайм-аутом; null — ответа не дождались. */
-export function ask<T>(event: string, payload: unknown): Promise<T | null> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const done = (value: T | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(value);
-    };
-    const timer = setTimeout(() => done(null), ACK_TIMEOUT_MS);
-    // Типы событий сокета сужены до конкретных пар payload/ack — здесь же
-    // событие приходит строкой, поэтому вызов идёт мимо перегрузок.
-    (getSocket().emit as (e: string, p: unknown, cb: (res: T) => void) => void)(
-      event,
-      payload,
-      done,
-    );
-  });
 }

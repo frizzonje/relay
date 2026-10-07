@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import type { MentionSuggestResult } from '@relay/shared';
 import { cn } from '@/lib/utils';
-import { ask } from '@/lib/channels';
+import { request } from '@/lib/request';
 import { Identicon } from '@/components/ui/Identicon';
 import { PresenceDot } from '@/components/ui/PresenceDot';
 import { useT } from '@/lib/i18n';
@@ -48,7 +48,7 @@ export function useMentionSuggest(query: string | null): {
     }
     let live = true;
     const timer = setTimeout(async () => {
-      const res = await ask<MentionSuggestResult>('mention-suggest', { prefix: query });
+      const res = await request('mention-suggest', { prefix: query });
       if (!live) return;
       setState({ people: res?.people ?? [], asked: true });
     }, TYPING_PAUSE_MS);

@@ -9,7 +9,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const emit = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/socket', () => ({ getSocket: () => ({ emit }) }));
+vi.mock('@/lib/socket', async () => {
+  const { timeoutOf } = await import('@/lib/testing/socket');
+  return { getSocket: () => ({ emit, timeout: timeoutOf(emit) }) };
+});
 
 const toast = vi.hoisted(() => vi.fn());
 vi.mock('sonner', () => ({ toast }));
@@ -21,7 +24,6 @@ vi.mock('@/stores/servers', () => ({
 
 import { MAIN_SERVER_ID } from './constants';
 import {
-  ask,
   channelStats,
   createChannel,
   deleteChannel,
@@ -203,19 +205,6 @@ describe('срезы для диалогов подтверждения', () => 
 });
 
 describe('молчание сервера', () => {
-  it('без ответа диалог не висит вечно — через тайм-аут приходит null', async () => {
-    const p = ask('channel-delete', { id: 'ch-1' });
-    vi.advanceTimersByTime(6000);
-    expect(await p).toBeNull();
-  });
-
-  it('поздний ответ после тайм-аута ничего не ломает', async () => {
-    const p = ask('channel-delete', { id: 'ch-1' });
-    vi.advanceTimersByTime(6000);
-    expect(await p).toBeNull();
-    expect(() => reply({ ok: true })).not.toThrow();
-  });
-
   it('молчание объясняется своим текстом, а не выдумывает причину отказа', async () => {
     const p = deleteChannel('ch-1');
     vi.advanceTimersByTime(6000);

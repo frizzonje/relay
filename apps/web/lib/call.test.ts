@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { timeoutOf } from '@/lib/testing/socket';
 import type { CallReplyResult, CallStartResult, CallStateRelay } from '@relay/shared';
 
 /**
@@ -15,6 +16,7 @@ import type { CallReplyResult, CallStartResult, CallStateRelay } from '@relay/sh
 const socket = {
   on: vi.fn(),
   emit: vi.fn(),
+  timeout: timeoutOf((...args) => socket.emit(...args)),
 };
 const handlers: Record<string, (payload: never) => void> = {};
 socket.on = vi.fn((event: string, h: (payload: never) => void) => {
@@ -189,6 +191,22 @@ describe('вход в комнату беседы', () => {
     handlers['call-state'](accepted('r1') as never);
     await Promise.resolve();
     expect(voice.joinVoice).not.toHaveBeenCalled();
+  });
+
+  it('молчание сервера владения не снимает: исход решит «принято», если доедет', async () => {
+    vi.useFakeTimers();
+    try {
+      const { call, voice } = await fresh();
+      const answered = call.answerCall('r1');
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(await answered).toBeNull();
+      expect(call.ownedCall()).toBe('r1');
+
+      handlers['call-state'](accepted('r1') as never);
+      await vi.waitFor(() => expect(voice.joinVoice).toHaveBeenCalledWith(ROOM, 'Боря'));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('не вошли — и не считаем себя в разговоре', async () => {

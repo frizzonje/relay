@@ -5,9 +5,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
   MAX_UPLOAD_BYTES,
-  type ChatHistoryMoreResult,
   type ChatMessage,
-  type ChatWindowResult,
   type ReplyRef,
   type UploadResponse,
 } from '@relay/shared';
@@ -16,7 +14,7 @@ import { STAGE_FADE_MS } from '@/lib/motion';
 import { Icon } from '@/components/ui/icon';
 import { fmtBytes } from '@/lib/format';
 import { getSocket } from '@/lib/socket';
-import { ask } from '@/lib/channels';
+import { request } from '@/lib/request';
 import { notifySent } from '@/lib/notify';
 import { useRetention } from '@/lib/use-sfu';
 import { useUiStore } from '@/stores/ui';
@@ -319,7 +317,7 @@ export function ChatPanel() {
 
     state.setLoadingMore(true);
     anchorHeight.current = el.scrollHeight;
-    const page = await ask<ChatHistoryMoreResult>('chat-history-more', {
+    const page = await request('chat-history-more', {
       beforeTs: top.ts,
       beforeId: top.id,
     });
@@ -344,7 +342,7 @@ export function ChatPanel() {
     if (!state.moreAfter || state.loadingAfter || !bottom?.id) return;
 
     state.setLoadingAfter(true);
-    const page = await ask<ChatWindowResult>('chat-history-after', {
+    const page = await request('chat-history-after', {
       afterTs: bottom.ts,
       afterId: bottom.id,
     });

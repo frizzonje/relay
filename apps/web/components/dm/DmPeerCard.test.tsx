@@ -13,7 +13,7 @@ import { useRingStore } from '@/stores/ring';
 
 /**
  * `lib/call.ts` (не `stores/ring.ts`) — вот что здесь подделано, тем же
- * приёмом, что `people-picker.test.tsx` подделывает `ask` из `lib/channels`:
+ * приёмом, что `people-picker.test.tsx` подделывает `request` из `lib/request`:
  * карточке важно, что клик действительно доходит до набора номера, а
  * дублировать протокол дозвона второй подделкой незачем (настоящее поведение
  * машины дозвона проверяют `lib/call.test.ts` и `stores/ring.test.ts`).

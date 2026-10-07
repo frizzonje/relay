@@ -1,6 +1,7 @@
 import { toast } from 'sonner';
 import type { CallReplyResult, CallStartResult, CallStateRelay } from '@relay/shared';
 import { getSocket } from '@/lib/socket';
+import { request } from '@/lib/request';
 import { tx as msg } from '@/lib/i18n';
 import { voiceRefusalKey } from '@/lib/refusals';
 import { joinVoice, leaveVoice, onVoiceLeft, voiceRoom } from '@/lib/voice';
@@ -79,14 +80,18 @@ export function ownedCall(): string | null {
  * Позвонить. Владение заявляем по ответу сервера, и здесь это безопасно:
  * `accepted` не может обогнать подтверждение — между ними стоит человек,
  * который берёт трубку.
+ *
+ * `null` — сервер промолчал. Вызова при этом нет и не будет: вопрос, не
+ * дождавшийся ответа, `request` вынимает из буфера, и на реконнекте он не
+ * зазвонит у собеседника через минуту после того, как экран сказал «не вышло».
  */
-export function dialCall(fingerprint: string, video = false): Promise<CallStartResult> {
-  return new Promise((resolve) => {
-    getSocket().emit('call-start', { fingerprint, video }, (res) => {
-      if (res.ok) mine = res.ringId;
-      resolve(res);
-    });
-  });
+export async function dialCall(
+  fingerprint: string,
+  video = false,
+): Promise<CallStartResult | null> {
+  const res = await request('call-start', { fingerprint, video });
+  if (res?.ok) mine = res.ringId;
+  return res;
 }
 
 /**
@@ -98,16 +103,15 @@ export function dialCall(fingerprint: string, video = false): Promise<CallStartR
  * приехало бы в никуда, и разговор не собрался бы ровно на том устройстве, где
  * нажали «принять».
  */
-export function answerCall(ringId: string): Promise<CallReplyResult> {
+export async function answerCall(ringId: string): Promise<CallReplyResult | null> {
   mine = ringId;
-  return new Promise((resolve) => {
-    getSocket().emit('call-accept', { ringId }, (res) => {
-      // Проигранная гонка (успели отменить, вышел таймаут, ответили с другого
-      // устройства): владение снимаем — садиться будет некуда.
-      if (!res.ok) forget(ringId);
-      resolve(res);
-    });
-  });
+  const res = await request('call-accept', { ringId });
+  // Проигранная гонка (успели отменить, вышел таймаут, ответили с другого
+  // устройства): владение снимаем — садиться будет некуда. Молчание (`null`)
+  // владения не снимает: исход неизвестен, и решит его `call-state` или
+  // `call-ended`, если доедут.
+  if (res && !res.ok) forget(ringId);
+  return res;
 }
 
 /**

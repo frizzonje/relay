@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { toast } from 'sonner';
-import type { ChatSearchResult, ChatWindowResult, SearchHit, SearchScope } from '@relay/shared';
-import { ask } from '@/lib/channels';
+import type { SearchHit, SearchScope } from '@relay/shared';
+import { request } from '@/lib/request';
 import { tx } from '@/lib/i18n';
 import { useChannelsStore } from '@/stores/channels';
 import { useChatStore } from '@/stores/chat';
@@ -85,7 +85,7 @@ export const useSearchStore = create<SearchState>((set, get) => ({
     }
     const mine = (seq += 1);
     set({ loading: true, failed: false });
-    const res = await ask<ChatSearchResult>('chat-search', { query, scope: get().scope });
+    const res = await request('chat-search', { query, scope: get().scope });
     if (mine !== seq) return;
     set({
       loading: false,
@@ -103,7 +103,7 @@ export const useSearchStore = create<SearchState>((set, get) => ({
     if (!more || loading || !last?.id) return;
     const mine = (seq += 1);
     set({ loading: true });
-    const res = await ask<ChatSearchResult>('chat-search', {
+    const res = await request('chat-search', {
       query: query.trim(),
       scope,
       beforeTs: last.ts,
@@ -146,7 +146,7 @@ export const useSearchStore = create<SearchState>((set, get) => ({
     }
     await useUiStore.getState().sceneSettled();
 
-    const win = await ask<ChatWindowResult>('chat-around', { id });
+    const win = await request('chat-around', { id });
     // Пока ждали ответ, человек ушёл в другой канал или в другую беседу — чужое
     // окно ему не надо.
     if (openLedger(useUiStore.getState()) !== hit.slug) return;

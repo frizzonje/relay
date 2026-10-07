@@ -1,13 +1,7 @@
 import { create } from 'zustand';
 import { toast } from 'sonner';
-import {
-  PIN_LIMIT,
-  type ChatMessage,
-  type ChatPinResult,
-  type ChatPinsResult,
-  type ChatWindowResult,
-} from '@relay/shared';
-import { ask } from '@/lib/channels';
+import { PIN_LIMIT, type ChatMessage } from '@relay/shared';
+import { request } from '@/lib/request';
 import { tx } from '@/lib/i18n';
 import { useChatStore } from '@/stores/chat';
 import { useSearchStore } from '@/stores/search';
@@ -99,7 +93,7 @@ export const usePinsStore = create<PinsState>((set, get) => ({
     if (!slug) return;
     const mine = (seq += 1);
     set({ loading: true, failed: false });
-    const res = await ask<ChatPinsResult>('chat-pins', { slug });
+    const res = await request('chat-pins', { slug });
     if (mine !== seq) return;
     // Список чужого канала сервер и не пришлёт — он сверяет слаг, — но пока
     // ответ шёл, человек мог уйти: тогда он уже не про то, что на экране.
@@ -117,7 +111,7 @@ export const usePinsStore = create<PinsState>((set, get) => ({
   },
 
   toggle: async (id, on) => {
-    const res = await ask<ChatPinResult>('chat-pin', { id, on });
+    const res = await request('chat-pin', { id, on });
     if (res?.ok) return true;
     // Потолок — единственный отказ, с которым человеку есть что делать:
     // открепить лишнее. Остальные значат «реплики уже нет» или «канал не твой»,
@@ -149,7 +143,7 @@ export const usePinsStore = create<PinsState>((set, get) => ({
       return;
     }
     const slug = useUiStore.getState().textRoom;
-    const win = await ask<ChatWindowResult>('chat-around', { id });
+    const win = await request('chat-around', { id });
     if (useUiStore.getState().textRoom !== slug) return;
     if (!win || !win.messages.length) {
       // Реплику удалили, пока панель была открыта. Молча показать конец канала

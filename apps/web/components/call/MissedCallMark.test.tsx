@@ -22,7 +22,9 @@ vi.mock('@/lib/call', () => ({
   cancelCall: vi.fn(),
   ownedCall: vi.fn(() => null),
 }));
-vi.mock('@/lib/channels', () => ({ ask: vi.fn() }));
+vi.mock('@/lib/request', () => ({
+  request: vi.fn(),
+}));
 
 /** Настройки инсталляции: звонить можно — иначе кнопки не будет вовсе. */
 const settings: Record<string, unknown> = { 'calls.enabled': true, 'calls.whoCanCall': 'everyone' };

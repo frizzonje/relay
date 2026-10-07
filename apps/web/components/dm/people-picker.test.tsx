@@ -8,16 +8,18 @@ import { shortFingerprint } from '@/lib/format';
 import { usePresenceStore } from '@/stores/presence';
 
 /**
- * `ask` — единственная дверь наружу у `PeoplePicker` (dm-people, dm-open).
+ * `request` — единственная дверь наружу у `PeoplePicker` (dm-people, dm-open).
  * Стор здесь ни при чём, а сокет реальным быть не может — стаб идёт тем же
  * приёмом, что stores/search.test.ts: `vi.mock` очереди ответов вместо
  * сети. Здесь очередь — по конкретным вызовам, а не общая: тесту про гонку
  * важен порядок разрешения, а не только сами ответы.
  */
-vi.mock('@/lib/channels', () => ({ ask: vi.fn() }));
-import { ask } from '@/lib/channels';
+vi.mock('@/lib/request', () => ({
+  request: vi.fn(),
+}));
+import { request } from '@/lib/request';
 
-const askMock = ask as unknown as Mock;
+const askMock = request as unknown as Mock;
 
 /** Отложенный ответ — чтобы решать, в каком порядке разрешать запросы. */
 function deferred<T>() {
@@ -65,7 +67,7 @@ async function flush() {
 }
 
 /** Продвигает фейковые таймеры внутри `act` — иначе выстрел debounce-таймера
- *  сам по себе (ask → setState) идёт мимо React и он ругается в консоль. */
+ *  сам по себе (request → setState) идёт мимо React и он ругается в консоль. */
 async function advance(ms: number) {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(ms);
@@ -177,12 +179,12 @@ describe('выбор собеседника', () => {
     const freshP = person({ fingerprint: '5555-6666-7777-8888', nick: 'Олеся' });
 
     renderPicker();
-    // Первый запрос (пустая строка) уходит без паузы — это первый вызов ask.
+    // Первый запрос (пустая строка) уходит без паузы — это первый вызов request.
     await advance(0);
 
     const input = host.querySelector('input') as HTMLInputElement;
     typeQuery(input, 'о');
-    // Второй запрос — с паузой на наборе; это второй вызов ask.
+    // Второй запрос — с паузой на наборе; это второй вызов request.
     await advance(280);
 
     expect(askMock).toHaveBeenCalledTimes(2);

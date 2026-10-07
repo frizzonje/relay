@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { getSocket } from '@/lib/socket';
+import { request } from '@/lib/request';
 import type { DmActivityRelay, DmConversation } from '@relay/shared';
 import { useUnreadStore } from './unread';
 
@@ -44,13 +44,11 @@ const initial: Pick<DmState, 'conversations' | 'activity' | 'loading' | 'failed'
 };
 
 /**
- * Номер последнего запроса списка и срок, после которого ответа уже не ждём.
- * У `socket.emit` с подтверждением своего срока нет вовсе: молчащий сервер
- * оставлял бы экран в «загружаем» навсегда, и это ровно то состояние, в котором
- * список раньше уверенно писал «переписок пока нет».
+ * Номер последнего запроса списка. Срок у самого запроса (lib/request): без него
+ * молчащий сервер оставлял бы экран в «загружаем» навсегда, и это ровно то
+ * состояние, в котором список раньше уверенно писал «переписок пока нет».
  */
 let listSeq = 0;
-const LIST_TIMEOUT_MS = 6000;
 
 /**
  * Через сколько переспросить, если список не доехал, — и сколько раз.
@@ -84,16 +82,11 @@ export const useDmStore = create<DmState>((set, get) => {
   const attempt = (tries: number): void => {
     const mine = (listSeq += 1);
     set({ loading: true, failed: false });
-    const giveUp = setTimeout(() => {
-      if (mine !== listSeq) return;
-      again(mine, tries);
-    }, LIST_TIMEOUT_MS);
-    getSocket().emit('dm-list', (res) => {
+    void request('dm-list').then((res) => {
       // Ответ на обогнанный запрос (переподключились, пока ждали) не трогает
       // ничего: свежий уже в пути, и его снимок новее этого.
       if (mine !== listSeq) return;
-      clearTimeout(giveUp);
-      if (!res.ok) {
+      if (!res?.ok) {
         again(mine, tries);
         return;
       }

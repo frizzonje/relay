@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import type { InviteCreateResult } from '@relay/shared';
 import {
   Dialog,
   DialogContent,
@@ -13,7 +12,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
-import { getSocket } from '@/lib/socket';
+import { request } from '@/lib/request';
 import { useT } from '@/lib/i18n';
 
 type InviteState =
@@ -42,13 +41,9 @@ export function InviteDialog({
     if (!target) return;
     setState({ phase: 'loading' });
     let alive = true;
-    // Ack может не прийти (обрыв) — не подвисаем в «loading» навсегда.
-    const fallback = setTimeout(() => {
-      if (alive) setState({ phase: 'error' });
-    }, 6000);
-    getSocket().emit('invite-create', { room: target.slug }, (res: InviteCreateResult) => {
+    // Ответ может не прийти вовсе (обрыв) — срок у запроса, и «loading» не вечен.
+    void request('invite-create', { room: target.slug }).then((res) => {
       if (!alive) return;
-      clearTimeout(fallback);
       if (res?.ok) {
         const url = `${window.location.origin}/invite/${res.token}?l=${encodeURIComponent(target.label)}`;
         setState({ phase: 'ready', url, listen: res.listen });
@@ -58,7 +53,6 @@ export function InviteDialog({
     });
     return () => {
       alive = false;
-      clearTimeout(fallback);
     };
   }, [target]);
 

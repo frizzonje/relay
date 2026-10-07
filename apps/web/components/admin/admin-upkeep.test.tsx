@@ -29,7 +29,10 @@ import { translate } from '@/lib/i18n/translate';
  */
 
 const emit = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/socket', () => ({ getSocket: () => ({ emit }) }));
+vi.mock('@/lib/socket', async () => {
+  const { timeoutOf } = await import('@/lib/testing/socket');
+  return { getSocket: () => ({ emit, timeout: timeoutOf(emit) }) };
+});
 
 import { AdminDialog } from './AdminDialog';
 import { OverviewTab } from './OverviewTab';

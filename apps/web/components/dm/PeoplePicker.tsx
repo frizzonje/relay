@@ -2,16 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import {
-  DM_PEOPLE_LIMIT,
-  type DmOpenResult,
-  type DmPeopleResult,
-  type DmPerson,
-} from '@relay/shared';
+import { DM_PEOPLE_LIMIT, type DmPerson } from '@relay/shared';
 import { Icon } from '@/components/ui/icon';
 import { Identicon } from '@/components/ui/Identicon';
 import { PresenceDot } from '@/components/ui/PresenceDot';
-import { ask } from '@/lib/channels';
+import { request } from '@/lib/request';
 import { fmtSince, shortFingerprint } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
@@ -173,22 +168,20 @@ export function PeoplePicker({
     const delay = query.trim() ? TYPING_PAUSE_MS : 0;
     const mine = (seqRef.current += 1);
     const timer = setTimeout(() => {
-      void ask<DmPeopleResult>('dm-people', query.trim() ? { query: query.trim() } : {}).then(
-        (res) => {
-          // Ответ мог прийти позже более свежего запроса (следующая буква,
-          // очередной сброс паузой) — тогда он уже не про то, что набрано
-          // сейчас, и подменять список или флаг «спрашивали» им нельзя.
-          if (mine !== seqRef.current) return;
-          setAsked(true);
-          setPeople(res?.ok ? res.people : []);
-        },
-      );
+      void request('dm-people', query.trim() ? { query: query.trim() } : {}).then((res) => {
+        // Ответ мог прийти позже более свежего запроса (следующая буква,
+        // очередной сброс паузой) — тогда он уже не про то, что набрано
+        // сейчас, и подменять список или флаг «спрашивали» им нельзя.
+        if (mine !== seqRef.current) return;
+        setAsked(true);
+        setPeople(res?.ok ? res.people : []);
+      });
     }, delay);
     return () => clearTimeout(timer);
   }, [open, query]);
 
   async function choose(person: DmPerson) {
-    const res = await ask<DmOpenResult>('dm-open', { fingerprint: person.fingerprint });
+    const res = await request('dm-open', { fingerprint: person.fingerprint });
     if (!res?.ok) return;
     useDmStore.getState().remember(res.conversation);
     useUiStore.getState().openDm(res.conversation.slug, person.fingerprint, person.nick);

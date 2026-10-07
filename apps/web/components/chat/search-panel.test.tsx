@@ -19,7 +19,9 @@ import { useUiStore } from '@/stores/ui';
  */
 
 // Запрос уходит по таймеру набора; сеть в тесте не нужна — важна разметка.
-vi.mock('@/lib/channels', () => ({ ask: vi.fn(async () => null) }));
+vi.mock('@/lib/request', () => ({
+  request: vi.fn(async () => null),
+}));
 
 const slug = 'dm-0123456789abcdef01234567';
 const nick = 'Марта';

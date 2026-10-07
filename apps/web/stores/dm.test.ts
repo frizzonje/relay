@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const emit = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/socket', () => ({ getSocket: () => ({ emit }) }));
+vi.mock('@/lib/socket', async () => {
+  const { timeoutOf } = await import('@/lib/testing/socket');
+  return { getSocket: () => ({ emit, timeout: timeoutOf(emit) }) };
+});
 
 import { unreadIn, useDmStore } from './dm';
 import { useUnreadStore } from './unread';
@@ -149,23 +152,23 @@ describe('unreadIn', () => {
  * первую неудачу — спросить ещё раз, а не рисовать приговор.
  */
 describe('reload(): неудача — повод переспросить, а не сдаться', () => {
-  it('оставшись без ответа, спрашивает список заново', () => {
+  it('оставшись без ответа, спрашивает список заново', async () => {
     vi.useFakeTimers();
     useDmStore.getState().reload();
     expect(emit).toHaveBeenCalledTimes(1);
 
     // Сокет умер на полуслове: подтверждения не будет никогда.
-    vi.advanceTimersByTime(60_000);
+    await vi.advanceTimersByTimeAsync(60_000);
 
     expect(emit.mock.calls.length).toBeGreaterThan(1);
   });
 
-  it('отказ лимитера тоже переспрашивается: он временный', () => {
+  it('отказ лимитера тоже переспрашивается: он временный', async () => {
     vi.useFakeTimers();
     useDmStore.getState().reload();
     answerLast({ ok: false, error: 'forbidden' });
 
-    vi.advanceTimersByTime(60_000);
+    await vi.advanceTimersByTimeAsync(60_000);
 
     expect(emit.mock.calls.length).toBeGreaterThan(1);
   });
@@ -178,21 +181,21 @@ describe('reload(): неудача — повод переспросить, а �
     expect(useDmStore.getState().failed).toBe(false);
   });
 
-  it('исчерпав повторы, признаёт неудачу — кнопке «Ещё раз» есть что чинить', () => {
+  it('исчерпав повторы, признаёт неудачу — кнопке «Ещё раз» есть что чинить', async () => {
     vi.useFakeTimers();
     useDmStore.getState().reload();
-    vi.advanceTimersByTime(300_000);
+    await vi.advanceTimersByTimeAsync(300_000);
 
     expect(useDmStore.getState().failed).toBe(true);
     expect(useDmStore.getState().loading).toBe(false);
   });
 
-  it('дождавшись списка, повторов не заводит', () => {
+  it('дождавшись списка, повторов не заводит', async () => {
     vi.useFakeTimers();
     useDmStore.getState().reload();
     answerLast({ ok: true, conversations: [] });
 
-    vi.advanceTimersByTime(300_000);
+    await vi.advanceTimersByTimeAsync(300_000);
 
     expect(emit).toHaveBeenCalledTimes(1);
     expect(useDmStore.getState().failed).toBe(false);

@@ -88,7 +88,11 @@ const socket = vi.hoisted(() => {
     _handlers: handlers,
   };
 });
-vi.mock('@/lib/socket', () => ({ getSocket: () => socket }));
+vi.mock('@/lib/socket', async () => {
+  const { timeoutOf } = await import('@/lib/testing/socket');
+  const timed = Object.assign(socket, { timeout: timeoutOf(socket.emit) });
+  return { getSocket: () => timed };
+});
 
 import { SocketProvider } from './SocketProvider';
 import { notifyCall, notifyDirect } from '@/lib/notify';
