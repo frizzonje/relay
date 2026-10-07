@@ -87,27 +87,38 @@
 
 1. **Тени контракта** — `tools/check-contract-shadows.mjs`: имена, которые
    экспортирует `@relay/shared` и заново объявляет `apps/*` (кроме
-   `Untrusted<…>`-обёрток в `apps/api/src/gateway/protocol.ts`). Гейт: 0.
-2. **Клоны** — jscpd с порогом из замера; цель — только осознанные исключения
+   `Untrusted<…>`-обёрток в `apps/api/src/gateway/protocol.ts` и намеренных
+   реализаций — `isPublicKey`/`isSignature` на `Buffer`). Плюс реэкспорт
+   имён контракта через модули приложений: у имени один путь. Гейт: 0.
+2. **Копии по форме** — интерфейсы с одинаковым набором полей в разных
+   пакетах. Проверка по именам их не видит: на ней `DmPeerView`, `BanView`,
+   `Metrics`, `GuestClaims` прошли незамеченными. Гейт: только список
+   разрешённых пар (тест-киты, роли одной формы внутри shared).
+3. **Клоны** — jscpd с порогом из замера; цель — только осознанные исключения
    (тест-киты api↔sfu).
-3. **Циклы** — madge `--circular` по трём приложениям; циклы на одних типах
+4. **Циклы** — madge `--circular` по трём приложениям; циклы на одних типах
    разрешены списком.
-4. **Мёртвое** — knip: неиспользуемые файлы, экспорты, зависимости.
-5. **Гонки и промисы** — typescript-eslint в режиме с типами для api, sfu и
+5. **Мёртвое** — knip: неиспользуемые файлы, экспорты, зависимости.
+6. **Гонки и промисы** — typescript-eslint в режиме с типами для api, sfu и
    web/lib: `no-floating-promises`, `no-misused-promises`, `await-thenable`,
    `require-await`, `switch-exhaustiveness-check`.
-6. **Размер** — `max-lines` (400), `max-lines-per-function` (150),
+7. **Размер** — `max-lines` (400), `max-lines-per-function` (150),
    `complexity` (20) как предупреждения. Отчёт питает
    [module-split.md](module-split.md), гейт не ставим: декларативные каталоги
    законно длинные.
-7. **Тесты api под tsc** — вернуть `*.test.ts` в typecheck api (сейчас они
+8. **Тесты api под tsc** — вернуть `*.test.ts` в typecheck api (сейчас они
    исключены, и ошибок там много). Без этого рефакторинг не доказан: тест,
    который не проходит проверку типов, может проверять уже несуществующее.
 
 ## Этап 1 — найденное сейчас (доказано, чинится первым)
 
-**Остаток фазы 1: контракт, объявленный в api заново (D1, C1).**
-Тела совпадают байт в байт — это копии, а не разные понятия:
+**✅ Остаток фазы 1: контракт, объявленный в api заново (D1, C1).** Сделано
+(`refactor(api): one path to every contract name`). Кроме таблицы ниже —
+переименованные копии, найденные сравнением форм (`DmPeerView`,
+`DmConversationView`, `BanView`, `Metrics`, `GuestClaims`, `IceServer`, ответ
+`/api/config`), реэкспорт имён контракта через семь модулей api и ответы
+HTTP API устройств, которые api и web объявляли каждый у себя (теперь
+`OwnDevice`, `PairOffer` в контракте). Тела совпадали байт в байт:
 
 | В api | В shared |
 | ----- | -------- |
@@ -122,7 +133,7 @@
 | `identity/crypto.ts`: `sanitizeNick` (с параметром длины) | `identity.ts` (без параметра) |
 | `auth/auth.ts`: `parseCookies` | `auth.ts` |
 
-**Гонка в SFU: транспорт-сирота (R2).** `rooms.service.ts`, `createTransport`:
+**✅ Гонка в SFU: транспорт-сирота (R2).** `rooms.service.ts`, `createTransport`:
 транспорт регистрируется в `peer.transports` после
 `await createWebRtcTransport`. Если участник ушёл в это окно (`leave` уже
 очистил его транспорты), новый транспорт попадает в карту мёртвого участника
@@ -131,7 +142,8 @@
 закрыть транспорт, если участника нет. Тест — с отложенным промисом вместо
 `createWebRtcTransport`.
 
-**Потолок транспортов обходится параллельными запросами (R1).**
+**✅ Потолок транспортов обходится параллельными запросами (R1).** Тест
+запускал 9 запросов разом при потолке 6 — проходили все 9.
 `sfu.gateway.ts`, `handleCreateTransport`: `MAX_TRANSPORTS_PER_PEER`
 сверяется до `await`, N одновременных запросов проходят все. Тот же приём,
 что в `produce`: проверка после ожидания.
@@ -155,6 +167,14 @@
 `voice.handlers`. Сиды каналов `web/lib/constants.ts` ↔
 `api/gateway/registry.service.ts` (25 строк) — в контракт: CONTRIBUTING сейчас
 требует держать их «байт в байт» руками.
+
+**Остальное из сравнения форм (D2):** два токен-бакета в api
+(`TokenBucket` в `gateway/socket-data.ts` и `Budget` в `upload.guard.ts`) —
+одна реализация лимитера; `DeleteChannelTarget`/`RenameChannelTarget` в web —
+`Pick<Channel, …>` контракта; `IncomingScreen` в `stores/ring.ts` против
+`CallIncomingRelay`. Пять ролей формы `{ fingerprint, nick }` внутри shared
+(`DmPeer`, `MentionRef`, `Reactor`, `RosterPerson`, `CallPerson`) — решить:
+один `PersonRef` с алиасами или осознанно разные имена.
 
 ## Этап 2 — проход по каждому файлу
 
