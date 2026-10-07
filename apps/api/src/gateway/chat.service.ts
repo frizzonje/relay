@@ -19,6 +19,7 @@ import {
 } from './protocol';
 import { DmService } from './dm.service';
 import { RegistryService } from './registry.service';
+import { CHAT_PAGE_SIZE, CHAT_PREFIX, REACTION_EMOJIS } from '@relay/shared';
 
 /**
  * История текстовых каналов.
@@ -40,7 +41,7 @@ import { RegistryService } from './registry.service';
  */
 
 /** Комнаты чата в socket.io живут с префиксом — чтобы не пересечься с эфиром. */
-export const CHAT_PREFIX = 'chat:';
+export { CHAT_PREFIX };
 
 /**
  * Сколько реплик отдаём одной страницей — и при входе в канал, и при подгрузке.
@@ -48,9 +49,9 @@ export const CHAT_PREFIX = 'chat:';
  * Умолчание, а не закон: размер страницы правится в панели
  * (`messages.pageSize`), и читает его `pageSize()` ниже. Константа осталась
  * ровно тем, чем была до панели, — поведением инсталляции, где настройку не
- * трогали, — и её же сверяет с копией в `@relay/shared` тест общих констант.
+ * трогали, — и то же число, что ждёт клиент (`CHAT_PAGE_SIZE` контракта).
  */
-export const PAGE_SIZE = 50;
+export const PAGE_SIZE = CHAT_PAGE_SIZE;
 
 /**
  * Сколько находок отдаём одной страницей. Меньше страницы ленты намеренно:
@@ -156,11 +157,8 @@ export function mentionedIn(
   return out;
 }
 
-/**
- * Разрешённый набор реакций — дублирует REACTION_EMOJIS из `@relay/shared`
- * (api намеренно не зависит от пакета фронта, как и прочие константы).
- */
-const REACTION_EMOJIS = new Set(['👍', '👎', '❤️', '😂', '🔥', '🫡', '🤡', '😭']);
+/** Разрешённый набор реакций — тот же, что рисует клиент. */
+const REACTIONS: ReadonlySet<string> = new Set(REACTION_EMOJIS);
 
 /**
  * Всё, что приходит от клиента, обязано быть проверено до попадания в запрос:
@@ -864,7 +862,7 @@ export class ChatService implements OnModuleInit {
 
   /** Знаем ли мы такую реакцию (набор закрытый — произвольные эмодзи не носим). */
   knownReaction(emoji: string): boolean {
-    return REACTION_EMOJIS.has(emoji);
+    return REACTIONS.has(emoji);
   }
 
   /**

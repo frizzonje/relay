@@ -1,33 +1,94 @@
-import type { Attachment } from '../uploads';
-import type { SettingGroup, SettingSpec, SettingValue } from '../settings/catalog';
-import type { RetentionMode } from '../db/retention.policy';
+import { LIMITS } from '@relay/shared';
+import type * as wire from '@relay/shared';
 
 /**
- * Форма сообщений сигналинга: что приходит от клиента и что уходит ack'ом.
+ * Форма сообщений сигналинга со стороны сервера.
  *
- * Всё, что клиент прислал, объявлено как `unknown`, и это не поза: тело
- * сообщения socket.io не проверяет никто, а обработчик обязан считать его
- * враньём до первой проверки. Типы здесь описывают ФОРМУ разговора, а не
- * гарантию — гарантию даёт разбор в обработчике.
+ * Контракт один — `@relay/shared`. Ответы и рассылки (`*Result`, `*Relay`)
+ * сервер отдаёт ровно в тех типах, что читает клиент, и берёт их оттуда же.
  *
- * Ответы (`*Result`) совпадают по форме с одноимёнными типами из
- * `@relay/shared`: api намеренно не зависит от пакета фронта, поэтому
- * контракт держится совпадением, а не общим импортом.
- *
- * Здесь же — единственный способ читать эти тела (`str`/`trimmed`/`optional`) и
- * потолки полей (`LIMIT`). Раньше разбор был написан тридцать три раза одной и
- * той же строкой с числом внутри, и одно поле в разных обработчиках резалось
- * по-разному просто потому, что копии писались в разные дни.
+ * Тела, которые присылает клиент (`*Payload`), здесь те же по форме, но с
+ * `unknown` в каждом поле (`Untrusted`): тело события socket.io не проверяет
+ * никто, и обработчик обязан считать его враньём до первой проверки. Тип
+ * говорит, какие поля бывают, а гарантию даёт разбор (`str`/`trimmed`/
+ * `optional`).
  */
 
-/**
- * Версия контракта сигналинга. Копия числа из `@relay/shared` — api намеренно
- * не зависит от пакета фронта, и совпадение проверяет контрактный тест.
- *
- * Клиент называет её в handshake, сервер сверяет и не пускает несовпавших:
- * отставший клиент до 1.0 выглядел не устаревшим, а сломанным.
- */
-export const PROTOCOL_VERSION = 1;
+/** Форма тела из контракта, без доверия к значениям. */
+export type Untrusted<T> = { [K in keyof T]?: unknown };
+
+export { PROTOCOL_VERSION, SYSTEM_ACTOR_NICK, UNKNOWN_ACTOR_NICK } from '@relay/shared';
+
+export type {
+  AdminAction,
+  AdminActionResult,
+  AdminAuditResult,
+  AdminBansResult,
+  AdminChangedRelay,
+  AdminDevice,
+  AdminExport,
+  AdminImportRejection,
+  AdminOverview,
+  AdminPasswordResult,
+  AdminPeopleResult,
+  AdminPerson,
+  AdminRefusal,
+  AdminResetResult,
+  AdminRetention,
+  AdminSetResult,
+  AdminStateResult,
+  AuditAction,
+  AuditCursor,
+  AuditEntry,
+  BanEntry,
+  BannedRelay,
+  CallEndedRelay,
+  CallIncomingRelay,
+  CallMark,
+  CallPerson,
+  CallRefusal,
+  CallReplyResult,
+  CallStartResult,
+  CallStateRelay,
+  ChannelCreateResult,
+  ChannelDeleteResult,
+  ChannelRenameResult,
+  ChannelStatsResult,
+  ChatHistoryMoreResult,
+  ChatHistoryPage,
+  ChatMessage,
+  ChatPinResult,
+  ChatPinsResult,
+  ChatRefusal,
+  ChatRefusedRelay,
+  ChatSearchResult,
+  ChatWindowResult,
+  DmConversation,
+  DmJoinResult,
+  DmListResult,
+  DmOpenResult,
+  DmPeer,
+  DmPeopleResult,
+  DmPerson,
+  GuestKickResult,
+  InviteCreateResult,
+  MentionRef,
+  MentionSuggestResult,
+  ModerationBansResult,
+  ModerationResult,
+  QuotaScope,
+  ReactionMap,
+  Reactor,
+  ReplyRef,
+  RosterPerson,
+  ServerCreateResult,
+  ServerDeleteResult,
+  ServerStatsResult,
+  SettingsSnapshot,
+  SfuTokenResult,
+  VoiceRefusal,
+  VoiceRefusedRelay,
+} from '@relay/shared';
 
 // ── Как это читать ──────────────────────────────────────────────────────────
 
@@ -40,8 +101,8 @@ export const PROTOCOL_VERSION = 1;
  * (`spaces.channelNameMaxLength`), `message` (`messages.maxLength`) и
  * `mentions` (`moderation.maxMentionsPerMessage`): действующее число
  * спрашивает обработчик, а здесь остаётся то, с чем инсталляция живёт, пока
- * панель не открывали. Оно же уезжает клиенту контрактом (`LIMITS` в
- * `@relay/shared`), поэтому менять его тут нельзя в одиночку.
+ * панель не открывали. Числа, которые знает и клиент, берутся из `LIMITS`
+ * контракта — у него поле участника зовётся `name`, а у слага `room`.
  */
 export const LIMIT = {
   /** id сервера — его придумывает клиент, чтобы не ждать ответа. */
@@ -49,9 +110,9 @@ export const LIMIT = {
   /** Имя сервера или канала. */
   name: 32,
   /** Тег участника. */
-  tag: 20,
+  tag: LIMITS.name,
   /** Слаг канала, он же имя комнаты. */
-  slug: 32,
+  slug: LIMITS.room,
   /**
    * Имя голосовой комнаты: слаг канала — либо адрес комнаты беседы, который
    * длиннее (`voice:` плюс двадцать семь знаков адреса — тридцать три).
@@ -66,7 +127,7 @@ export const LIMIT = {
   /** Значок сервера. */
   emoji: 8,
   /** Реплика чата. */
-  message: 500,
+  message: LIMITS.chatText,
   /** Поисковый запрос — заведомо длиннее любого осмысленного и короче реплики. */
   search: 100,
   /** Отпечаток ключа: адресат упоминания и цель разбана. */
@@ -114,994 +175,59 @@ export function optional(value: unknown, limit: number): string | undefined {
 
 // ── Что присылает клиент ────────────────────────────────────────────────────
 
-export interface JoinPayload {
-  room?: unknown;
-  name?: unknown;
-  clientId?: unknown;
-  transport?: unknown;
-}
+export type AdminActionPayload = Untrusted<wire.AdminActionPayload>;
+export type AdminAuditPayload = Untrusted<wire.AdminAuditPayload>;
+export type AdminPasswordPayload = Untrusted<wire.AdminPasswordPayload>;
+export type AdminPeoplePayload = Untrusted<wire.AdminPeoplePayload>;
+export type AdminResetPayload = Untrusted<wire.AdminResetPayload>;
+export type AdminSetPayload = Untrusted<wire.AdminSetPayload>;
+export type CallRingPayload = Untrusted<wire.CallRingPayload>;
+export type CallStartPayload = Untrusted<wire.CallStartPayload>;
+export type ChannelCreatePayload = Untrusted<wire.ChannelCreatePayload>;
+export type ChannelDeletePayload = Untrusted<wire.ChannelDeletePayload>;
+export type ChannelModePayload = Untrusted<wire.ChannelModePayload>;
+export type ChannelRenamePayload = Untrusted<wire.ChannelRenamePayload>;
+export type ChannelStatsPayload = Untrusted<wire.ChannelStatsPayload>;
+export type ChatAroundPayload = Untrusted<wire.ChatAroundPayload>;
+export type ChatDeletePayload = Untrusted<wire.ChatDeletePayload>;
+export type ChatEditPayload = Untrusted<wire.ChatEditPayload>;
+export type ChatHistoryAfterPayload = Untrusted<wire.ChatHistoryAfterPayload>;
+export type ChatHistoryMorePayload = Untrusted<wire.ChatHistoryMorePayload>;
+export type ChatPinPayload = Untrusted<wire.ChatPinPayload>;
+export type ChatPinsPayload = Untrusted<wire.ChatPinsPayload>;
+export type ChatReactPayload = Untrusted<wire.ChatReactPayload>;
+export type ChatSearchPayload = Untrusted<wire.ChatSearchPayload>;
+export type DmJoinPayload = Untrusted<wire.DmJoinPayload>;
+export type DmOpenPayload = Untrusted<wire.DmOpenPayload>;
+export type DmPeoplePayload = Untrusted<wire.DmPeoplePayload>;
+export type GuestKickPayload = Untrusted<wire.GuestKickPayload>;
+export type InviteCreatePayload = Untrusted<wire.InviteCreatePayload>;
+export type JoinPayload = Untrusted<wire.JoinPayload>;
+export type MentionSuggestPayload = Untrusted<wire.MentionSuggestPayload>;
+export type ModerationBanPayload = Untrusted<wire.ModerationBanPayload>;
+export type ModerationBansPayload = Untrusted<wire.ModerationBansPayload>;
+export type ModerationUnbanPayload = Untrusted<wire.ModerationUnbanPayload>;
+export type PrefsSetPayload = Untrusted<wire.PrefsSetPayload>;
+export type ReadMarkPayload = Untrusted<wire.ReadMarkPayload>;
+export type ServerCreatePayload = Untrusted<wire.ServerCreatePayload>;
+export type ServerDeletePayload = Untrusted<wire.ServerDeletePayload>;
+export type ServerStatsPayload = Untrusted<wire.ServerStatsPayload>;
+export type ServerUnlockPayload = Untrusted<wire.ServerUnlockPayload>;
+export type SfuTokenPayload = Untrusted<wire.SfuTokenPayload>;
+export type VoiceDiagPayload = Untrusted<wire.VoiceDiagPayload>;
+export type ChatJoinPayload = Untrusted<wire.ChatJoinPayload>;
+export type ChatMessagePayload = Untrusted<wire.ChatMessagePayload>;
+/** `offer`, `answer`, `ice-candidate` и `screen-watch` — один разбор на четыре события. */
+export type SignalPayload = Untrusted<
+  wire.OfferPayload & wire.AnswerPayload & wire.IcePayload & wire.ScreenWatchPayload
+>;
 
-export interface SignalPayload {
-  to?: unknown;
-  sdp?: unknown;
-  candidate?: unknown;
-  /** `screen-watch`: смотрит ли отправитель трансляцию адресата. */
-  on?: unknown;
-}
-
-export interface ChatPayload {
-  room?: unknown;
-  name?: unknown;
-  text?: unknown;
-  uploadId?: unknown;
-  replyTo?: unknown;
-  spoiler?: unknown;
-  /**
-   * Кого имел в виду отправитель — отпечатками ключей, а не именами: имена
-   * свободные и не уникальные, и «@Аня» в инсталляции с двумя Анями адресовало
-   * бы обеих или наугад одну. Клиент называет их, выбрав из подсказки, а сервер
-   * сверяет, что названный и правда назван в тексте (см. `mentionedIn`).
-   */
-  mentions?: unknown;
-}
-
-/**
- * Курсор подгрузки ленты вверх: время и id самой верхней реплики, которую
- * клиент уже держит. Пары достаточно и она честнее «страницы номер N» —
- * страницы разъезжаются, когда снизу приходит новое.
- */
-export interface ChatHistoryMorePayload {
-  beforeTs?: unknown;
-  beforeId?: unknown;
-}
-
-/** Тот же курсор, но вниз: время и id самой нижней реплики на экране. */
-export interface ChatHistoryAfterPayload {
-  afterTs?: unknown;
-  afterId?: unknown;
-}
-
-/** Какую реплику показать в контексте её канала — переход из поиска. */
-export interface ChatAroundPayload {
-  id?: unknown;
-}
+// ── Что сервер рассылает сам ────────────────────────────────────────────────
 
 /**
- * Запрос поиска. Область приходит от клиента, но набор каналов по ней собирает
- * сервер: «по этому серверу» значит «по тем его каналам, которые видно этому
- * сокету», и решать, что кому видно, клиенту не дают нигде.
+ * Участник голосового канала в presence — так, как его собирает сервер: у
+ * клиента поля необязательны (старый сервер мог их не прислать), у сервера
+ * они есть всегда.
  */
-export interface ChatSearchPayload {
-  query?: unknown;
-  scope?: unknown;
-  beforeTs?: unknown;
-  beforeId?: unknown;
-}
-
-export interface ChatEditPayload {
-  id?: unknown;
-  text?: unknown;
-  /** Правка переписывает и упоминания: имя в тексте могло появиться или уйти. */
-  mentions?: unknown;
-}
-
-/** Кого предложить после набранного `@`. Пустой префикс — «покажи всех». */
-export interface MentionSuggestPayload {
-  prefix?: unknown;
-}
-
-export interface ChatDeletePayload {
-  id?: unknown;
-}
-
-export interface ChatReactPayload {
-  id?: unknown;
-  emoji?: unknown;
-}
-
-/**
- * Закрепить или открепить реплику. `on` приходит явно, а не выводится из
- * текущего состояния: клиент решает по своей копии ленты, а она бывает старше
- * действительности на одно чужое действие, — и тогда «переключить» сняло бы то,
- * что человек хотел поставить.
- */
-export interface ChatPinPayload {
-  id?: unknown;
-  on?: unknown;
-}
-
-/**
- * За закреплённым какого канала пришли. Слаг здесь — не адрес (сервер отвечает
- * про ту комнату, в которой сокет и сидит), а сверка: ответ бывает медленнее
- * человека, и список чужого канала, подставленный в открытый, выглядел бы как
- * чужие закрепления.
- */
-export interface ChatPinsPayload {
-  slug?: unknown;
-}
-
-/**
- * Модерация. Целью бана служит СООБЩЕНИЕ, а не человек: id личности в протоколе
- * не появляется вовсе (см. ./ownership), а список участников — это имена, среди
- * которых бывают тёзки. Сообщение же однозначно указывает на своего автора, и
- * банят в жизни именно за сказанное, глядя на него.
- *
- * `everywhere` — бан на всю инсталляцию вместо бана со своего сервера. Такой
- * ставит только владелец, и спрашивается он явно: молча расширить охват до
- * инсталляции, когда человек хотел выгнать со своего сервера, нельзя.
- */
-export interface ModerationBanPayload {
-  id?: unknown;
-  everywhere?: unknown;
-}
-
-/** Разбан и список забаненных — по охвату: сервер или, если пусто, инсталляция. */
-export interface ModerationBansPayload {
-  server?: unknown;
-}
-
-export interface ModerationUnbanPayload {
-  fingerprint?: unknown;
-  server?: unknown;
-}
-
-/**
- * «Дочитал этот канал до этого момента». Канал зовётся слагом — тем же, что и
- * везде в протоколе; в базе отметка живёт по id канала, чтобы переименование
- * не объявляло его непрочитанным заново.
- *
- * Время — серверное: клиент возвращает то, что сам получил в `chat-activity`
- * или в снимке каналов. Свои часы он здесь не спрашивает вовсе, иначе на
- * спешащем устройстве точка не загоралась бы, а на отстающем не гасла.
- */
-export interface ReadMarkPayload {
-  slug?: unknown;
-  ts?: unknown;
-}
-
-/**
- * Настройка человека: ключ из закрытого списка (см. `identity/prefs.service`) и
- * значение, о смысле которого сервер не осведомлён.
- */
-export interface PrefsSetPayload {
-  key?: unknown;
-  value?: unknown;
-}
-
-export interface ServerCreatePayload {
-  id?: unknown;
-  name?: unknown;
-  emoji?: unknown;
-  password?: unknown;
-}
-
-export interface ServerDeletePayload {
-  id?: unknown;
-}
-
-export interface ServerStatsPayload {
-  id?: unknown;
-}
-
-export interface ServerUnlockPayload {
-  id?: unknown;
-  password?: unknown;
-}
-
-export interface ChannelCreatePayload {
-  serverId?: unknown;
-  type?: unknown;
-  name?: unknown;
-  mode?: unknown;
-}
-
-export interface ChannelModePayload {
-  id?: unknown;
-  mode?: unknown;
-}
-
-export interface ChannelDeletePayload {
-  id?: unknown;
-}
-
-export interface ChannelRenamePayload {
-  id?: unknown;
-  name?: unknown;
-}
-
-export interface ChannelStatsPayload {
-  id?: unknown;
-}
-
-export interface InviteCreatePayload {
-  room?: unknown;
-}
-
-/** Кого выгоняем: socket-id гостя (он же его id в presence и на плитке). */
-export interface GuestKickPayload {
-  id?: unknown;
-}
-
-export interface CallStartPayload {
-  fingerprint?: unknown;
-  video?: unknown;
-}
-
-/** Ответ на уже идущий вызов: принять, отклонить или дать отбой. */
-export interface CallRingPayload {
-  ringId?: unknown;
-}
-
-export interface SfuTokenPayload {
-  room?: unknown;
-  name?: unknown;
-}
-
-/** Диагностическая веха звонка от клиента — уходит в серверный лог как есть. */
-export interface VoiceDiagPayload {
-  event?: unknown;
-  detail?: unknown;
-}
-
-/** Кому пишем: отпечаток ключа, а не ник — ники не уникальны. */
-export interface DmOpenPayload {
-  fingerprint?: unknown;
-}
-
-/** В ленту какой беседы садимся — тот же слаг, что вернул `dm-open`. */
-export interface DmJoinPayload {
-  slug?: unknown;
-}
-
-/** Поиск по списку собеседников: нику или отпечатку. Пусто — весь список. */
-export interface DmPeoplePayload {
-  query?: unknown;
-}
-
-// ── Что уходит ack'ом ───────────────────────────────────────────────────────
-// Отказ обязан быть внятным: интерфейс объясняет, почему канал остался на
-// месте, вместо молчаливого «ничего не произошло».
-
-/**
- * Итог заведения сервера. До 1.0 отказ был молчанием: интерфейс закрывал
- * диалог, рисовал новый сервер активным — и человек оставался стоять в
- * несуществующем месте, не зная, что произошло (audit S2).
- *
- * `limit` со `scope` — два разных разговора: «у тебя уже столько» человек
- * чинит сам, «на инсталляции больше нельзя» может починить только тот, у кого
- * ssh к машине, — и путать их значит советовать невозможное.
- *
- * `token` — пропуск в только что созданный закрытый сервер (audit S5).
- */
-export type ServerCreateResult =
-  | { ok: true; token?: string }
-  | {
-      ok: false;
-      error: 'forbidden' | 'bad-name' | 'exists' | 'limit';
-      scope?: QuotaScope;
-      limit?: number;
-    };
-
-/** Чей потолок кончился: личный, этого сервера или всей инсталляции. */
-export type QuotaScope = 'person' | 'server' | 'install';
-
-/**
- * Итог заведения канала. `slug` возвращается не для красоты: адрес комнаты
- * считает сервер, и клиент, который хочет тут же в неё войти, узнаёт его
- * отсюда.
- */
-export type ChannelCreateResult =
-  | { ok: true; slug: string }
-  | {
-      ok: false;
-      error: 'not-found' | 'forbidden' | 'bad-name' | 'exists' | 'limit';
-      scope?: QuotaScope;
-      limit?: number;
-    };
-
-export type ChannelDeleteResult =
-  | { ok: true }
-  | { ok: false; error: 'not-found' | 'forbidden' | 'occupied' | 'not-owner'; occupants?: number };
-
-export type ChannelRenameResult =
-  | { ok: true }
-  | { ok: false; error: 'not-found' | 'forbidden' | 'bad-name' | 'not-owner' };
-
-export type ChannelStatsResult = { ok: true; occupants: number; messages: number } | { ok: false };
-
-/**
- * Страница истории. `more` — «выше есть ещё»: без него клиент не отличает
- * начало истории от её края, срезанного ретенцией, и рисует одно вместо
- * другого.
- */
-export interface ChatHistoryPage {
-  messages: ChatMessage[];
-  more: boolean;
-}
-
-export type ChatHistoryMoreResult = { ok: true } & ChatHistoryPage;
-
-/**
- * Окно ленты вокруг точки: у него, в отличие от страницы, есть низ. Пока лента
- * читалась только сверху вниз, «дальше» всегда значило вверх; из поиска человек
- * попадает в середину истории, и под ним остаётся весь остальной канал.
- */
-export type ChatWindowResult = { ok: true } & ChatHistoryPage & { moreAfter: boolean };
-
-/** Ответ поиска: находки, есть ли ещё и слова, по которым искали. */
-export type ChatSearchResult = {
-  ok: true;
-  hits: { slug: string; message: ChatMessage }[];
-  more: boolean;
-  /**
-   * Разобранные слова запроса. Возвращаем их, чтобы подсветку в найденном
-   * рисовали ровно по тому, по чему искали: свой разбор на клиенте — это второе
-   * место с правилами, и оно неизбежно разъедется с первым.
-   */
-  terms: string[];
-};
-
-/**
- * Кого можно назвать здесь. `online` — человек сейчас на связи; такие идут
- * первыми, потому что упоминание для них — не запись в историю, а обращение,
- * которое они увидят сейчас.
- */
-export type MentionSuggestResult = {
-  ok: true;
-  people: { fingerprint: string; nick: string; online: boolean }[];
-};
-
-/**
- * Ответ на закрепление. `limit` — единственный отказ, о котором человеку есть
- * что сделать: открепить лишнее. `not-found` — реплики уже нет, `forbidden` —
- * канал не свой (закрепление меняет канал для всех, значит это модерация).
- */
-export type ChatPinResult =
-  | { ok: true; pinned: boolean; count: number }
-  | { ok: false; error: 'forbidden' | 'not-found' | 'limit' };
-
-/**
- * Закреплённое канала — целиком: их не больше `PIN_LIMIT`, страниц не нужно.
- * Слаг в ответе — чей это список: по нему клиент отличает свой ответ от
- * доехавшего после смены канала.
- */
-export type ChatPinsResult = { ok: true; slug: string; pins: ChatMessage[] } | { ok: false };
-
-export type ServerDeleteResult =
-  | { ok: true }
-  | {
-      ok: false;
-      error: 'not-found' | 'forbidden' | 'not-owner' | 'occupied';
-      occupants?: number;
-    };
-
-export type ServerStatsResult =
-  | { ok: true; channels: number; messages: number; occupants: number }
-  | { ok: false };
-
-export type InviteCreateResult =
-  | { ok: true; token: string; exp: number; listen: boolean }
-  | { ok: false; error: 'not-found' | 'forbidden' };
-
-/**
- * Отказ в «выгнать» тоже обязан быть внятным: not-found — гость уже вышел сам
- * (частый случай: кнопку жмут вдогонку), forbidden — канал этому сокету не
- * виден либо он сам гость.
- */
-export type GuestKickResult = { ok: true } | { ok: false; error: 'not-found' | 'forbidden' };
-
-/**
- * Отказ модератору. `not-found` — сообщения уже нет (удалили, вышло за
- * ретенцию) либо у него нет автора-личности: гостя по инвайту банить нечем,
- * его выгоняют из эфира. `forbidden` — не твой сервер, не ты владелец или это
- * попытка забанить владельца.
- */
-export type ModerationResult =
-  | { ok: true }
-  | { ok: false; error: 'not-found' | 'forbidden' | 'unknown' };
-
-export interface BanEntry {
-  fingerprint: string;
-  nick: string;
-  at: string;
-  by: string | null;
-}
-
-export type ModerationBansResult =
-  | { ok: true; bans: BanEntry[] }
-  | { ok: false; error: 'forbidden' };
-
-export type SfuTokenResult =
-  | { ok: true; token: string; exp: number; url: string }
-  | { ok: false; error: 'forbidden' | 'unavailable' | 'not-in-room' | 'not-sfu' };
-
-/**
- * Итог открытия беседы. `unknown` — такой личности инсталляция не знает,
- * `self` — попытка открыть беседу с собой, `forbidden` — ЛС не для тебя
- * (гость по инвайту, отсутствие личности).
- */
-export type DmOpenResult =
-  | { ok: true; conversation: DmConversation }
-  | { ok: false; error: 'unknown' | 'self' | 'forbidden' };
-
-/**
- * Итог входа в ленту беседы. `unknown` — такого адреса нет вовсе,
- * `forbidden` — адрес существует, но сокет не одна из двух сторон.
- */
-export type DmJoinResult = { ok: true } | { ok: false; error: 'unknown' | 'forbidden' };
-
-export type DmListResult =
-  | { ok: true; conversations: DmConversation[] }
-  | { ok: false; error: 'forbidden' };
-
-export type DmPeopleResult = { ok: true; people: DmPerson[] } | { ok: false; error: 'forbidden' };
-
-// ── Что живёт в состоянии ───────────────────────────────────────────────────
-
-/** Кто поставил реакцию: отпечаток ключа и ник на тот момент (audit S1). */
-export interface Reactor {
-  fingerprint?: string;
-  nick: string;
-}
-
-export type ReactionMap = Record<string, Reactor[]>;
-
-/**
- * Снимок цитируемого сообщения (reply) — копией, а не ссылкой: исходное могут
- * отредактировать или удалить, цитата остаётся прежней.
- */
-export interface ReplyRef {
-  id: string;
-  name: string;
-  text: string;
-}
-
-/**
- * Названный в реплике: отпечаток его ключа и ник, как он был написан. Ник тут
- * не украшение — по нему клиент находит в тексте то самое слово и рисует его
- * упоминанием; текущее имя человека к этому моменту может быть уже другим.
- */
-export interface MentionRef {
-  fingerprint: string;
-  nick: string;
-}
-
-/**
- * Почему реплика не принята.
- *
- * События ленты (`chat-message`, `chat-edit`, `chat-delete`, `chat-react`)
- * ответа не ждут — ack'а у них нет и заводить его поздно, — поэтому отказ
- * уезжает отдельным событием тому, кому отказали. Молчать здесь нельзя: до
- * этапа C всякий отказ в ленте выглядел одинаково — «нажал, и ничего не
- * произошло», — а теперь у него появились причины, которые человек может
- * устранить сам (убрать ссылку, дождаться конца обслуживания, не повторять
- * слово). Это тот же выбор, что у `voice-locked` и `chat-closed`.
- *
- * Причины разные намеренно: «правку выключили» и «правка протухла» человек
- * чинит по-разному, а один общий отказ советовал бы невозможное.
- */
-export type ChatRefusal =
-  | 'read-only'
-  | 'rate'
-  | 'banned-word'
-  | 'links-off'
-  | 'attachments-off'
-  | 'edit-off'
-  | 'edit-window'
-  | 'delete-off'
-  | 'reactions-off'
-  | 'search-off'
-  | 'too-new'
-  | 'spoiler-off';
-
-export interface ChatRefusedRelay {
-  reason: ChatRefusal;
-}
-
-/**
- * Почему в голосе отказали.
- *
- * Событие отдельное по той же причине, что и `chat-refused`: ни `join`, ни
- * `media-update` ответа не ждут, а `join` вдобавок неотличим для клиента от
- * удавшегося — без этого выключенная камера выглядела бы сломанной кнопкой, а
- * полный канал — тишиной. Урок этапа A прямым текстом.
- *
- * `room-full` и `guests-full` разделены намеренно: первое человек переждёт,
- * второе значит, что ссылка своё отработала и звать надо иначе.
- *
- * `not-in-call` — комната беседы: разговор двоих, и постучавшийся не один из
- * них (либо разговора уже нет). Оба случая отвечают одинаково нарочно: разбери
- * их сервер по-разному, посторонний узнавал бы, что беседа с таким адресом
- * существует.
- */
-export type VoiceRefusal =
-  | 'video-off'
-  | 'screen-share-off'
-  | 'room-full'
-  | 'guests-full'
-  | 'not-in-call';
-
-/** Отказ в голосе — тому, кому отказали. */
-export interface VoiceRefusedRelay {
-  reason: VoiceRefusal;
-}
-
-// ── Дозвон ───────────────────────────────────────────────────────────────────
-
-/**
- * Почему позвонить не вышло. Пять причин, и разными они сделаны намеренно:
- * «выключено», «нельзя», «не в сети», «занято» и «слишком часто» объясняют
- * человеку совершенно разные вещи, и делать по ним надо тоже разное.
- *
- * `busy` покрывает два случая сразу — собеседник уже в вызове и собеседник
- * говорит в голосовом канале (`calls.busyWhenInVoice`). Различать их клиенту
- * незачем: ответ один и тот же, «перезвони позже», — а рассказывать звонящему,
- * ГДЕ именно занят собеседник, значит рассказывать о нём больше, чем тот
- * показал сам.
- *
- * `offline` — это не исход вызова, а отказ ДО него: собеседника не было на
- * связи в момент набора, и звонить оказалось некуда. Исход `failed` из машины
- * состояний — другое: там собеседник пропал, когда у него уже звонило.
- */
-export type CallRefusal = 'disabled' | 'forbidden' | 'offline' | 'busy' | 'rate';
-
-export type CallStartResult = { ok: true; ringId: string } | { ok: false; error: CallRefusal };
-
-/**
- * Ответ на `call-accept` / `call-decline` / `call-cancel`. `unknown` — такого
- * живого вызова нет: не ошибка клиента, а проигранная гонка (успели отменить,
- * вышел таймаут, собеседник уже ответил с другого устройства). Тем же ответом
- * отвечает и чужой `ringId` — знать, что такой вызов вообще есть, постороннему
- * незачем.
- */
-export type CallReplyResult = { ok: true } | { ok: false; error: 'unknown' };
-
-/** Участник вызова так, как его показывают собеседнику: лицо и подпись. */
-export interface CallPerson {
-  fingerprint: string;
-  nick: string;
-}
-
-/**
- * Входящий вызов — на ВСЕ устройства собеседника: звонят человеку, а не
- * вкладке, и угадывать, за какой из них он сидит, сервер не должен.
- */
-export interface CallIncomingRelay {
-  ringId: string;
-  from: CallPerson;
-  /** Когда начался дозвон, мс Unix по часам сервера. */
-  at: number;
-  /** Звонят с камерой. Уже зажато `calls.videoAllowed`. */
-  video: boolean;
-}
-
-/**
- * Вызов жив: звонит либо принят. Уходит на все сокеты обеих сторон — по нему
- * же гаснет входящий на тех устройствах собеседника, которые не отвечали.
- */
-export interface CallStateRelay {
-  ringId: string;
-  state: 'ringing' | 'accepted';
-  /** Вторая сторона — глазами того, кому событие адресовано. */
-  peer: CallPerson;
-  at: number;
-  video: boolean;
-}
-
-/**
- * Вызов кончился, не став разговором. Пять исходов, и все пять уходят ОБЕИМ
- * сторонам: «не ответили» собеседник обязан узнать не меньше звонившего —
- * иначе у него просто молча пропадает входящий.
- */
-export interface CallEndedRelay {
-  ringId: string;
-  state: 'declined' | 'no-answer' | 'busy' | 'cancelled' | 'failed';
-  peer: CallPerson;
-  at: number;
-  /** Оставит ли этот исход отметку в переписке (`calls.missedMarkEnabled`). */
-  missed: boolean;
-}
-
-/**
- * Снимок действующих настроек, каким его видит браузер: то, что отдаёт
- * `SettingsService.snapshot()`, — без единого секрета (каталог заменяет их
- * признаком «задано»).
- *
- * Тип объявлен здесь, а не выведен из каталога, по общей конвенции контракта:
- * api не зависит от `@relay/shared`, и совпадение половин держит тест, а не
- * общий импорт. Уезжает снимок двумя дорогами — полем `settings` в
- * `GET /api/config` и событием `settings` в сокете.
- */
-export type SettingsSnapshot = Record<string, SettingValue>;
-
-/**
- * Что случилось — так, как это называет журнал.
- *
- * Список закрыт намеренно: панель подбирает по этому имени подпись строки, и
- * незнакомое действие она нарисовала бы пустотой. Имя строкой, а не числом, —
- * журнал переживает и обновления, и правки каталога, и читают его глазами.
- *
- * Сегодня пишутся первые шесть. Остальные заведёт тот код, который их
- * совершает: смена пароля инсталляции и действия вкладки «Обслуживание».
- * Объявлены заранее не для красоты — панель показывает журнал целиком, и
- * добавлять действие вместе с обработчиком дешевле, чем гадать, почему строка
- * без подписи.
- */
-export type AuditAction =
-  | 'setting-changed'
-  | 'settings-reset'
-  | 'ban'
-  | 'unban'
-  | 'owner-claimed'
-  | 'owner-link-issued'
-  | 'password-changed'
-  | 'retention-run'
-  | 'files-swept'
-  | 'sessions-revoked'
-  | 'device-revoked'
-  | 'settings-imported';
-
-/**
- * Ник в системной записи — той, у которой автора-человека нет вовсе (ссылку
- * владельца печатает `relay owner-link` с машины, ретенция ходит по таймеру).
- * Колонка ника не пустует: строка «кто-то закрыл регистрацию» без имени
- * читается хуже, чем строка с честным «system».
- *
- * Узнавать систему ПО ЭТОМУ ТЕКСТУ нельзя — для этого есть `system`.
- */
-export const SYSTEM_ACTOR_NICK = 'system';
-
-/**
- * Ник, когда автор известен отпечатком, а имени не нашлось: личность успела
- * исчезнуть между действием и записью. Случай редкий до невозможности, но
- * терять из-за него саму запись нельзя — «действие было» важнее, чем «мы знаем,
- * как его звали».
- */
-export const UNKNOWN_ACTOR_NICK = 'unknown';
-
-/** Курсор страницы журнала: время и id последней показанной строки. */
-export interface AuditCursor {
-  at: number;
-  id: string;
-}
-
-/**
- * Строка журнала, как её читает панель.
- *
- * `actorNick` — снимок имени НА МОМЕНТ ДЕЙСТВИЯ, как в цитатах и упоминаниях:
- * человек переименуется, а «Ким закрыл регистрацию» обязано остаться читаемым.
- *
- * `actor` — отпечаток ключа: лицо в списке. Его нет у системной записи и у той,
- * чья личность с тех пор удалена. Различает эти два случая `system`, и только
- * он: узнавать систему по тексту ника нельзя — человек, назвавшийся так же,
- * подделал бы системную запись.
- */
-export interface AuditEntry {
-  id: string;
-  /** Когда, миллисекундами. Он же половина курсора страницы. */
-  at: number;
-  actor?: string;
-  actorNick: string;
-  /** Действовала машина, а не человек. */
-  system?: true;
-  action: AuditAction;
-  /** На кого подействовали: ключ настройки, группа, отпечаток забаненного. */
-  target?: string;
-  /** Подробности: «было/стало» у настройки, имя и охват у бана. */
-  detail: Record<string, unknown>;
-}
-
-/**
- * Тебя забанили. Тело появилось у события, у которого его не было: владелец
- * может объяснить причину словами (`moderation.banNotice`), и объяснение
- * обязано доехать до того, кого выгнали, — иначе он узнаёт только факт.
- *
- * Поле необязательное, и пустой текст настройки НЕ уезжает пустой строкой:
- * событие остаётся ровно таким, каким было, пока владелец ничего не написал.
- */
-export interface BannedRelay {
-  notice?: string;
-}
-
-/**
- * Кто сейчас в текстовом канале. Человек, а не сокет и не строка с именем:
- * имена свободные и не уникальные, а одна личность может сидеть с двух
- * устройств — склеивает их отпечаток (см. `emitRoster`). У гостя по инвайту
- * отпечатка нет, ключа ему не выдавали.
- */
-export interface RosterPerson {
-  nick: string;
-  fingerprint?: string;
-}
-
-/** Собеседник в ЛС: лицо рисуется по отпечатку, подпись — ником. */
-export interface DmPeer {
-  fingerprint: string;
-  nick: string;
-}
-
-/** Человек в списке выбора собеседника: тот же собеседник и когда его видели. */
-export interface DmPerson extends DmPeer {
-  lastSeenTs: number;
-}
-
-/** Строка раздела ЛС — беседа со своим адресом и превью последней реплики. */
-export interface DmConversation {
-  slug: string;
-  peer: DmPeer;
-  lastTs: number;
-  preview: string;
-  previewMine: boolean;
-  /**
-   * Заполнено, когда последняя строка беседы — отметка о пропущенном звонке
-   * (см. `CallMark` ниже и `ChatMessage.call`). `preview` в этом случае несёт
-   * непереведённую запаску сервера — рисовать список обязан клиент, своим
-   * словом через `t()`, а не показывать серверную строку как есть.
-   */
-  call?: CallMark;
-}
-
-/**
- * Отметка о пропущенном звонке — «системная строка особого вида».
- *
- * Её никто не говорил, и рисуется она пунктирной плашкой, а не пузырём, —
- * поэтому в ленту едет структурой, а не фразой: текст отметки на языке
- * читающего, а язык у сервера не спрашивается никогда, да и «21:04 · 38 с
- * дозвона» из готовой строки обратно не разобрать.
- *
- * `state` — почему пропущен, и исходов ровно два: «не ответили» и «не в сети».
- * Остальные четыре отметки не оставляют вовсе (см. `missed` в ./ring-machine),
- * так что третьего значения здесь не бывает. `ms` — сколько звонило
- * (`endedAt - startedAt` дозвона, обе точки по часам сервера). Времени
- * отдельным полем нет: им служит `ts` самой реплики — по нему же она стоит в
- * ленте, и второе число разъехалось бы с местом строки в разговоре.
- */
-export interface CallMark {
-  state: 'no-answer' | 'failed';
-  /** Сколько длился дозвон, мс. Ноль законен, отрицательного не бывает. */
-  ms: number;
-}
-
-export interface ChatMessage {
-  id?: string;
-  name: string;
-  /**
-   * Отпечаток ключа автора: по нему рисуется лицо в ленте и по нему же двух
-   * одинаковых «Ань» видно, что они разные. Пусто у гостя по инвайту и у всего,
-   * что писалось до 1.0, — поле необязательное именно поэтому, а не «на всякий
-   * случай»: клиент обязан уметь показать реплику без лица.
-   */
-  fingerprint?: string;
-  text: string;
-  ts: number;
-  attachment?: Attachment;
-  system?: boolean;
-  /**
-   * Строка — отметка о пропущенном звонке, а не реплика. Рядом с `system`, а не
-   * вместо него: системная она и есть (её не писали, её не правят и не удаляют),
-   * но рисуется плашкой с «перезвонить», а не курсивом по центру. Клиент, не
-   * знающий поля, покажет обычную системную строку — для того `text` и написан
-   * словами.
-   */
-  call?: CallMark;
-  reactions?: ReactionMap;
-  replyTo?: ReplyRef;
-  editedTs?: number;
-  /** Кого в ней назвали. Пусто — не назвали никого, и ключа в реплике нет. */
-  mentions?: MentionRef[];
-  /**
-   * Реплика закреплена. Это не украшение: закрепление — единственное исключение
-   * из ретенции, и человек вправе видеть в самой ленте, какая строка переживёт
-   * четырнадцать дней, а какая нет.
-   */
-  pinned?: true;
-}
-
-/**
- * Участник голосового канала в presence. `transport` называет сам клиент в
- * `join`: разъехавшись в транспортах, люди друг друга не слышат вовсе, и знать
- * об этом должны все.
- */
-export interface VoicePresenceEntry {
-  id: string;
-  name: string;
-  /** Отпечаток ключа: лицо на плитке. Пусто у гостя по инвайту (см. ChatMessage). */
-  fingerprint?: string;
-  micOn: boolean;
-  deafened: boolean;
-  transport: 'p2p' | 'sfu';
-  guest?: boolean;
-  /** Гость-слушатель: канал под паролем, право говорить ссылка не раздаёт. */
-  listen?: boolean;
-}
-
-// ── Админ-панель ────────────────────────────────────────────────────────────
-
-/**
- * Протокол панели владельца — половина сервера; половина клиента живёт в
- * `packages/shared/src/admin.ts`, и совпадение половин держит тест.
- *
- * Тела, как и везде здесь, объявлены `unknown`: панель шлёт их тем же
- * socket.io, что и всё остальное, и «это же наш собственный экран» проверкой
- * не считается.
- *
- * ПАНЕЛЬ ТОЛЬКО ДЛЯ ВЛАДЕЛЬЦА, и владение проверяет каждый обработчик сам —
- * см. `admin.handlers.ts`.
- */
-
-/** Действие панели — то, что делают кнопкой, а не полем. */
-export type AdminAction =
-  | 'owner-link'
-  | 'retention-run'
-  | 'files-sweep'
-  | 'revoke-sessions'
-  | 'revoke-device'
-  | 'ban'
-  | 'unban'
-  | 'export'
-  | 'import';
-
-/**
- * Почему панели отказали. Шесть причин посередине — причины каталога
- * (`SettingError`), и они обязаны входить сюда целиком: обработчик возвращает
- * их как есть, и седьмая причина каталога не соберётся, пока её не назовут и
- * здесь.
- *
- * Список общий на все события панели: отказ она показывает одним и тем же
- * способом, и второй перечень разошёлся бы с первым.
- */
-export type AdminRefusal =
-  | 'forbidden'
-  | 'needs-confirm'
-  | 'unknown-key'
-  | 'read-only'
-  | 'wrong-type'
-  | 'out-of-range'
-  | 'not-an-option'
-  | 'too-long'
-  | 'bad-item'
-  | 'secret-path'
-  | 'not-found'
-  | 'unsupported';
-
-export interface AdminSetPayload {
-  key?: unknown;
-  value?: unknown;
-  confirm?: unknown;
-}
-
-export interface AdminResetPayload {
-  group?: unknown;
-  confirm?: unknown;
-}
-
-export interface AdminPeoplePayload {
-  query?: unknown;
-  cursor?: unknown;
-}
-
-export interface AdminAuditPayload {
-  cursor?: unknown;
-}
-
-export interface AdminActionPayload {
-  action?: unknown;
-  target?: unknown;
-  confirm?: unknown;
-  values?: unknown;
-}
-
-/**
- * Смена пароля инсталляции. Своё событие, а не поле в `admin-set` и не
- * действие: пароль — единственный параметр, который одновременно секрет,
- * хэшируется и отзывает всё выданное, и ехать ему в теле, общем с баном и
- * импортом, незачем.
- */
-export interface AdminPasswordPayload {
-  password?: unknown;
-  confirm?: unknown;
-}
-
-/** Политика хранения так, как её показывает сводка. */
-export interface AdminRetention {
-  mode: RetentionMode;
-  days?: number;
-}
-
-/** Сводка: то, что владелец видит первым. Считается запросами, а не счётчиками. */
-export interface AdminOverview {
-  people: number;
-  online: number;
-  bans: number;
-  messages: number;
-  servers: number;
-  channels: number;
-  storageBytes: number;
-  storageQuotaBytes: number;
-  retention: AdminRetention;
-  directRetention: AdminRetention | null;
-  version: string;
-}
-
-/** Устройство человека — так, как его видит владелец в таблице людей. */
-export interface AdminDevice {
-  id: string;
-  name: string;
-  lastSeenAt: number | null;
-  revoked: boolean;
-}
-
-/**
- * Человек в таблице людей. Id личности наружу не уходит: в протоколе человека
- * называет отпечаток, он же ручка для бана (см. `gateway/ownership`).
- */
-export interface AdminPerson {
-  fingerprint: string;
-  nick: string;
-  createdAt: number;
-  lastSeenAt: number | null;
-  devices: AdminDevice[];
-  banned: boolean;
-  owner: boolean;
-}
-
-/** Выгрузка настроек. Секретов в ней нет вовсе — ни значением, ни признаком. */
-export interface AdminExport {
-  protocol: number;
-  at: number;
-  values: SettingsSnapshot;
-}
-
-export interface AdminImportRejection {
-  key: string;
-  reason: AdminRefusal;
-}
-
-export type AdminStateResult =
-  | {
-      ok: true;
-      catalog: SettingSpec[];
-      values: SettingsSnapshot;
-      overview: AdminOverview;
-    }
-  | { ok: false; error: AdminRefusal };
-
-export type AdminSetResult =
-  | { ok: true; key: string; changed: boolean; value: SettingValue }
-  | { ok: false; error: AdminRefusal };
-
-export type AdminResetResult =
-  | { ok: true; group: SettingGroup; changed: string[]; values: SettingsSnapshot }
-  | { ok: false; error: AdminRefusal };
-
-export type AdminPeopleResult =
-  | { ok: true; people: AdminPerson[]; cursor?: string }
-  | { ok: false; error: AdminRefusal };
-
-export type AdminBansResult = { ok: true; bans: BanEntry[] } | { ok: false; error: AdminRefusal };
-
-export type AdminAuditResult =
-  | { ok: true; entries: AuditEntry[]; more: boolean }
-  | { ok: false; error: AdminRefusal };
-
-export type AdminActionResult =
-  | {
-      ok: true;
-      action: AdminAction;
-      /** Ключ владельца — единственный раз, когда он существует в читаемом виде. */
-      link?: { token: string; expiresAt: number };
-      settings?: AdminExport;
-      imported?: { applied: string[]; rejected: AdminImportRejection[] };
-      count?: number;
-    }
-  | { ok: false; error: AdminRefusal };
-
-export type AdminPasswordResult =
-  | { ok: true; set: boolean; changed: boolean; count: number }
-  | { ok: false; error: AdminRefusal };
-
-/** Настройку поменяли из другой сессии владельца — только его собственным сокетам. */
-export interface AdminChangedRelay {
-  keys: string[];
-  values: SettingsSnapshot;
-}
+export type VoicePresenceEntry = wire.VoicePeer &
+  Required<Pick<wire.VoicePeer, 'name' | 'micOn' | 'deafened' | 'transport'>>;

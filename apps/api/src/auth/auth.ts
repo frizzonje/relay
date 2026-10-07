@@ -1,11 +1,10 @@
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { verifyServerPassword } from '../gateway/unlock';
+import { AUTH_COOKIE, GUEST_TOKEN_TTL_MS, TOKEN_TTL_MS } from '@relay/shared';
 
-// Срок жизни пропуска. Подпись зависит от пароля: смена пароля
-// мгновенно отзывает все выданные куки.
-const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-
-export const AUTH_COOKIE = 'relay_pass';
+// Срок жизни пропуска и имя куки — из контракта: их же знает Edge-middleware
+// Next. Подпись зависит от пароля: смена пароля мгновенно отзывает все куки.
+export { AUTH_COOKIE };
 
 /**
  * Чем инсталляция заперта прямо сейчас.
@@ -153,7 +152,6 @@ export function verifyToken(token: string | undefined): boolean {
 // как relay_pass. Подпись/срок проверяются даже при пустом SITE_PASSWORD: токен
 // несёт scope (какой войс-канал и на каких правах), а не просто «доступ».
 // Байт-в-байт с shared, включая приём ссылок прошлой версии (g1, без режима).
-const GUEST_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** Что разрешает гостевой токен: слаг канала, срок и право говорить. */
 export interface GuestClaims {

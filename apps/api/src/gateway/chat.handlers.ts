@@ -23,7 +23,8 @@ import {
   type ChatHistoryAfterPayload,
   type ChatHistoryMorePayload,
   type ChatHistoryMoreResult,
-  type ChatPayload,
+  type ChatJoinPayload,
+  type ChatMessagePayload,
   type ChatPinPayload,
   type ChatPinResult,
   type ChatPinsPayload,
@@ -155,7 +156,7 @@ export class ChatHandlers {
   }
 
   // ===== Текстовый канал =====
-  async join(client: AppSocket, payload: ChatPayload) {
+  async join(client: AppSocket, payload: ChatJoinPayload) {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const slug = trimmed(payload?.room, LIMIT.slug);
     if (!slug) return;
@@ -365,7 +366,7 @@ export class ChatHandlers {
   leave(client: AppSocket) {
     this.chats.leave(client);
   }
-  async message(client: AppSocket, payload: ChatPayload) {
+  async message(client: AppSocket, payload: ChatMessagePayload) {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return;
     const room = this.chats.roomOf(client);
     if (!room) return;
@@ -565,7 +566,7 @@ export class ChatHandlers {
    * реплики гостей и всё, что написано до 1.0. Строгость там взять не из чего —
    * зато и не притворяемся, что она есть.
    */
-  private ownsMessage(client: AppSocket, msg: { name: string; fingerprint?: string }): boolean {
+  private ownsMessage(client: AppSocket, msg: { name?: string; fingerprint?: string }): boolean {
     if (msg.fingerprint) return this.perimeter.speaker(client)?.fingerprint === msg.fingerprint;
     return msg.name === this.chats.nameOf(client);
   }

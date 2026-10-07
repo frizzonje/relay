@@ -12,6 +12,7 @@ import { DataSource, In } from 'typeorm';
 import { AttachmentRow, MessageRow } from './db/entities';
 import { SettingsService } from './settings/settings.service';
 import { isExecutable } from './uploads.policy';
+import { MAX_UPLOAD_BYTES } from '@relay/shared';
 
 // Файлы храним вне public (он монтируется read-only в превью) — отдельная
 // писучая папка, которую main.ts раздаёт по префиксу /uploads за авторизацией.
@@ -27,7 +28,7 @@ export const UPLOAD_DIR = process.env.UPLOAD_DIR || join(__dirname, '..', 'uploa
  * Поднять её выше 25 МиБ сегодня некуда: столько же знает и браузер
  * (`MAX_UPLOAD_BYTES` в `@relay/shared`), и он откажет ещё до отправки.
  */
-export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 МБ на файл
+export { MAX_UPLOAD_BYTES };
 
 // Разбор размера из `.env` живёт в uploads.policy.ts — там же, где его
 // спрашивают настройки при первом старте. Здесь остаётся имя, под которым его

@@ -3,9 +3,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { ChannelRow, ConversationRow } from '../db/entities';
 import type { CallMark } from './protocol';
+import { DM_PEOPLE_LIMIT, DM_PREFIX, DM_PREVIEW_LIMIT } from '@relay/shared';
 
 /** Адрес беседы всегда начинается с этого — по нему её и узнают в ленте. */
-export const DM_PREFIX = 'dm-';
+export { DM_PREFIX };
 
 /** Сколько знаков хэша в адресе. 24 знака шестнадцатеричных — 96 бит. */
 const ADDRESS_LEN = 24;
@@ -16,10 +17,10 @@ const ADDRESS_LEN = 24;
  * обработчик, а здесь остаётся то, с чем инсталляция живёт, пока панель не
  * открывали, — и то же число, которое ждёт клиент (см. `packages/shared`).
  */
-export const DM_PREVIEW_LIMIT = 120;
+export { DM_PREVIEW_LIMIT };
 
 /** Сколько людей отдаётся на один запрос `dm-people`. */
-export const DM_PEOPLE_LIMIT = 30;
+export { DM_PEOPLE_LIMIT };
 
 /**
  * Форма адреса беседы — тот же анкорный шаблон, что `isDmSlug` в

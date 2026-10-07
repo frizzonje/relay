@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import type { AppServer, AppSocket } from './socket-data';
 import type { VoicePresenceEntry } from './protocol';
 import { ANON_NAME } from './protocol';
+import { CALL_ROOM_PREFIX } from '@relay/shared';
 
 /**
  * С этого начинается имя голосовой комнаты беседы.
@@ -11,11 +12,11 @@ import { ANON_NAME } from './protocol';
  * разговора самим адресом, `peer-left` и весь сигналинг звонка уезжали бы
  * каждому, кто просто открыл переписку.
  *
- * Двойник строки живёт в `@relay/shared` (`CALL_ROOM_PREFIX`), а совпадение
- * стережёт контрактный тест: разъехавшись, половины посадили бы двоих в разные
- * комнаты — и принятый вызов кончался бы тишиной.
+ * Строка общая с клиентом (`CALL_ROOM_PREFIX` контракта): разъехавшись,
+ * половины посадили бы двоих в разные комнаты — и принятый вызов кончался бы
+ * тишиной.
  */
-export const CALL_ROOM_PREFIX = 'voice:';
+export { CALL_ROOM_PREFIX };
 
 /** Комната беседы по её адресу (`DmService.address`). */
 export function callRoom(address: string): string {

@@ -77,7 +77,8 @@ import {
   type ChatHistoryAfterPayload,
   type ChatHistoryMorePayload,
   type ChatHistoryMoreResult,
-  type ChatPayload,
+  type ChatJoinPayload,
+  type ChatMessagePayload,
   type ChatPinPayload,
   type ChatPinResult,
   type ChatPinsPayload,
@@ -907,7 +908,7 @@ export class SignalingGateway
   // ===== Текстовый канал =====
 
   @SubscribeMessage('chat-join')
-  handleChatJoin(@ConnectedSocket() client: AppSocket, @MessageBody() payload: ChatPayload) {
+  handleChatJoin(@ConnectedSocket() client: AppSocket, @MessageBody() payload: ChatJoinPayload) {
     return this.chatHandlers.join(client, payload);
   }
 
@@ -957,7 +958,10 @@ export class SignalingGateway
   }
 
   @SubscribeMessage('chat-message')
-  handleChatMessage(@ConnectedSocket() client: AppSocket, @MessageBody() payload: ChatPayload) {
+  handleChatMessage(
+    @ConnectedSocket() client: AppSocket,
+    @MessageBody() payload: ChatMessagePayload,
+  ) {
     return this.chatHandlers.message(client, payload);
   }
 
