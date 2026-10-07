@@ -1,6 +1,5 @@
 import { create } from 'zustand';
-import type { Channel } from '@relay/shared';
-import { DEFAULT_CHANNELS } from '@/lib/constants';
+import { DEFAULT_CHANNELS, type Channel } from '@relay/shared';
 
 /**
  * Реестр направлений — зеркало серверного списка. Сид (DEFAULT_CHANNELS) виден
@@ -14,6 +13,6 @@ interface ChannelsState {
 }
 
 export const useChannelsStore = create<ChannelsState>((set) => ({
-  channels: DEFAULT_CHANNELS,
+  channels: [...DEFAULT_CHANNELS],
   setChannels: (channels) => set({ channels }),
 }));

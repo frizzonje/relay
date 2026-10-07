@@ -1,8 +1,7 @@
-import type { ChannelType, QuotaScope, VoiceMode } from '@relay/shared';
+import { MAIN_SERVER_ID, type ChannelType, type QuotaScope, type VoiceMode } from '@relay/shared';
 import { toast } from 'sonner';
 import { getSocket } from '@/lib/socket';
 import { request } from '@/lib/request';
-import { MAIN_SERVER_ID } from '@/lib/constants';
 import { useServersStore } from '@/stores/servers';
 import { tx } from '@/lib/i18n';
 

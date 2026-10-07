@@ -10,7 +10,7 @@ import type { ReadsService } from '../identity/reads.service';
 import type { SettingsService } from '../settings/settings.service';
 import type { VoiceSessions } from './voice-sessions';
 import { ChannelEntry } from './registry';
-import { MAIN_SERVER_ID, MAX_CHANNELS, RegistryService, channelSlug } from './registry.service';
+import { MAX_CHANNELS, RegistryService, channelSlug } from './registry.service';
 import { createdBy, ownedBy } from './ownership';
 import { clientIp, hashServerPassword, issueUnlockToken } from './unlock';
 import {
@@ -28,15 +28,16 @@ import {
   type ServerUnlockPayload,
 } from './protocol';
 import {
-  isDmSlug,
-  VoiceMode,
   type ChannelCreateResult,
   type ChannelDeleteResult,
   type ChannelRenameResult,
   type ChannelStatsResult,
+  MAIN_SERVER_ID,
   type ServerCreateResult,
   type ServerDeleteResult,
   type ServerStatsResult,
+  VoiceMode,
+  isDmSlug,
 } from '@relay/shared';
 
 /**

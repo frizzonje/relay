@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
-import { sanitizeNick, type Channel, type VoiceMode } from '@relay/shared';
+import { sanitizeNick, type Channel, type VoiceMode, MAIN_SERVER_ID } from '@relay/shared';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Icon } from '@/components/ui/icon';
 import { Toolbar } from '@/components/layout/Toolbar';
@@ -13,7 +13,6 @@ import { useChannelsStore } from '@/stores/channels';
 import { useServersStore } from '@/stores/servers';
 import { useUnreadStore, channelMentions, isChannelUnread } from '@/stores/unread';
 import { useNotifyStore, isChannelLoud } from '@/stores/notify';
-import { MAIN_SERVER_ID } from '@/lib/constants';
 import { useRichT, useT } from '@/lib/i18n';
 import { Identicon } from '@/components/ui/Identicon';
 import { PresenceDot } from '@/components/ui/PresenceDot';

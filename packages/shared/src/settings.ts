@@ -23,7 +23,7 @@
  * загляни она хоть раз в окружение — три ответа разъехались бы на четвёртый.
  */
 
-import type { AttachmentKind } from './index';
+import type { AttachmentKind } from './attachments';
 
 /**
  * Вид значения. От него зависит и контрол в панели, и правила проверки.
@@ -1562,3 +1562,10 @@ function sameNetwork(prefix: AddressPrefix, probe: number[]): boolean {
   const masked = maskBytes(probe, prefix.bits);
   return masked.every((byte, index) => byte === prefix.bytes[index]);
 }
+
+/**
+ * Снимок настроек, каким его видит браузер. Ключи — из каталога
+ * (`packages/shared/src/settings.ts`), значения уже обезврежены: у секрета
+ * вместо строки признак «задано».
+ */
+export type SettingsSnapshot = Record<string, SettingValue>;

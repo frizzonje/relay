@@ -1,6 +1,5 @@
+import { MAIN_SERVER_ID, type Server } from '@relay/shared';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { Server } from '@relay/shared';
-import { MAIN_SERVER_ID } from '@/lib/constants';
 import { isServerUnlocked, useServersStore } from './servers';
 
 /**

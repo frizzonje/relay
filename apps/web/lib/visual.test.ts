@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
+import { DEFAULT_CHANNELS, DEFAULT_SERVERS, MAIN_SERVER_ID } from '@relay/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { avatarGradient, avatarStyle, randomCallsign } from './avatar';
-import { DEFAULT_CHANNELS, DEFAULT_SERVERS, MAIN_SERVER_ID } from './constants';
 import { fmtBytes, fmtClock } from './format';
 import { seedGradient } from './gradient';
 import { serverGradient, serverInitials } from './server-visual';

@@ -1,7 +1,6 @@
 import { create } from 'zustand';
+import { DEFAULT_SERVERS, MAIN_SERVER_ID, type Server } from '@relay/shared';
 import type { MessageKey } from '@/lib/i18n/translate';
-import type { Server } from '@relay/shared';
-import { DEFAULT_SERVERS, MAIN_SERVER_ID } from '@/lib/constants';
 
 /**
  * Реестр серверов (гильдий) — зеркало серверного списка, как stores/channels.
@@ -31,7 +30,7 @@ interface ServersState {
 }
 
 export const useServersStore = create<ServersState>((set) => ({
-  servers: DEFAULT_SERVERS,
+  servers: [...DEFAULT_SERVERS],
   activeServerId: MAIN_SERVER_ID,
   unlockedIds: [],
   unlockTargetId: null,

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
+import { DEFAULT_CHANNELS, MAIN_SERVER_ID } from '@relay/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_CHANNELS, MAIN_SERVER_ID } from '@/lib/constants';
 import { useAudioUnlockStore } from './audio-unlock';
 import { useChannelsStore } from './channels';
 import { useChatStore } from './chat';
@@ -28,7 +28,7 @@ beforeEach(() => {
     atBottom: true,
   });
   useChatStore.getState().reset();
-  useChannelsStore.setState({ channels: DEFAULT_CHANNELS });
+  useChannelsStore.setState({ channels: [...DEFAULT_CHANNELS] });
   useServersStore.setState({
     activeServerId: MAIN_SERVER_ID,
     unlockedIds: [],

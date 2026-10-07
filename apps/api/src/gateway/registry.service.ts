@@ -2,12 +2,13 @@ import { Injectable, Logger, Optional, type OnModuleInit } from '@nestjs/common'
 import { createHash } from 'node:crypto';
 import { existsSync, writeFileSync } from 'node:fs';
 import { DataSource, In, type EntityManager } from 'typeorm';
+import { DEFAULT_CHANNELS, DEFAULT_SERVERS, MAIN_SERVER_ID } from '@relay/shared';
 import { ChannelRow, ServerRow } from '../db/entities';
 import {
-  ChannelEntry,
+  type ChannelEntry,
   MIGRATED_MARKER,
   REGISTRY_FILE,
-  ServerEntry,
+  type ServerEntry,
   loadRegistry,
 } from './registry';
 import { type Claimant, type PublicServer, ownedBy, publicServer } from './ownership';
@@ -30,9 +31,6 @@ import { type Claimant, type PublicServer, ownedBy, publicServer } from './owner
  * Слой ролей плана 1.0 приземляется сюда: «кому позволено» — это `editable` и
  * `canSee`, и больше нигде.
  */
-
-/** Главный сервер relay — неудаляем; его id носят все каналы по умолчанию. */
-export const MAIN_SERVER_ID = 'relay-main';
 
 /** Типы каналов, которыми распоряжается реестр. Беседы (`dm`) — не его дело. */
 export const REGISTRY_CHANNEL_TYPES = ['text', 'voice'];
@@ -61,45 +59,6 @@ export const MAX_SERVERS_PER_PERSON = 5;
 export const MAX_CHANNELS = 300;
 export const MAX_CHANNELS_PER_SERVER = 25;
 
-// Серверы по умолчанию — только главный. Участники добавляют свои через «+» в
-// рейке. Клиент держит такой же сид (lib/constants).
-const DEFAULT_SERVERS: ServerEntry[] = [{ id: MAIN_SERVER_ID, name: 'relay', removable: false }];
-
-// Каналы главного сервера. Набор фиксирован: ровно два голосовых (прямой и
-// через медиасервер — чтобы разницу можно было услышать, не заводя своего
-// сервера) и один текстовый. Ни создать четвёртый, ни удалить, ни
-// переименовать эти нельзя — все запреты держит сам сервер, не интерфейс.
-// Клиент держит такой же сид (lib/constants) — id/slug совпадают.
-const DEFAULT_CHANNELS: ChannelEntry[] = [
-  {
-    id: 'text-obshchii',
-    serverId: MAIN_SERVER_ID,
-    type: 'text',
-    name: 'общий',
-    slug: 'obshchii',
-    removable: false,
-  },
-  {
-    id: 'voice-obshchii',
-    serverId: MAIN_SERVER_ID,
-    type: 'voice',
-    name: 'P2P общий',
-    slug: 'voice-obshchii',
-    removable: false,
-  },
-  {
-    id: 'voice-obshchii-sfu',
-    serverId: MAIN_SERVER_ID,
-    type: 'voice',
-    name: 'SFU общий',
-    slug: 'voice-obshchii-sfu',
-    removable: false,
-    // Медиасервер поднят не везде: если его нет, клиент не получит пропуск
-    // (`sfu-token` → not-sfu/unavailable) и штатно позвонит напрямую.
-    mode: 'sfu',
-  },
-];
-
 // Каналы, которые были дефолтными раньше. persist() пишет на диск весь список
 // вместе с дефолтами, поэтому выпавший из DEFAULT_CHANNELS канал вернулся бы
 // из registry.json как «сохранённый пользовательский» — и главный сервер
@@ -109,7 +68,7 @@ const RETIRED_CHANNEL_IDS = new Set(['text-general']);
 // Дефолты — источник правды: копируем их первыми, затем добавляем сохранённые
 // записи с новыми id (созданные пользователями). Так дефолты всегда актуальны,
 // а их изменение между версиями не перетирается старым файлом.
-function mergeById<T extends { id: string }>(defaults: T[], saved: T[] | undefined): T[] {
+function mergeById<T extends { id: string }>(defaults: readonly T[], saved: T[] | undefined): T[] {
   const out = defaults.map((d) => ({ ...d }));
   const seen = new Set(out.map((d) => d.id));
   for (const item of saved ?? []) {
@@ -309,11 +268,11 @@ export class RegistryService implements OnModuleInit {
     ]);
 
     this.servers.length = 0;
-    this.servers.push(...mergeById(DEFAULT_SERVERS, servers.map(toServerEntry)));
+    this.servers.push(...mergeById<ServerEntry>(DEFAULT_SERVERS, servers.map(toServerEntry)));
     const serverIds = new Set(this.servers.map((s) => s.id));
     this.channels.length = 0;
     this.channels.push(
-      ...mergeById(DEFAULT_CHANNELS, channels.map(toChannel)).filter(
+      ...mergeById<ChannelEntry>(DEFAULT_CHANNELS, channels.map(toChannel)).filter(
         (c) => serverIds.has(c.serverId) && !RETIRED_CHANNEL_IDS.has(c.id),
       ),
     );

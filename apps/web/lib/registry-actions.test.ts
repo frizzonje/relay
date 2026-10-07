@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { MAIN_SERVER_ID } from '@relay/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -22,7 +23,6 @@ vi.mock('@/stores/servers', () => ({
   useServersStore: { getState: () => ({ activeServerId: activeServerId.value }) },
 }));
 
-import { MAIN_SERVER_ID } from './constants';
 import {
   channelStats,
   createChannel,

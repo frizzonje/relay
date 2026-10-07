@@ -1,11 +1,10 @@
 'use client';
 
+import { MAIN_SERVER_ID, type Server } from '@relay/shared';
 import { useEffect, useState } from 'react';
-import type { Server } from '@relay/shared';
 import { Icon } from '@/components/ui/icon';
 import { Logo } from '@/components/ui/Logo';
 import { cn } from '@/lib/utils';
-import { MAIN_SERVER_ID } from '@/lib/constants';
 import { serverGradient, serverInitials } from '@/lib/server-visual';
 import { avatarStyle } from '@/lib/avatar';
 import { hostLabel, isCurrentHost, type RemoteHost } from '@/lib/hosts';

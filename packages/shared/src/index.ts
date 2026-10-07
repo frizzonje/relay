@@ -67,10 +67,9 @@ export {
 // умолчаниями. По нему сервер проверяет запись, а панель владельца сама рисует
 // контролы — см. ./settings.
 export * from './settings';
-// Тип нужен и здесь, по имени: `export *` пробрасывает имена наружу, но в
-// область видимости этого файла их не вносит. Импорт типовой (стирается
-// сборкой), поэтому встречный `import type` в settings.ts цикла не заводит.
-import type { SettingValue } from './settings';
+// Типы нужны и здесь, по имени: `export *` пробрасывает имена наружу, но в
+// область видимости этого файла их не вносит.
+import type { SettingsSnapshot } from './settings';
 
 // Машина состояний вызова: чистый переход, по которому владелец живых вызовов
 // на сервере и оба экрана — исходящий и входящий — одинаково решают, чем
@@ -92,6 +91,19 @@ export * from './admin';
 
 // Протокол медиасервера (сокет `/sfu/`) — см. ./sfu.
 export * from './sfu';
+
+// Вложения и модерация — свои файлы, потому что их знают не только события
+// ниже: виды вложений — каталог настроек, список забаненных — панель.
+export * from './attachments';
+export * from './moderation';
+import type { Attachment } from './attachments';
+import type {
+  ModerationBanPayload,
+  ModerationBansPayload,
+  ModerationBansResult,
+  ModerationResult,
+  ModerationUnbanPayload,
+} from './moderation';
 import type {
   AdminActionPayload,
   AdminActionResult,
@@ -109,9 +121,6 @@ import type {
   AdminSetResult,
   AdminStateResult,
 } from './admin';
-
-/** Лимит размера загружаемого файла — 25 МБ. */
-export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 /**
  * Размер страницы ленты: столько реплик приходит при входе в канал и столько
@@ -147,23 +156,6 @@ export const LIMITS = {
   /** Длина текста сообщения. */
   chatText: 500,
 } as const;
-
-// ─────────────────────────────────────────────────────────────────────────
-// Вложения
-// ─────────────────────────────────────────────────────────────────────────
-
-/** Как клиент рисует вложение: картинка инлайн, mp3 — плеером, прочее — карточкой. */
-export type AttachmentKind = 'image' | 'audio' | 'file';
-
-export interface Attachment {
-  url: string;
-  name: string;
-  size: number;
-  mime: string;
-  kind: AttachmentKind;
-  /** Спойлер: клиент рисует вложение заблюренным до клика («показать»). */
-  spoiler?: boolean;
-}
 
 // ─────────────────────────────────────────────────────────────────────────
 // Чат
@@ -542,28 +534,6 @@ export type ServerCreateResult =
       limit?: number;
     };
 
-/** Ввод пароля для доступа к закрытому серверу. */
-/** Кого банить: сообщение, а `everywhere` — вся инсталляция вместо сервера. */
-export interface ModerationBanPayload {
-  id: string;
-  /** Только владельцу инсталляции. Без него бан действует на текущем сервере. */
-  everywhere?: boolean;
-}
-
-/** Охват: сервер, а пустой — вся инсталляция (её списки видит только владелец). */
-export interface ModerationBansPayload {
-  server?: string;
-}
-
-export interface ModerationUnbanPayload {
-  fingerprint: string;
-  server?: string;
-}
-
-export type ModerationResult =
-  | { ok: true }
-  | { ok: false; error: 'not-found' | 'forbidden' | 'unknown' };
-
 /**
  * «Дочитал этот канал до этого момента». Время — серверное: клиент возвращает
  * то, что сам получил в `chat-activity` или в снимке каналов, а свои часы в этой
@@ -626,20 +596,7 @@ export interface PrefsRelay {
   full?: boolean;
 }
 
-/** Забаненный так, как его показывают модератору: лицо, имя и след. */
-export interface BanEntry {
-  fingerprint: string;
-  nick: string;
-  /** Когда забанен, ISO. */
-  at: string;
-  /** Ник забанившего; пусто — его личности уже нет. */
-  by: string | null;
-}
-
-export type ModerationBansResult =
-  | { ok: true; bans: BanEntry[] }
-  | { ok: false; error: 'forbidden' };
-
+/** Ввод пароля для доступа к закрытому серверу. */
 export interface ServerUnlockPayload {
   id: string;
   password: string;
@@ -713,6 +670,57 @@ export interface Channel {
    */
   lastTs?: number;
 }
+
+/** Главный сервер инсталляции: несносимый, без создателя, без пароля. */
+export const MAIN_SERVER_ID = 'relay-main';
+
+/**
+ * Реестр по умолчанию — одна копия на обе стороны. Сервер начинает с него
+ * каждый запуск (сохранённое добавляется следом, по новым id), клиент рисует
+ * его до прихода настоящего списка и когда api недоступен. Раньше это были две
+ * копии, которые CONTRIBUTING просил держать «байт в байт» руками.
+ *
+ * Серверы — только главный; участники заводят свои через «+» в рейке.
+ */
+export const DEFAULT_SERVERS: readonly Server[] = [
+  { id: MAIN_SERVER_ID, name: 'relay', removable: false },
+];
+
+/**
+ * Каналы главного сервера. Набор фиксирован: ровно два голосовых (прямой и
+ * через медиасервер — чтобы разницу можно было услышать, не заводя своего
+ * сервера) и один текстовый. Ни создать четвёртый, ни удалить, ни
+ * переименовать эти нельзя — все запреты держит сам сервер, не интерфейс.
+ */
+export const DEFAULT_CHANNELS: readonly Channel[] = [
+  {
+    id: 'text-obshchii',
+    serverId: MAIN_SERVER_ID,
+    type: 'text',
+    name: 'общий',
+    slug: 'obshchii',
+    removable: false,
+  },
+  {
+    id: 'voice-obshchii',
+    serverId: MAIN_SERVER_ID,
+    type: 'voice',
+    name: 'P2P общий',
+    slug: 'voice-obshchii',
+    removable: false,
+  },
+  {
+    id: 'voice-obshchii-sfu',
+    serverId: MAIN_SERVER_ID,
+    type: 'voice',
+    name: 'SFU общий',
+    slug: 'voice-obshchii-sfu',
+    removable: false,
+    // Медиасервер поднят не везде: если его нет, клиент не получит пропуск
+    // (`sfu-token` → not-sfu/unavailable) и штатно позвонит напрямую.
+    mode: 'sfu',
+  },
+];
 
 /**
  * Создание канала. Только в своих серверах: набор главного (`relay`) фиксирован
@@ -857,73 +865,6 @@ export interface ConfigResponse {
    * так, как жил до этапа C.
    */
   settings?: SettingsSnapshot;
-}
-
-/**
- * Снимок настроек, каким его видит браузер. Ключи — из каталога
- * (`packages/shared/src/settings.ts`), значения уже обезврежены: у секрета
- * вместо строки признак «задано».
- */
-export type SettingsSnapshot = Record<string, SettingValue>;
-
-/**
- * Что случилось — так, как это называет журнал. Пишет журнал сервер, читает
- * панель, и перечисление у них одно — это.
- *
- * Список закрыт намеренно: панель подбирает по этому имени подпись строки, и
- * незнакомое действие она нарисовала бы пустотой.
- */
-export type AuditAction =
-  | 'setting-changed'
-  | 'settings-reset'
-  | 'ban'
-  | 'unban'
-  | 'owner-claimed'
-  | 'owner-link-issued'
-  | 'password-changed'
-  | 'retention-run'
-  | 'files-swept'
-  | 'sessions-revoked'
-  | 'device-revoked'
-  | 'settings-imported';
-
-/**
- * Ник в системной записи — той, у которой автора-человека нет вовсе. Узнавать
- * систему по этому тексту нельзя: для этого есть `AuditEntry.system`, иначе
- * человек с таким же ником подделал бы системную запись.
- */
-export const SYSTEM_ACTOR_NICK = 'system';
-
-/** Ник, когда автор известен, а имени не нашлось: личность уже удалена. */
-export const UNKNOWN_ACTOR_NICK = 'unknown';
-
-/** Курсор страницы журнала: время и id последней показанной строки. */
-export interface AuditCursor {
-  at: number;
-  id: string;
-}
-
-/**
- * Строка журнала, как её читает панель.
- *
- * `actorNick` — снимок имени НА МОМЕНТ ДЕЙСТВИЯ: человек переименуется, а «Ким
- * закрыл регистрацию» обязано остаться читаемым. `actor` — отпечаток ключа,
- * лицо в списке; его нет ни у системной записи, ни у той, чья личность с тех
- * пор удалена, и различает эти два случая только `system`.
- */
-export interface AuditEntry {
-  id: string;
-  /** Когда, миллисекундами. Он же половина курсора страницы. */
-  at: number;
-  actor?: string;
-  actorNick: string;
-  /** Действовала машина, а не человек. */
-  system?: true;
-  action: AuditAction;
-  /** На кого подействовали: ключ настройки, группа, отпечаток забаненного. */
-  target?: string;
-  /** Подробности: «было/стало» у настройки, имя и охват у бана. */
-  detail: Record<string, unknown>;
 }
 
 /** Что инсталляция делает с историей. Зеркало `Retention` в api. */

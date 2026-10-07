@@ -23,7 +23,7 @@ import { DmService } from './dm.service';
 import { RegistryService, channelSlug } from './registry.service';
 import { SignalingGateway } from './signaling.gateway';
 import { FakeServer, asSocket, type FakeSocket } from './testkit';
-import type { Attachment } from '@relay/shared';
+import { MAIN_SERVER_ID, type Attachment } from '@relay/shared';
 
 /**
  * Общий стенд для тестов гейтвея.
@@ -39,8 +39,8 @@ import type { Attachment } from '@relay/shared';
  * интересует, КОМУ гейтвей адресует ответ (см. ./testkit).
  */
 
-/** Главный сервер инсталляции: несносимый, без создателя, без пароля. */
-export const MAIN = 'relay-main';
+/** Главный сервер инсталляции — короче для тестов, значение из контракта. */
+export const MAIN = MAIN_SERVER_ID;
 
 /**
  * Реестр гейтвея — тесту нужно видеть его самого, а не только рассылки. Поле

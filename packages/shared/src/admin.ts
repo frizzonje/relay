@@ -1,5 +1,11 @@
-import type { AuditCursor, AuditEntry, BanEntry, SettingsSnapshot } from './index';
-import type { SettingError, SettingGroup, SettingSpec, SettingValue } from './settings';
+import type { BanEntry } from './moderation';
+import type {
+  SettingError,
+  SettingGroup,
+  SettingSpec,
+  SettingValue,
+  SettingsSnapshot,
+} from './settings';
 
 /**
  * Протокол админ-панели: что панель спрашивает у сервера и что получает в ответ.
@@ -310,4 +316,66 @@ export type AdminPasswordResult =
 export interface AdminChangedRelay {
   keys: string[];
   values: SettingsSnapshot;
+}
+
+// ── Журнал ─────────────────────────────────────────────────────────────────
+
+/**
+ * Что случилось — так, как это называет журнал. Пишет журнал сервер, читает
+ * панель, и перечисление у них одно — это.
+ *
+ * Список закрыт намеренно: панель подбирает по этому имени подпись строки, и
+ * незнакомое действие она нарисовала бы пустотой.
+ */
+export type AuditAction =
+  | 'setting-changed'
+  | 'settings-reset'
+  | 'ban'
+  | 'unban'
+  | 'owner-claimed'
+  | 'owner-link-issued'
+  | 'password-changed'
+  | 'retention-run'
+  | 'files-swept'
+  | 'sessions-revoked'
+  | 'device-revoked'
+  | 'settings-imported';
+
+/**
+ * Ник в системной записи — той, у которой автора-человека нет вовсе. Узнавать
+ * систему по этому тексту нельзя: для этого есть `AuditEntry.system`, иначе
+ * человек с таким же ником подделал бы системную запись.
+ */
+export const SYSTEM_ACTOR_NICK = 'system';
+
+/** Ник, когда автор известен, а имени не нашлось: личность уже удалена. */
+export const UNKNOWN_ACTOR_NICK = 'unknown';
+
+/** Курсор страницы журнала: время и id последней показанной строки. */
+export interface AuditCursor {
+  at: number;
+  id: string;
+}
+
+/**
+ * Строка журнала, как её читает панель.
+ *
+ * `actorNick` — снимок имени НА МОМЕНТ ДЕЙСТВИЯ: человек переименуется, а «Ким
+ * закрыл регистрацию» обязано остаться читаемым. `actor` — отпечаток ключа,
+ * лицо в списке; его нет ни у системной записи, ни у той, чья личность с тех
+ * пор удалена, и различает эти два случая только `system`.
+ */
+export interface AuditEntry {
+  id: string;
+  /** Когда, миллисекундами. Он же половина курсора страницы. */
+  at: number;
+  actor?: string;
+  actorNick: string;
+  /** Действовала машина, а не человек. */
+  system?: true;
+  action: AuditAction;
+  /** На кого подействовали: ключ настройки, группа, отпечаток забаненного. */
+  target?: string;
+  /** Подробности: «было/стало» у настройки, имя и охват у бана. */
+  detail: Record<string, unknown>;
 }

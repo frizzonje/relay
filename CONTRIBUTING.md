@@ -88,9 +88,9 @@ pnpm audit --prod --audit-level=high
   Меняете формат сообщений — правьте контракт и [docs/protocol.md](docs/protocol.md),
   держите web-клиент эталонной реализацией. Подробно —
   [docs/architecture.md](docs/architecture.md#контракт).
-- **Сиды серверов/каналов** дублируются во фронте (`apps/web/lib/constants.ts`) и
-  в реестре api (`apps/api/src/gateway/registry.service.ts`) — id и slug обязаны
-  совпадать байт-в-байт.
+- **Сиды серверов и каналов** (`DEFAULT_SERVERS`, `DEFAULT_CHANNELS`,
+  `MAIN_SERVER_ID`) — тоже контракт: одна копия в `packages/shared`, с неё
+  начинает реестр api и её рисует web до прихода списка.
 - Комментарии и UI — на русском, в тон существующему коду; нейтральная лексика,
   без внутренних шуток.
 - Коммиты — в стиле Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`).
