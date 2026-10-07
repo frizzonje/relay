@@ -6,6 +6,7 @@ import {
   MAIN,
   connect,
   makeGateway,
+  personCookie,
   settle,
   slugOf,
   useGatewayStand,
@@ -271,7 +272,7 @@ describe('channel-mode', () => {
 
 describe('channel-rename / channel-delete / channel-stats', () => {
   async function withChannels() {
-    const { gw, server, registry } = await makeGateway();
+    const { gw, server, registry, reads } = await makeGateway();
     const owner = connect(gw, server, { id: 'owner', clientId: 'dev-owner' });
     await gw.handleServerCreate(asSocket(owner), { id: 'srv', name: 'мой' });
     await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'чат' });
@@ -280,7 +281,7 @@ describe('channel-rename / channel-delete / channel-stats', () => {
     server.clearAll();
     const text = registryOf(gw).channels.find((c) => c.slug === slugOf('чат'))!;
     const voice = registryOf(gw).channels.find((c) => c.slug === slugOf('эфир'))!;
-    return { gw, server, owner, text, voice, registry };
+    return { gw, server, owner, text, voice, registry, reads };
   }
 
   it('переименование меняет имя, но не слаг — переписка и комната остаются', async () => {
@@ -374,6 +375,30 @@ describe('channel-rename / channel-delete / channel-stats', () => {
       messages: [],
       more: false,
     });
+  });
+
+  it('два удаления одного канала разом уносят только его', async () => {
+    // Индекс канала брался до похода в базу, а резался после: второе удаление
+    // резало по устаревшему индексу — то есть соседний канал.
+    const { gw, owner, text, voice } = await withChannels();
+    const results = await Promise.all([
+      gw.handleChannelDelete(asSocket(owner), { id: text.id }),
+      gw.handleChannelDelete(asSocket(owner), { id: text.id }),
+    ]);
+    expect(results).toContainEqual({ ok: true });
+    const left = registryOf(gw).channels.map((c) => c.id);
+    expect(left).not.toContain(text.id);
+    expect(left).toContain(voice.id);
+  });
+
+  it('сервер уносит и отметки чтения своих каналов — как и удаление канала', async () => {
+    const { gw, owner, text, reads } = await withChannels();
+    const anya = await personCookie('Аня');
+    await reads.mark(anya.identityId, text.id, Date.now());
+    expect((await reads.marks(anya.identityId)).has(text.id)).toBe(true);
+
+    expect(await gw.handleServerDelete(asSocket(owner), { id: 'srv' })).toEqual({ ok: true });
+    expect((await reads.marks(anya.identityId)).has(text.id)).toBe(false);
   });
 
   it('пустой id, дефолтный канал и гость — три разных отказа', async () => {

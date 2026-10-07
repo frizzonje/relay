@@ -286,21 +286,17 @@ export class RegistryHandlers {
     this.directory.broadcastServers();
 
     // Каналы удалённого сервера уходят вместе с ним — иначе повиснут сиротами.
-    // Текстовые провожаем так же, как в channel-delete: стираем историю и
-    // распускаем комнату, чтобы у читателей не осталось канала-призрака.
-    const before = this.registry.channels.length;
+    // Текстовые провожаем так же, как в channel-delete (см. `seeOffText`).
+    const gone: ChannelEntry[] = [];
     for (let i = this.registry.channels.length - 1; i >= 0; i--) {
       const channel = this.registry.channels[i];
       if (channel.serverId !== id) continue;
-      // Забываем ДО того, как канал исчезнет из реестра: слаг разрешается в
-      // канал по этому же списку, и после splice забывать было бы уже нечего.
-      if (channel.type === 'text') {
-        this.chat.forget(channel.slug);
-        this.chats.close(this.chat.room(channel.slug), channel.slug);
-      }
+      if (channel.type === 'text') this.seeOffText(channel);
       this.registry.channels.splice(i, 1);
+      gone.push(channel);
     }
-    if (this.registry.channels.length !== before) this.directory.broadcastChannels();
+    if (gone.length) this.directory.broadcastChannels();
+    await Promise.all(gone.map((c) => this.forgetReads(c)));
     await this.registry.persist();
     return { ok: true };
   }
@@ -552,22 +548,37 @@ export class RegistryHandlers {
       if (occupants > 0) return { ok: false, error: 'occupied', occupants };
     }
 
-    // История удалённого канала уходит вместе с ним (каскадом в базе), а
-    // читателей выписываем сами: их клиент мог бы и не заметить пропажу канала
-    // в новом реестре, а остаться в комнате — значит продолжать писать в канал,
-    // которого больше нет ни у кого. Порядок важен: `forget` разрешает слаг по
-    // реестру, поэтому идёт до того, как канал из него исчезнет.
-    if (channel.type === 'text') {
-      this.chat.forget(channel.slug);
-      this.chats.close(this.chat.room(channel.slug), channel.slug);
-      // Отметки чтения канала уходят вместе с ним: каскада у них нет намеренно
-      // (отметка не должна запирать удаление канала), значит убрать за собой
-      // некому, кроме этого места.
-      await this.reads.forget(channel.id);
-    }
+    // От проверки до выреза — ни одного `await`. Индекс годен ровно до первой
+    // уступки циклу событий: второе удаление того же канала, пришедшее в этот
+    // зазор, вырезало бы по тому же индексу уже соседний канал.
+    if (channel.type === 'text') this.seeOffText(channel);
     this.registry.channels.splice(index, 1);
     this.directory.broadcastChannels();
+    await this.forgetReads(channel);
     await this.registry.persist();
     return { ok: true };
+  }
+
+  /**
+   * Проводить текстовый канал: забыть кэш его активности и выписать читателей.
+   * История уходит каскадом в базе, а читателей выписываем сами: их клиент мог
+   * бы не заметить пропажу канала в новом реестре, а остаться в комнате —
+   * значит писать в канал, которого нет ни у кого.
+   *
+   * Зовётся ДО того, как канал исчезнет из реестра: `forget` разрешает слаг по
+   * этому же списку, и после выреза забывать было бы нечего.
+   */
+  private seeOffText(channel: ChannelEntry): void {
+    this.chat.forget(channel.slug);
+    this.chats.close(this.chat.room(channel.slug), channel.slug);
+  }
+
+  /**
+   * Отметки чтения удалённого канала. Каскада у них нет намеренно (отметка не
+   * должна запирать удаление канала), значит убрать за собой некому, кроме
+   * того, кто канал удалил, — сам канал или его сервер.
+   */
+  private async forgetReads(channel: ChannelEntry): Promise<void> {
+    if (channel.type === 'text') await this.reads.forget(channel.id);
   }
 }
