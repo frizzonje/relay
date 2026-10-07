@@ -13,10 +13,11 @@ import type { CallReplyResult, CallStartResult, CallStateRelay } from '@relay/sh
  * встаём ли, когда собеседник ушёл.
  */
 
+const emit = vi.fn();
 const socket = {
   on: vi.fn(),
-  emit: vi.fn(),
-  timeout: timeoutOf((...args) => socket.emit(...args)),
+  emit,
+  timeout: timeoutOf(emit),
 };
 const handlers: Record<string, (payload: never) => void> = {};
 socket.on = vi.fn((event: string, h: (payload: never) => void) => {

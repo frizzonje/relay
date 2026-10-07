@@ -5,11 +5,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { HealthController } from './health.controller';
 import { issueSession } from './identity/session';
 import { MetricsController } from './metrics.controller';
-import type { Metrics, MetricsService } from './metrics';
+import type { MetricsService } from './metrics';
 import { UploadController } from './upload.controller';
 import { UploadByteBudget, UploadRateGuard, uploadBudget } from './upload.guard';
 import type { UploadsService } from './uploads';
-import type { Attachment } from '@relay/shared';
+import type { Attachment, MetricsResponse } from '@relay/shared';
 
 /**
  * Мелкие http-ручки и гард загрузок. Ручки тонкие нарочно, и проверять в них
@@ -29,7 +29,7 @@ describe('GET /api/health', () => {
 
 describe('GET /api/metrics', () => {
   it('отдаёт срез машины как есть', async () => {
-    const snapshot: Metrics = {
+    const snapshot: MetricsResponse = {
       cpu: { cores: 4, usage: 0.25, load1: 0.5 },
       mem: { total: 100, used: 40 },
       disk: { total: 1000, used: 200 },

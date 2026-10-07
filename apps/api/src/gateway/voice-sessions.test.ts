@@ -1,7 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueGuestToken } from '../auth/auth';
-import { asSocket, type FakeSocket } from './testkit';
+import { asSocket, type FakeServer, type FakeSocket } from './testkit';
 import { DmService } from './dm.service';
 import {
   connect,

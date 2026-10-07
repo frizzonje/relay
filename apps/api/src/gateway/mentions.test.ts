@@ -69,11 +69,10 @@ describe('упоминания', () => {
 
   it('ник в снимке — из базы, а не из тела сообщения', async () => {
     const { gw, a, b, anya } = await twoInChannel();
-    await gw.handleChatMessage(asSocket(b), {
-      text: '@Аня привет',
-      mentions: [anya.fingerprint],
-      name: 'кто угодно',
-    });
+    // Лишнее поле — то, что подсунул клиент: контракт его не знает, а тело
+    // события socket.io не проверяет никто, кроме самого обработчика.
+    const body = { text: '@Аня привет', mentions: [anya.fingerprint], name: 'кто угодно' };
+    await gw.handleChatMessage(asSocket(b), body);
     expect((a.last('chat') as { mentions: { nick: string }[] }).mentions[0].nick).toBe('Аня');
   });
 

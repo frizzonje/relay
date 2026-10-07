@@ -17,7 +17,7 @@ import { AuditService } from '../settings/audit.service';
 import { OverviewService } from '../settings/overview.service';
 import { SettingsService } from '../settings/settings.service';
 import type { UploadsService } from '../uploads';
-import type { ChannelEntry, PersistedRegistry, ServerEntry } from './registry';
+import type { PersistedRegistry } from './registry';
 import { ChatService } from './chat.service';
 import { DmService } from './dm.service';
 import { RegistryService, channelSlug } from './registry.service';
@@ -42,10 +42,15 @@ import type { Attachment } from '@relay/shared';
 /** Главный сервер инсталляции: несносимый, без создателя, без пароля. */
 export const MAIN = 'relay-main';
 
-/** Приватные поля гейтвея — тесту нужно видеть сам реестр, а не только рассылки. */
-export type AnyGw = SignalingGateway & {
-  registry: { servers: ServerEntry[]; channels: ChannelEntry[] };
-};
+/**
+ * Реестр гейтвея — тесту нужно видеть его самого, а не только рассылки. Поле
+ * приватное, поэтому дверь одна и названа: пересечение с гейтвеем, которым
+ * это делалось раньше, схлопывалось в `never` (приватное поле с тем же
+ * именем), и всё, что читалось через него, компилятор не проверял вовсе.
+ */
+export function registryOf(gw: SignalingGateway): RegistryService {
+  return (gw as unknown as { registry: RegistryService }).registry;
+}
 
 let db: DataSource;
 

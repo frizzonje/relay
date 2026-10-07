@@ -15,7 +15,7 @@ import {
   slugOf,
   tune,
   useGatewayStand,
-  type AnyGw,
+  registryOf,
 } from './gateway.testkit';
 
 /**
@@ -87,7 +87,7 @@ describe('server-create', () => {
     const a = connect(gw, server);
     await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'раз' });
     await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'два' });
-    expect((gw as AnyGw).registry.servers.filter((s) => s.id === 'srv')).toHaveLength(1);
+    expect(registryOf(gw).servers.filter((s) => s.id === 'srv')).toHaveLength(1);
   });
 
   it('без id или без имени сервер не появляется', async () => {
@@ -96,7 +96,7 @@ describe('server-create', () => {
     await gw.handleServerCreate(asSocket(a), { id: '', name: 'мой' });
     await gw.handleServerCreate(asSocket(a), { id: 'srv', name: '   ' });
     await gw.handleServerCreate(asSocket(a), { id: 42, name: 'мой' });
-    expect((gw as AnyGw).registry.servers).toHaveLength(1);
+    expect(registryOf(gw).servers).toHaveLength(1);
   });
 
   it('имя и emoji режутся по длине, пустой emoji не сохраняется', async () => {
@@ -109,7 +109,7 @@ describe('server-create', () => {
     });
     await gw.handleServerCreate(asSocket(a), { id: 'srv-2', name: 'второй', emoji: '  ' });
     settle();
-    const srv = (gw as AnyGw).registry.servers.find((s) => s.id === 'srv')!;
+    const srv = registryOf(gw).servers.find((s) => s.id === 'srv')!;
     expect(srv.name).toHaveLength(32);
     expect(srv.emoji).toHaveLength(8);
     // Из одних пробелов emoji не рождается — наружу такой сервер уходит без поля.
@@ -176,7 +176,7 @@ describe('server-create', () => {
         vi.advanceTimersByTime(1000);
       }
     }
-    expect((gw as AnyGw).registry.servers).toHaveLength(MAX_SERVERS);
+    expect(registryOf(gw).servers).toHaveLength(MAX_SERVERS);
     expect(last).toEqual({ ok: false, error: 'limit', scope: 'install', limit: MAX_SERVERS });
   });
 
@@ -202,7 +202,7 @@ describe('server-create', () => {
     const { token } = issueGuestToken('voice-obshchii');
     const guest = connect(gw, server, { guest: token });
     await gw.handleServerCreate(asSocket(guest), { id: 'srv', name: 'мой' });
-    expect((gw as AnyGw).registry.servers).toHaveLength(1);
+    expect(registryOf(gw).servers).toHaveLength(1);
   });
 
   it('сохранённые серверы поднимаются вместе с дефолтными, дефолт — источник правды', async () => {
@@ -212,8 +212,8 @@ describe('server-create', () => {
         { id: MAIN, name: 'подмена', removable: true },
       ],
     });
-    expect((gw as AnyGw).registry.servers.map((s) => s.id)).toEqual([MAIN, 'srv']);
-    expect((gw as AnyGw).registry.servers[0].removable).toBe(false);
+    expect(registryOf(gw).servers.map((s) => s.id)).toEqual([MAIN, 'srv']);
+    expect(registryOf(gw).servers[0].removable).toBe(false);
   });
 
   it('удалённый сервер уносит свои каналы и их переписку', async () => {
@@ -229,7 +229,7 @@ describe('server-create', () => {
 
     // Канал-сирота теперь невозможен не по договорённости, а по внешнему ключу:
     // сервера нет — нет и каналов, а вместе с каналом уходит его переписка.
-    expect((gw as AnyGw).registry.channels.some((c) => c.serverId === 'srv')).toBe(false);
+    expect(registryOf(gw).channels.some((c) => c.serverId === 'srv')).toBe(false);
     expect(await database().getRepository(ChannelRow).countBy({ serverId: 'srv' })).toBe(0);
     expect(await database().getRepository(MessageRow).count()).toBe(0);
   });
@@ -248,7 +248,7 @@ describe('server-create', () => {
         },
       ],
     });
-    expect((gw as AnyGw).registry.channels.find((c) => c.id === 'text-general')).toBeUndefined();
+    expect(registryOf(gw).channels.find((c) => c.id === 'text-general')).toBeUndefined();
   });
 
   it('отказ базы не роняет живой реестр в памяти', async () => {
@@ -259,7 +259,7 @@ describe('server-create', () => {
     await registry.flush();
     // Записать не вышло, но сервер жив: люди, уже сидящие в relay, не должны
     // терять только что созданное из-за того, что база моргнула.
-    expect((gw as AnyGw).registry.servers.map((s) => s.id)).toContain('srv');
+    expect(registryOf(gw).servers.map((s) => s.id)).toContain('srv');
   });
 });
 
@@ -283,8 +283,8 @@ describe('server-delete', () => {
     const { gw, owner } = await withServer();
     expect(await gw.handleServerDelete(asSocket(owner), { id: 'srv' })).toEqual({ ok: true });
     settle();
-    expect((gw as AnyGw).registry.servers.map((s) => s.id)).toEqual([MAIN]);
-    expect((gw as AnyGw).registry.channels.some((c) => c.serverId === 'srv')).toBe(false);
+    expect(registryOf(gw).servers.map((s) => s.id)).toEqual([MAIN]);
+    expect(registryOf(gw).channels.some((c) => c.serverId === 'srv')).toBe(false);
     expect((owner.last('channels') as unknown[]).length).toBe(3);
   });
 
@@ -314,7 +314,7 @@ describe('server-delete', () => {
       ok: false,
       error: 'not-owner',
     });
-    expect((gw as AnyGw).registry.servers.map((s) => s.id)).toContain('srv');
+    expect(registryOf(gw).servers.map((s) => s.id)).toContain('srv');
   });
 
   it('запись без создателя (создана до правила владения) остаётся общей', async () => {
@@ -593,7 +593,7 @@ describe('настройки пространств', () => {
     expect(
       await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'мой', password: 'секрет' }),
     ).toEqual({ ok: false, error: 'forbidden' });
-    expect((gw as AnyGw).registry.servers.some((s) => s.id === 'srv')).toBe(false);
+    expect(registryOf(gw).servers.some((s) => s.id === 'srv')).toBe(false);
   });
 
   it('потолок имени берут все три места сразу — иначе принятое имя не пережило бы правку', async () => {
@@ -601,14 +601,14 @@ describe('настройки пространств', () => {
     await tune(settings, 'spaces.channelNameMaxLength', 4);
     const a = connect(gw, server, { clientId: 'dev-a' });
     await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'длинное имя' });
-    expect((gw as AnyGw).registry.servers.find((s) => s.id === 'srv')?.name).toBe('длин');
+    expect(registryOf(gw).servers.find((s) => s.id === 'srv')?.name).toBe('длин');
 
     await gw.handleChannelCreate(asSocket(a), { serverId: 'srv', type: 'text', name: 'болталка' });
-    const channel = (gw as AnyGw).registry.channels.find((c) => c.serverId === 'srv')!;
+    const channel = registryOf(gw).channels.find((c) => c.serverId === 'srv')!;
     expect(channel.name).toBe('болт');
 
     await gw.handleChannelRename(asSocket(a), { id: channel.id, name: 'переименование' });
-    expect((gw as AnyGw).registry.channels.find((c) => c.id === channel.id)?.name).toBe('пере');
+    expect(registryOf(gw).channels.find((c) => c.id === channel.id)?.name).toBe('пере');
   });
 
   it('режим новых голосовых каналов берётся из настройки, если клиент промолчал', async () => {
@@ -617,7 +617,7 @@ describe('настройки пространств', () => {
     const a = connect(gw, server, { clientId: 'dev-a' });
     await gw.handleServerCreate(asSocket(a), { id: 'srv', name: 'мой' });
     await gw.handleChannelCreate(asSocket(a), { serverId: 'srv', type: 'voice', name: 'эфир' });
-    expect((gw as AnyGw).registry.channels.find((c) => c.serverId === 'srv')?.mode).toBe('sfu');
+    expect(registryOf(gw).channels.find((c) => c.serverId === 'srv')?.mode).toBe('sfu');
 
     // Названный клиентом режим сильнее умолчания: настройка про то, каким
     // канал рождается, а не про то, каким ему быть.
@@ -627,7 +627,7 @@ describe('настройки пространств', () => {
       name: 'второй',
       mode: 'p2p',
     });
-    const second = (gw as AnyGw).registry.channels.find((c) => c.name === 'второй');
+    const second = registryOf(gw).channels.find((c) => c.name === 'второй');
     expect(second?.mode).toBeUndefined();
   });
 });

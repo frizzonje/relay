@@ -484,7 +484,7 @@ describe('цитата', () => {
     const reply = await chat.add('obshchii', { name: 'Б', text: 'ответ', replyToId: src.id });
     expect(reply?.replyTo).toEqual({ id: src.id, name: 'А', text: 'исходное' });
 
-    await chat.edit(src.id!, 'переписал');
+    await chat.edit(src.id!, 'переписал', []);
     const fresh = await restart();
     const [, restored] = (await fresh.history('obshchii')).messages;
     expect(restored.replyTo?.text).toBe('исходное');

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Socket } from 'socket.io';
 import { asSocket } from './testkit';
@@ -30,10 +30,7 @@ import {
 
 useGatewayStand();
 
-const gatewaySource = readFileSync(
-  fileURLToPath(new URL('./signaling.gateway.ts', import.meta.url)),
-  'utf8',
-);
+const gatewaySource = readFileSync(join(__dirname, 'signaling.gateway.ts'), 'utf8');
 
 /** Все события панели, какие подписывает гейтвей. Источник — он сам. */
 const PANEL_EVENTS = [...gatewaySource.matchAll(/@SubscribeMessage\('(admin-[a-z-]+)'\)/g)].map(

@@ -9,7 +9,7 @@ import {
   settle,
   slugOf,
   useGatewayStand,
-  type AnyGw,
+  registryOf,
 } from './gateway.testkit';
 
 /**
@@ -39,7 +39,7 @@ describe('channel-create', () => {
       type: 'text',
       name: 'Общий Чат!',
     });
-    const ch = (gw as AnyGw).registry.channels.find((c) => c.serverId === 'srv')!;
+    const ch = registryOf(gw).channels.find((c) => c.serverId === 'srv')!;
     expect(ch.slug).toBe(slugOf('Общий Чат!'));
     expect(ch.type).toBe('text');
     expect(ch.creatorId).toBe('dev-owner');
@@ -52,7 +52,7 @@ describe('channel-create', () => {
       type: 'text',
       name: 'а   б   в '.repeat(6),
     });
-    const ch = (gw as AnyGw).registry.channels.find((c) => c.serverId === 'srv')!;
+    const ch = registryOf(gw).channels.find((c) => c.serverId === 'srv')!;
     expect(ch.slug.length).toBeLessThanOrEqual(32);
     expect(ch.slug).not.toMatch(/--/);
   });
@@ -64,7 +64,7 @@ describe('channel-create', () => {
       type: 'text',
       name: '!!! ???',
     });
-    expect((gw as AnyGw).registry.channels.some((c) => c.serverId === 'srv')).toBe(false);
+    expect(registryOf(gw).channels.some((c) => c.serverId === 'srv')).toBe(false);
   });
 
   it('имя с префиксом dm-, но не в форме адреса, — законное имя канала', async () => {
@@ -78,7 +78,7 @@ describe('channel-create', () => {
       name: 'dm-general',
     });
     expect(res.ok).toBe(true);
-    expect((gw as AnyGw).registry.channels.some((c) => c.serverId === 'srv')).toBe(true);
+    expect(registryOf(gw).channels.some((c) => c.serverId === 'srv')).toBe(true);
   });
 
   it('имя, дающее 24 hex после dm-, тоже не адрес — метка сервера ломает форму', async () => {
@@ -92,7 +92,7 @@ describe('channel-create', () => {
       name: 'dm-0123456789abcdef01234567',
     });
     expect(res.ok).toBe(true);
-    expect((gw as AnyGw).registry.channels.some((c) => c.serverId === 'srv')).toBe(true);
+    expect(registryOf(gw).channels.some((c) => c.serverId === 'srv')).toBe(true);
   });
 
   it('в главный сервер каналы не добавляют — набор там фиксирован', async () => {
@@ -100,7 +100,7 @@ describe('channel-create', () => {
     await gw.handleChannelCreate(asSocket(owner), { serverId: MAIN, type: 'text', name: 'лишний' });
     // serverId по умолчанию — тоже главный, то есть тот же запрет.
     await gw.handleChannelCreate(asSocket(owner), { type: 'text', name: 'лишний-2' });
-    expect((gw as AnyGw).registry.channels).toHaveLength(3);
+    expect(registryOf(gw).channels).toHaveLength(3);
   });
 
   it('несуществующий сервер и неизвестный тип канала не создают', async () => {
@@ -111,24 +111,20 @@ describe('channel-create', () => {
       type: 'видео',
       name: 'что-то',
     });
-    expect((gw as AnyGw).registry.channels).toHaveLength(3);
+    expect(registryOf(gw).channels).toHaveLength(3);
   });
 
   it('дубликат слага того же типа не создаётся, а другого типа — можно', async () => {
     const { gw, owner } = await withOwnServer();
     await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'общий' });
     await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'общий' });
-    expect((gw as AnyGw).registry.channels.filter((c) => c.slug === slugOf('общий'))).toHaveLength(
-      1,
-    );
+    expect(registryOf(gw).channels.filter((c) => c.slug === slugOf('общий'))).toHaveLength(1);
     await gw.handleChannelCreate(asSocket(owner), {
       serverId: 'srv',
       type: 'voice',
       name: 'общий',
     });
-    expect((gw as AnyGw).registry.channels.filter((c) => c.slug === slugOf('общий'))).toHaveLength(
-      2,
-    );
+    expect(registryOf(gw).channels.filter((c) => c.slug === slugOf('общий'))).toHaveLength(2);
   });
 
   it('режим sfu пишется только голосовым', async () => {
@@ -145,12 +141,10 @@ describe('channel-create', () => {
       name: 'текст',
       mode: 'sfu',
     });
-    expect(
-      (gw as AnyGw).registry.channels.find((c) => c.slug === slugOf('через сервер'))!.mode,
-    ).toBe('sfu');
-    expect(
-      (gw as AnyGw).registry.channels.find((c) => c.slug === slugOf('текст'))!.mode,
-    ).toBeUndefined();
+    expect(registryOf(gw).channels.find((c) => c.slug === slugOf('через сервер'))!.mode).toBe(
+      'sfu',
+    );
+    expect(registryOf(gw).channels.find((c) => c.slug === slugOf('текст'))!.mode).toBeUndefined();
   });
 
   it('в закрытый сервер канал заводит только разблокировавший', async () => {
@@ -163,7 +157,7 @@ describe('channel-create', () => {
       type: 'text',
       name: 'вторжение',
     });
-    expect((gw as AnyGw).registry.channels.some((c) => c.slug === slugOf('вторжение'))).toBe(false);
+    expect(registryOf(gw).channels.some((c) => c.slug === slugOf('вторжение'))).toBe(false);
   });
 
   /**
@@ -202,7 +196,7 @@ describe('channel-create', () => {
       type: 'text',
       name: 'гостевой',
     });
-    expect((gw as AnyGw).registry.channels).toHaveLength(3);
+    expect(registryOf(gw).channels).toHaveLength(3);
   });
 });
 
@@ -215,7 +209,7 @@ describe('channel-mode', () => {
     await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'text', name: 'чат' });
     settle();
     server.clearAll();
-    const voice = (gw as AnyGw).registry.channels.find((c) => c.slug === slugOf('эфир'))!;
+    const voice = registryOf(gw).channels.find((c) => c.slug === slugOf('эфир'))!;
     return { gw, server, owner, voice };
   }
 
@@ -247,14 +241,14 @@ describe('channel-mode', () => {
 
   it('текстовому каналу режим не меняют', async () => {
     const { gw, owner } = await withVoice();
-    const text = (gw as AnyGw).registry.channels.find((c) => c.slug === slugOf('чат'))!;
+    const text = registryOf(gw).channels.find((c) => c.slug === slugOf('чат'))!;
     await gw.handleChannelMode(asSocket(owner), { id: text.id, mode: 'sfu' });
     expect(text.mode).toBeUndefined();
   });
 
   it('дефолтный канал остаётся на p2p — он обязан работать без медиасервера', async () => {
     const { gw, owner } = await withVoice();
-    const def = (gw as AnyGw).registry.channels.find((c) => c.slug === 'voice-obshchii')!;
+    const def = registryOf(gw).channels.find((c) => c.slug === 'voice-obshchii')!;
     await gw.handleChannelMode(asSocket(owner), { id: def.id, mode: 'sfu' });
     expect(def.mode).toBeUndefined();
   });
@@ -284,8 +278,8 @@ describe('channel-rename / channel-delete / channel-stats', () => {
     await gw.handleChannelCreate(asSocket(owner), { serverId: 'srv', type: 'voice', name: 'эфир' });
     settle();
     server.clearAll();
-    const text = (gw as AnyGw).registry.channels.find((c) => c.slug === slugOf('чат'))!;
-    const voice = (gw as AnyGw).registry.channels.find((c) => c.slug === slugOf('эфир'))!;
+    const text = registryOf(gw).channels.find((c) => c.slug === slugOf('чат'))!;
+    const voice = registryOf(gw).channels.find((c) => c.slug === slugOf('эфир'))!;
     return { gw, server, owner, text, voice, registry };
   }
 
@@ -324,7 +318,7 @@ describe('channel-rename / channel-delete / channel-stats', () => {
   it('дефолтный и чужой каналы не переименовывают', async () => {
     const { gw, server, text } = await withChannels();
     const owner2 = connect(gw, server, { clientId: 'dev-owner' });
-    const def = (gw as AnyGw).registry.channels.find((c) => c.slug === 'obshchii')!;
+    const def = registryOf(gw).channels.find((c) => c.slug === 'obshchii')!;
     expect(await gw.handleChannelRename(asSocket(owner2), { id: def.id, name: 'моё' })).toEqual({
       ok: false,
       error: 'forbidden',
@@ -388,7 +382,7 @@ describe('channel-rename / channel-delete / channel-stats', () => {
       ok: false,
       error: 'not-found',
     });
-    const def = (gw as AnyGw).registry.channels.find((c) => c.slug === 'obshchii')!;
+    const def = registryOf(gw).channels.find((c) => c.slug === 'obshchii')!;
     expect(await gw.handleChannelDelete(asSocket(owner), { id: def.id })).toEqual({
       ok: false,
       error: 'forbidden',
@@ -434,7 +428,7 @@ describe('channel-rename / channel-delete / channel-stats', () => {
       type: 'text',
       name: 'скрытый',
     });
-    const hidden = (gw as AnyGw).registry.channels.find((c) => c.slug === slugOf('скрытый'))!;
+    const hidden = registryOf(gw).channels.find((c) => c.slug === slugOf('скрытый'))!;
 
     // Тот же clientId, что у владельца: если бы владение проверялось первым,
     // ответ был бы «ok». Порядок проверок скрывает даже существование канала.

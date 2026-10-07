@@ -258,12 +258,12 @@ describe('лента чата', () => {
     s().addMessage(msg('1'));
     s().addMessage(msg('2'));
     expect(s().messages.map((m) => m.id)).toEqual(['1', '2']);
-    s().setHistory([msg('9')]);
+    s().setHistory([msg('9')], false);
     expect(s().messages.map((m) => m.id)).toEqual(['9']);
   });
 
   it('реакция, правка и удаление находят сообщение по id', () => {
-    s().setHistory([msg('1'), msg('2')]);
+    s().setHistory([msg('1'), msg('2')], false);
     s().applyReaction('1', { '🔥': [{ nick: 'A' }] });
     expect(s().messages[0].reactions).toEqual({ '🔥': [{ nick: 'A' }] });
     s().applyEdit('2', 'переписал', 555);
@@ -273,7 +273,7 @@ describe('лента чата', () => {
   });
 
   it('действие по неизвестному id ничего не портит', () => {
-    s().setHistory([msg('1')]);
+    s().setHistory([msg('1')], false);
     s().applyEdit('нет', 'x', 1);
     s().applyDelete('нет');
     s().applyReaction('нет', {});
@@ -312,7 +312,7 @@ describe('лента чата', () => {
 
   it('сброс чистит и ленту, и состав, и «печатает»', () => {
     s().addMessage(msg('1'));
-    s().setRoster(['A', 'B']);
+    s().setRoster([{ nick: 'A' }, { nick: 'B' }]);
     s().setTyping(['B']);
     s().reset();
     expect([s().messages, s().roster, s().typing]).toEqual([[], [], []]);

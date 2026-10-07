@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import type { SignalingGateway } from './signaling.gateway';
 import { issueGuestToken } from '../auth/auth';
 import { FakeServer, asSocket } from './testkit';
 import {
@@ -16,7 +17,7 @@ import {
   tune,
   until,
   useGatewayStand,
-  type AnyGw,
+  registryOf,
 } from './gateway.testkit';
 
 /**
@@ -186,7 +187,7 @@ describe('личное: непрочитанное и настройки', () =>
   it('на входе человек получает свои отметки и настройки, а безымянный — ничего', async () => {
     const { gw, server, prefs, reads } = await makeGateway();
     const anya = await personCookie('Аня');
-    const channel = (gw as AnyGw).registry.channels.find((c) => c.type === 'text')!;
+    const channel = registryOf(gw).channels.find((c) => c.type === 'text')!;
     await reads.mark(anya.identityId, channel.id, 5_000);
     await prefs.set(anya.identityId, 'sound', [channel.slug]);
 
@@ -218,7 +219,7 @@ describe('личное: непрочитанное и настройки', () =>
     expect(desktop.got('reads')).toBe(false);
     // И уж точно не чужому человеку: непрочитанное — личное дело.
     expect(boris.got('reads')).toBe(false);
-    const channel = (gw as AnyGw).registry.channels.find((c) => c.slug === 'obshchii')!;
+    const channel = registryOf(gw).channels.find((c) => c.slug === 'obshchii')!;
     expect(await reads.marks(anya.identityId)).toEqual(new Map([[channel.id, 7_000]]));
   });
 
@@ -288,7 +289,7 @@ describe('личное: непрочитанное и настройки', () =>
     await gw.handleChannelCreate(asSocket(a), { serverId: 'srv', type: 'text', name: 'болталка' });
     settle();
     await gw.handleReadMark(asSocket(a), { slug: slugOf('болталка'), ts: 7_000 });
-    const channel = (gw as AnyGw).registry.channels.find((c) => c.slug === slugOf('болталка'))!;
+    const channel = registryOf(gw).channels.find((c) => c.slug === slugOf('болталка'))!;
 
     expect(await gw.handleChannelDelete(asSocket(a), { id: channel.id })).toEqual({ ok: true });
     // Каскада у отметок нет намеренно (они не должны запирать удаление канала),

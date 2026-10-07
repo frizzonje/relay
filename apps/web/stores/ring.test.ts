@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import type {
   CallEndedRelay,
   CallIncomingRelay,
@@ -259,7 +259,8 @@ describe('«Написать вместо звонка»', () => {
         previewMine: false,
       },
     };
-    vi.mocked(server.request).mockResolvedValue(conversation);
+    // `request` обобщён по всем событиям контракта — у подделки тип попроще.
+    (server.request as unknown as Mock).mockResolvedValue(conversation);
     const openDm = vi.fn();
     vi.mocked(ui.useUiStore.getState).mockReturnValue({ openDm } as never);
 
@@ -325,7 +326,8 @@ describe('экран, открытый набором с СОСЕДНЕГО ус
         previewMine: false,
       },
     };
-    vi.mocked(server.request).mockResolvedValue(conversation);
+    // `request` обобщён по всем событиям контракта — у подделки тип попроще.
+    (server.request as unknown as Mock).mockResolvedValue(conversation);
     const openDm = vi.fn();
     vi.mocked(ui.useUiStore.getState).mockReturnValue({ openDm } as never);
 
