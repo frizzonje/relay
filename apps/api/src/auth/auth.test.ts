@@ -8,12 +8,17 @@ import {
   parseCookies,
   isAuthorized,
   extractToken,
+  issueGuestToken,
+  verifyGuestToken,
 } from './auth';
-// Кросс-проверка байт-в-байт совместимости с Web-Crypto близнецом из shared.
+// Кросс-проверка байт-в-байт: пропуск выпускает api, а проверяет и
+// Edge-middleware Next — реализацией из контракта, на Web Crypto.
 import {
+  issueGuestToken as issueGuestTokenWeb,
   issueToken as issueTokenWeb,
+  verifyGuestToken as verifyGuestTokenWeb,
   verifyToken as verifyTokenWeb,
-} from '../../../../packages/shared/src/auth';
+} from '@relay/shared';
 
 const PASS = 'secret-пароль-123';
 const original = process.env.SITE_PASSWORD;
@@ -117,6 +122,22 @@ describe('parity: api(sync node:crypto) ↔ shared(Web Crypto) — формат 
   it('токен из shared проходит проверку в api', async () => {
     const { value } = await issueTokenWeb(PASS);
     expect(verifyToken(value)).toBe(true);
+  });
+
+  it('гостевой токен из api проходит проверку в shared — с режимом', async () => {
+    const { token, exp } = issueGuestToken('эфир', { listen: true });
+    expect(await verifyGuestTokenWeb(token, PASS)).toEqual({ slug: 'эфир', exp, listen: true });
+  });
+
+  it('гостевой токен из shared проходит проверку в api', async () => {
+    const token = await issueGuestTokenWeb('эфир', PASS);
+    expect(verifyGuestToken(token)).toMatchObject({ slug: 'эфир', listen: false });
+  });
+
+  it('гостевой токен не проходит как пропуск — ни там, ни там', async () => {
+    const { token } = issueGuestToken('эфир');
+    expect(verifyToken(token)).toBe(false);
+    expect(await verifyTokenWeb(token, PASS)).toBe(false);
   });
 
   it('подпись для одного exp идентична в обеих реализациях', async () => {
