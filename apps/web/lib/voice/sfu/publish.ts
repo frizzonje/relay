@@ -1,5 +1,6 @@
 'use client';
 
+import type { SfuSource } from '@relay/shared';
 import type { Device, Producer, RtpCodecCapability, Transport } from 'mediasoup-client/types';
 import type { UplinkStatus } from '@/stores/voice';
 import { setting } from '@/stores/config';
@@ -16,7 +17,6 @@ import {
   MIC_CODEC_OPTIONS,
   SCREEN_AUDIO_CODEC_OPTIONS,
   type Ask,
-  type Source,
 } from './protocol';
 
 /**
@@ -87,7 +87,7 @@ export interface Publisher {
   replaceMic(track: MediaStreamTrack): Promise<void>;
   /** Отправить звук демонстрации: он включается отдельно от картинки. */
   publishScreenAudio(track: MediaStreamTrack): Promise<void>;
-  closeProducer(source: Source): void;
+  closeProducer(source: SfuSource): void;
   /** Закрыть все свои дорожки молча — сервер и так узнает (выход, разбор). */
   closeAll(): void;
   /** Сколько своих дорожек сейчас едет. Ноль на входе — это немой заход. */
@@ -108,17 +108,17 @@ function trackFps(track: MediaStreamTrack): number {
 }
 
 export function createPublisher({ host, sendTransport, device, ask }: PublishDeps): Publisher {
-  const producers = new Map<Source, Producer>();
+  const producers = new Map<SfuSource, Producer>();
   // Публикации, которые уже идут, по роли. Роль публикуют с разных сторон почти
   // разом — вход, сверка после обрыва, тумблер камеры, — а в `producers` она
   // попадает только после ответа сервера. Без этой записи обе проходили
   // проверку «уже течёт»: сервер оставлял вторую, а первая так и кодировалась
   // у нас сиротой — для экрана это двойная нагрузка на процессор и аплинк.
-  const inflight = new Map<Source, Promise<boolean>>();
+  const inflight = new Map<SfuSource, Promise<boolean>>();
   // Что реально уходит с трансляции — по слоям, в серверный лог.
   const telemetry = createScreenTelemetry((event, detail) => host.diag(event, detail));
 
-  async function produce(source: Source, track: MediaStreamTrack): Promise<boolean> {
+  async function produce(source: SfuSource, track: MediaStreamTrack): Promise<boolean> {
     const pending = inflight.get(source);
     if (pending) {
       // Дождаться той публикации и подменить в ней дорожку — как с живой.
@@ -136,7 +136,7 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
     }
   }
 
-  async function produceNow(source: Source, track: MediaStreamTrack): Promise<boolean> {
+  async function produceNow(source: SfuSource, track: MediaStreamTrack): Promise<boolean> {
     const transport = sendTransport();
     const dev = device();
     if (!transport || !dev) {
@@ -178,7 +178,7 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
   }
 
   async function produceWith(
-    source: Source,
+    source: SfuSource,
     track: MediaStreamTrack,
     codec?: RtpCodecCapability,
   ): Promise<boolean> {
@@ -247,7 +247,7 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
   }
 
   /** Закрыть свой producer и сказать серверу — иначе он останется висеть. */
-  function closeProducer(source: Source) {
+  function closeProducer(source: SfuSource) {
     const producer = producers.get(source);
     if (!producer) return;
     producers.delete(source);
@@ -264,7 +264,7 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
    */
   async function syncVideo() {
     const track = host.videoTrack();
-    const wanted: Source | null = !track ? null : host.screenOn() ? 'screen' : 'cam';
+    const wanted: SfuSource | null = !track ? null : host.screenOn() ? 'screen' : 'cam';
     for (const stale of ['cam', 'screen'] as const) {
       if (stale !== wanted) closeProducer(stale);
     }

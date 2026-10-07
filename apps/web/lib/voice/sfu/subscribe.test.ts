@@ -1,7 +1,7 @@
+import type { SfuProducerInfo } from '@relay/shared';
 import { describe, expect, it, vi } from 'vitest';
 import type { Device, Transport } from 'mediasoup-client/types';
 import type { TransportHost } from '../types';
-import type { ProducerInfo } from './protocol';
 import { createSubscriber } from './subscribe';
 
 vi.mock('@/lib/i18n', () => ({ tx: (key: string) => key }));
@@ -67,7 +67,7 @@ function setup() {
   return { subscriber, watch, consumed, asked: byEvent };
 }
 
-const info = (peer: string, source: ProducerInfo['source']): ProducerInfo => ({
+const info = (peer: string, source: SfuProducerInfo['source']): SfuProducerInfo => ({
   id: `${peer}:${source}`,
   kind: source === 'mic' || source === 'screen-audio' ? 'audio' : 'video',
   source,

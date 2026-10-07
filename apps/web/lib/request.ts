@@ -27,21 +27,20 @@ import { getSocket } from '@/lib/socket';
 /** Сколько ждём ответа. Обычный ответ сервера — миллисекунды. */
 export const REQUEST_TIMEOUT_MS = 6000;
 
-type Events = ClientToServerEvents;
-type Params<E extends keyof Events> = Parameters<Events[E]>;
+type Params<E extends keyof ClientToServerEvents> = Parameters<ClientToServerEvents[E]>;
 
 /** Ответ сервера на событие — аргумент колбэка, последнего параметра. */
-export type ReplyOf<E extends keyof Events> =
+export type ReplyOf<E extends keyof ClientToServerEvents> =
   Params<E> extends [...unknown[], (res: infer R) => void] ? R : never;
 
 /** Аргументы события без колбэка. */
-type ArgsOf<E extends keyof Events> =
+type ArgsOf<E extends keyof ClientToServerEvents> =
   Params<E> extends [...infer A, (res: never) => void] ? A : never;
 
 /** События, на которые сервер отвечает. */
 export type AskedEvent = {
-  [E in keyof Events]: [ReplyOf<E>] extends [never] ? never : E;
-}[keyof Events];
+  [E in keyof ClientToServerEvents]: [ReplyOf<E>] extends [never] ? never : E;
+}[keyof ClientToServerEvents];
 
 /** Спросить с обычным сроком. `null` — ответа не дождались. */
 export function request<E extends AskedEvent>(

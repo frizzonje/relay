@@ -48,9 +48,6 @@ interface PendingFile {
   spoiler: boolean;
 }
 
-/** Черновик ответа: снимок цитируемого сообщения, живёт в композере до отправки. */
-type Draft = ReplyRef;
-
 /** Полоса предпросмотра ещё не отправленных вложений — над композером. */
 function PendingAttachments({
   items,
@@ -177,7 +174,8 @@ export function ChatPanel() {
   const [mentionActive, setMentionActive] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [pending, setPending] = useState<PendingFile[]>([]);
-  const [reply, setReply] = useState<Draft | null>(null);
+  // Черновик ответа: снимок цитируемого сообщения, живёт в композере до отправки.
+  const [reply, setReply] = useState<ReplyRef | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ChatMessage | null>(null);
   const [pendingBan, setPendingBan] = useState<BanTarget | null>(null);

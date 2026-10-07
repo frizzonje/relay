@@ -14,7 +14,6 @@ import { WorkersService } from './workers.service';
  * пересылает остальным вместе с producerId — по нему дирижёр решает, куда
  * приткнуть входящий трек: микрофон в микшер, камера/экран в плитку.
  */
-export type ProducerSource = SfuSource;
 
 export const PRODUCER_SOURCES = SFU_SOURCES;
 
@@ -215,12 +214,10 @@ export interface TransportParams {
   dtlsParameters: types.DtlsParameters;
 }
 
-export type ProducerInfo = SfuProducerInfo;
-
-export function producerInfo(producer: types.Producer): ProducerInfo {
+export function producerInfo(producer: types.Producer): SfuProducerInfo {
   return {
     id: producer.id,
     kind: producer.kind,
-    source: (producer.appData as { source?: ProducerSource }).source ?? 'mic',
+    source: (producer.appData as { source?: SfuSource }).source ?? 'mic',
   };
 }

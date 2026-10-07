@@ -7,29 +7,20 @@ import type {
   RtpParameters,
   TransportOptions,
 } from 'mediasoup-client/types';
-import type {
-  SfuAck,
-  SfuConsumer,
-  SfuConsumerLayers,
-  SfuEvents,
-  SfuPeerSnapshot,
-  SfuProducerInfo,
-  SfuRequests,
-  SfuSource,
-} from '@relay/shared';
+import type { SfuConsumer, SfuEvents, SfuMedia, SfuRequests } from '@relay/shared';
 
 /**
  * Что чем является на проводе между нами и медиасервером.
  *
  * Формы разговора — из контракта (`@relay/shared`, файл `sfu.ts`), вторая его
- * сторона — `apps/sfu`. Здесь они получают медиатипы браузерного
- * `mediasoup-client` и привычные этому каталогу имена; плюс профили
- * кодирования, о которых мы договорились с роутером. Ни состояния, ни
- * зависимостей: этот файл — лист.
+ * сторона — `apps/sfu`. Здесь те из них, что несут медиатипы, получают типы
+ * браузерного `mediasoup-client`; остальные берутся из контракта как есть,
+ * под своими именами. Плюс профили кодирования, о которых мы договорились с
+ * роутером. Ни состояния, ни зависимостей: этот файл — лист.
  */
 
 /** Медиатипы браузерной стороны. */
-export interface ClientMedia {
+export interface ClientMedia extends SfuMedia {
   rtpCapabilities: RtpCapabilities;
   rtpParameters: RtpParameters;
   dtlsParameters: DtlsParameters;
@@ -37,15 +28,10 @@ export interface ClientMedia {
   transportParams: TransportOptions;
 }
 
-export type Source = SfuSource;
-export type ProducerInfo = SfuProducerInfo;
-export type PeerSnapshot = SfuPeerSnapshot;
 export type ConsumerPayload = SfuConsumer<ClientMedia>;
-export type ConsumerLayers = SfuConsumerLayers;
 export type ServerEvents = SfuEvents<ClientMedia>;
 export type WelcomePayload = ServerEvents['welcome'];
 export type Requests = SfuRequests<ClientMedia>;
-export type Ack<T = object> = SfuAck<T>;
 
 /**
  * Спросить сервер и дождаться ответа. Имя запроса, его тело и ответ сверяются

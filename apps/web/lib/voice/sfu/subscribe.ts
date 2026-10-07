@@ -1,5 +1,6 @@
 'use client';
 
+import type { SfuProducerInfo, SfuSource } from '@relay/shared';
 import type { Consumer, Device, Transport } from 'mediasoup-client/types';
 import { tx } from '@/lib/i18n';
 import type { TransportHost } from '../types';
@@ -9,8 +10,6 @@ import {
   TOP_SPATIAL_LAYER,
   type Ask,
   type ConsumerPayload,
-  type ProducerInfo,
-  type Source,
 } from './protocol';
 
 /**
@@ -27,7 +26,7 @@ export interface ConsumerEntry {
   producerId: string;
   consumer: Consumer;
   peerId: string;
-  source: Source;
+  source: SfuSource;
 }
 
 export interface SubscribeDeps {
@@ -49,7 +48,7 @@ export interface Subscriber {
    * берём, только когда зритель нажал «Смотреть»; до того лишь запоминаем, что
    * она есть, и говорим об этом плитке.
    */
-  consume(peerId: string, info: ProducerInfo): Promise<void>;
+  consume(peerId: string, info: SfuProducerInfo): Promise<void>;
   /** Собеседник закрыл дорожку (а не мы перестали её слушать). */
   producerClosed(producerId: string): void;
   watch(peerId: string): Promise<void>;
@@ -103,7 +102,7 @@ export function createSubscriber({
   // Чужие дорожки, объявленные раньше, чем у нас встал приёмный транспорт.
   // Подписаться на них в тот момент нельзя, а забыть — значит остаться без
   // звука до конца звонка (см. ниже).
-  const pending: { peerId: string; info: ProducerInfo }[] = [];
+  const pending: { peerId: string; info: SfuProducerInfo }[] = [];
   // Подписки, которые уже идут. Одна и та же дорожка приезжает к нам разными
   // путями почти разом — `new-producer`, снимок комнаты, очередь, — а запись в
   // `consumers` появляется только после двух ожиданий, и проверка по ней
@@ -116,13 +115,13 @@ export function createSubscriber({
   // Трансляции, которые идут в комнате, — объявленные, смотрим мы их или нет:
   // по собеседнику, по producerId. По ним «Смотреть» знает, на что подписаться,
   // а «Перестать смотреть» — что снова предложить.
-  const streams = new Map<string, Map<string, ProducerInfo>>();
+  const streams = new Map<string, Map<string, SfuProducerInfo>>();
   // Чьи трансляции смотрим. Выбор держится, пока собеседник в канале: показ
   // перезапустился (сменил окно, моргнула сеть и дорожку заменили) — зритель
   // остаётся зрителем, и нажимать «Смотреть» второй раз ему не нужно.
   const watching = new Set<string>();
 
-  function isStream(source: Source): boolean {
+  function isStream(source: SfuSource): boolean {
     return source === 'screen' || source === 'screen-audio';
   }
 
@@ -181,7 +180,7 @@ export function createSubscriber({
    * оно не пришло ни разу, ни при входе, ни в идущем разговоре. Поэтому сначала
    * смотрим само свойство, и только если дорожка ещё молчит — ждём событие.
    */
-  function reportRtp(track: MediaStreamTrack, source: Source, peerId: string) {
+  function reportRtp(track: MediaStreamTrack, source: SfuSource, peerId: string) {
     const tell = () => host.diag('sfu rtp', `${source} from ${peerId}`);
     if (!track.muted) {
       tell();
@@ -255,7 +254,7 @@ export function createSubscriber({
   // Протокол требует именно такого порядка: consumer приходит на паузе, трек
   // подключён — только теперь просим пустить пакеты. Не дошло — дорожка так и
   // останется на паузе навсегда, и это неотличимо от «прислали чёрный кадр».
-  async function resumeConsumer(consumer: Consumer, source: Source, peerId: string) {
+  async function resumeConsumer(consumer: Consumer, source: SfuSource, peerId: string) {
     if (!(await ask('resume', { consumerId: consumer.id }))) {
       host.diag('sfu resume failed', `${source} from ${peerId}`);
     }

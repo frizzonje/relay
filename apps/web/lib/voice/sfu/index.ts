@@ -1,18 +1,12 @@
 'use client';
 
+import type { SfuAck, SfuConsumerLayers, SfuProducerInfo, SfuSource } from '@relay/shared';
 import { Device } from 'mediasoup-client';
 import type { Transport } from 'mediasoup-client/types';
 import { io, type Socket } from 'socket.io-client';
 import { tx } from '@/lib/i18n';
 import type { TransportHost, VoiceTransport } from '../types';
-import {
-  type Ack,
-  type ConsumerLayers,
-  type ProducerInfo,
-  type Requests,
-  type Source,
-  type WelcomePayload,
-} from './protocol';
+import { type Requests, type WelcomePayload } from './protocol';
 import { createPublisher } from './publish';
 import { createMetrics } from './metrics';
 import { createLadder } from './recovery';
@@ -125,7 +119,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     const s = sock;
     if (!s) return Promise.resolve(null);
     return new Promise((resolve) => {
-      s.timeout(10_000).emit(event, payload, (err: unknown, res: Ack<Requests[E][1]>) => {
+      s.timeout(10_000).emit(event, payload, (err: unknown, res: SfuAck<Requests[E][1]>) => {
         if (err || !res || !res.ok) {
           console.warn(`[sfu] ${event} failed:`, err ?? (res as { error?: string })?.error);
           resolve(null);
@@ -160,7 +154,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
           transportId: transport.id,
           kind,
           rtpParameters,
-          source: (appData as { source?: Source }).source,
+          source: (appData as { source?: SfuSource }).source,
         }).then((res) => (res ? done({ id: res.id }) : fail(new Error('produce failed'))));
       });
     }
@@ -314,7 +308,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         id: entry.producerId,
         kind: entry.consumer.kind,
         source: entry.source,
-      } as ProducerInfo,
+      } as SfuProducerInfo,
     }));
     for (const entry of subscriber.entries()) subscriber.dropConsumer(entry.producerId);
     publisher.closeAll();
@@ -490,9 +484,12 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
       s.on('peer-joined', ({ peerId, name }: { peerId: string; name: string }) => {
         subscriber.addPeer(peerId, name);
       });
-      s.on('new-producer', ({ peerId, producer }: { peerId: string; producer: ProducerInfo }) => {
-        void subscriber.consume(peerId, producer);
-      });
+      s.on(
+        'new-producer',
+        ({ peerId, producer }: { peerId: string; producer: SfuProducerInfo }) => {
+          void subscriber.consume(peerId, producer);
+        },
+      );
       s.on('producer-closed', ({ producerId }: { producerId: string }) => {
         subscriber.producerClosed(producerId);
       });
@@ -503,7 +500,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
         subscriber.dropPeer(peerId);
         host.playSfx('peerLeave');
       });
-      s.on('consumer-layers', ({ consumerId, spatialLayer }: ConsumerLayers) => {
+      s.on('consumer-layers', ({ consumerId, spatialLayer }: SfuConsumerLayers) => {
         subscriber.layerReported(consumerId, spatialLayer);
       });
       // Сигналинг оборвался посреди звонка. Медиа ещё может идти — ICE живёт

@@ -13,15 +13,21 @@ import {
   Peer,
   PRODUCER_SOURCES,
   type TransportParams,
-  ProducerSource,
   producerInfo,
   RoomsService,
 } from '../media/rooms.service';
 import { verifySfuToken } from '../token';
-import type { SfuAck, SfuRequest, SfuRequests, Untrusted } from '@relay/shared';
+import type {
+  SfuAck,
+  SfuMedia,
+  SfuRequest,
+  SfuRequests,
+  SfuSource,
+  Untrusted,
+} from '@relay/shared';
 
 /** Медиатипы серверной стороны контракта. */
-interface ServerMedia {
+interface ServerMedia extends SfuMedia {
   rtpCapabilities: types.RtpCapabilities;
   rtpParameters: types.RtpParameters;
   dtlsParameters: types.DtlsParameters;
@@ -332,8 +338,8 @@ export class SfuGateway implements OnGatewayConnection {
     if (!transport) return fail('no-transport');
     const kind = payload?.kind === 'video' ? 'video' : payload?.kind === 'audio' ? 'audio' : null;
     if (!kind) return fail('bad-kind');
-    const source = PRODUCER_SOURCES.includes(payload?.source as ProducerSource)
-      ? (payload.source as ProducerSource)
+    const source = PRODUCER_SOURCES.includes(payload?.source as SfuSource)
+      ? (payload.source as SfuSource)
       : null;
     if (!source) return fail('bad-source');
     try {
