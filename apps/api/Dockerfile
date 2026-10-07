@@ -12,12 +12,14 @@ RUN pnpm install --frozen-lockfile
 FROM deps AS builder
 COPY apps/api ./apps/api
 COPY packages/shared ./packages/shared
-RUN pnpm --filter @relay/api build
+# `...` — вместе с зависимостями: api импортирует собранный @relay/shared.
+RUN pnpm --filter "@relay/api..." build
 
 # ── Stage 3: pnpm deploy — только прод-зависимости + dist ────────────────────
 # Стартуем от deps (есть lockfile + манифесты), добавляем скомпилированный dist.
 FROM deps AS pruner
 COPY --from=builder /mono/apps/api/dist ./apps/api/dist
+COPY --from=builder /mono/packages/shared/dist ./packages/shared/dist
 # pnpm deploy копирует файлы пакета (package.json + dist/) и ставит prod-deps.
 RUN pnpm deploy --filter @relay/api --prod /deploy
 
