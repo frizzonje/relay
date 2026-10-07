@@ -98,10 +98,20 @@
    полей (от трёх), что у типа в другом пакете. Интерфейс, который
    `extends` тип контракта, — реализация (`ServerMedia extends SfuMedia`).
    Нашёл `IncomingScreen` = `CallIncomingRelay` — убран.
-3. **Клоны** — jscpd с порогом из замера; цель — только осознанные исключения
-   (тест-киты api↔sfu).
-4. **Циклы** — madge `--circular` по трём приложениям; циклы на одних типах
-   разрешены списком.
+3. ✅ **Клоны** — `tools/check-clones.mjs` (`pnpm clones:check`, jscpd от 8
+   строк и 60 токенов): пара файлов с клоном допустима, только если записана —
+   в `ALLOWED` с причиной или в `DEBT` со ссылкой на план. Убранный долг,
+   оставшийся в списке, тоже роняет проверку. Из 16 клонов осталось: два
+   намеренных (синхронный близнец пропуска, подделки сокета api↔sfu), один
+   осознанный (декораторы TypeORM) и один долг до фазы 2.
+4. ✅ **Циклы** — `tools/check-cycles.mjs` (`pnpm cycles:check`, madge по
+   четырём пакетам). Алиас `@/` web задан явным `baseUrl`: без него madge
+   молча терял половину рёбер (163 вместо 944) и докладывал «циклов нет» про
+   граф, в котором их нельзя было найти; теперь граф с рёбрами меньше, чем
+   файлов, сам считается ошибкой. Циклы shared (`admin`↔`index`,
+   `settings`↔`index`) разорваны переносом вложений, модерации, журнала и
+   `SettingsSnapshot` в свои модули; `signer`↔`signer-shell` записан —
+   обратная сторона там динамический `import()`.
 5. **Мёртвое** — knip: неиспользуемые файлы, экспорты, зависимости.
 6. ✅ **Гонки и промисы** — typescript-eslint с типами для api, sfu, web и
    shared (у каждого свой `tsconfig.lint.json` — тот же проект с тестами):
@@ -179,20 +189,28 @@ HTTP API устройств, которые api и web объявляли каж
 реконнекте): им доставка после реконнекта и нужна. `ask` у SFU — другой сокет
 и другой контракт, у него срок уже был.
 
-**Точные клоны jscpd, которые стоит убрать (D4):**
-`IdentityGate.tsx` ↔ `GuestStage.tsx` (30 строк), `DmThread.tsx` ↔
-`MobileNav.tsx` (30), `PinsPanel.tsx` ↔ `PeoplePicker.tsx` (35),
-`DeleteChannelDialog` ↔ `DeleteServerDialog` (два места),
-`CreateChannelDialog` ↔ `RenameChannelDialog`, `retention.service` ↔
-`identity/prune.service` (один и тот же цикл уборки), `guests.handlers` ↔
-`voice.handlers`. Сиды каналов `web/lib/constants.ts` ↔
-`api/gateway/registry.service.ts` (25 строк) — в контракт: CONTRIBUTING сейчас
-требует держать их «байт в байт» руками.
+**✅ Точные клоны jscpd (D4).** Сиды каналов и серверов — в контракт
+(`DEFAULT_SERVERS`, `DEFAULT_CHANNELS`, `MAIN_SERVER_ID`; файл констант web
+удалён). Запись реестра в базу — `serverRow`/`channelRow` вместо трёх копий
+(синхронизация, переезд с `registry.json`, тест-кит). Вставка реплики — один
+`write` вместо трёх (`add`, `addSystem`, `addCallMark`). Уборщики —
+`Periodic` (ниже). В web: `NickField` (вход в личность и гость),
+`ChannelNameField` (создать и переименовать), `CallIconButton` (шапка беседы
+и мобильная), `ChatDrawer`/`MessageExcerpt` (закреплённые и поиск),
+`PaneHeader` (настройки и панель владельца), `useDeletionStats`/`DeletionCost`
+(удаление канала и сервера, заодно цели — `Pick<Channel|Server, …>`).
+
+**✅ Уборщики роняли процесс (R6, R1, R4).** `retention`, `prune` и
+`uploads` звали `void this.sweep()` по таймеру без `.catch`: отказ базы
+посреди прохода (перезапуск Postgres) становился необработанным, и Node 20
+ронял api со всеми сокетами. Там же — проходы внахлёст, когда DELETE дольше
+периода (у «не хранить» он минута), и таймер `uploads`, который не снимался
+никогда. Теперь у всех `Periodic`: проход за проходом, ошибка в лог,
+расписание снимается в `onModuleDestroy` и следует за настройками.
 
 **Остальное из сравнения форм (D2):** два токен-бакета в api
 (`TokenBucket` в `gateway/socket-data.ts` и `Budget` в `upload.guard.ts`) —
-одна реализация лимитера; `DeleteChannelTarget`/`RenameChannelTarget` в web —
-`Pick<Channel, …>` контракта (детектор их не видит: два поля). Пять ролей формы `{ fingerprint, nick }` внутри shared
+одна реализация лимитера; `DeleteChannelTarget`/`RenameChannelTarget` в web — ✅ `Pick<Channel, …>`. Пять ролей формы `{ fingerprint, nick }` внутри shared
 (`DmPeer`, `MentionRef`, `Reactor`, `RosterPerson`, `CallPerson`) — решить:
 один `PersonRef` с алиасами или осознанно разные имена.
 
