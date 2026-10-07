@@ -9,6 +9,10 @@
 // комментирован плотно, и `wc -l` вдвое завышал бы почти каждый файл.
 //
 // Запуск: node tools/report-size.mjs (или pnpm size:report).
+//
+// С каталогом — `node tools/report-size.mjs --inventory apps/api/src/gateway` —
+// печатает таблицу ВСЕХ его файлов (строки кода, самая длинная функция) в
+// markdown: заготовку для партии аудита (docs/plans/code-audit.md, этап 2).
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -17,15 +21,20 @@ import ts from 'typescript';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-const PACKAGES = [
-  'apps/api/src',
-  'apps/sfu/src',
-  'apps/web/app',
-  'apps/web/components',
-  'apps/web/lib',
-  'apps/web/stores',
-  'packages/shared/src',
-];
+const inventoryAt = process.argv.indexOf('--inventory');
+const INVENTORY = inventoryAt >= 0 ? process.argv[inventoryAt + 1] : undefined;
+
+const PACKAGES = INVENTORY
+  ? [INVENTORY]
+  : [
+      'apps/api/src',
+      'apps/sfu/src',
+      'apps/web/app',
+      'apps/web/components',
+      'apps/web/lib',
+      'apps/web/stores',
+      'packages/shared/src',
+    ];
 
 /** Файл длиннее — кандидат на разрез (module-split.md, «Что считаем большим»). */
 const FILE_LINES = 300;
@@ -101,17 +110,30 @@ for (const pkg of PACKAGES) {
     const kind = rel.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
     const file = ts.createSourceFile(rel, text, ts.ScriptTarget.Latest, true, kind);
     const lines = codeLines(file);
-    files.push({ rel, code: lines.size, total: text.split('\n').length });
+    const entry = { rel, code: lines.size, total: text.split('\n').length, longest: null };
+    files.push(entry);
 
     const visit = (node) => {
       if (ts.isFunctionLike(node) && 'body' in node && node.body) {
-        const code = countIn(lines, file, node);
-        if (code > FUNCTION_LINES) functions.push({ rel, name: nameOf(node), code });
+        const fn = { rel, name: nameOf(node), code: countIn(lines, file, node) };
+        if (fn.code > FUNCTION_LINES) functions.push(fn);
+        if (!entry.longest || fn.code > entry.longest.code) entry.longest = fn;
       }
       ts.forEachChild(node, visit);
     };
     visit(file);
   }
+}
+
+if (INVENTORY) {
+  console.log('| Файл | Код / всего | Самая длинная функция | Находки |');
+  console.log('| ---- | ----------- | --------------------- | ------- |');
+  for (const f of files.sort((a, b) => a.rel.localeCompare(b.rel))) {
+    const name = f.rel.slice(INVENTORY.length + 1);
+    const longest = f.longest ? `\`${f.longest.name}\` ${f.longest.code}` : '—';
+    console.log(`| \`${name}\` | ${f.code} / ${f.total} | ${longest} | |`);
+  }
+  process.exit(0);
 }
 
 const big = files.filter((f) => f.code > FILE_LINES).sort((a, b) => b.code - a.code);
