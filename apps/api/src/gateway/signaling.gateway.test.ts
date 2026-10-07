@@ -435,6 +435,22 @@ describe('переход к найденному', () => {
     ).toEqual(empty);
   });
 
+  it('курсор за пределами календаря — пустая страница, а не ошибка базы', async () => {
+    const { gw, a, messages } = await withHistory();
+    const id = messages[0].id;
+    expect(await gw.handleChatHistoryAfter(asSocket(a), { afterTs: 1e300, afterId: id })).toEqual({
+      ok: true,
+      messages: [],
+      more: false,
+      moreAfter: false,
+    });
+    expect(await gw.handleChatHistoryMore(asSocket(a), { beforeTs: 1e300, beforeId: id })).toEqual({
+      ok: true,
+      messages: [],
+      more: false,
+    });
+  });
+
   it('гостю окно не показывают', async () => {
     const { gw, server } = await makeGateway();
     const { token } = issueGuestToken('voice-obshchii');

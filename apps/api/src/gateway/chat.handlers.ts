@@ -17,6 +17,7 @@ import { knownReaction, toggleReaction } from './reactions';
 import {
   LIMIT,
   str,
+  timestamp,
   trimmed,
   type ChatAroundPayload,
   type ChatDeletePayload,
@@ -210,7 +211,7 @@ export class ChatHandlers {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
     const room = this.chats.roomOf(client);
     if (!room) return empty;
-    const beforeTs = typeof payload?.beforeTs === 'number' ? payload.beforeTs : 0;
+    const beforeTs = timestamp(payload?.beforeTs);
     const beforeId = str(payload?.beforeId);
     if (!beforeTs || !beforeId) return empty;
     return { ok: true, ...(await this.chat.older(this.chat.slug(room), beforeTs, beforeId)) };
@@ -225,7 +226,7 @@ export class ChatHandlers {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
     const room = this.chats.roomOf(client);
     if (!room) return empty;
-    const afterTs = typeof payload?.afterTs === 'number' ? payload.afterTs : 0;
+    const afterTs = timestamp(payload?.afterTs);
     const afterId = str(payload?.afterId);
     if (!afterTs || !afterId) return empty;
     return { ok: true, ...(await this.chat.newer(this.chat.slug(room), afterTs, afterId)) };
@@ -282,7 +283,7 @@ export class ChatHandlers {
     const channelIds = this.dm.isDm(slug) ? [slug] : this.searchScope(client, room, payload?.scope);
     if (!channelIds) return empty;
 
-    const beforeTs = typeof payload?.beforeTs === 'number' ? payload.beforeTs : 0;
+    const beforeTs = timestamp(payload?.beforeTs);
     const beforeId = str(payload?.beforeId);
     const cursor = beforeTs && beforeId ? { ts: beforeTs, id: beforeId } : undefined;
 

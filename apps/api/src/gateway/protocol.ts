@@ -98,6 +98,21 @@ export function optional(value: unknown, limit: number): string | undefined {
   return typeof value === 'string' ? value.trim().slice(0, limit) : undefined;
 }
 
+/** Самое позднее время, какое умеет `Date`: ±8.64e15 мс от эпохи. */
+const MAX_DATE_MS = 8.64e15;
+
+/**
+ * Время из тела — миллисекунды эпохи. Не число или за пределами того, что
+ * умеет `Date`, — ноль, то есть «курсора нет». Без этой проверки `1e300` в
+ * курсоре ленты доезжал бы до Postgres как «Invalid Date», и вместо пустой
+ * страницы запрос падал бы ошибкой базы — ack клиенту не приходил бы вовсе.
+ */
+export function timestamp(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= MAX_DATE_MS
+    ? value
+    : 0;
+}
+
 // ── Что присылает клиент ────────────────────────────────────────────────────
 
 export type AdminActionPayload = Untrusted<wire.AdminActionPayload>;
