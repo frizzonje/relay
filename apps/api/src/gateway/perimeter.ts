@@ -6,7 +6,8 @@ import { RolesService } from '../identity/roles.service';
 import type { AddressDoor } from '../auth/auth';
 import { addressBlocked } from '@relay/shared';
 import type { SettingsService } from '../settings/settings.service';
-import type { AppServer, AppSocket, TokenBucket } from './socket-data';
+import type { AppServer, AppSocket } from './socket-data';
+import { refill } from '../token-bucket';
 import { ChannelEntry, ServerEntry } from './registry';
 import { RegistryService } from './registry.service';
 import { normalizeClientId, type Claimant } from './ownership';
@@ -605,11 +606,7 @@ export class Perimeter {
     capacity: number,
     refillPerSec: number,
   ): boolean {
-    const now = Date.now();
-    const bucket: TokenBucket = client.data[key] ?? { tokens: capacity, ts: now };
-    const elapsed = (now - bucket.ts) / 1000;
-    bucket.tokens = Math.min(capacity, bucket.tokens + elapsed * refillPerSec);
-    bucket.ts = now;
+    const bucket = refill(client.data[key], capacity, refillPerSec, Date.now());
     client.data[key] = bucket;
     if (bucket.tokens < 1) return false;
     bucket.tokens -= 1;

@@ -1,11 +1,6 @@
 import type { DefaultEventsMap, Server, Socket } from 'socket.io';
 import type { Speaker } from '../identity/identity.service';
-
-/** Ведро токенов лимитера: сколько осталось и когда его считали. */
-export interface TokenBucket {
-  tokens: number;
-  ts: number;
-}
+import type { TokenBucket } from '../token-bucket';
 
 /**
  * Всё, что сервер помнит про сокет между его сообщениями.

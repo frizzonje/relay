@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { SettingsService } from './settings/settings.service';
+import { refill, type TokenBucket } from './token-bucket';
 
 /**
  * Лимит на `POST /api/upload` — единственный публичный POST, который пишет на
@@ -29,23 +30,16 @@ const REFILL_BYTES_PER_SEC = (100 * 1024 ** 2) / 60;
 // Чтобы карта не росла на каждый заглянувший адрес.
 const MAX_TRACKED = 5000;
 
-interface Budget {
-  tokens: number;
-  ts: number;
-}
-
 export class UploadByteBudget {
-  private readonly budgets = new Map<string, Budget>();
+  private readonly budgets = new Map<string, TokenBucket>();
 
   constructor(
     private readonly capacity = BURST_BYTES,
     private readonly refillPerSec = REFILL_BYTES_PER_SEC,
   ) {}
 
-  private refill(key: string, now: number): Budget {
-    const b = this.budgets.get(key) ?? { tokens: this.capacity, ts: now };
-    b.tokens = Math.min(this.capacity, b.tokens + ((now - b.ts) / 1000) * this.refillPerSec);
-    b.ts = now;
+  private refill(key: string, now: number): TokenBucket {
+    const b = refill(this.budgets.get(key), this.capacity, this.refillPerSec, now);
     this.budgets.set(key, b);
     return b;
   }
@@ -67,7 +61,7 @@ export class UploadByteBudget {
   // Полный бюджет — это «как будто и не приходил»: такие записи можно забыть.
   private forgetFull(now: number): void {
     for (const [key, b] of this.budgets) {
-      if (b.tokens + ((now - b.ts) / 1000) * this.refillPerSec >= this.capacity) {
+      if (refill(b, this.capacity, this.refillPerSec, now).tokens >= this.capacity) {
         this.budgets.delete(key);
       }
     }

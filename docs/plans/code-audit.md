@@ -220,8 +220,9 @@ HTTP API устройств, которые api и web объявляли каж
 расписание снимается в `onModuleDestroy` и следует за настройками.
 
 **Остальное из сравнения форм (D2):** два токен-бакета в api
-(`TokenBucket` в `gateway/socket-data.ts` и `Budget` в `upload.guard.ts`) —
-одна реализация лимитера; `DeleteChannelTarget`/`RenameChannelTarget` в web — ✅ `Pick<Channel, …>`. Пять ролей формы `{ fingerprint, nick }` внутри shared
+(`TokenBucket` в `gateway/socket-data.ts` и `Budget` в `upload.guard.ts`) — ✅
+один расчёт ведра в `token-bucket.ts`, списание (токен за сообщение, байты
+за файл) осталось у владельцев; `DeleteChannelTarget`/`RenameChannelTarget` в web — ✅ `Pick<Channel, …>`. Пять ролей формы `{ fingerprint, nick }` внутри shared
 (`DmPeer`, `MentionRef`, `Reactor`, `RosterPerson`, `CallPerson`) — решить:
 один `PersonRef` с алиасами или осознанно разные имена.
 
