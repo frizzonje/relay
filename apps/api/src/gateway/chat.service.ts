@@ -9,7 +9,7 @@ import { AttachmentRow, MessageRow } from '../db/entities';
 import { SettingsService } from '../settings/settings.service';
 import { DmService } from './dm.service';
 import { RegistryService } from './registry.service';
-import { isUuid, toMessage } from './chat-rows';
+import { MESSAGE_RELATIONS, isUuid, messageQuery, toMessage } from './chat-rows';
 import { SEARCH_CONFIG, SEARCH_PAGE_SIZE, searchTerms, tsquery } from './chat-search';
 import {
   CHAT_PREFIX,
@@ -167,12 +167,7 @@ export class ChatService implements OnModuleInit {
     const channelId = this.channelIdOf(slug);
     if (!channelId || !isUuid(afterId)) return { messages: [], more: false, moreAfter: false };
     const size = this.pageSize();
-    const rows = await this.db
-      .getRepository(MessageRow)
-      .createQueryBuilder('m')
-      .leftJoinAndSelect('m.attachment', 'a')
-      .leftJoinAndSelect('m.authorIdentity', 'ai')
-      .leftJoinAndSelect('m.pins', 'pin')
+    const rows = await messageQuery(this.db)
       .where('m.channel_id = :channelId', { channelId })
       .andWhere('(m.created_at, m.id) > (:afterAt, :afterId)', {
         afterAt: new Date(afterTs),
@@ -200,7 +195,7 @@ export class ChatService implements OnModuleInit {
     if (!channelId || !isUuid(id)) return empty;
     const target = await this.db.getRepository(MessageRow).findOne({
       where: { id, channelId },
-      relations: { attachment: true, authorIdentity: true, pins: true },
+      relations: MESSAGE_RELATIONS,
     });
     // Реплики нет — её удалили, пока человек читал результаты поиска. Пустое
     // окно здесь честнее последней страницы канала: «нашли, но показать нечего»
@@ -209,24 +204,14 @@ export class ChatService implements OnModuleInit {
 
     const at = target.createdAt;
     const [before, after] = await Promise.all([
-      this.db
-        .getRepository(MessageRow)
-        .createQueryBuilder('m')
-        .leftJoinAndSelect('m.attachment', 'a')
-        .leftJoinAndSelect('m.authorIdentity', 'ai')
-        .leftJoinAndSelect('m.pins', 'pin')
+      messageQuery(this.db)
         .where('m.channel_id = :channelId', { channelId })
         .andWhere('(m.created_at, m.id) < (:at, :id)', { at, id })
         .orderBy('m.createdAt', 'DESC')
         .addOrderBy('m.id', 'DESC')
         .limit(AROUND_HALF + 1)
         .getMany(),
-      this.db
-        .getRepository(MessageRow)
-        .createQueryBuilder('m')
-        .leftJoinAndSelect('m.attachment', 'a')
-        .leftJoinAndSelect('m.authorIdentity', 'ai')
-        .leftJoinAndSelect('m.pins', 'pin')
+      messageQuery(this.db)
         .where('m.channel_id = :channelId', { channelId })
         .andWhere('(m.created_at, m.id) > (:at, :id)', { at, id })
         .orderBy('m.createdAt', 'ASC')
@@ -255,12 +240,7 @@ export class ChatService implements OnModuleInit {
     const terms = searchTerms(query);
     if (!terms.length || channelIds.length === 0) return { hits: [], more: false };
 
-    const qb = this.db
-      .getRepository(MessageRow)
-      .createQueryBuilder('m')
-      .leftJoinAndSelect('m.attachment', 'a')
-      .leftJoinAndSelect('m.authorIdentity', 'ai')
-      .leftJoinAndSelect('m.pins', 'pin')
+    const qb = messageQuery(this.db)
       .where('m.channel_id IN (:...channelIds)', { channelIds })
       // Системные строки — «история истекла», «удалено владельцем» — не то, что
       // человек искал: он ищет сказанное людьми.
@@ -556,12 +536,7 @@ export class ChatService implements OnModuleInit {
    */
   private feed(size: number) {
     return (
-      this.db
-        .getRepository(MessageRow)
-        .createQueryBuilder('m')
-        .leftJoinAndSelect('m.attachment', 'a')
-        .leftJoinAndSelect('m.authorIdentity', 'ai')
-        .leftJoinAndSelect('m.pins', 'pin')
+      messageQuery(this.db)
         .orderBy('m.createdAt', 'DESC')
         .addOrderBy('m.id', 'DESC')
         // `limit`, а не `take`: вложение — связь «многие к одному», лишних строк
@@ -585,7 +560,7 @@ export class ChatService implements OnModuleInit {
     if (!channelId || !isUuid(id)) return undefined;
     const row = await this.db.getRepository(MessageRow).findOne({
       where: { id, channelId, ...(includeSystem ? {} : { system: false }) },
-      relations: { attachment: true, authorIdentity: true, pins: true },
+      relations: MESSAGE_RELATIONS,
     });
     return row ? toMessage(row) : undefined;
   }

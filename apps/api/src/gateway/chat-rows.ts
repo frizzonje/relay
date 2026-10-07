@@ -1,7 +1,26 @@
+import type { DataSource, SelectQueryBuilder } from 'typeorm';
 import { AttachmentRow, MessageRow } from '../db/entities';
 import type { Attachment, ChatMessage } from '@relay/shared';
 
 /** Строки базы → реплики протокола, и проверка id до того, как он попадёт в запрос. */
+
+/**
+ * Связи, без которых строка не становится репликой: из них `toMessage` берёт
+ * вложение, лицо автора и пометку «закреплено». Один список на все выборки —
+ * связь, забытая в одной из них, давала бы реплику без лица ровно в той ленте,
+ * где её забыли.
+ */
+export const MESSAGE_RELATIONS = { attachment: true, authorIdentity: true, pins: true } as const;
+
+/** Выборка реплик со всеми связями `MESSAGE_RELATIONS` — основа каждого запроса ленты. */
+export function messageQuery(db: DataSource): SelectQueryBuilder<MessageRow> {
+  return db
+    .getRepository(MessageRow)
+    .createQueryBuilder('m')
+    .leftJoinAndSelect('m.attachment', 'a')
+    .leftJoinAndSelect('m.authorIdentity', 'ai')
+    .leftJoinAndSelect('m.pins', 'pin');
+}
 
 /**
  * Всё, что приходит от клиента, обязано быть проверено до попадания в запрос:

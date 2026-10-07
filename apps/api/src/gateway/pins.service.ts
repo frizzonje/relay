@@ -5,7 +5,7 @@ import { MessageRow, PinRow } from '../db/entities';
 // иначе `emitDecoratorMetadata` запишет в довод конструктора `Function`, и
 // Nest не соберёт сервис.
 import { ChatService } from './chat.service';
-import { isUuid, toMessage } from './chat-rows';
+import { isUuid, messageQuery, toMessage } from './chat-rows';
 import { PIN_LIMIT, type ChatMessage } from '@relay/shared';
 
 /**
@@ -93,13 +93,9 @@ export class PinsService {
   async list(slug: string, limit: number = PIN_LIMIT): Promise<ChatMessage[]> {
     const channelId = this.chat.channelIdOf(slug);
     if (!channelId) return [];
-    const rows = await this.db
-      .getRepository(MessageRow)
-      .createQueryBuilder('m')
-      .leftJoinAndSelect('m.attachment', 'a')
-      .leftJoinAndSelect('m.authorIdentity', 'ai')
-      .innerJoinAndSelect('m.pins', 'pin')
+    const rows = await messageQuery(this.db)
       .where('m.channel_id = :channelId', { channelId })
+      .andWhere('pin.message_id IS NOT NULL')
       .orderBy('pin.pinned_at', 'DESC')
       .addOrderBy('m.id', 'DESC')
       .limit(limit)
