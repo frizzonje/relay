@@ -4,12 +4,14 @@ import {
   Injectable,
   Logger,
   Optional,
+  type OnModuleDestroy,
   type OnModuleInit,
 } from '@nestjs/common';
 import { mkdirSync, readdirSync, statSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { DataSource, In } from 'typeorm';
 import { AttachmentRow, MessageRow } from './db/entities';
+import { Periodic } from './periodic';
 import { SettingsService } from './settings/settings.service';
 import { isExecutable } from './uploads.policy';
 import type { Attachment, AttachmentKind } from '@relay/shared';
@@ -119,7 +121,7 @@ interface DiskFile {
 }
 
 @Injectable()
-export class UploadsService implements OnModuleInit {
+export class UploadsService implements OnModuleInit, OnModuleDestroy {
   // Суммарный размер каталога. Счётчик, а не подсчёт на каждый запрос: обход
   // каталога на горячем пути стоил бы дороже самой загрузки. Сверяется с диском
   // при каждом подметании и перед вытеснением, так что разъехаться надолго
@@ -127,6 +129,7 @@ export class UploadsService implements OnModuleInit {
   private total = 0;
 
   private readonly logger = new Logger(UploadsService.name);
+  private readonly schedule = new Periodic(this.logger, () => this.sweep());
 
   /**
    * Что каждый уже загрузил за скользящие сутки: ключ (личность или адрес) →
@@ -282,10 +285,12 @@ export class UploadsService implements OnModuleInit {
     return (await this.db.getRepository(AttachmentRow).countBy({ id })) > 0;
   }
 
-  onModuleInit() {
-    void this.sweep();
-    const timer = setInterval(() => void this.sweep(), SWEEP_INTERVAL_MS);
-    timer.unref?.(); // не держим процесс живым ради чистильщика
+  onModuleInit(): void {
+    this.schedule.every(SWEEP_INTERVAL_MS);
+  }
+
+  onModuleDestroy(): void {
+    this.schedule.stop();
   }
 
   /**

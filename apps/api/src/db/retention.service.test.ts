@@ -222,7 +222,8 @@ describe('расписание', () => {
     service.onModuleInit();
     sweep.mockClear();
 
-    vi.advanceTimersByTime(60_000);
+    // Асинхронно: следующий проход ждёт, пока кончится первый (`Periodic`).
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(sweep).toHaveBeenCalled();
     vi.useRealTimers();
   });

@@ -1,6 +1,7 @@
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { DataSource, In } from 'typeorm';
 import { DeviceRow, IdentityRow } from '../db/entities';
+import { Periodic } from '../periodic';
 import { SettingsService } from '../settings/settings.service';
 
 /**
@@ -39,8 +40,7 @@ const KEY = 'people.pruneInactiveDays';
 @Injectable()
 export class PruneService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PruneService.name);
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private unsubscribe: (() => void) | null = null;
+  private readonly schedule = new Periodic(this.logger, () => this.sweep());
 
   constructor(
     private readonly db: DataSource,
@@ -48,19 +48,11 @@ export class PruneService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit(): void {
-    this.apply();
-    // Настройка, которая начинает действовать только после перезапуска, — не
-    // настройка: выключив уборку, человек ждёт, что она прекратится сейчас, а
-    // не с ближайшим обновлением образа.
-    this.unsubscribe = this.settings.onChange((key) => {
-      if (key === KEY) this.apply();
-    });
+    this.schedule.follow(this.settings, [KEY], () => this.plan());
   }
 
   onModuleDestroy(): void {
-    this.stop();
-    this.unsubscribe?.();
-    this.unsubscribe = null;
+    this.schedule.stop();
   }
 
   /** Сколько дней бездействия терпим. Ноль — не чистим вовсе. */
@@ -109,27 +101,17 @@ export class PruneService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Взять действующий срок и пересобрать под него расписание. Зовётся и на
-   * старте, и на каждой смене настройки — второй раз это важнее: включив
-   * уборку, человек остался бы без единого прохода до перезапуска, потому что
-   * у выключенной таймера нет вовсе.
+   * Период прохода под действующий срок — или `null`, если уборка выключена.
+   * Зовётся на старте и на каждой смене настройки (см. `Periodic.follow`).
    */
-  private apply(): void {
-    this.stop();
+  private plan(): number | null {
     const days = this.days();
     if (days <= 0) {
       this.logger.log('уборка личностей выключена');
-      return;
+      return null;
     }
     // Говорим вслух: удаление людей — не та работа, которая заводится молча.
     this.logger.log(`уборка личностей: бездействие дольше ${days} дн.`);
-    void this.sweep();
-    this.timer = setInterval(() => void this.sweep(), SWEEP_INTERVAL_MS);
-    this.timer.unref?.();
-  }
-
-  private stop(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    return SWEEP_INTERVAL_MS;
   }
 }

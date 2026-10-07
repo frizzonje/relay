@@ -1,5 +1,6 @@
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { Periodic } from '../periodic';
 import { SettingsService } from '../settings/settings.service';
 import { describeRetention, type Retention } from './retention.policy';
 import type { RetentionMode } from '@relay/shared';
@@ -51,8 +52,7 @@ type Scope = 'all' | 'channels' | 'direct';
 @Injectable()
 export class RetentionService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RetentionService.name);
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private unsubscribe: (() => void) | null = null;
+  private readonly schedule = new Periodic(this.logger, () => this.sweep());
 
   constructor(
     private readonly db: DataSource,
@@ -60,19 +60,11 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit(): void {
-    this.apply();
-    // Настройка, которая начинает действовать только после перезапуска, — не
-    // настройка: человек, поставивший в панели три дня, ждёт, что недельное
-    // уйдёт сегодня, а не с ближайшим обновлением образа.
-    this.unsubscribe = this.settings.onChange((key) => {
-      if (WATCHED.includes(key)) this.apply();
-    });
+    this.schedule.follow(this.settings, WATCHED, () => this.plan());
   }
 
   onModuleDestroy(): void {
-    this.stop();
-    this.unsubscribe?.();
-    this.unsubscribe = null;
+    this.schedule.stop();
   }
 
   /** Что делаем на самом деле — ровно то, что показывает панель. */
@@ -142,13 +134,10 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Взять действующую политику и пересобрать под неё расписание. Зовётся и на
-   * старте, и на каждой смене настройки — второй раз это важнее: сменив режим
-   * с «хранить всегда» на «не хранить», человек остался бы без единого прохода,
-   * потому что таймера у «всегда» нет вовсе.
+   * Период прохода под действующую политику — или `null`, когда ходить незачем.
+   * Зовётся на старте и на каждой смене настройки (см. `Periodic.follow`).
    */
-  private apply(): void {
-    this.stop();
+  private plan(): number | null {
     const policy = this.effective();
     // Говорим всегда, а не только на необычном значении: хранение — обещание
     // людям на этом сервере, и хозяин должен видеть его при каждом старте и
@@ -160,20 +149,11 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
     if (direct) this.logger.log(`ретенция бесед: ${describeRetention(direct)}`);
 
     const both = direct ? [policy, direct] : [policy];
-    if (both.every((p) => p.mode === 'forever')) return;
-
-    void this.sweep();
+    if (both.every((p) => p.mode === 'forever')) return null;
     // Без срока хранения час подметания был бы часом хранения — хватает и
     // одной такой политики из двух.
-    const interval = both.some((p) => p.mode === 'ephemeral')
+    return both.some((p) => p.mode === 'ephemeral')
       ? SWEEP_INTERVAL_EPHEMERAL_MS
       : SWEEP_INTERVAL_MS;
-    this.timer = setInterval(() => void this.sweep(), interval);
-    this.timer.unref?.();
-  }
-
-  private stop(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
   }
 }
