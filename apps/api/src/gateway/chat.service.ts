@@ -1,20 +1,18 @@
 import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
-import { AttachmentRow, IdentityRow, MessageRow, PinRow } from '../db/entities';
+import { AttachmentRow, MessageRow } from '../db/entities';
 // Значением, а не `import type`: тип стирается при сборке, и
 // `emitDecoratorMetadata` записывает в довод конструктора `Function` вместо
 // класса — Nest такой довод не разрешает и падает при старте. Тесты этого не
 // видят: они собирают сервисы руками, минуя контейнер.
 import { SettingsService } from '../settings/settings.service';
-import { LIMIT } from './protocol';
 import { DmService } from './dm.service';
 import { RegistryService } from './registry.service';
 import { isUuid, toMessage } from './chat-rows';
 import { SEARCH_CONFIG, SEARCH_PAGE_SIZE, searchTerms, tsquery } from './chat-search';
 import {
   CHAT_PREFIX,
-  PIN_LIMIT,
   type SearchHit,
   type CallMark,
   type ChatMessage,
@@ -48,43 +46,6 @@ import {
  * всегда ниже вопроса.
  */
 export const AROUND_HALF = 25;
-
-/** Сколько имён показываем в подсказке после `@`. Список читают глазами. */
-export const MENTION_SUGGEST_LIMIT = 8;
-
-/**
- * Кого из названных клиентом действительно назвали в этом тексте.
- *
- * Проверка ровно одна и она про видимость: упоминание обязано быть написано.
- * Клиент присылает отпечатки — то есть адресатов, — и без этой сверки любой
- * смог бы позвать человека, не написав его имени: беззвучный вызов, которого в
- * ленте не видно ни ему, ни остальным. Ищем подстроку `@ник`, а не слово по
- * границам: ники свободные, в них бывают и пробелы, и точки, и разбор «где тут
- * кончается имя» дал бы второе место с правилами и вечное расхождение с тем,
- * что человек выбрал в подсказке.
- *
- * Регистр не важен: написавший «@аня» позвал Аню и знает об этом.
- *
- * Сколько имён носит одна реплика, решает вызывающий: с этапа C это настройка
- * (`moderation.maxMentionsPerMessage`), а `LIMIT.mentions` — её умолчание.
- */
-export function mentionedIn(
-  text: string,
-  people: Person[],
-  limit: number = LIMIT.mentions,
-): Person[] {
-  const haystack = text.toLowerCase();
-  const out: Person[] = [];
-  const seen = new Set<string>();
-  for (const person of people) {
-    if (!person.nick || seen.has(person.fingerprint)) continue;
-    if (!haystack.includes('@' + person.nick.toLowerCase())) continue;
-    seen.add(person.fingerprint);
-    out.push({ fingerprint: person.fingerprint, nick: person.nick });
-    if (out.length >= limit) break;
-  }
-  return out;
-}
 
 /** Новая реплика — то, что гейтвей разобрал из тела и проверил по правам. */
 export interface NewMessage {
@@ -171,7 +132,7 @@ export class ChatService implements OnModuleInit {
    * переворачиваем: лента читается сверху вниз.
    */
   async history(slug: string): Promise<Page> {
-    const channelId = this.channelId(slug);
+    const channelId = this.channelIdOf(slug);
     if (!channelId) return { messages: [], more: false };
     const size = this.pageSize();
     const rows = await this.feed(size).where('m.channel_id = :channelId', { channelId }).getMany();
@@ -184,7 +145,7 @@ export class ChatService implements OnModuleInit {
    * такая страница их бы теряла или показывала дважды.
    */
   async older(slug: string, beforeTs: number, beforeId: string): Promise<Page> {
-    const channelId = this.channelId(slug);
+    const channelId = this.channelIdOf(slug);
     if (!channelId || !isUuid(beforeId)) return { messages: [], more: false };
     const size = this.pageSize();
     const rows = await this.feed(size)
@@ -203,7 +164,7 @@ export class ChatService implements OnModuleInit {
    * попадает в середину истории, и «дальше» для него означает вниз.
    */
   async newer(slug: string, afterTs: number, afterId: string): Promise<FeedWindow> {
-    const channelId = this.channelId(slug);
+    const channelId = this.channelIdOf(slug);
     if (!channelId || !isUuid(afterId)) return { messages: [], more: false, moreAfter: false };
     const size = this.pageSize();
     const rows = await this.db
@@ -235,7 +196,7 @@ export class ChatService implements OnModuleInit {
    */
   async around(slug: string, id: string): Promise<FeedWindow> {
     const empty = { messages: [], more: false, moreAfter: false };
-    const channelId = this.channelId(slug);
+    const channelId = this.channelIdOf(slug);
     if (!channelId || !isUuid(id)) return empty;
     const target = await this.db.getRepository(MessageRow).findOne({
       where: { id, channelId },
@@ -336,7 +297,7 @@ export class ChatService implements OnModuleInit {
    * от того, в каком порядке два сообщения дошли до сервера.
    */
   async add(slug: string, input: NewMessage): Promise<ChatMessage | undefined> {
-    const channelId = this.channelId(slug);
+    const channelId = this.channelIdOf(slug);
     if (!channelId) return undefined;
 
     return this.write(slug, channelId, {
@@ -370,7 +331,7 @@ export class ChatService implements OnModuleInit {
    */
   async addSystem(slug: string, text: string): Promise<ChatMessage | undefined> {
     if (!this.settings.get<boolean>('messages.systemMessages')) return undefined;
-    const channelId = this.channelId(slug);
+    const channelId = this.channelIdOf(slug);
     if (!channelId) return undefined;
 
     return this.write(slug, channelId, {
@@ -409,7 +370,7 @@ export class ChatService implements OnModuleInit {
     slug: string,
     mark: CallMark & { name: string; identityId: string },
   ): Promise<ChatMessage | undefined> {
-    const channelId = this.channelId(slug);
+    const channelId = this.channelIdOf(slug);
     if (!channelId) return undefined;
 
     return this.write(slug, channelId, {
@@ -480,7 +441,7 @@ export class ChatService implements OnModuleInit {
    * инвайту или она старше самих личностей.
    */
   async authorOf(slug: string, id: string): Promise<string | null> {
-    const channelId = this.channelId(slug);
+    const channelId = this.channelIdOf(slug);
     if (!channelId || !isUuid(id)) return null;
     const row = await this.db.getRepository(MessageRow).findOne({
       where: { id, channelId },
@@ -525,13 +486,13 @@ export class ChatService implements OnModuleInit {
    * остаётся забыть кэш активности.
    */
   forget(slug: string): void {
-    const channelId = this.channelId(slug);
+    const channelId = this.channelIdOf(slug);
     if (channelId) this.lastActivity.delete(channelId);
   }
 
   /** Сколько реплик в канале (для диалога подтверждения удаления). */
   async count(slug: string): Promise<number> {
-    const channelId = this.channelId(slug);
+    const channelId = this.channelIdOf(slug);
     if (!channelId) return 0;
     return this.db.getRepository(MessageRow).countBy({ channelId });
   }
@@ -542,180 +503,27 @@ export class ChatService implements OnModuleInit {
    * только сообщения — ровно те же, что рассылают `chat-activity`.
    */
   lastTs(slug: string): number {
-    const channelId = this.channelId(slug);
+    const channelId = this.channelIdOf(slug);
     return (channelId && this.lastActivity.get(channelId)) || 0;
   }
-
-  // ── Закреплённые ──────────────────────────────────────────────────────────
-
-  /**
-   * Закрепить реплику. `ok` — закреплена (или уже была: повтор безвреден),
-   * `limit` — в канале уже столько, сколько разрешено, `gone` — такой реплики
-   * здесь нет. Потолок приходит доводом, а не берётся из константы: его задаёт
-   * владелец (`messages.pinLimit`), и знать об этом хранилищу незачем.
-   *
-   * Системные строки не закрепляем: «история истекла» и «удалено владельцем» —
-   * это следы событий, а закрепление обещает пережить ретенцию, то есть ровно
-   * то событие, о котором такая строка и сообщает.
-   */
-  async pin(
-    slug: string,
-    id: string,
-    by: string | null,
-    limit: number = PIN_LIMIT,
-  ): Promise<'ok' | 'limit' | 'gone'> {
-    const channelId = this.channelId(slug);
-    if (!channelId || !isUuid(id)) return 'gone';
-    const exists = await this.db
-      .getRepository(MessageRow)
-      .findOne({ where: { id, channelId, system: false }, select: { id: true } });
-    if (!exists) return 'gone';
-
-    // Счёт и вставка одним запросом. Посчитай мы отдельно, между «в канале ещё
-    // есть место» и самой вставкой помещалось бы чужое закрепление, и потолок
-    // стал бы потолком, который иногда пропускает лишнее.
-    const rows: { message_id: string }[] = await this.db.query(
-      `INSERT INTO "pins" ("message_id", "channel_id", "pinned_by")
-            SELECT $1, $2, $3
-             WHERE (SELECT count(*) FROM "pins" WHERE "channel_id" = $2) < $4
-       ON CONFLICT ("message_id") DO NOTHING
-         RETURNING "message_id"`,
-      [id, channelId, by, limit],
-    );
-    if (rows.length) return 'ok';
-
-    // Строк ноль по одной из двух причин, и они разные: уже закреплено (тогда
-    // человек получил, что хотел) или упёрлись в потолок (тогда ему есть что
-    // с этим сделать).
-    const already = await this.db.getRepository(PinRow).countBy({ messageId: id });
-    return already ? 'ok' : 'limit';
-  }
-
-  /** Снять закрепление. `false` — его и не было. */
-  async unpin(slug: string, id: string): Promise<boolean> {
-    const channelId = this.channelId(slug);
-    if (!channelId || !isUuid(id)) return false;
-    const res = await this.db.getRepository(PinRow).delete({ messageId: id, channelId });
-    return (res.affected ?? 0) > 0;
-  }
-
-  /** Сколько закреплено в канале — число для шапки. */
-  async pinCount(slug: string): Promise<number> {
-    const channelId = this.channelId(slug);
-    if (!channelId) return 0;
-    return this.db.getRepository(PinRow).countBy({ channelId });
-  }
-
-  /**
-   * Закреплённое канала целиком — страниц здесь нет и не нужно: их не больше
-   * `PIN_LIMIT`. Порядок — от последнего закрепления к первому, а не по времени
-   * самих реплик: закрепляют, чтобы не потерять, и последнее закреплённое почти
-   * всегда и есть то, что ищут.
-   */
-  async pinned(slug: string, limit: number = PIN_LIMIT): Promise<ChatMessage[]> {
-    const channelId = this.channelId(slug);
-    if (!channelId) return [];
-    const rows = await this.db
-      .getRepository(MessageRow)
-      .createQueryBuilder('m')
-      .leftJoinAndSelect('m.attachment', 'a')
-      .leftJoinAndSelect('m.authorIdentity', 'ai')
-      .innerJoinAndSelect('m.pins', 'pin')
-      .where('m.channel_id = :channelId', { channelId })
-      .orderBy('pin.pinned_at', 'DESC')
-      .addOrderBy('m.id', 'DESC')
-      .limit(limit)
-      .getMany();
-    return rows.map(toMessage);
-  }
-
-  // ── Упоминания ────────────────────────────────────────────────────────────
-
-  /**
-   * Личности по отпечаткам ключей — то, чем клиент называет упомянутых.
-   *
-   * Ник берётся отсюда, а не из тела сообщения: иначе рядом с чужим лицом можно
-   * было бы написать любое имя, и снимок упоминания врал бы про того, кого
-   * адресует.
-   */
-  async peopleByFingerprint(fingerprints: string[]): Promise<Person[]> {
-    if (!fingerprints.length) return [];
-    const rows = await this.db
-      .getRepository(IdentityRow)
-      .createQueryBuilder('i')
-      .select(['i.fingerprint AS fingerprint', 'i.nick AS nick'])
-      .where('i.fingerprint IN (:...fingerprints)', { fingerprints })
-      .getRawMany<Person>();
-    return rows;
-  }
-
-  /**
-   * Кого предложить после набранного `@`: те, кто говорил в этих каналах, — от
-   * недавних к давним.
-   *
-   * Список людей берётся из сказанного, а не из таблицы личностей целиком, и
-   * это не оптимизация. Личности в relay не состоят в сервере (членства нет
-   * вовсе — см. роли), поэтому «все, кто есть в инсталляции» означало бы
-   * подсказку из посторонних, а заодно раздачу всякому вошедшему полного
-   * списка людей. Кто здесь говорил — тот здесь и есть.
-   */
-  async mentionCandidates(channelIds: string[], prefix: string): Promise<Person[]> {
-    if (!channelIds.length) return [];
-    // ILIKE — искать по началу имени, не различая регистр. Спецсимволы шаблона
-    // экранируем: `%` в набранном человеком префиксе иначе означал бы «любой
-    // хвост», то есть подсказку из всех подряд.
-    const pattern = prefix.replace(/[\\%_]/g, (c) => '\\' + c) + '%';
-    return this.db
-      .getRepository(MessageRow)
-      .createQueryBuilder('m')
-      .innerJoin(IdentityRow, 'i', 'i.id = m.author_identity_id')
-      .select(['i.fingerprint AS fingerprint', 'i.nick AS nick'])
-      .where('m.channel_id IN (:...channelIds)', { channelIds })
-      .andWhere('i.nick ILIKE :pattern', { pattern })
-      .groupBy('i.fingerprint')
-      .addGroupBy('i.nick')
-      .orderBy('MAX(m.created_at)', 'DESC')
-      .limit(MENTION_SUGGEST_LIMIT)
-      .getRawMany<Person>();
-  }
-
-  /**
-   * Непрочитанные упоминания: id канала → сколько раз человека там назвали
-   * после того, как он этот канал дочитал.
-   *
-   * Своё не считается. Написать собственное имя не значит позвать себя, а
-   * счётчик, который человек зажигает себе сам, — это ошибка, о которой он
-   * подумает на тебя.
-   */
-  async mentionCounts(identityId: string, fingerprint: string): Promise<Map<string, number>> {
-    if (!identityId || !fingerprint) return new Map();
-    const rows: { channel_id: string; n: string }[] = await this.db.query(
-      `SELECT m."channel_id" AS channel_id, count(*) AS n
-         FROM "messages" m
-         LEFT JOIN "reads" r ON r."channel_id" = m."channel_id" AND r."identity_id" = $1
-        WHERE m."mentions" @> $2::jsonb
-          AND m."author_identity_id" IS DISTINCT FROM $1
-          AND (r."read_at" IS NULL OR m."created_at" > r."read_at")
-        GROUP BY m."channel_id"`,
-      [identityId, JSON.stringify([{ fingerprint }])],
-    );
-    return new Map(rows.map((row) => [row.channel_id, Number(row.n)]));
-  }
-
-  // ── Внутреннее ────────────────────────────────────────────────────────────
 
   /**
    * Канал с таким слагом. Сперва реестр (текстовые каналы, самый частый
    * случай), затем беседы: они тоже строки в `channels`, но реестр о них не
    * знает намеренно (см. `dm.service`), и без второго вопроса ЛС оставались бы
    * лентой, в которую нельзя написать.
+   *
+   * Открыт наружу ради закреплённых (`pins.service.ts`): второе место, где
+   * реестр и беседы сводятся в один ответ, разошлось бы с этим.
    */
-  private channelId(slug: string): string | undefined {
+  channelIdOf(slug: string): string | undefined {
     return (
       this.registry.channels.find((c) => c.type === 'text' && c.slug === slug)?.id ??
       this.dm.channelIdOf(slug)
     );
   }
+
+  // ── Внутреннее ────────────────────────────────────────────────────────────
 
   /**
    * Обратный ход: слаг канала по его id. Нужен поиску — в базе у реплики
@@ -773,7 +581,7 @@ export class ChatService implements OnModuleInit {
     id: string,
     includeSystem: boolean,
   ): Promise<ChatMessage | undefined> {
-    const channelId = this.channelId(slug);
+    const channelId = this.channelIdOf(slug);
     if (!channelId || !isUuid(id)) return undefined;
     const row = await this.db.getRepository(MessageRow).findOne({
       where: { id, channelId, ...(includeSystem ? {} : { system: false }) },

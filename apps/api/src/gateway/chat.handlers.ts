@@ -10,7 +10,8 @@ import type { RegistryService } from './registry.service';
 import type { SettingsService } from '../settings/settings.service';
 import type { UploadsService } from '../uploads';
 import { BROADCAST_DEBOUNCE_MS } from './directory';
-import { ChatService, MENTION_SUGGEST_LIMIT } from './chat.service';
+import type { ChatService } from './chat.service';
+import type { PinsService } from './pins.service';
 import { searchTerms } from './chat-search';
 import { knownReaction, toggleReaction } from './reactions';
 import {
@@ -65,6 +66,7 @@ export class ChatHandlers {
   constructor(
     private readonly registry: RegistryService,
     private readonly chat: ChatService,
+    private readonly pinsService: PinsService,
     private readonly chats: ChatSessions,
     private readonly uploads: UploadsService,
     private readonly perimeter: Perimeter,
@@ -192,7 +194,7 @@ export class ChatHandlers {
     // помещается в один снимок, и остальное он подтянет вверх сам. Вместе с ней
     // — сколько здесь закреплено: число рисуется в шапке сразу, а сам список
     // спрашивают, только когда его открывают.
-    const [page, pins] = await Promise.all([this.chat.history(slug), this.chat.pinCount(slug)]);
+    const [page, pins] = await Promise.all([this.chat.history(slug), this.pinsService.count(slug)]);
     client.emit('chat-history', { slug, ...page, pins });
     this.chats.emitRoster(room);
   }
@@ -312,14 +314,7 @@ export class ChatHandlers {
     return channels.map((c) => c.id);
   }
 
-  /**
-   * Кого предложить после набранного `@`.
-   *
-   * Список собирает сервер, и в него попадают только те, кому этот канал виден:
-   * подсказать человека, который не может прочитать канал, значит предложить
-   * позвать его в комнату за запертой дверью. Себя в подсказке нет — позвать
-   * себя нельзя, и место в списке из восьми имён этим не тратится.
-   */
+  /** Кого предложить после набранного `@` — решает `Mentions.suggest`. */
   async mentionSuggest(
     client: AppSocket,
     payload: MentionSuggestPayload,
@@ -328,45 +323,12 @@ export class ChatHandlers {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client)) return empty;
     const room = this.chats.roomOf(client);
     if (!room) return empty;
-    const here = this.registry.channels.find(
-      (c) => c.type === 'text' && c.slug === this.chat.slug(room),
-    );
-    if (!here || !this.perimeter.canSee(client, here)) return empty;
-
-    const prefix = trimmed(payload?.prefix, LIMIT.tag).toLowerCase();
-    const me = this.perimeter.speaker(client)?.fingerprint;
-    const seen = new Set<string>();
-    const people: MentionSuggestResult['people'] = [];
-
-    // Сначала те, кто сейчас на связи: для них упоминание — не запись в
-    // историю, а обращение, которое они увидят сию минуту.
-    for (const sock of this.server.sockets.sockets.values()) {
-      const who = this.perimeter.speaker(sock);
-      if (!who || who.fingerprint === me || seen.has(who.fingerprint)) continue;
-      if (this.perimeter.isGuest(sock) || !this.perimeter.canSee(sock, here)) continue;
-      if (prefix && !who.nick.toLowerCase().startsWith(prefix)) continue;
-      seen.add(who.fingerprint);
-      people.push({ fingerprint: who.fingerprint, nick: who.nick, online: true });
-    }
-
-    // Затем — говорившие на этом сервере, в тех его каналах, что видно
-    // спрашивающему: звать через канал человека, о котором ты знаешь только по
-    // соседнему каналу, — обычное дело.
-    const channels = this.registry.channels.filter(
-      (c) => c.type === 'text' && c.serverId === here.serverId && this.perimeter.canSee(client, c),
-    );
-    const spoke = await this.chat.mentionCandidates(
-      channels.map((c) => c.id),
-      prefix,
-    );
-    for (const person of spoke) {
-      if (person.fingerprint === me || seen.has(person.fingerprint)) continue;
-      seen.add(person.fingerprint);
-      people.push({ ...person, online: false });
-    }
-
-    return { ok: true, people: people.slice(0, MENTION_SUGGEST_LIMIT) };
+    return {
+      ok: true,
+      people: await this.mentions.suggest(client, this.chat.slug(room), payload?.prefix),
+    };
   }
+
   leave(client: AppSocket) {
     this.chats.leave(client);
   }
@@ -652,7 +614,7 @@ export class ChatHandlers {
     if (msg.pinned) {
       this.server
         .to(room)
-        .emit('chat-pinned', { id, pinned: false, count: await this.chat.pinCount(slug) });
+        .emit('chat-pinned', { id, pinned: false, count: await this.pinsService.count(slug) });
     }
   }
 
@@ -685,7 +647,7 @@ export class ChatHandlers {
     const on = payload?.on === true;
 
     if (on) {
-      const res = await this.chat.pin(
+      const res = await this.pinsService.pin(
         slug,
         id,
         this.perimeter.speaker(client)?.id ?? null,
@@ -693,11 +655,11 @@ export class ChatHandlers {
       );
       if (res === 'gone') return { ok: false, error: 'not-found' };
       if (res === 'limit') return { ok: false, error: 'limit' };
-    } else if (!(await this.chat.unpin(slug, id))) {
+    } else if (!(await this.pinsService.unpin(slug, id))) {
       return { ok: false, error: 'not-found' };
     }
 
-    const count = await this.chat.pinCount(slug);
+    const count = await this.pinsService.count(slug);
     this.server.to(room).emit('chat-pinned', { id, pinned: on, count });
     return { ok: true, pinned: on, count };
   }
@@ -723,7 +685,7 @@ export class ChatHandlers {
     // честный ответ, а не отказ: сказать «здесь ничего не закреплено» можно, не
     // спрашивая прав, в отличие от самой попытки закрепить.
     if (this.dm.isDm(slug)) return { ok: true, slug, pins: [] };
-    return { ok: true, slug, pins: await this.chat.pinned(slug, this.pinLimit()) };
+    return { ok: true, slug, pins: await this.pinsService.list(slug, this.pinLimit()) };
   }
 
   // «Печатает…»: клиент шлёт с троттлингом, релеим остальным в канале (себе — нет).

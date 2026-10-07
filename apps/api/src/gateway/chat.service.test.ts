@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto';
 import type { DataSource } from 'typeorm';
 import { AttachmentRow, IdentityRow, MessageRow, ReadRow } from '../db/entities';
 import { resetDatabase, testDatabase } from '../db/testing';
-import { AROUND_HALF, ChatService, mentionedIn } from './chat.service';
+import { AROUND_HALF, ChatService } from './chat.service';
+import { MentionsService, mentionedIn } from './mentions.service';
+import { PinsService } from './pins.service';
 import { isUuid } from './chat-rows';
 import { SEARCH_PAGE_SIZE, searchTerms } from './chat-search';
 import { DmService } from './dm.service';
@@ -25,6 +27,8 @@ let db: DataSource;
 let registry: RegistryService;
 let dm: DmService;
 let chat: ChatService;
+let pins: PinsService;
+let mentions: MentionsService;
 let settings: SettingsService;
 
 beforeAll(async () => {
@@ -44,6 +48,8 @@ beforeEach(async () => {
   settings = await freshSettings(db);
   chat = new ChatService(db, registry, dm, settings);
   await chat.onModuleInit();
+  pins = new PinsService(db, chat);
+  mentions = new MentionsService(db);
 });
 
 /** Свежий сервис поверх той же базы — то же самое, что рестарт процесса. */
@@ -647,7 +653,7 @@ describe('упоминания', () => {
 
   it('ник в снимке берётся из базы, а не из тела сообщения', async () => {
     const anya = await person('Аня');
-    const found = await chat.peopleByFingerprint([anya.fingerprint]);
+    const found = await mentions.peopleByFingerprint([anya.fingerprint]);
     expect(found).toEqual([{ fingerprint: anya.fingerprint, nick: 'Аня' }]);
   });
 
@@ -677,7 +683,7 @@ describe('упоминания', () => {
         mentions: mention,
       });
 
-      const counts = await chat.mentionCounts(anya.id, anya.fingerprint);
+      const counts = await mentions.unreadCounts(anya.id, anya.fingerprint);
       expect(counts.get('text-obshchii')).toBe(2);
       expect(counts.get('text-kuhnya')).toBe(1);
     });
@@ -696,7 +702,7 @@ describe('упоминания', () => {
         .getRepository(ReadRow)
         .insert({ identityId: anya.id, channelId: 'text-obshchii', readAt: new Date(first!.ts) });
 
-      expect((await chat.mentionCounts(anya.id, anya.fingerprint)).get('text-obshchii')).toBe(
+      expect((await mentions.unreadCounts(anya.id, anya.fingerprint)).get('text-obshchii')).toBe(
         undefined,
       );
 
@@ -706,7 +712,7 @@ describe('упоминания', () => {
         text: '@Аня два',
         mentions: mention,
       });
-      expect((await chat.mentionCounts(anya.id, anya.fingerprint)).get('text-obshchii')).toBe(1);
+      expect((await mentions.unreadCounts(anya.id, anya.fingerprint)).get('text-obshchii')).toBe(1);
     });
 
     it('своё имя в своей реплике себя не зовёт', async () => {
@@ -717,7 +723,7 @@ describe('упоминания', () => {
         text: 'меня зовут @Аня',
         mentions: [{ fingerprint: anya.fingerprint, nick: anya.nick }],
       });
-      expect((await chat.mentionCounts(anya.id, anya.fingerprint)).size).toBe(0);
+      expect((await mentions.unreadCounts(anya.id, anya.fingerprint)).size).toBe(0);
     });
 
     it('удалённая реплика уносит упоминание с собой', async () => {
@@ -730,7 +736,7 @@ describe('упоминания', () => {
         mentions: [{ fingerprint: anya.fingerprint, nick: anya.nick }],
       });
       await chat.remove(msg!.id!);
-      expect((await chat.mentionCounts(anya.id, anya.fingerprint)).size).toBe(0);
+      expect((await mentions.unreadCounts(anya.id, anya.fingerprint)).size).toBe(0);
     });
   });
 
@@ -741,7 +747,7 @@ describe('упоминания', () => {
       await chat.add('obshchii', { name: 'Аня', identityId: anya.id, text: 'раз' });
       await chat.add('obshchii', { name: 'Борис', identityId: boris.id, text: 'два' });
 
-      const people = await chat.mentionCandidates(['text-obshchii'], '');
+      const people = await mentions.candidates(['text-obshchii'], '');
       expect(people.map((p) => p.nick)).toEqual(['Борис', 'Аня']);
     });
 
@@ -750,11 +756,11 @@ describe('упоминания', () => {
       await person('Борис');
       await chat.add('obshchii', { name: 'Аня', identityId: anya.id, text: 'раз' });
 
-      expect((await chat.mentionCandidates(['text-obshchii'], 'ан')).map((p) => p.nick)).toEqual([
+      expect((await mentions.candidates(['text-obshchii'], 'ан')).map((p) => p.nick)).toEqual([
         'Аня',
       ]);
       // Борис в канале не говорил — предлагать его тут не из чего.
-      expect(await chat.mentionCandidates(['text-obshchii'], 'бор')).toEqual([]);
+      expect(await mentions.candidates(['text-obshchii'], 'бор')).toEqual([]);
     });
 
     it('один человек — одна строка, сколько бы он ни говорил', async () => {
@@ -762,17 +768,17 @@ describe('упоминания', () => {
       for (let i = 0; i < 5; i += 1) {
         await chat.add('obshchii', { name: 'Аня', identityId: anya.id, text: `${i}` });
       }
-      expect(await chat.mentionCandidates(['text-obshchii'], '')).toHaveLength(1);
+      expect(await mentions.candidates(['text-obshchii'], '')).toHaveLength(1);
     });
 
     it('«%» в набранном — это символ, а не «покажи всех»', async () => {
       const anya = await person('Аня');
       await chat.add('obshchii', { name: 'Аня', identityId: anya.id, text: 'раз' });
-      expect(await chat.mentionCandidates(['text-obshchii'], '%')).toEqual([]);
+      expect(await mentions.candidates(['text-obshchii'], '%')).toEqual([]);
     });
 
     it('без каналов спрашивать некого', async () => {
-      expect(await chat.mentionCandidates([], 'ан')).toEqual([]);
+      expect(await mentions.candidates([], 'ан')).toEqual([]);
     });
   });
 });
@@ -780,7 +786,7 @@ describe('упоминания', () => {
 describe('закреплённые', () => {
   it('пометка видна в самой ленте, а не только в списке', async () => {
     const msg = await say('правила канала');
-    expect(await chat.pin('obshchii', msg.id!, null)).toBe('ok');
+    expect(await pins.pin('obshchii', msg.id!, null)).toBe('ok');
 
     const [shown] = (await chat.history('obshchii')).messages;
     expect(shown.pinned).toBe(true);
@@ -791,48 +797,48 @@ describe('закреплённые', () => {
 
   it('открепление снимает пометку и уменьшает счёт', async () => {
     const msg = await say('уже не важное');
-    await chat.pin('obshchii', msg.id!, null);
-    expect(await chat.pinCount('obshchii')).toBe(1);
+    await pins.pin('obshchii', msg.id!, null);
+    expect(await pins.count('obshchii')).toBe(1);
 
-    expect(await chat.unpin('obshchii', msg.id!)).toBe(true);
-    expect(await chat.pinCount('obshchii')).toBe(0);
+    expect(await pins.unpin('obshchii', msg.id!)).toBe(true);
+    expect(await pins.count('obshchii')).toBe(0);
     expect((await chat.history('obshchii')).messages[0].pinned).toBeUndefined();
     // Второй раз откреплять нечего — и это не ошибка, а честное «его не было».
-    expect(await chat.unpin('obshchii', msg.id!)).toBe(false);
+    expect(await pins.unpin('obshchii', msg.id!)).toBe(false);
   });
 
   it('список идёт от последнего закрепления к первому', async () => {
     const first = await say('раз');
     const second = await say('два');
-    await chat.pin('obshchii', first.id!, null);
-    await chat.pin('obshchii', second.id!, null);
+    await pins.pin('obshchii', first.id!, null);
+    await pins.pin('obshchii', second.id!, null);
 
     // Не по времени самих реплик: закрепляют, чтобы не потерять, и последнее
     // закреплённое почти всегда и есть то, что ищут.
-    expect((await chat.pinned('obshchii')).map((m) => m.text)).toEqual(['два', 'раз']);
+    expect((await pins.list('obshchii')).map((m) => m.text)).toEqual(['два', 'раз']);
   });
 
   it('повторное закрепление безвредно и не удваивает счёт', async () => {
     const msg = await say('важное');
-    expect(await chat.pin('obshchii', msg.id!, null)).toBe('ok');
-    expect(await chat.pin('obshchii', msg.id!, null)).toBe('ok');
-    expect(await chat.pinCount('obshchii')).toBe(1);
-    expect(await chat.pinned('obshchii')).toHaveLength(1);
+    expect(await pins.pin('obshchii', msg.id!, null)).toBe('ok');
+    expect(await pins.pin('obshchii', msg.id!, null)).toBe('ok');
+    expect(await pins.count('obshchii')).toBe(1);
+    expect(await pins.list('obshchii')).toHaveLength(1);
   });
 
   it('потолок канала — отказ, а не молчаливое «закрепили»', async () => {
     for (let i = 0; i < PIN_LIMIT; i += 1) {
       const msg = await say(`важное ${i}`);
-      expect(await chat.pin('obshchii', msg.id!, null)).toBe('ok');
+      expect(await pins.pin('obshchii', msg.id!, null)).toBe('ok');
     }
     const extra = await say('и ещё одно');
-    expect(await chat.pin('obshchii', extra.id!, null)).toBe('limit');
-    expect(await chat.pinCount('obshchii')).toBe(PIN_LIMIT);
+    expect(await pins.pin('obshchii', extra.id!, null)).toBe('limit');
+    expect(await pins.count('obshchii')).toBe(PIN_LIMIT);
 
     // Открепили одно — место освободилось.
-    const [top] = await chat.pinned('obshchii');
-    await chat.unpin('obshchii', top.id!);
-    expect(await chat.pin('obshchii', extra.id!, null)).toBe('ok');
+    const [top] = await pins.list('obshchii');
+    await pins.unpin('obshchii', top.id!);
+    expect(await pins.pin('obshchii', extra.id!, null)).toBe('ok');
   });
 
   it('закреплённое соседнего канала здесь не считается и не показывается', async () => {
@@ -848,14 +854,14 @@ describe('закреплённые', () => {
 
     const here = await say('важное');
     const there = await chat.add('kuhnya', { name: 'Б', text: 'важное на кухне' });
-    await chat.pin('obshchii', here.id!, null);
-    await chat.pin('kuhnya', there!.id!, null);
+    await pins.pin('obshchii', here.id!, null);
+    await pins.pin('kuhnya', there!.id!, null);
 
-    expect(await chat.pinCount('obshchii')).toBe(1);
-    expect((await chat.pinned('obshchii')).map((m) => m.text)).toEqual(['важное']);
+    expect(await pins.count('obshchii')).toBe(1);
+    expect((await pins.list('obshchii')).map((m) => m.text)).toEqual(['важное']);
     // И открепить чужое, назвав свой канал, тоже нельзя: канал в паре с id —
     // не украшение запроса, а проверка.
-    expect(await chat.unpin('obshchii', there!.id!)).toBe(false);
+    expect(await pins.unpin('obshchii', there!.id!)).toBe(false);
   });
 
   it('системную строку не закрепить', async () => {
@@ -872,24 +878,24 @@ describe('закреплённые', () => {
     });
     // Такая строка — след самой ретенции, и обещать ей, что она ретенцию
     // переживёт, значило бы обещать бессмыслицу.
-    expect(await chat.pin('obshchii', id, null)).toBe('gone');
+    expect(await pins.pin('obshchii', id, null)).toBe('gone');
   });
 
   it('несуществующая реплика и мусор в id — «нет такой», а не ошибка базы', async () => {
-    expect(await chat.pin('obshchii', randomUUID(), null)).toBe('gone');
-    expect(await chat.pin('obshchii', 'нет-такого', null)).toBe('gone');
-    expect(await chat.pin('нет-канала', randomUUID(), null)).toBe('gone');
-    expect(await chat.unpin('obshchii', 'нет-такого')).toBe(false);
-    expect(await chat.pinned('нет-канала')).toEqual([]);
+    expect(await pins.pin('obshchii', randomUUID(), null)).toBe('gone');
+    expect(await pins.pin('obshchii', 'нет-такого', null)).toBe('gone');
+    expect(await pins.pin('нет-канала', randomUUID(), null)).toBe('gone');
+    expect(await pins.unpin('obshchii', 'нет-такого')).toBe(false);
+    expect(await pins.list('нет-канала')).toEqual([]);
   });
 
   it('удалённая реплика уносит закрепление с собой', async () => {
     const msg = await say('важное');
-    await chat.pin('obshchii', msg.id!, null);
+    await pins.pin('obshchii', msg.id!, null);
     await chat.remove(msg.id!);
 
-    expect(await chat.pinCount('obshchii')).toBe(0);
-    expect(await chat.pinned('obshchii')).toEqual([]);
+    expect(await pins.count('obshchii')).toBe(0);
+    expect(await pins.list('obshchii')).toEqual([]);
   });
 });
 

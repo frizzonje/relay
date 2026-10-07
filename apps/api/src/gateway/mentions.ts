@@ -1,18 +1,18 @@
 import type { AppServer, AppSocket } from './socket-data';
-import type { ChatService } from './chat.service';
+import type { MentionsService } from './mentions.service';
 import type { DmService } from './dm.service';
 import type { Perimeter } from './perimeter';
 import type { RegistryService } from './registry.service';
 import type { SettingsService } from '../settings/settings.service';
-import { mentionedIn } from './chat.service';
+import { MENTION_SUGGEST_LIMIT, mentionedIn } from './mentions.service';
 import { LIMIT, trimmed } from './protocol';
-import type { Person } from '@relay/shared';
+import type { MentionSuggestResult, Person } from '@relay/shared';
 
 /**
- * Упоминания: кого назвали, кому об этом сказать и сколько раз назвали, пока
- * человека не было.
+ * Упоминания: кого предложить после `@`, кого назвали, кому об этом сказать и
+ * сколько раз назвали, пока человека не было.
  *
- * Три действия вокруг одного вопроса, и живут они вместе потому, что вместе же
+ * Четыре действия вокруг одного вопроса, и живут они вместе потому, что вместе же
  * и ломаются. Общего у них ровно одно правило: **упоминание не должно
  * рассказывать о канале больше, чем человеку видно**. Слаг канала закрытого
  * сервера сам по себе часть секрета — по нему заходят, — поэтому и вызов, и
@@ -21,7 +21,7 @@ import type { Person } from '@relay/shared';
 export class Mentions {
   constructor(
     private readonly registry: RegistryService,
-    private readonly chat: ChatService,
+    private readonly store: MentionsService,
     private readonly perimeter: Perimeter,
     private readonly dm: DmService,
     private readonly settings: SettingsService,
@@ -39,6 +39,57 @@ export class Mentions {
    */
   private cap(): number {
     return this.settings.get<number>('moderation.maxMentionsPerMessage');
+  }
+
+  /**
+   * Кого предложить после набранного `@` в этом канале.
+   *
+   * Список собирает сервер, и в него попадают только те, кому этот канал виден:
+   * подсказать человека, который не может прочитать канал, значит предложить
+   * позвать его в комнату за запертой дверью. Себя в подсказке нет — позвать
+   * себя нельзя, и место в списке из восьми имён этим не тратится.
+   */
+  async suggest(
+    client: AppSocket,
+    slug: string,
+    prefixRaw: unknown,
+  ): Promise<MentionSuggestResult['people']> {
+    const here = this.registry.channels.find((c) => c.type === 'text' && c.slug === slug);
+    if (!here || !this.perimeter.canSee(client, here)) return [];
+
+    const prefix = trimmed(prefixRaw, LIMIT.tag).toLowerCase();
+    const me = this.perimeter.speaker(client)?.fingerprint;
+    const seen = new Set<string>();
+    const people: MentionSuggestResult['people'] = [];
+
+    // Сначала те, кто сейчас на связи: для них упоминание — не запись в
+    // историю, а обращение, которое они увидят сию минуту.
+    for (const sock of this.serverOf().sockets.sockets.values()) {
+      const who = this.perimeter.speaker(sock);
+      if (!who || who.fingerprint === me || seen.has(who.fingerprint)) continue;
+      if (this.perimeter.isGuest(sock) || !this.perimeter.canSee(sock, here)) continue;
+      if (prefix && !who.nick.toLowerCase().startsWith(prefix)) continue;
+      seen.add(who.fingerprint);
+      people.push({ fingerprint: who.fingerprint, nick: who.nick, online: true });
+    }
+
+    // Затем — говорившие на этом сервере, в тех его каналах, что видно
+    // спрашивающему: звать через канал человека, о котором ты знаешь только по
+    // соседнему каналу, — обычное дело.
+    const channels = this.registry.channels.filter(
+      (c) => c.type === 'text' && c.serverId === here.serverId && this.perimeter.canSee(client, c),
+    );
+    const spoke = await this.store.candidates(
+      channels.map((c) => c.id),
+      prefix,
+    );
+    for (const person of spoke) {
+      if (person.fingerprint === me || seen.has(person.fingerprint)) continue;
+      seen.add(person.fingerprint);
+      people.push({ ...person, online: false });
+    }
+
+    return people.slice(0, MENTION_SUGGEST_LIMIT);
   }
 
   /**
@@ -61,7 +112,7 @@ export class Mentions {
       ),
     ];
     if (!fingerprints.length) return [];
-    return mentionedIn(text, await this.chat.peopleByFingerprint(fingerprints), cap);
+    return mentionedIn(text, await this.store.peopleByFingerprint(fingerprints), cap);
   }
 
   /**
@@ -99,7 +150,7 @@ export class Mentions {
   async sendSnapshot(client: AppSocket): Promise<void> {
     const me = this.perimeter.speaker(client);
     if (!me) return;
-    const counts = await this.chat.mentionCounts(me.id, me.fingerprint);
+    const counts = await this.store.unreadCounts(me.id, me.fingerprint);
     const bySlug: Record<string, number> = {};
     for (const channel of this.registry.channels) {
       const n = counts.get(channel.id);

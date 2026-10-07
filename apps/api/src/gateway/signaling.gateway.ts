@@ -40,6 +40,8 @@ import { SettingsService } from '../settings/settings.service';
 import { RetentionService } from '../db/retention.service';
 import { UploadsService } from '../uploads';
 import { ChatService } from './chat.service';
+import { MentionsService } from './mentions.service';
+import { PinsService } from './pins.service';
 import { DmService } from './dm.service';
 import { RegistryService } from './registry.service';
 import {
@@ -202,6 +204,8 @@ export class SignalingGateway
   constructor(
     private readonly uploads: UploadsService,
     private readonly chat: ChatService,
+    private readonly pinsService: PinsService,
+    private readonly mentionsService: MentionsService,
     private readonly registry: RegistryService,
     private readonly identities: IdentityService,
     private readonly owner: OwnerService,
@@ -349,10 +353,10 @@ export class SignalingGateway
       this.voice.openCallRoom(callRoomOf(DmService.address(from, to)), [from, to]),
   });
 
-  /** Упоминания: кого назвали, кому сказать, сколько накопилось. */
+  /** Упоминания: кого предложить, кого назвали, кому сказать, сколько накопилось. */
   private readonly mentions = new Mentions(
     this.registry,
-    this.chat,
+    this.mentionsService,
     this.perimeter,
     this.dm,
     this.settings,
@@ -377,6 +381,7 @@ export class SignalingGateway
   private readonly chatHandlers = new ChatHandlers(
     this.registry,
     this.chat,
+    this.pinsService,
     this.chats,
     this.uploads,
     this.perimeter,

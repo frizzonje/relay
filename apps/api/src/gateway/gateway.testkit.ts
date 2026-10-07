@@ -19,6 +19,8 @@ import { SettingsService } from '../settings/settings.service';
 import type { UploadsService } from '../uploads';
 import type { PersistedRegistry } from './registry';
 import { ChatService } from './chat.service';
+import { MentionsService } from './mentions.service';
+import { PinsService } from './pins.service';
 import { DmService } from './dm.service';
 import { RegistryService, channelRow, channelSlug, serverRow } from './registry.service';
 import { SignalingGateway } from './signaling.gateway';
@@ -230,6 +232,8 @@ export async function makeGateway(saved: PersistedRegistry = {}) {
   const gw = new SignalingGateway(
     uploads as unknown as UploadsService,
     chat,
+    new PinsService(db, chat),
+    new MentionsService(db),
     registry,
     identities,
     owner,

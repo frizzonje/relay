@@ -17,6 +17,8 @@ import { MetricsController } from './metrics.controller';
 import { UploadController } from './upload.controller';
 import { SignalingGateway } from './gateway/signaling.gateway';
 import { ChatService } from './gateway/chat.service';
+import { MentionsService } from './gateway/mentions.service';
+import { PinsService } from './gateway/pins.service';
 import { DmService } from './gateway/dm.service';
 import { RegistryService } from './gateway/registry.service';
 import { MetricsService } from './metrics';
@@ -53,6 +55,8 @@ export class AppModule {
         { provide: DataSource, useValue: db },
         SignalingGateway,
         ChatService,
+        PinsService,
+        MentionsService,
         DmService,
         IdentityService,
         OwnerService,

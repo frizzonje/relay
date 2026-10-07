@@ -96,7 +96,7 @@ SignalingGateway
 | `VoiceSessions` | [`voice-sessions.ts`](../apps/api/src/gateway/voice-sessions.ts) | голосовая комната сокета, транспорт, пропуск SFU, мут, грейс 24 с, выгон «призраков», комнаты бесед |
 | `Presence` | [`presence.ts`](../apps/api/src/gateway/presence.ts) | присутствие личностей на инсталляции |
 | `Rings` | [`ring.ts`](../apps/api/src/gateway/ring.ts) | живые вызовы, таймауты, исходы; переходы — машина [`ring.ts`](../packages/shared/src/ring.ts) из контракта |
-| `Mentions` | [`mentions.ts`](../apps/api/src/gateway/mentions.ts) | разбор `@` и счётчики упоминаний |
+| `Mentions` | [`mentions.ts`](../apps/api/src/gateway/mentions.ts) | подсказка и разбор `@`, вызов названных, счётчики упоминаний |
 | `Moderation` | [`moderation.ts`](../apps/api/src/gateway/moderation.ts) | кто модерирует, как вывести забаненного |
 
 `client.data` (поля сокета, [`socket-data.ts`](../apps/api/src/gateway/socket-data.ts))
@@ -110,7 +110,7 @@ SignalingGateway
 | Файл | События |
 |---|---|
 | [`registry.handlers.ts`](../apps/api/src/gateway/registry.handlers.ts) | `server-*`, `channel-*` |
-| [`chat.handlers.ts`](../apps/api/src/gateway/chat.handlers.ts) | `chat-*`, `mention-suggest`, отметки пропущенных звонков |
+| [`chat.handlers.ts`](../apps/api/src/gateway/chat.handlers.ts) | `chat-*`, `mention-suggest` (через `Mentions`), отметки пропущенных звонков |
 | [`dm.handlers.ts`](../apps/api/src/gateway/dm.handlers.ts) | `dm-*` |
 | [`ring.handlers.ts`](../apps/api/src/gateway/ring.handlers.ts) | `call-*` |
 | [`voice.handlers.ts`](../apps/api/src/gateway/voice.handlers.ts) | `join`, `leave`, `offer`, `answer`, `ice-candidate`, `media-update`, `sfu-token`, `voice-diag` |
@@ -144,7 +144,9 @@ SignalingGateway
 | Сервис | Файл | Что |
 |---|---|---|
 | `RegistryService` | [`gateway/registry.service.ts`](../apps/api/src/gateway/registry.service.ts) | серверы и каналы: память + Postgres, сиды главного сервера, одноразовый импорт `registry.json` из 0.x |
-| `ChatService` | [`gateway/chat.service.ts`](../apps/api/src/gateway/chat.service.ts) | сообщения, курсоры ленты, поиск (`to_tsvector('simple')` + префиксы), реакции, закрепы |
+| `ChatService` | [`gateway/chat.service.ts`](../apps/api/src/gateway/chat.service.ts) | сообщения, курсоры ленты, поиск (`to_tsvector('simple')` + префиксы), реакции |
+| `PinsService` | [`gateway/pins.service.ts`](../apps/api/src/gateway/pins.service.ts) | закреплённые: потолок канала, список, счёт для шапки |
+| `MentionsService` | [`gateway/mentions.service.ts`](../apps/api/src/gateway/mentions.service.ts) | упоминания: ник по отпечатку, подсказка после `@`, непрочитанные |
 | `DmService` | [`gateway/dm.service.ts`](../apps/api/src/gateway/dm.service.ts) | беседы 1:1, адрес беседы, список переписок |
 | `IdentityService` | [`identity/identity.service.ts`](../apps/api/src/identity/identity.service.ts) | челлендж, вход, ник, устройства |
 | `PairingService` | [`identity/pairing.service.ts`](../apps/api/src/identity/pairing.service.ts) | связка устройств по коду (в памяти, 3 мин) |
