@@ -10,7 +10,9 @@ import type { RegistryService } from './registry.service';
 import type { SettingsService } from '../settings/settings.service';
 import type { UploadsService } from '../uploads';
 import { BROADCAST_DEBOUNCE_MS } from './directory';
-import { ChatService, MENTION_SUGGEST_LIMIT, searchTerms } from './chat.service';
+import { ChatService, MENTION_SUGGEST_LIMIT } from './chat.service';
+import { searchTerms } from './chat-search';
+import { knownReaction, toggleReaction } from './reactions';
 import {
   LIMIT,
   str,
@@ -750,7 +752,7 @@ export class ChatHandlers {
       return void this.refuse(client, 'reactions-off');
     const id = str(payload?.id);
     const emoji = str(payload?.emoji);
-    if (!id || !this.chat.knownReaction(emoji)) return;
+    if (!id || !knownReaction(emoji)) return;
 
     const msg = await this.chat.findAny(this.chat.slug(room), id);
     if (!msg) return;
@@ -761,7 +763,7 @@ export class ChatHandlers {
     const who = speaker
       ? { fingerprint: speaker.fingerprint, nick: speaker.nick }
       : { nick: this.chats.nameOf(client) };
-    const reactions = this.chat.toggleReaction(msg, who, emoji);
+    const reactions = toggleReaction(msg, who, emoji);
     await this.chat.saveReactions(id, reactions);
 
     this.server.to(room).emit('chat-reaction', { id, reactions });

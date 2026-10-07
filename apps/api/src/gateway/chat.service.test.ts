@@ -3,14 +3,9 @@ import { randomUUID } from 'node:crypto';
 import type { DataSource } from 'typeorm';
 import { AttachmentRow, IdentityRow, MessageRow, ReadRow } from '../db/entities';
 import { resetDatabase, testDatabase } from '../db/testing';
-import {
-  AROUND_HALF,
-  ChatService,
-  SEARCH_PAGE_SIZE,
-  isUuid,
-  mentionedIn,
-  searchTerms,
-} from './chat.service';
+import { AROUND_HALF, ChatService, mentionedIn } from './chat.service';
+import { isUuid } from './chat-rows';
+import { SEARCH_PAGE_SIZE, searchTerms } from './chat-search';
 import { DmService } from './dm.service';
 import { RegistryService } from './registry.service';
 import type { SettingsService } from '../settings/settings.service';

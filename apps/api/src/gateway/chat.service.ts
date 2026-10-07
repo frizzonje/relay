@@ -10,17 +10,16 @@ import { SettingsService } from '../settings/settings.service';
 import { LIMIT } from './protocol';
 import { DmService } from './dm.service';
 import { RegistryService } from './registry.service';
+import { isUuid, toMessage } from './chat-rows';
+import { SEARCH_CONFIG, SEARCH_PAGE_SIZE, searchTerms, tsquery } from './chat-search';
 import {
   CHAT_PREFIX,
   PIN_LIMIT,
-  REACTION_EMOJIS,
   type SearchHit,
-  type Attachment,
   type CallMark,
   type ChatMessage,
   type Person,
   type ReactionMap,
-  type PersonOrGuest,
   type ReplyRef,
 } from '@relay/shared';
 
@@ -44,58 +43,11 @@ import {
  */
 
 /**
- * Сколько находок отдаём одной страницей. Меньше страницы ленты намеренно:
- * результат читают глазами по одному, а не пролистывают.
- */
-export const SEARCH_PAGE_SIZE = 20;
-
-/**
  * Окно вокруг найденной реплики — столько же сверху и снизу. Смысл перехода из
  * поиска в том, чтобы увидеть разговор, а не одну строку: ответ на вопрос почти
  * всегда ниже вопроса.
  */
 export const AROUND_HALF = 25;
-
-/**
- * Конфигурация полнотекста. Обязана слово в слово совпадать с той, что в
- * индексе (миграция MessageSearch) — иначе индекс молча не применится.
- * Почему `simple`, а не язык — там же, в шапке миграции.
- */
-const SEARCH_CONFIG = 'simple';
-
-/** Больше слов в запрос не берём: это поиск по чату, а не язык запросов. */
-const SEARCH_MAX_TERMS = 8;
-
-/** И длиннее слова не берём — тем более что ищем по префиксу. */
-const SEARCH_TERM_MAX = 40;
-
-/**
- * Запрос человека → слова для полнотекста.
- *
- * Режем по всему, что не буква и не цифра, и тем самым решаем сразу вторую
- * задачу: у `to_tsquery` свой синтаксис (`&`, `|`, `!`, скобки, кавычки), и
- * человек, написавший в поиске «а & б», не должен получить ни ошибку базы, ни
- * чужой смысл. После разбора в словах не остаётся ни одного его символа.
- */
-export function searchTerms(query: string): string[] {
-  return query
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}_]+/u)
-    .filter(Boolean)
-    .map((term) => term.slice(0, SEARCH_TERM_MAX))
-    .slice(0, SEARCH_MAX_TERMS);
-}
-
-/**
- * Слова → tsquery: все слова обязательны, каждое ищется как начало.
- *
- * Префикс — замена стеммингу, которого в `simple` нет: «канал» находит
- * «каналы» и «каналом». Обратное неверно, и это честный размен — набранное
- * человеком слово почти всегда короче или равно тому, что он ищет.
- */
-function tsquery(terms: string[]): string {
-  return terms.map((term) => `${term}:*`).join(' & ');
-}
 
 /** Сколько имён показываем в подсказке после `@`. Список читают глазами. */
 export const MENTION_SUGGEST_LIMIT = 8;
@@ -132,20 +84,6 @@ export function mentionedIn(
     if (out.length >= limit) break;
   }
   return out;
-}
-
-/** Разрешённый набор реакций — тот же, что рисует клиент. */
-const REACTIONS: ReadonlySet<string> = new Set(REACTION_EMOJIS);
-
-/**
- * Всё, что приходит от клиента, обязано быть проверено до попадания в запрос:
- * `id` тут — строка из тела сообщения, и «не-uuid» в условии по uuid-колонке
- * это не пустой результат, а ошибка базы (22P02).
- */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export function isUuid(value: string): boolean {
-  return UUID_RE.test(value);
 }
 
 /** Новая реплика — то, что гейтвей разобрал из тела и проверил по правам. */
@@ -199,53 +137,6 @@ export interface SearchPage {
 export interface Cursor {
   ts: number;
   id: string;
-}
-
-function toAttachment(row: AttachmentRow, spoiler: boolean): Attachment {
-  return {
-    url: '/uploads/' + row.id,
-    name: row.name,
-    size: row.size,
-    mime: row.mime,
-    kind: row.kind as Attachment['kind'],
-    ...(spoiler ? { spoiler: true } : {}),
-  };
-}
-
-/**
- * Строка базы → реплика протокола. Пустые поля не носим: клиент отличает
- * «реакций нет» от «пустой объект реакций» только по наличию ключа, и так было
- * всегда.
- */
-function toMessage(row: MessageRow): ChatMessage {
-  const reactions = row.reactions ?? {};
-  return {
-    id: row.id,
-    name: row.authorName,
-    // Отпечаток берётся у личности, а не хранится в строке: имя — снимок
-    // момента, а лицо у человека одно, и второй его копией мы бы завели место,
-    // где оно может разойтись с ключом.
-    ...(row.authorIdentity ? { fingerprint: row.authorIdentity.fingerprint } : {}),
-    text: row.text,
-    ts: row.createdAt.getTime(),
-    ...(row.attachment ? { attachment: toAttachment(row.attachment, row.spoiler) } : {}),
-    ...(row.system ? { system: true } : {}),
-    ...(row.call ? { call: row.call } : {}),
-    ...(Object.keys(reactions).length ? { reactions } : {}),
-    ...(row.replyTo ? { replyTo: row.replyTo } : {}),
-    ...(row.editedAt ? { editedTs: row.editedAt.getTime() } : {}),
-    ...(row.mentions?.length ? { mentions: row.mentions } : {}),
-    ...(row.pins?.length ? { pinned: true as const } : {}),
-  };
-}
-
-/**
- * Один ли это человек. Отпечаток сильнее ника и не сравнивается с ним никогда:
- * «у меня ключ, а у записи его нет» — это разные люди, даже если имя совпало.
- */
-function sameReactor(a: PersonOrGuest, b: PersonOrGuest): boolean {
-  if (a.fingerprint || b.fingerprint) return a.fingerprint === b.fingerprint;
-  return a.nick === b.nick;
 }
 
 @Injectable()
@@ -811,33 +702,6 @@ export class ChatService implements OnModuleInit {
     return new Map(rows.map((row) => [row.channel_id, Number(row.n)]));
   }
 
-  /** Знаем ли мы такую реакцию (набор закрытый — произвольные эмодзи не носим). */
-  knownReaction(emoji: string): boolean {
-    return REACTIONS.has(emoji);
-  }
-
-  /**
-   * Тогл реакции: повторный эмодзи снимает свою. Возвращает новый набор.
-   *
-   * «Своя» — по отпечатку ключа, а не по нику: ники не уникальны, и до 1.0
-   * тёзка снимал чужую реакцию и голосовал от чужого имени (audit S1). У
-   * записи без отпечатка — а такие остались от прежних версий — своим считается
-   * только тот, у кого ключа нет тоже: иначе достаточно было бы назваться.
-   */
-  toggleReaction(msg: ChatMessage, who: PersonOrGuest, emoji: string): ReactionMap {
-    const reactions: ReactionMap = { ...(msg.reactions ?? {}) };
-    const list = reactions[emoji] ?? [];
-    const mine = list.filter((r) => sameReactor(r, who));
-    if (mine.length) {
-      const next = list.filter((r) => !sameReactor(r, who));
-      if (next.length) reactions[emoji] = next;
-      else delete reactions[emoji];
-    } else {
-      reactions[emoji] = [...list, who];
-    }
-    return reactions;
-  }
-
   // ── Внутреннее ────────────────────────────────────────────────────────────
 
   /**
@@ -866,11 +730,6 @@ export class ChatService implements OnModuleInit {
   }
 
   /**
-   * Запрос ленты: свежие первыми, на одну больше страницы. Эта лишняя запись и
-   * есть ответ на вопрос «есть ли выше ещё» — считать общее число реплик
-   * канала ради одного булева значения было бы расточительно.
-   */
-  /**
    * Размер страницы, каким его назначил владелец.
    *
    * Спрашивается РАЗ на запрос, и полученное число передаётся дальше доводом:
@@ -882,6 +741,11 @@ export class ChatService implements OnModuleInit {
     return this.settings.get<number>('messages.pageSize');
   }
 
+  /**
+   * Запрос ленты: свежие первыми, на одну больше страницы. Эта лишняя запись и
+   * есть ответ на вопрос «есть ли выше ещё» — считать общее число реплик
+   * канала ради одного булева значения было бы расточительно.
+   */
   private feed(size: number) {
     return (
       this.db
