@@ -12,7 +12,8 @@ import type { VoiceSessions } from './voice-sessions';
 import { ChannelEntry } from './registry';
 import { MAX_CHANNELS, RegistryService, channelSlug } from './registry.service';
 import { createdBy, ownedBy } from './ownership';
-import { clientIp, hashServerPassword, issueUnlockToken } from './unlock';
+import { hashServerPassword, issueUnlockToken } from './unlock';
+import { clientIp } from '../client-address';
 import {
   LIMIT,
   str,

@@ -2,6 +2,7 @@ import { Body, Controller, Logger, Post, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { SettingsService } from '../settings/settings.service';
 import { authEnabled, issueToken, passwordMatches } from './auth';
+import { requestNetwork } from '../client-address';
 import { AUTH_COOKIE } from '@relay/shared';
 
 // Защита от подбора: на IP — не больше `access.unlockAttempts` неудач за окно.
@@ -56,7 +57,7 @@ export class AuthController {
       return;
     }
 
-    const ip = req.ip ?? 'unknown';
+    const ip = requestNetwork(req);
     if (this.isRateLimited(ip)) {
       res.status(429).json({ error: 'too many attempts' });
       return;

@@ -6,7 +6,7 @@ import {
   hasValidGuestBearer,
   isAuthorized,
 } from './auth/auth';
-import { clientIp } from './gateway/unlock';
+import { clientIp } from './client-address';
 
 /**
  * Две миддлвары, стоящие перед всем остальным http api. Живут отдельно от

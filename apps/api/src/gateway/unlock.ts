@@ -158,26 +158,6 @@ export function verifyUnlockToken(
   return serverId;
 }
 
-/**
- * Адрес клиента. `trust proxy: 1` в main.ts означает: доверяем ровно одному
- * хопу (нашему Caddy), то есть берём ПОСЛЕДНЮЮ запись X-Forwarded-For — ту,
- * которую подставил он. Первая запись — то, что написал клиент, и вязать
- * ограничения к ней значит не иметь ограничений вовсе.
- */
-export function clientIp(handshake: {
-  headers: Record<string, string | string[] | undefined>;
-  address?: string;
-}): string {
-  const raw = handshake.headers['x-forwarded-for'];
-  const line = Array.isArray(raw) ? raw[raw.length - 1] : raw;
-  if (typeof line === 'string') {
-    const parts = line.split(',');
-    const last = parts[parts.length - 1].trim();
-    if (last) return last;
-  }
-  return handshake.address || 'unknown';
-}
-
 // Первый простой; дальше он удваивается до потолка из настроек.
 const COOLDOWN_MS = 30_000;
 // Тишина в течение часа = разговор окончен, запись можно забыть.

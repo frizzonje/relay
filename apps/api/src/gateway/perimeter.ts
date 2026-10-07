@@ -11,7 +11,8 @@ import { refill } from '../token-bucket';
 import { ChannelEntry, ServerEntry } from './registry';
 import { RegistryService } from './registry.service';
 import { normalizeClientId, type Claimant } from './ownership';
-import { UnlockAttempts, clientIp, verifyServerPassword, verifyUnlockToken } from './unlock';
+import { UnlockAttempts, verifyServerPassword, verifyUnlockToken } from './unlock';
+import { clientIp, networkOf } from '../client-address';
 
 /** Права гостя, приехавшие подписанными в токене приглашения. */
 export interface GuestPass {
@@ -385,9 +386,9 @@ export class Perimeter {
     return this.isGuest(client) ? client.data.guestRoom : undefined;
   }
 
-  /** Ключ отлучения: комната + устройство (а если оно не назвалось — адрес). */
+  /** Ключ отлучения: комната + устройство (а если оно не назвалось — сеть). */
   private banKey(client: AppSocket, room: string): string {
-    const device = client.data.clientId || `ip:${clientIp(client.handshake)}`;
+    const device = client.data.clientId || `ip:${this.network(client)}`;
     // Разделитель — NUL, записанный escape-последовательностью: сырой байт
     // делает весь файл двоичным для grep и file. Ни в имени комнаты, ни в id
     // устройства он встретиться не может, поэтому склейка однозначна.
@@ -519,7 +520,7 @@ export class Perimeter {
    * перебору забить пул: сам семафор только ограничивает ущерб.
    */
   unlockBlocked(client: AppSocket, serverId: string): boolean {
-    return !!this.unlockAttempts.blockedUntil(clientIp(client.handshake), serverId);
+    return !!this.unlockAttempts.blockedUntil(this.network(client), serverId);
   }
 
   /**
@@ -534,7 +535,7 @@ export class Perimeter {
 
   /** Неудачная попытка: её номер и конец простоя — оба идут в лог. */
   noteUnlockFailure(client: AppSocket, serverId: string): { count: number; until: number } {
-    return this.unlockAttempts.fail(clientIp(client.handshake), serverId);
+    return this.unlockAttempts.fail(this.network(client), serverId);
   }
 
   /**
@@ -548,7 +549,7 @@ export class Perimeter {
     storedHash: string,
     password: string,
   ): void {
-    this.unlockAttempts.succeed(clientIp(client.handshake), serverId);
+    this.unlockAttempts.succeed(this.network(client), serverId);
     const key = this.unlockCacheId(storedHash, password);
     if (this.unlockCache.has(key)) return;
     if (this.unlockCache.size >= Perimeter.UNLOCK_CACHE_MAX) {
@@ -561,6 +562,11 @@ export class Perimeter {
   /** Сервер удалён — забыть его счётчики: id могут занять заново. */
   forgetServer(serverId: string): void {
     this.unlockAttempts.forgetServer(serverId);
+  }
+
+  /** Сеть абонента — ключ счётчиков неудач и отлучений (см. ../client-address). */
+  private network(client: AppSocket): string {
+    return networkOf(clientIp(client.handshake));
   }
 
   // Ключ вяжем к самому хэшу, а не к id сервера: id можно освободить удалением и

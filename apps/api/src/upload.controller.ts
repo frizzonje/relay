@@ -14,6 +14,7 @@ import { IDENTITY_COOKIE, readSession } from './identity/session';
 import { UploadRateGuard, UploadsEnabledGuard, uploadBudget } from './upload.guard';
 import { MAX_UPLOAD_BYTES, type Attachment, parseCookies } from '@relay/shared';
 import { UPLOAD_DIR, UploadsService } from './uploads';
+import { requestNetwork } from './client-address';
 
 // multer без @types — берём через require, чтобы не тянуть декларации
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -65,12 +66,15 @@ export class UploadController {
     @UploadedFile() file?: MulterFile,
   ): Promise<Attachment & { id: string }> {
     if (!file) throw new BadRequestException('файл не получен');
-    uploadBudget.charge(req.ip ?? 'unknown', file.size);
+    uploadBudget.charge(requestNetwork(req), file.size);
     // Кто принёс — нужно суточной квоте (`files.perIdentityDailyBytes`).
     // Личность берём из куки сессии и ничего у неё не спрашиваем: квоте нужен
     // ключ, а не права — их уже проверил гейт. Устройство сюда не идёт
     // намеренно: квота у человека одна на все его вкладки и телефоны.
     const session = readSession(parseCookies(req.headers.cookie)[IDENTITY_COOKIE]);
-    return this.uploads.register(file, { identityId: session?.identityId, ip: req.ip });
+    return this.uploads.register(file, {
+      identityId: session?.identityId,
+      network: requestNetwork(req),
+    });
   }
 }

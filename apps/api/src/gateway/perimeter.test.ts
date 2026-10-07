@@ -289,6 +289,25 @@ describe('server-unlock', () => {
     expect(neighbour.last('server-unlock-result')).toMatchObject({ id: 'srv', ok: true });
   });
 
+  it('простой вяжется к сети абонента: смена IPv6-адреса внутри /64 его не сбрасывает', async () => {
+    // Абонент держит целый /64 и меняет адрес в нём сам. Считай мы по адресу,
+    // каждая попытка с нового адреса была бы первой — порог не значил бы ничего.
+    const { gw, server } = await withLocked();
+    for (let i = 0; i < 9; i++) {
+      const tmp = connect(gw, server, { id: `v6-${i}`, ip: `2001:db8:7:7::${i + 1}` });
+      await gw.handleServerUnlock(asSocket(tmp), { id: 'srv', password: 'мимо' });
+      vi.advanceTimersByTime(1000);
+    }
+    const fresh = connect(gw, server, { id: 'v6-fresh', ip: '2001:db8:7:7:ffff::1' });
+    await gw.handleServerUnlock(asSocket(fresh), { id: 'srv', password: 'пароль' });
+    expect(fresh.last('server-unlock-result')).toEqual({ id: 'srv', ok: false });
+
+    // Соседний блок — другой абонент.
+    const other = connect(gw, server, { id: 'v6-other', ip: '2001:db8:7:8::1' });
+    await gw.handleServerUnlock(asSocket(other), { id: 'srv', password: 'пароль' });
+    expect(other.last('server-unlock-result')).toMatchObject({ id: 'srv', ok: true });
+  });
+
   // Регрессия. Разблокировка жила только на сокете, а сокет рвётся сам по себе.
   // После реконнекта реестр приезжал без каналов закрытого сервера (сайдбар
   // показывал их «сиротами» на главном), а `join` в них молча отбивался: клиент

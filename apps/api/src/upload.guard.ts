@@ -8,6 +8,7 @@ import {
 import type { Request } from 'express';
 import { SettingsService } from './settings/settings.service';
 import { refill, type TokenBucket } from './token-bucket';
+import { requestNetwork } from './client-address';
 
 /**
  * Лимит на `POST /api/upload` — единственный публичный POST, который пишет на
@@ -78,7 +79,7 @@ export class UploadRateGuard implements CanActivate {
     const req = ctx.switchToHttp().getRequest<Request>();
     // `trust proxy: 1` (main.ts) — req.ip это адрес, который подставил наш
     // Caddy, а не то, что клиент написал в X-Forwarded-For.
-    if (uploadBudget.allow(req.ip ?? 'unknown')) return true;
+    if (uploadBudget.allow(requestNetwork(req))) return true;
     throw new HttpException('too many uploads', HttpStatus.TOO_MANY_REQUESTS);
   }
 }

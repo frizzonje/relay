@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   Semaphore,
   UnlockAttempts,
-  clientIp,
   hashServerPassword,
   issueUnlockToken,
   verifyServerPassword,
@@ -91,34 +90,6 @@ describe('пароль сервера', () => {
       ...Array.from({ length: 5 }, (_, i) => verifyServerPassword('не тот ' + i, stored)),
     ]);
     expect(answers).toEqual([true, true, true, true, true, false, false, false, false, false]);
-  });
-});
-
-describe('clientIp', () => {
-  const at = (headers: Record<string, string | string[] | undefined>, address?: string) =>
-    clientIp({ headers, address });
-
-  it('берёт последнюю запись X-Forwarded-For — ту, что подставил наш прокси', () => {
-    // Первая запись — то, что написал клиент. Довериться ей значит разрешить
-    // каждому назначить себе новый адрес на каждую попытку пароля.
-    expect(at({ 'x-forwarded-for': '9.9.9.9, 203.0.113.7' })).toBe('203.0.113.7');
-  });
-
-  it('одна запись — она и есть адрес', () => {
-    expect(at({ 'x-forwarded-for': '203.0.113.7' })).toBe('203.0.113.7');
-  });
-
-  it('заголовок пришёл массивом — берём последний', () => {
-    expect(at({ 'x-forwarded-for': ['9.9.9.9', '203.0.113.7'] })).toBe('203.0.113.7');
-  });
-
-  it('без прокси — адрес сокета', () => {
-    expect(at({}, '198.51.100.4')).toBe('198.51.100.4');
-    expect(at({ 'x-forwarded-for': '  ' }, '198.51.100.4')).toBe('198.51.100.4');
-  });
-
-  it('неизвестно — честное "unknown", а не пустая строка на всех', () => {
-    expect(at({})).toBe('unknown');
   });
 });
 

@@ -98,7 +98,7 @@ describe('POST /api/upload', () => {
       file,
     );
     // Устройство не идёт: квота у человека одна на все его вкладки и телефоны.
-    expect(uploads.byWhom).toEqual([{ identityId: 'ид-1', ip: '10.0.0.1' }]);
+    expect(uploads.byWhom).toEqual([{ identityId: 'ид-1', network: '10.0.0.1' }]);
   });
 
   it('без куки остаётся адрес: иначе квота снималась бы её удалением', async () => {
@@ -107,7 +107,7 @@ describe('POST /api/upload', () => {
       { ip: '10.0.0.1', headers: {} } as unknown as Request,
       file,
     );
-    expect(uploads.byWhom).toEqual([{ identityId: undefined, ip: '10.0.0.1' }]);
+    expect(uploads.byWhom).toEqual([{ identityId: undefined, network: '10.0.0.1' }]);
   });
 
   it('списывает настоящий размер записанного файла, а не Content-Length', async () => {

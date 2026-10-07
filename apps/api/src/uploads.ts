@@ -87,7 +87,8 @@ interface StoredFile {
  */
 export interface Uploader {
   identityId?: string;
-  ip?: string;
+  /** Сеть, откуда пришёл файл, — ключ квоты, когда личности нет (см. client-address). */
+  network?: string;
 }
 
 /**
@@ -206,7 +207,7 @@ export class UploadsService implements OnModuleInit, OnModuleDestroy {
   private withinDailyQuota(by: Uploader, size: number): boolean {
     const limit = this.settings.get<number>('files.perIdentityDailyBytes');
     if (limit <= 0) return true; // ноль — без квоты (см. каталог)
-    const key = by.identityId ?? by.ip;
+    const key = by.identityId ?? by.network;
     // Никого не опознали (тест, внутренний вызов) — считать не на кого.
     if (!key) return true;
     const since = Date.now() - DAY_MS;
@@ -221,7 +222,7 @@ export class UploadsService implements OnModuleInit, OnModuleDestroy {
   /** Записать потраченное. Зовётся ПОСЛЕ того, как загрузка состоялась. */
   private chargeDaily(by: Uploader, size: number): void {
     if (this.settings.get<number>('files.perIdentityDailyBytes') <= 0) return;
-    const key = by.identityId ?? by.ip;
+    const key = by.identityId ?? by.network;
     if (!key) return;
     this.daily.set(key, [...(this.daily.get(key) ?? []), { at: Date.now(), bytes: size }]);
   }

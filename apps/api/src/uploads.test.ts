@@ -513,11 +513,11 @@ describe('квота личности на сутки', () => {
   it('без личности считает по адресу — иначе квота снимается удалением куки', async () => {
     const svc = untouched();
     await tune(settings, 'files.perIdentityDailyBytes', 1000);
-    await svc.register(put('первый.bin', 900, 0), { ip: '10.0.0.1' });
-    expect(await refusalOf(svc.register(put('второй.bin', 900, 0), { ip: '10.0.0.1' }))).toBe(
+    await svc.register(put('первый.bin', 900, 0), { network: '10.0.0.1' });
+    expect(await refusalOf(svc.register(put('второй.bin', 900, 0), { network: '10.0.0.1' }))).toBe(
       HttpStatus.PAYLOAD_TOO_LARGE,
     );
-    await svc.register(put('соседний.bin', 900, 0), { ip: '10.0.0.2' });
+    await svc.register(put('соседний.bin', 900, 0), { network: '10.0.0.2' });
     expect(await svc.exists('соседний.bin')).toBe(true);
   });
 
