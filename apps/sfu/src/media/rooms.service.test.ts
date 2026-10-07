@@ -184,6 +184,25 @@ describe('транспорты', () => {
     rooms.leave(peer);
     await expect(rooms.createTransport(peer)).rejects.toThrow('room is gone');
   });
+
+  it('участник ушёл, пока заводился транспорт, — транспорт закрыт, а не брошен', async () => {
+    // Обрыв посреди входа: `leave` уже снял его транспорты, а этот ещё ехал из
+    // воркера. Привяжи его к ушедшему — и он живёт до закрытия роутера, держа
+    // порт WebRtcServer на каждый такой обрыв. Соседу комната нужна живой,
+    // иначе роутер закрылся бы и унёс транспорт сам.
+    const { peer } = await join('эфир', 'a');
+    await join('эфир', 'b');
+    const router = workers.routers[0];
+    let release!: () => void;
+    router.hold = new Promise((resolve) => (release = resolve));
+    const pending = rooms.createTransport(peer);
+    rooms.leave(peer);
+    release();
+    await expect(pending).rejects.toThrow('peer is gone');
+    expect(router.transports).toHaveLength(1);
+    expect(router.transports[0].closed).toBe(true);
+    expect(peer.transports.size).toBe(0);
+  });
 });
 
 describe('снимок комнаты для новичка', () => {

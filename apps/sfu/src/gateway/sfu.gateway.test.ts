@@ -170,6 +170,24 @@ describe('транспорты', () => {
     });
   });
 
+  it('потолок держится и против запросов разом, а не только по очереди', async () => {
+    // Проверка до ожидания пропускает всех, кто пришёл, пока первый транспорт
+    // ещё заводится: счётчик растёт только после него.
+    const s = await connect('эфир', 'a');
+    const router = workers.routers[0];
+    let release!: () => void;
+    router.hold = new Promise((resolve) => (release = resolve));
+    const acks = Array.from({ length: 9 }, () => gw.handleCreateTransport(sock(s), {}));
+    release();
+    const done = await Promise.all(acks);
+    expect(done.filter((a) => a.ok)).toHaveLength(6);
+    expect(done.filter((a) => !a.ok)).toEqual(
+      Array(3).fill({ ok: false, error: 'too-many-transports' }),
+    );
+    // Лишние не просто отвергнуты — закрыты: порт за ними не держится.
+    expect(router.transports.filter((t) => !t.closed)).toHaveLength(6);
+  });
+
   it('упавший mediasoup превращается во внятный отказ, а не в исключение', async () => {
     const s = await connect('эфир', 'a');
     workers.routers[0].failTransport = true;

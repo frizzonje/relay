@@ -158,6 +158,11 @@ export class FakeRouter {
   /** Ответ canConsume — то самое место, где «слышно, но не видно». */
   consumable = true;
   failTransport = false;
+  /**
+   * Пока не разрешится — транспорт «заводится». Окно, в которое настоящий
+   * mediasoup уходит в воркер и обратно, а сокет успевает оборваться.
+   */
+  hold: Promise<void> | null = null;
 
   constructor(readonly mediaCodecs: unknown) {}
 
@@ -165,6 +170,7 @@ export class FakeRouter {
 
   async createWebRtcTransport(options?: unknown): Promise<FakeTransport> {
     if (this.failTransport) throw new Error('порты кончились');
+    if (this.hold) await this.hold;
     this.transportOptions.push(options);
     const t = new FakeTransport();
     this.transports.push(t);

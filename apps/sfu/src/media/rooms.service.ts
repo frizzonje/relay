@@ -160,6 +160,13 @@ export class RoomsService {
     const transport = await room.router.createWebRtcTransport(
       webRtcTransportOptions(room.webRtcServer),
     );
+    // Пока транспорт ехал из воркера, участник мог уйти: `leave` уже снял всё,
+    // что за ним числилось, и этот привязать не к кому. Брошенный, он жил бы до
+    // закрытия роутера — с портом WebRtcServer на каждый обрыв посреди входа.
+    if (!this.has(peer)) {
+      transport.close();
+      throw new Error('peer is gone');
+    }
     // Судьба медиапути видна только отсюда: клиентские логи умирают вместе со
     // вкладкой, а «отвалились на второй минуте» назавтра разбирается ровно по
     // этим строчкам. dtls connected — медиа реально пошло; ice disconnected —

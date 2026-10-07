@@ -238,7 +238,13 @@ export class SfuGateway implements OnGatewayConnection {
     }
     const direction = payload?.direction === 'recv' ? 'recv' : 'send';
     try {
-      const { params } = await this.rooms.createTransport(peer);
+      const { transport, params } = await this.rooms.createTransport(peer);
+      // Сверяемся и после ожидания: запросы, пришедшие разом, все прошли
+      // проверку выше, пока первый транспорт ещё заводился.
+      if (peer.transports.size > SfuGateway.MAX_TRANSPORTS_PER_PEER) {
+        transport.close();
+        return fail('too-many-transports');
+      }
       return { ok: true, params, direction };
     } catch (err) {
       this.logger.warn(`create-transport failed for ${peer.id}: ${String(err)}`);
