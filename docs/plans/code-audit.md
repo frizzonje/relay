@@ -103,9 +103,15 @@
 4. **Циклы** — madge `--circular` по трём приложениям; циклы на одних типах
    разрешены списком.
 5. **Мёртвое** — knip: неиспользуемые файлы, экспорты, зависимости.
-6. **Гонки и промисы** — typescript-eslint в режиме с типами для api, sfu и
-   web/lib: `no-floating-promises`, `no-misused-promises`, `await-thenable`,
-   `require-await`, `switch-exhaustiveness-check`.
+6. ✅ **Гонки и промисы** — typescript-eslint с типами для api, sfu, web и
+   shared (у каждого свой `tsconfig.lint.json` — тот же проект с тестами):
+   `no-floating-promises`, `no-misused-promises` (атрибуты JSX — нет),
+   `await-thenable`, `switch-exhaustiveness-check` (`default` засчитан).
+   Нашёл два `setInterval(async …)` с тиками внахлёст — сканер QR в
+   `AdmitDeviceDialog` мог отдать один код в `onFound` дважды, опрос в
+   `LinkDevicePanel` — завести две перезагрузки; `bootstrap()` sfu без
+   `.catch`; 47 `await` на синхронных вызовах в тестах api. `require-await`
+   не включён: 125 срабатываний, почти все — асинхронные подделки в тестах.
 7. **Размер** — `max-lines` (400), `max-lines-per-function` (150),
    `complexity` (20) как предупреждения. Отчёт питает
    [module-split.md](module-split.md), гейт не ставим: декларативные каталоги

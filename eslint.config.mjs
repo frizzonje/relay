@@ -101,22 +101,44 @@ export default tseslint.config(
     rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
 
-  // Api: линт со знанием типов — ради одного правила, но важного.
-  // Асинхронный обработчик, вызванный без `await`, тестами не ловится: они
-  // крутят фейковые таймеры, а о незавершённой записи в базу таймеры не знают.
-  // На спокойной машине такой тест проходит, на загруженной — нет, и разбирают
-  // это как «плавающий» тест, а не как забытое слово. Правило требует разбора
-  // с типами (медленнее обычного), поэтому включено только здесь.
-  {
-    files: ['apps/api/src/**/*.ts'],
+  // Линт со знанием типов: правила о промисах и о полноте `switch`.
+  //
+  // Асинхронный вызов без `await` тестами не ловится: они крутят фейковые
+  // таймеры, а о незавершённой записи в базу таймеры не знают. На спокойной
+  // машине такой тест проходит, на загруженной — нет, и разбирают это как
+  // «плавающий» тест, а не как забытое слово. `setInterval(async …)` — тики,
+  // налезающие друг на друга, когда ответ дольше периода. `await` не на
+  // промисе — проверка, которая ждёт не то, что думает.
+  //
+  // Разбор с типами медленнее обычного, поэтому у каждого пакета свой
+  // `tsconfig.lint.json` (тот же проект, но с тестами), а не общий сервис.
+  ...[
+    ['apps/api/src/**/*.ts', './apps/api/tsconfig.lint.json'],
+    ['apps/sfu/src/**/*.ts', './apps/sfu/tsconfig.lint.json'],
+    ['apps/web/{app,components,lib,stores}/**/*.{ts,tsx}', './apps/web/tsconfig.lint.json'],
+    ['packages/shared/src/**/*.ts', './packages/shared/tsconfig.lint.json'],
+  ].map(([files, project]) => ({
+    files: [files],
     languageOptions: {
-      parserOptions: {
-        project: './apps/api/tsconfig.lint.json',
-        tsconfigRootDir: import.meta.dirname,
-      },
+      parserOptions: { project, tsconfigRootDir: import.meta.dirname },
     },
-    rules: { '@typescript-eslint/no-floating-promises': 'error' },
-  },
+    rules: {
+      '@typescript-eslint/no-floating-promises': 'error',
+      // Асинхронный обработчик в атрибуте JSX (`onClick={async …}`) — обычный
+      // приём React: событие его не ждёт, и ждать не должно.
+      '@typescript-eslint/no-misused-promises': [
+        'error',
+        { checksVoidReturn: { attributes: false } },
+      ],
+      '@typescript-eslint/await-thenable': 'error',
+      // `default` — законный ответ «всё остальное»; правило ловит `switch` по
+      // объединению, в котором забыли вариант и не оставили `default`.
+      '@typescript-eslint/switch-exhaustiveness-check': [
+        'error',
+        { considerDefaultExhaustiveForUnions: true },
+      ],
+    },
+  })),
 
   // Осознанные послабления: RTC-касты и SSR-заглушки местами требуют any;
   // неиспользуемые аргументы с префиксом «_» — норма.

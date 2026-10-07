@@ -1,0 +1,7 @@
+{
+  // Тот же проект, но с тестами — как apps/api/tsconfig.lint.json: забытый
+  // `await` живёт в тестах не реже, чем в коде.
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*"],
+  "exclude": []
+}
