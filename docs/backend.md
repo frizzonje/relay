@@ -127,9 +127,11 @@ SignalingGateway
 
 ### Как добавить событие
 
-1. Тип payload и ответа — в [`packages/shared/src/index.ts`](../packages/shared/src/index.ts)
+1. Тип payload и ответа — в файл своего домена в
+   [`packages/shared/src`](../packages/shared/src) (`chat.ts`, `registry.ts`, …),
+   событие — в карту [`events.ts`](../packages/shared/src/events.ts)
    (`ClientToServerEvents` / `ServerToClientEvents`); в `gateway/protocol.ts` —
-   реэкспорт ответа и `Untrusted<…>` для тела.
+   `Untrusted<…>` для тела. Ответ обработчик берёт прямо из `@relay/shared`.
 2. Логику — в подходящий `*.handlers.ts`; состояние сокета — через владельца.
 3. `@SubscribeMessage` в гейтвее — одна строка, передающая управление обработчику.
 4. Первой строкой обработчика — `perimeter.allow(client)` (кроме негоциации) и

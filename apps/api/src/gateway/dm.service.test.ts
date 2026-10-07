@@ -51,7 +51,7 @@ describe('адрес беседы', () => {
     const b = '22222222-2222-2222-2222-222222222222';
     expect(isDmSlug(DmService.address(a, b))).toBe(true);
     // «dm-обсуждение» — законное имя текстового канала (см.
-    // packages/shared/src/index.ts), и по одному префиксу его не отличить
+    // packages/shared/src/dm.ts), и по одному префиксу его не отличить
     // от адреса беседы.
     expect(isDmSlug('dm-obsuzhdenie')).toBe(false);
     expect(isDmSlug('lounge')).toBe(false);

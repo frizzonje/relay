@@ -3,9 +3,10 @@
 Спецификация для тех, кто пишет клиента: веб, десктоп-оболочку, iOS, Android.
 Сервер не знает, какая у клиента платформа, — все говорят по одному контракту.
 
-**Источник правды — код, а не этот файл.** Типы всех событий и ответов лежат в
-[`packages/shared/src/index.ts`](../packages/shared/src/index.ts)
-(`ClientToServerEvents`, `ServerToClientEvents`), админка — в
+**Источник правды — код, а не этот файл.** Карты событий —
+[`packages/shared/src/events.ts`](../packages/shared/src/events.ts)
+(`ClientToServerEvents`, `ServerToClientEvents`), payload'ы и ответы — в файле
+своего домена рядом (`chat.ts`, `dm.ts`, `registry.ts`, `voice.ts`, `call.ts`…), админка — в
 [`admin.ts`](../packages/shared/src/admin.ts), каталог настроек — в
 [`settings.ts`](../packages/shared/src/settings.ts). Этот документ объясняет,
 что они значат и в каком порядке их слать. Меняете контракт — правьте оба

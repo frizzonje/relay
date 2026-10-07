@@ -69,7 +69,7 @@ describe('channel-create', () => {
 
   it('имя с префиксом dm-, но не в форме адреса, — законное имя канала', async () => {
     // «dm-обсуждение» задокументирован как легальное имя текстового канала
-    // (packages/shared/src/index.ts) — резервировать надо форму адреса
+    // (packages/shared/src/dm.ts) — резервировать надо форму адреса
     // беседы, а не сам префикс `dm-`.
     const { gw, owner } = await withOwnServer();
     const res = await gw.handleChannelCreate(asSocket(owner), {

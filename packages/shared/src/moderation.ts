@@ -37,3 +37,8 @@ export interface BanEntry {
 export type ModerationBansResult =
   | { ok: true; bans: BanEntry[] }
   | { ok: false; error: 'forbidden' };
+
+/** Бан — тому, кого забанили. Текст пишет владелец, и он может молчать. */
+export interface BannedRelay {
+  notice?: string;
+}

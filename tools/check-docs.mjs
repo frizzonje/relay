@@ -114,7 +114,7 @@ function interfaceKeys(source, name) {
   return [...body.matchAll(/^\s{2}'?([a-z][a-z-]*)'?\s*:/gm)].map((m) => m[1]);
 }
 
-const shared = read('packages/shared/src/index.ts');
+const shared = read('packages/shared/src/events.ts');
 const apiGateway = read('apps/api/src/gateway/signaling.gateway.ts');
 const sfuGateway = read('apps/sfu/src/gateway/sfu.gateway.ts');
 

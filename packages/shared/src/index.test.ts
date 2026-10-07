@@ -56,7 +56,7 @@ describe('контракт и сервер', () => {
     const subscribed = [...gateway.matchAll(/@SubscribeMessage\('(admin-[a-z-]+)'\)/g)].map(
       (m) => m[1],
     );
-    const contract = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8');
+    const contract = readFileSync(fileURLToPath(new URL('./events.ts', import.meta.url)), 'utf8');
     const c2s = contract.slice(contract.indexOf('export interface ClientToServerEvents'));
     const declared = [...c2s.slice(0, c2s.indexOf('\n}')).matchAll(/'(admin-[a-z-]+)':/g)].map(
       (m) => m[1],
