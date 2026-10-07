@@ -147,12 +147,18 @@ export class Perimeter {
     try {
       const speaker = await this.identities.fromCookie(socket.handshake.headers.cookie);
       if (speaker) {
-        socket.data.identity = speaker;
         // Власть над инсталляцией выясняется здесь же и один раз: её спрашивает
         // каждая рассылка реестра, а меняется она перевыпуском ссылки
         // владельца — событием со своим обработчиком (см. `resyncOwner`).
-        socket.data.owner = await this.owner.isOwner(speaker.id);
-        const rights = await this.roles.rightsOf(speaker.id);
+        const [owner, rights] = await Promise.all([
+          this.owner.isOwner(speaker.id),
+          this.roles.rightsOf(speaker.id),
+        ]);
+        // На сокет — всё разом и только когда известно всё. Положи мы личность
+        // до чтения прав, упавший запрос оставил бы сокет с именем, но без
+        // банов: забаненный с сервера говорил бы в нём под своим лицом.
+        socket.data.identity = speaker;
+        socket.data.owner = owner;
         socket.data.bannedFrom = rights.bannedFrom;
         socket.data.banned = rights.banned;
       }

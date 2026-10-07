@@ -91,6 +91,16 @@ describe('подключение', () => {
     expect(sock.got('servers')).toBe(true);
   });
 
+  it('права не прочитались — личность на сокет не кладётся вовсе', async () => {
+    // Иначе упавший запрос прав оставлял сокет с именем, но без банов.
+    const { gw, server, roles } = await makeGateway();
+    const banned = await personCookie('Забаненная');
+    vi.spyOn(roles, 'rightsOf').mockRejectedValueOnce(new Error('база не ответила'));
+    const sock = await connectAs(gw, server, banned.cookie);
+    expect(asSocket(sock).data.identity).toBeUndefined();
+    expect(asSocket(sock).data.bannedFrom).toBeUndefined();
+  });
+
   it('новичок сразу получает реестры и состав эфиров', async () => {
     const { gw, server } = await makeGateway();
     const sock = server.connect();
