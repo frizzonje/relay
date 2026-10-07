@@ -7,10 +7,10 @@ import { DeviceRow } from '../db/entities';
 import { resetDatabase, testDatabase } from '../db/testing';
 import type { SettingsService } from '../settings/settings.service';
 import { freshSettings, tune } from '../settings/settings.testkit';
-import { SIGN_ALGORITHM, authMessage } from './crypto';
 import { IdentityController } from './identity.controller';
 import { IdentityService } from './identity.service';
 import { IDENTITY_COOKIE } from './session';
+import { SIGN_ALGORITHM, authMessage } from '@relay/shared';
 
 /**
  * Здесь проверяется не криптография (она в `crypto.test`) и не правила входа

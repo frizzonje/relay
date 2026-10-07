@@ -5,7 +5,8 @@ import type { Perimeter } from './perimeter';
 import type { RegistryService } from './registry.service';
 import type { SettingsService } from '../settings/settings.service';
 import { mentionedIn } from './chat.service';
-import { LIMIT, trimmed, type MentionRef } from './protocol';
+import { LIMIT, trimmed } from './protocol';
+import type { MentionRef } from '@relay/shared';
 
 /**
  * Упоминания: кого назвали, кому об этом сказать и сколько раз назвали, пока

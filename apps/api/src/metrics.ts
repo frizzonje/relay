@@ -2,6 +2,7 @@ import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { readFile, statfs } from 'node:fs/promises';
 import { cpus, freemem, loadavg, platform, totalmem, uptime } from 'node:os';
 import { UPLOAD_DIR } from './uploads';
+import type { MetricsResponse } from '@relay/shared';
 
 /**
  * Состояние машины, на которой стоит инсталляция: процессор, память, диск.
@@ -27,13 +28,6 @@ const SAMPLE_MS = 2000;
 // Сколько ждать, если первый запрос успел раньше первого такта: короткая
 // синхронная выборка вместо прочерка на экране. Один раз за жизнь процесса.
 const FIRST_SAMPLE_MS = 150;
-
-export interface Metrics {
-  cpu: { cores: number; usage: number | null; load1: number | null };
-  mem: { total: number; used: number };
-  disk: { total: number; used: number } | null;
-  uptimeSec: number;
-}
 
 interface CpuSample {
   idle: number;
@@ -117,7 +111,7 @@ async function readDisk(path: string): Promise<{ total: number; used: number } |
 export class MetricsService implements OnModuleInit {
   private last: CpuSample = cpuSample();
   private usage: number | null = null;
-  private cache: { at: number; value: Metrics } | null = null;
+  private cache: { at: number; value: MetricsResponse } | null = null;
 
   onModuleInit() {
     const timer = setInterval(() => this.tick(), SAMPLE_MS);
@@ -131,7 +125,7 @@ export class MetricsService implements OnModuleInit {
     if (usage !== null) this.usage = usage;
   }
 
-  async read(): Promise<Metrics> {
+  async read(): Promise<MetricsResponse> {
     const now = Date.now();
     if (this.cache && now - this.cache.at < CACHE_MS) return this.cache.value;
 
@@ -145,7 +139,7 @@ export class MetricsService implements OnModuleInit {
     const [mem, disk] = await Promise.all([readMem(), readDisk(UPLOAD_DIR)]);
     // loadavg на не-Linux возвращает нули — это не «нагрузки нет», а «не умею».
     const load = loadavg()[0];
-    const value: Metrics = {
+    const value: MetricsResponse = {
       cpu: {
         cores: cpus().length,
         usage: this.usage,

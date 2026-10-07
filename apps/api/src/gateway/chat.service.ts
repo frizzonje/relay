@@ -2,24 +2,27 @@ import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { AttachmentRow, IdentityRow, MessageRow, PinRow } from '../db/entities';
-import type { Attachment } from '../uploads';
 // Значением, а не `import type`: тип стирается при сборке, и
 // `emitDecoratorMetadata` записывает в довод конструктора `Function` вместо
 // класса — Nest такой довод не разрешает и падает при старте. Тесты этого не
 // видят: они собирают сервисы руками, минуя контейнер.
 import { SettingsService } from '../settings/settings.service';
+import { LIMIT } from './protocol';
+import { DmService } from './dm.service';
+import { RegistryService } from './registry.service';
 import {
-  LIMIT,
+  CHAT_PREFIX,
+  PIN_LIMIT,
+  REACTION_EMOJIS,
+  type SearchHit,
+  type Attachment,
   type CallMark,
   type ChatMessage,
   type MentionRef,
   type ReactionMap,
   type Reactor,
   type ReplyRef,
-} from './protocol';
-import { DmService } from './dm.service';
-import { RegistryService } from './registry.service';
-import { CHAT_PAGE_SIZE, CHAT_PREFIX, REACTION_EMOJIS } from '@relay/shared';
+} from '@relay/shared';
 
 /**
  * История текстовых каналов.
@@ -39,19 +42,6 @@ import { CHAT_PAGE_SIZE, CHAT_PREFIX, REACTION_EMOJIS } from '@relay/shared';
  * чих. Это кэш производной величины, а не второе хранилище: он пересчитывается
  * при старте одним запросом и обновляется на каждой новой реплике.
  */
-
-/** Комнаты чата в socket.io живут с префиксом — чтобы не пересечься с эфиром. */
-export { CHAT_PREFIX };
-
-/**
- * Сколько реплик отдаём одной страницей — и при входе в канал, и при подгрузке.
- *
- * Умолчание, а не закон: размер страницы правится в панели
- * (`messages.pageSize`), и читает его `pageSize()` ниже. Константа осталась
- * ровно тем, чем была до панели, — поведением инсталляции, где настройку не
- * трогали, — и то же число, что ждёт клиент (`CHAT_PAGE_SIZE` контракта).
- */
-export const PAGE_SIZE = CHAT_PAGE_SIZE;
 
 /**
  * Сколько находок отдаём одной страницей. Меньше страницы ленты намеренно:
@@ -106,19 +96,6 @@ export function searchTerms(query: string): string[] {
 function tsquery(terms: string[]): string {
   return terms.map((term) => `${term}:*`).join(' & ');
 }
-
-/**
- * Сколько реплик можно закрепить в канале.
- *
- * Потолок здесь не про экономию места и не про длину поповера. Закрепление —
- * единственный способ оставить сообщение жить дольше ретенции, и без числа
- * четырнадцать дней превратились бы в пожелание: канал, где закреплено всё,
- * хранит всё вечно. Полсотни — это уже не «важное», а вторая лента.
- */
-export const PIN_LIMIT = 50;
-// С этапа C это умолчание настройки `messages.pinLimit`: действующее число
-// приносит обработчик, а здесь остаётся то, с чем инсталляция живёт, пока
-// панель не открывали.
 
 /** Сколько имён показываем в подсказке после `@`. Список читают глазами. */
 export const MENTION_SUGGEST_LIMIT = 8;
@@ -210,16 +187,6 @@ export interface Page {
 export interface FeedWindow extends Page {
   /** Ниже есть ещё — значит человек смотрит прошлое, а не живой конец канала. */
   moreAfter: boolean;
-}
-
-/**
- * Находка: реплика и канал, в котором она сказана. Слаг здесь обязателен —
- * поиск по серверу возвращает реплики из каналов, в которых человек сейчас не
- * сидит, и без него результат некуда открыть.
- */
-export interface SearchHit {
-  slug: string;
-  message: ChatMessage;
 }
 
 export interface SearchPage {

@@ -3,14 +3,8 @@ import type { DmService } from './dm.service';
 import type { Perimeter } from './perimeter';
 import type { Rings } from './ring';
 import type { SettingsService } from '../settings/settings.service';
-import {
-  LIMIT,
-  trimmed,
-  type CallReplyResult,
-  type CallRingPayload,
-  type CallStartPayload,
-  type CallStartResult,
-} from './protocol';
+import { LIMIT, trimmed, type CallRingPayload, type CallStartPayload } from './protocol';
+import type { CallReplyResult, CallStartResult } from '@relay/shared';
 
 /**
  * Четыре события дозвона: позвонить, принять, отклонить, дать отбой.

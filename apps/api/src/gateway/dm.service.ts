@@ -2,61 +2,17 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { ChannelRow, ConversationRow } from '../db/entities';
-import type { CallMark } from './protocol';
-import { DM_PEOPLE_LIMIT, DM_PREFIX, DM_PREVIEW_LIMIT } from '@relay/shared';
-
-/** Адрес беседы всегда начинается с этого — по нему её и узнают в ленте. */
-export { DM_PREFIX };
+import {
+  DM_PREFIX,
+  DM_PREVIEW_LIMIT,
+  type CallMark,
+  type DmConversation,
+  type DmPeer,
+  type DmPerson,
+} from '@relay/shared';
 
 /** Сколько знаков хэша в адресе. 24 знака шестнадцатеричных — 96 бит. */
 const ADDRESS_LEN = 24;
-
-/**
- * Докуда обрезается превью последней реплики в списке переписок. С этапа C это
- * умолчание настройки `messages.replyPreviewLength`: действующее число приносит
- * обработчик, а здесь остаётся то, с чем инсталляция живёт, пока панель не
- * открывали, — и то же число, которое ждёт клиент (см. `packages/shared`).
- */
-export { DM_PREVIEW_LIMIT };
-
-/** Сколько людей отдаётся на один запрос `dm-people`. */
-export { DM_PEOPLE_LIMIT };
-
-/**
- * Форма адреса беседы — тот же анкорный шаблон, что `isDmSlug` в
- * `@relay/shared`: `dm-` и 24 шестнадцатеричных знака, и ничего сверх.
- * Проверяет именно форму, а не префикс `dm-` целиком: «dm-обсуждение» —
- * законное имя текстового канала (см. `packages/shared/src/index.ts`), и по
- * одному префиксу его было бы не отличить от адреса чужой беседы.
- */
-export function isDmSlug(slug: string): boolean {
-  return /^dm-[0-9a-f]{24}$/.test(slug);
-}
-
-export interface DmPeerView {
-  fingerprint: string;
-  nick: string;
-}
-
-export interface DmConversationView {
-  /** Адрес беседы — он же слаг и id её канала. */
-  slug: string;
-  peer: DmPeerView;
-  /** Время последней реплики; 0 — переписки ещё не было. */
-  lastTs: number;
-  preview: string;
-  /** Последняя реплика — моя. По ней список рисует «вы: …». */
-  previewMine: boolean;
-  /**
-   * Заполнено, если последняя строка беседы — отметка о пропущенном звонке.
-   * `preview` тогда несёт непереведённую запаску (`ChatMessage.call` в
-   * протоколе), а слово подбирает клиент через `t()`; без этого поля список
-   * переписок показывал бы английскую строку сервера так же, как раньше — на
-   * ЭТОТ раз уже не только сразу после звонка, но и при каждой холодной
-   * загрузке списка, пока беседа не получит более свежую реплику.
-   */
-  call?: CallMark;
-}
 
 /**
  * Почему беседу не открыли. `not-allowed` — открывать НОВУЮ этому человеку
@@ -106,7 +62,7 @@ export class DmService implements OnModuleInit {
    * так же, как `known`: на старте одним запросом, дальше — по одной строке на
    * каждое открытие и по звонку `rememberNick` на переименование.
    */
-  private readonly nicks = new Map<string, DmPeerView>();
+  private readonly nicks = new Map<string, DmPeer>();
 
   constructor(private readonly db: DataSource) {}
 
@@ -155,7 +111,7 @@ export class DmService implements OnModuleInit {
       mayStart?: (peerId: string) => boolean | Promise<boolean>;
     } = {},
   ): Promise<
-    { ok: true; view: DmConversationView; created: boolean } | { ok: false; reason: DmOpenFailure }
+    { ok: true; view: DmConversation; created: boolean } | { ok: false; reason: DmOpenFailure }
   > {
     // Обе стороны одним запросом: собеседник — по отпечатку, я — по id.
     // `nicks` обязана расти по обеим половинам беседы (см. комментарий у поля
@@ -234,7 +190,7 @@ export class DmService implements OnModuleInit {
    * списке: закрытая переписка не должна исчезать из раздела оттого, что в ней
    * пока нечего показать.
    */
-  async list(meId: string, previewLimit?: number): Promise<DmConversationView[]> {
+  async list(meId: string, previewLimit?: number): Promise<DmConversation[]> {
     const rows: Array<{ channel_id: string; peer_fingerprint: string; peer_nick: string }> =
       await this.db.query(
         `SELECT c.channel_id,
@@ -276,11 +232,7 @@ export class DmService implements OnModuleInit {
    * им всё равно не доставить, а строка в списке выглядела бы как живой
    * человек.
    */
-  async people(
-    meId: string,
-    query: string,
-    limit: number,
-  ): Promise<Array<DmPeerView & { lastSeenTs: number }>> {
+  async people(meId: string, query: string, limit: number): Promise<DmPerson[]> {
     const like = `%${query.trim().toLowerCase()}%`;
     const rows: Array<{ fingerprint: string; nick: string; last_seen_at: Date | null }> =
       await this.db.query(
@@ -346,7 +298,7 @@ export class DmService implements OnModuleInit {
   }
 
   /** Как показать эту личность собеседнику: лицо и подпись. */
-  peerView(identityId: string): DmPeerView | undefined {
+  peerView(identityId: string): DmPeer | undefined {
     return this.nicks.get(identityId);
   }
 

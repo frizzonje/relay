@@ -6,7 +6,7 @@ import type { Perimeter } from './perimeter';
 import type { RegistryService } from './registry.service';
 import type { SettingsService } from '../settings/settings.service';
 import type { VoiceSessions } from './voice-sessions';
-import { Channel, ServerEntry } from './registry';
+import { ChannelEntry, ServerEntry } from './registry';
 import { moderatedBy } from './ownership';
 
 /**
@@ -81,7 +81,7 @@ export class Moderation {
   }
 
   /** Модерирует ли этот сокет сервер, которому принадлежит канал. */
-  mayModerate(client: AppSocket, channel: Channel): boolean {
+  mayModerate(client: AppSocket, channel: ChannelEntry): boolean {
     const srv = this.registry.serverOf(channel);
     return !!srv && this.perimeter.isOpenTo(client, srv) && this.moderates(client, srv);
   }

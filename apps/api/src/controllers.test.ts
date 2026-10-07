@@ -8,7 +8,8 @@ import { MetricsController } from './metrics.controller';
 import type { Metrics, MetricsService } from './metrics';
 import { UploadController } from './upload.controller';
 import { UploadByteBudget, UploadRateGuard, uploadBudget } from './upload.guard';
-import type { Attachment, UploadsService } from './uploads';
+import type { UploadsService } from './uploads';
+import type { Attachment } from '@relay/shared';
 
 /**
  * Мелкие http-ручки и гард загрузок. Ручки тонкие нарочно, и проверять в них

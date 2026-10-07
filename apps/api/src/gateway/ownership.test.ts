@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeClientId, ownedBy, publicChannel, publicServer } from './ownership';
-import type { Channel, ServerEntry } from './registry';
+import type { ChannelEntry, ServerEntry } from './registry';
 
 /**
  * Владение реестровыми записями (audit B2). Проверяем три обещания, которые
@@ -21,7 +21,7 @@ const server = (over: Partial<ServerEntry> = {}): ServerEntry => ({
   ...over,
 });
 
-const channel = (over: Partial<Channel> = {}): Channel => ({
+const channel = (over: Partial<ChannelEntry> = {}): ChannelEntry => ({
   id: 'c1',
   serverId: 's1',
   type: 'voice',
@@ -156,7 +156,7 @@ describe('publicChannel', () => {
   it('новое поле реестра само наружу не просочится', () => {
     // Витрина собирается поимённо: поле, добавленное в запись реестра, попадёт
     // клиенту только правкой publicChannel — а не потому, что его забыли убрать.
-    const out = publicChannel({ ...channel(), secret: 'не для клиента' } as Channel, nobody);
+    const out = publicChannel({ ...channel(), secret: 'не для клиента' } as ChannelEntry, nobody);
     expect(out).not.toHaveProperty('secret');
   });
 });

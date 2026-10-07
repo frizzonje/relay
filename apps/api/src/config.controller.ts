@@ -1,17 +1,18 @@
 import { Controller, Get } from '@nestjs/common';
-import { type RetentionMode } from './db/retention.policy';
 import { RetentionService } from './db/retention.service';
-import type { SettingsSnapshot } from './gateway/protocol';
+import type { ConfigResponse, IceServer } from '@relay/shared';
 import { SettingsService } from './settings/settings.service';
 import { issueTurnCredentials, turnSecret } from './turn';
 import { sfuHealthy } from './sfu/sfu-health';
 import { serverVersion } from './version';
 
-interface IceServer {
-  urls: string[];
-  username?: string;
-  credential?: string;
-}
+/**
+ * Что отдаёт этот сервер. Поля контракта необязательны ради клиентов, которые
+ * ходят к серверам постарше; сам он обязан заполнить каждое, кроме срока
+ * TURN-пары — её может не быть.
+ */
+type ServedConfig = Required<Omit<ConfigResponse, 'iceExpiresAt'>> &
+  Pick<ConfigResponse, 'iceExpiresAt'>;
 
 function splitUrls(value: string | undefined): string[] {
   return (value ?? '')
@@ -34,15 +35,7 @@ export class ConfigController {
   ) {}
 
   @Get('config')
-  async getConfig(): Promise<{
-    iceServers: IceServer[];
-    sfu: { available: boolean };
-    retentionDays: number;
-    retentionMode: RetentionMode;
-    version: string;
-    settings: SettingsSnapshot;
-    iceExpiresAt?: number;
-  }> {
+  async getConfig(): Promise<ServedConfig> {
     const iceServers: IceServer[] = [];
 
     // Без TURN звонок не соберётся между «строгими» NAT (мобильные сети и т.п.)

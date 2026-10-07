@@ -15,8 +15,6 @@ export const DEFAULT_RETENTION_DAYS = 14;
  * «не хранить вовсе» это три разных обещания, и одно число их различает только
  * по договорённости, о которой человек не знает.
  */
-export type RetentionMode = 'days' | 'forever' | 'ephemeral';
-
 export type Retention =
   | { mode: 'days'; days: number }
   | { mode: 'forever' }

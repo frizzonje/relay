@@ -1,8 +1,8 @@
 import type { Request, Response } from 'express';
-import { parseCookies } from '../auth/auth';
 import type { DeviceRow, IdentityRow } from '../db/entities';
 import type { IdentityService } from './identity.service';
 import { IDENTITY_COOKIE, readSession } from './session';
+import { parseCookies } from '@relay/shared';
 
 /**
  * «Кто спрашивает» — один ответ на все распоряжения личностью.

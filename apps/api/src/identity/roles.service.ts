@@ -4,6 +4,7 @@ import { DataSource, IsNull } from 'typeorm';
 import { IdentityRow, RoleRow } from '../db/entities';
 import { AuditService } from '../settings/audit.service';
 import { OWNER_ROLE } from './owner.service';
+import type { BanEntry } from '@relay/shared';
 
 /**
  * Что власть значит — в отличие от `owner.service`, где написано, как она
@@ -38,15 +39,6 @@ export interface Rights {
   banned: boolean;
   /** Серверы, с которых забанен. Пустое множество — обычный случай. */
   bannedFrom: Set<string>;
-}
-
-/** Забаненный так, как его видит модератор: лицо, имя и след. */
-export interface BanView {
-  fingerprint: string;
-  nick: string;
-  at: string;
-  /** Кто забанил. Пусто — личности бана уже нет в базе. */
-  by: string | null;
 }
 
 export type BanFailure =
@@ -181,7 +173,7 @@ export class RolesService {
    * отпечатку человека и различают глазами, и он же служит ручкой для разбана —
    * id личности в протоколе не появляется вовсе (см. `gateway/ownership`).
    */
-  async bans(serverId: string | null): Promise<BanView[]> {
+  async bans(serverId: string | null): Promise<BanEntry[]> {
     const rows = await this.db.getRepository(RoleRow).find({
       where: { serverId: serverId ?? IsNull(), role: BANNED_ROLE },
       relations: { identity: true },

@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { Identicon } from '@/components/ui/Identicon';
 import { Icon } from '@/components/ui/icon';
 import { fmtSince } from '@/lib/format';
-import { listDevices, revokeDevice, DeviceError, type Device } from '@/lib/devices';
+import type { OwnDevice } from '@relay/shared';
+import { listDevices, revokeDevice, DeviceError } from '@/lib/devices';
 import { useIdentityStore } from '@/stores/identity';
 import { useOwnerStore } from '@/stores/owner';
 import { usePairingStore } from '@/stores/pairing';
@@ -25,7 +26,7 @@ export function DevicesPanel() {
   const t = useT();
   const me = useIdentityStore((s) => s.me);
   const admit = usePairingStore((s) => s.admit);
-  const [devices, setDevices] = useState<Device[] | null>(null);
+  const [devices, setDevices] = useState<OwnDevice[] | null>(null);
   // Владельца спрашивает вход (AppShell) — здесь только читаем: два экрана,
   // задающие один и тот же вопрос по-своему, рано или поздно расходятся.
   const owner = useOwnerStore((s) => s.owner);
@@ -47,7 +48,7 @@ export function DevicesPanel() {
     void load();
   }, [load]);
 
-  async function revoke(device: Device) {
+  async function revoke(device: OwnDevice) {
     setAsking(null);
     try {
       await revokeDevice(device.id);

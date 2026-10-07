@@ -1,4 +1,4 @@
-import type { Channel, ServerEntry } from './registry';
+import type { ChannelEntry, ServerEntry } from './registry';
 
 /**
  * Владение реестровыми записями и их публичная форма (audit B2).
@@ -122,7 +122,7 @@ export function publicServer(entry: ServerEntry, who: Claimant, unlocked?: Set<s
  * есть: у записи есть поля, которым наружу не место (`creatorId`), и добавится
  * ещё — пусть их утечка требует правки здесь, а не случается сама.
  */
-export function publicChannel(channel: Channel, who: Claimant, lastTs?: number) {
+export function publicChannel(channel: ChannelEntry, who: Claimant, lastTs?: number) {
   return {
     id: channel.id,
     serverId: channel.serverId,

@@ -6,13 +6,8 @@ import { DeviceRow, IdentityRow, MessageRow, RoleRow } from '../db/entities';
 // класса — Nest такой довод не разрешает и падает при старте. Тесты этого не
 // видят: они собирают сервисы руками, минуя контейнер.
 import { SettingsService } from '../settings/settings.service';
-import {
-  certificateMessage,
-  fingerprint,
-  isPairCode,
-  newPairCode,
-  verifySignature,
-} from './crypto';
+import { fingerprint, newPairCode, verifySignature } from './crypto';
+import { certificateMessage, isPairCode, type PairOffer } from '@relay/shared';
 
 /**
  * Связка второго устройства с уже живущей личностью.
@@ -77,19 +72,6 @@ interface Waiting {
   expiresAt: number;
 }
 
-/** Что донор видит перед тем, как впустить. Ключ — чтобы было чем подписать. */
-export interface PairView {
-  publicKey: string;
-  fingerprint: string;
-  deviceName: string;
-  /**
-   * Сколько коду жить, в миллисекундах, — а не когда он умрёт. Метка времени
-   * потребовала бы, чтобы часы телефона и сервера совпадали, а они расходятся
-   * на минуты сплошь и рядом: обратный отсчёт на экране показывал бы чушь.
-   */
-  expiresIn: number;
-}
-
 @Injectable()
 export class PairingService {
   private readonly logger = new Logger('pairing');
@@ -136,7 +118,7 @@ export class PairingService {
    * Что стоит за кодом. Донор видит отпечаток и имя устройства — то, что он
    * сверит глазами с чужим экраном, — и публичный ключ, который подпишет.
    */
-  look(code: unknown, donorIdentityId: string): PairResult<{ view: PairView }> {
+  look(code: unknown, donorIdentityId: string): PairResult<{ view: PairOffer }> {
     const found = this.find(code, donorIdentityId);
     if (!found.ok) return found;
     const { waiting } = found;

@@ -16,13 +16,14 @@ import { RetentionService } from '../db/retention.service';
 import { AuditService } from '../settings/audit.service';
 import { OverviewService } from '../settings/overview.service';
 import { SettingsService } from '../settings/settings.service';
-import type { Attachment, UploadsService } from '../uploads';
-import type { Channel, PersistedRegistry, ServerEntry } from './registry';
+import type { UploadsService } from '../uploads';
+import type { ChannelEntry, PersistedRegistry, ServerEntry } from './registry';
 import { ChatService } from './chat.service';
 import { DmService } from './dm.service';
 import { RegistryService, channelSlug } from './registry.service';
 import { SignalingGateway } from './signaling.gateway';
 import { FakeServer, asSocket, type FakeSocket } from './testkit';
+import type { Attachment } from '@relay/shared';
 
 /**
  * Общий стенд для тестов гейтвея.
@@ -43,7 +44,7 @@ export const MAIN = 'relay-main';
 
 /** Приватные поля гейтвея — тесту нужно видеть сам реестр, а не только рассылки. */
 export type AnyGw = SignalingGateway & {
-  registry: { servers: ServerEntry[]; channels: Channel[] };
+  registry: { servers: ServerEntry[]; channels: ChannelEntry[] };
 };
 
 let db: DataSource;

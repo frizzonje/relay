@@ -1,12 +1,12 @@
-import { LIMITS } from '@relay/shared';
+import { LIMITS, type Untrusted } from '@relay/shared';
 import type * as wire from '@relay/shared';
-import type { Untrusted } from '@relay/shared';
 
 /**
  * Форма сообщений сигналинга со стороны сервера.
  *
  * Контракт один — `@relay/shared`. Ответы и рассылки (`*Result`, `*Relay`)
- * сервер отдаёт ровно в тех типах, что читает клиент, и берёт их оттуда же.
+ * сервер отдаёт ровно в тех типах, что читает клиент, и импортирует их прямо
+ * оттуда: здесь их нет, чтобы у каждого имени был один путь.
  *
  * Тела, которые присылает клиент (`*Payload`), здесь те же по форме, но с
  * `unknown` в каждом поле (`Untrusted`): тело события socket.io не проверяет
@@ -14,80 +14,6 @@ import type { Untrusted } from '@relay/shared';
  * говорит, какие поля бывают, а гарантию даёт разбор (`str`/`trimmed`/
  * `optional`).
  */
-
-export { PROTOCOL_VERSION, SYSTEM_ACTOR_NICK, UNKNOWN_ACTOR_NICK } from '@relay/shared';
-
-export type {
-  Untrusted,
-  AdminAction,
-  AdminActionResult,
-  AdminAuditResult,
-  AdminBansResult,
-  AdminChangedRelay,
-  AdminDevice,
-  AdminExport,
-  AdminImportRejection,
-  AdminOverview,
-  AdminPasswordResult,
-  AdminPeopleResult,
-  AdminPerson,
-  AdminRefusal,
-  AdminResetResult,
-  AdminRetention,
-  AdminSetResult,
-  AdminStateResult,
-  AuditAction,
-  AuditCursor,
-  AuditEntry,
-  BanEntry,
-  BannedRelay,
-  CallEndedRelay,
-  CallIncomingRelay,
-  CallMark,
-  CallPerson,
-  CallRefusal,
-  CallReplyResult,
-  CallStartResult,
-  CallStateRelay,
-  ChannelCreateResult,
-  ChannelDeleteResult,
-  ChannelRenameResult,
-  ChannelStatsResult,
-  ChatHistoryMoreResult,
-  ChatHistoryPage,
-  ChatMessage,
-  ChatPinResult,
-  ChatPinsResult,
-  ChatRefusal,
-  ChatRefusedRelay,
-  ChatSearchResult,
-  ChatWindowResult,
-  DmConversation,
-  DmJoinResult,
-  DmListResult,
-  DmOpenResult,
-  DmPeer,
-  DmPeopleResult,
-  DmPerson,
-  GuestKickResult,
-  InviteCreateResult,
-  MentionRef,
-  MentionSuggestResult,
-  ModerationBansResult,
-  ModerationResult,
-  QuotaScope,
-  ReactionMap,
-  Reactor,
-  ReplyRef,
-  RosterPerson,
-  ServerCreateResult,
-  ServerDeleteResult,
-  ServerStatsResult,
-  SettingsSnapshot,
-  SfuTokenResult,
-  VoiceRefusal,
-  VoiceRefusedRelay,
-} from '@relay/shared';
 
 // ── Как это читать ──────────────────────────────────────────────────────────
 

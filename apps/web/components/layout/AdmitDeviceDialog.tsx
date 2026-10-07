@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { PAIR_CODE_DIGITS, readPairCode } from '@relay/shared';
+import { PAIR_CODE_DIGITS, readPairCode, type PairOffer } from '@relay/shared';
 import {
   Dialog,
   DialogContent,
@@ -13,13 +13,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Identicon } from '@/components/ui/Identicon';
-import {
-  admitDevice,
-  peekPairing,
-  DeviceError,
-  type DeviceFailure,
-  type PairOffer,
-} from '@/lib/devices';
+import { admitDevice, peekPairing, DeviceError, type DeviceFailure } from '@/lib/devices';
 import { useIdentityStore } from '@/stores/identity';
 import { usePairingStore } from '@/stores/pairing';
 import { useT } from '@/lib/i18n';

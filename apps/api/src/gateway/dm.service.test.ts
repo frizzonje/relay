@@ -3,7 +3,8 @@ import type { DataSource } from 'typeorm';
 import { randomUUID } from 'node:crypto';
 import { ChannelRow, IdentityRow, MessageRow, RoleRow } from '../db/entities';
 import { resetDatabase, testDatabase } from '../db/testing';
-import { DmService, isDmSlug } from './dm.service';
+import { DmService } from './dm.service';
+import { isDmSlug } from '@relay/shared';
 
 let db: DataSource;
 let dm: DmService;

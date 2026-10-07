@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import type { PrefKey } from '@relay/shared';
 import { PrefRow } from '../db/entities';
 
 /**
@@ -18,9 +19,12 @@ import { PrefRow } from '../db/entities';
  * клиентский формат — сервер об этом не узнаёт и не должен.
  */
 
-/** Что человеку разрешено про себя помнить. Всё прочее — отказ. */
-export const PREF_KEYS = ['sound', 'volume'] as const;
-export type PrefKey = (typeof PREF_KEYS)[number];
+/**
+ * Что человеку разрешено про себя помнить. Всё прочее — отказ. Запись, а не
+ * массив: ключ, добавленный в контракт без строки здесь, — ошибка компиляции,
+ * а не тихий отказ сервера на всё, что клиент под ним помнит.
+ */
+const PREF_KEYS: Record<PrefKey, true> = { sound: true, volume: true };
 
 /** Потолок одной настройки в сериализованном виде. */
 export const PREF_MAX_BYTES = 8 * 1024;
@@ -69,5 +73,5 @@ export class PrefsService {
 }
 
 function isPrefKey(key: unknown): key is PrefKey {
-  return typeof key === 'string' && (PREF_KEYS as readonly string[]).includes(key);
+  return typeof key === 'string' && Object.prototype.hasOwnProperty.call(PREF_KEYS, key);
 }

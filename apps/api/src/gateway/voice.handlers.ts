@@ -4,7 +4,7 @@ import type { Directory } from './directory';
 import type { Perimeter } from './perimeter';
 import type { RegistryService } from './registry.service';
 import type { SettingsService } from '../settings/settings.service';
-import { isCallRoom, type VoiceSessions } from './voice-sessions';
+import { type VoiceSessions } from './voice-sessions';
 import { sfuHealthy } from '../sfu/sfu-health';
 import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
 import {
@@ -14,11 +14,10 @@ import {
   trimmed,
   type JoinPayload,
   type SfuTokenPayload,
-  type SfuTokenResult,
   type SignalPayload,
   type VoiceDiagPayload,
-  type VoiceRefusal,
 } from './protocol';
+import { isCallRoom, type SfuTokenResult, type VoiceRefusal } from '@relay/shared';
 
 // Строка для лога: без переводов строк (чтобы клиент не подделал чужие записи)
 // и лишних пробелов.

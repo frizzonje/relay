@@ -4,8 +4,9 @@ import type { DataSource } from 'typeorm';
 import { resetDatabase, testDatabase } from '../db/testing';
 import { SettingsService } from '../settings/settings.service';
 import { freshSettings, tune } from '../settings/settings.testkit';
-import { AUTH_COOKIE, verifyToken } from './auth';
+import { verifyToken } from './auth';
 import { AuthController } from './auth.controller';
+import { AUTH_COOKIE } from '@relay/shared';
 
 /**
  * Вход на сайт. Здесь важны две вещи, и обе — про то, чем кончается перебор:

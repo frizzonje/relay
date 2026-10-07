@@ -4,13 +4,12 @@ import type { AppServer, AppSocket } from './socket-data';
 import type { ChatSessions } from './chat-sessions';
 import type { ChatService } from './chat.service';
 import type { Directory } from './directory';
-import { isDmSlug } from './dm.service';
 import type { Mentions } from './mentions';
 import type { Perimeter } from './perimeter';
 import type { ReadsService } from '../identity/reads.service';
 import type { SettingsService } from '../settings/settings.service';
 import type { VoiceSessions } from './voice-sessions';
-import { Channel, VoiceMode } from './registry';
+import { ChannelEntry } from './registry';
 import { MAIN_SERVER_ID, MAX_CHANNELS, RegistryService, channelSlug } from './registry.service';
 import { createdBy, ownedBy } from './ownership';
 import { clientIp, hashServerPassword, issueUnlockToken } from './unlock';
@@ -19,22 +18,26 @@ import {
   str,
   trimmed,
   type ChannelCreatePayload,
-  type ChannelCreateResult,
   type ChannelDeletePayload,
-  type ChannelDeleteResult,
   type ChannelModePayload,
   type ChannelRenamePayload,
-  type ChannelRenameResult,
   type ChannelStatsPayload,
-  type ChannelStatsResult,
   type ServerCreatePayload,
-  type ServerCreateResult,
   type ServerDeletePayload,
-  type ServerDeleteResult,
   type ServerStatsPayload,
-  type ServerStatsResult,
   type ServerUnlockPayload,
 } from './protocol';
+import {
+  isDmSlug,
+  VoiceMode,
+  type ChannelCreateResult,
+  type ChannelDeleteResult,
+  type ChannelRenameResult,
+  type ChannelStatsResult,
+  type ServerCreateResult,
+  type ServerDeleteResult,
+  type ServerStatsResult,
+} from '@relay/shared';
 
 /**
  * Обработчики реестра: серверы и каналы — заведение, пароль, правка, снос.
@@ -389,7 +392,7 @@ export class RegistryHandlers {
     if (this.registry.channels.some((c) => c.type === type && c.slug === slug))
       return { ok: false, error: 'exists' };
 
-    const channel: Channel = {
+    const channel: ChannelEntry = {
       id: randomUUID(),
       serverId,
       type,
@@ -451,7 +454,7 @@ export class RegistryHandlers {
    * Сколько человек прямо сейчас в канале: для голосового — кто в эфире, для
    * текстового — у кого он открыт (socket.io-комната `chat:<slug>`).
    */
-  private occupantsOf(channel: Channel): number {
+  private occupantsOf(channel: ChannelEntry): number {
     const target = channel.type === 'voice' ? channel.slug : this.chat.room(channel.slug);
     let count = 0;
     for (const sock of this.server.sockets.sockets.values()) {

@@ -1,5 +1,6 @@
 import type { AppServer, AppSocket } from './socket-data';
-import { ANON_NAME, type RosterPerson } from './protocol';
+import { ANON_NAME } from './protocol';
+import type { RosterPerson } from '@relay/shared';
 
 /** Что чат-сессия спрашивает у того, чем не владеет. */
 export interface ChatSurroundings {

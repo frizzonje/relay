@@ -1,10 +1,15 @@
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { verifyServerPassword } from '../gateway/unlock';
-import { AUTH_COOKIE, GUEST_TOKEN_TTL_MS, TOKEN_TTL_MS } from '@relay/shared';
+import {
+  AUTH_COOKIE,
+  GUEST_TOKEN_TTL_MS,
+  TOKEN_TTL_MS,
+  parseCookies,
+  type GuestTokenPayload,
+} from '@relay/shared';
 
 // Срок жизни пропуска и имя куки — из контракта: их же знает Edge-middleware
 // Next. Подпись зависит от пароля: смена пароля мгновенно отзывает все куки.
-export { AUTH_COOKIE };
 
 /**
  * Чем инсталляция заперта прямо сейчас.
@@ -153,14 +158,6 @@ export function verifyToken(token: string | undefined): boolean {
 // несёт scope (какой войс-канал и на каких правах), а не просто «доступ».
 // Байт-в-байт с shared, включая приём ссылок прошлой версии (g1, без режима).
 
-/** Что разрешает гостевой токен: слаг канала, срок и право говорить. */
-export interface GuestClaims {
-  slug: string;
-  exp: number;
-  /** Только слушать: канал под паролем, а пароля гость не вводил. */
-  listen: boolean;
-}
-
 function guestHmac(message: string): string {
   return createHmac('sha256', 'relay-guest-v1:' + keyMaterial())
     .update(message)
@@ -180,7 +177,7 @@ export function issueGuestToken(
   return { token: `${prefix}.${guestHmac(prefix)}`, exp };
 }
 
-export function verifyGuestToken(token: string | undefined): GuestClaims | null {
+export function verifyGuestToken(token: string | undefined): GuestTokenPayload | null {
   if (!token) return null;
   const parts = token.split('.');
   // g2 — с режимом, g1 — ссылки прошлого формата (всегда с правом говорить).
@@ -229,21 +226,6 @@ export async function passwordMatches(candidate: string): Promise<boolean> {
   const a = createHash('sha256').update(candidate).digest();
   const b = createHash('sha256').update(secret.value).digest();
   return timingSafeEqual(a, b);
-}
-
-export function parseCookies(header: string | undefined): Record<string, string> {
-  const out: Record<string, string> = {};
-  if (!header) return out;
-  for (const part of header.split(';')) {
-    const eq = part.indexOf('=');
-    if (eq < 0) continue;
-    try {
-      out[part.slice(0, eq).trim()] = decodeURIComponent(part.slice(eq + 1).trim());
-    } catch {
-      // битое значение куки — пропускаем
-    }
-  }
-  return out;
 }
 
 // Форма, покрывающая и express-запрос, и socket.io handshake. `auth` есть

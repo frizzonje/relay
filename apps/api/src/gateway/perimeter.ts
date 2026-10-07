@@ -7,7 +7,7 @@ import type { AddressDoor } from '../auth/auth';
 import { addressBlocked } from '@relay/shared';
 import type { SettingsService } from '../settings/settings.service';
 import type { AppServer, AppSocket, TokenBucket } from './socket-data';
-import { Channel, ServerEntry } from './registry';
+import { ChannelEntry, ServerEntry } from './registry';
 import { RegistryService } from './registry.service';
 import { normalizeClientId, type Claimant } from './ownership';
 import { UnlockAttempts, clientIp, verifyServerPassword, verifyUnlockToken } from './unlock';
@@ -480,7 +480,7 @@ export class Perimeter {
   }
 
   /** Видит ли сокет этот канал: закрытый сервер — только после ввода пароля. */
-  canSee(client: AppSocket, channel: Channel): boolean {
+  canSee(client: AppSocket, channel: ChannelEntry): boolean {
     if (this.isBannedFrom(client, channel.serverId)) return false;
     return this.registry.canSee(this.unlockedOf(client), channel);
   }

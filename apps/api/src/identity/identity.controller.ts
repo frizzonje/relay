@@ -1,9 +1,9 @@
 import { Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { parseCookies } from '../auth/auth';
 import { SettingsService } from '../settings/settings.service';
 import { IdentityService, type VerifyResult } from './identity.service';
 import { IDENTITY_COOKIE, issueSession, readSession } from './session';
+import { parseCookies } from '@relay/shared';
 
 /**
  * Вход личности — два запроса и одна кука.

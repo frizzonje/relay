@@ -6,14 +6,8 @@ import type { RegistryService } from './registry.service';
 import type { SettingsService } from '../settings/settings.service';
 import type { VoiceSessions } from './voice-sessions';
 import { issueGuestToken } from '../auth/auth';
-import {
-  LIMIT,
-  trimmed,
-  type GuestKickPayload,
-  type GuestKickResult,
-  type InviteCreatePayload,
-  type InviteCreateResult,
-} from './protocol';
+import { LIMIT, trimmed, type GuestKickPayload, type InviteCreatePayload } from './protocol';
+import type { GuestKickResult, InviteCreateResult } from '@relay/shared';
 
 /**
  * Инвайт-ссылки: выдать и выгнать по ней пришедшего.

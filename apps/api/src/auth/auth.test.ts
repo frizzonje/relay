@@ -1,11 +1,9 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import {
-  AUTH_COOKIE,
   authEnabled,
   issueToken,
   verifyToken,
   passwordMatches,
-  parseCookies,
   isAuthorized,
   extractToken,
   issueGuestToken,
@@ -18,6 +16,7 @@ import {
   issueToken as issueTokenWeb,
   verifyGuestToken as verifyGuestTokenWeb,
   verifyToken as verifyTokenWeb,
+  AUTH_COOKIE,
 } from '@relay/shared';
 
 const PASS = 'secret-пароль-123';
@@ -101,15 +100,6 @@ describe('api auth (sync, node:crypto)', () => {
     ).toBe('header-tok');
     expect(extractToken({ headers: { cookie: `${AUTH_COOKIE}=cookie-tok` } })).toBe('cookie-tok');
     expect(extractToken({ headers: {} })).toBeUndefined();
-  });
-});
-
-describe('parseCookies (api)', () => {
-  it('парсит и декодирует', () => {
-    expect(parseCookies('a=1; b=hello%20world')).toEqual({ a: '1', b: 'hello world' });
-  });
-  it('undefined → {}', () => {
-    expect(parseCookies(undefined)).toEqual({});
   });
 });
 

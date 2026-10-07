@@ -3,8 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueGuestToken, issueToken } from '../auth/auth';
 import { authGate } from '../http-gate';
 import { asSocket } from './testkit';
-import { PROTOCOL_VERSION } from './protocol';
-import { defaults } from '@relay/shared';
+import { defaults, PROTOCOL_VERSION } from '@relay/shared';
 import { RL_CAPACITY, RL_REFILL_PER_SEC } from './perimeter';
 import {
   MAIN,

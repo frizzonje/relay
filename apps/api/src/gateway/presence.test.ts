@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { issueGuestToken } from '../auth/auth';
-import { Presence, type PresenceEntry, type PresenceState } from './presence';
+import { Presence } from './presence';
 import { asSocket, type FakeServer, type FakeSocket } from './testkit';
 import {
   connectAs,
@@ -14,6 +14,7 @@ import {
   useGatewayStand,
 } from './gateway.testkit';
 import type { SignalingGateway } from './signaling.gateway';
+import type { PresenceEntry, PresenceState } from '@relay/shared';
 
 /**
  * Глобальное присутствие личности: где человек вообще, а не кто в этой комнате.

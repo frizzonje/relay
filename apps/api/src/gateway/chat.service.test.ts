@@ -6,8 +6,6 @@ import { resetDatabase, testDatabase } from '../db/testing';
 import {
   AROUND_HALF,
   ChatService,
-  PAGE_SIZE,
-  PIN_LIMIT,
   SEARCH_PAGE_SIZE,
   isUuid,
   mentionedIn,
@@ -17,6 +15,7 @@ import { DmService } from './dm.service';
 import { RegistryService } from './registry.service';
 import type { SettingsService } from '../settings/settings.service';
 import { freshSettings, tune } from '../settings/settings.testkit';
+import { CHAT_PAGE_SIZE, PIN_LIMIT } from '@relay/shared';
 
 /**
  * История чата — то, ради чего в 1.0 вообще появилась база. Проверяем не «есть
@@ -224,14 +223,14 @@ describe('беседа тоже канал', () => {
 
 describe('страницы ленты', () => {
   beforeEach(async () => {
-    await series(PAGE_SIZE + 10, (i) => `${i}`);
+    await series(CHAT_PAGE_SIZE + 10, (i) => `${i}`);
   });
 
   it('вход в канал отдаёт последнюю страницу и честное «выше есть ещё»', async () => {
     const page = await chat.history('obshchii');
-    expect(page.messages).toHaveLength(PAGE_SIZE);
+    expect(page.messages).toHaveLength(CHAT_PAGE_SIZE);
     expect(page.messages[0].text).toBe('10');
-    expect(page.messages[PAGE_SIZE - 1].text).toBe(`${PAGE_SIZE + 9}`);
+    expect(page.messages[CHAT_PAGE_SIZE - 1].text).toBe(`${CHAT_PAGE_SIZE + 9}`);
     expect(page.more).toBe(true);
   });
 
@@ -255,7 +254,7 @@ describe('страницы ленты', () => {
     expect(older.more).toBe(false);
     // Ни одного повтора между страницами: курсор берёт строго то, что выше.
     const ids = new Set([...page.messages, ...older.messages].map((m) => m.id));
-    expect(ids.size).toBe(PAGE_SIZE + 10);
+    expect(ids.size).toBe(CHAT_PAGE_SIZE + 10);
   });
 
   it('владелец укоротил страницу — лента слушается его, а не константы', async () => {
@@ -264,7 +263,7 @@ describe('страницы ленты', () => {
     await tune(settings, 'messages.pageSize', 10);
     const page = await chat.history('obshchii');
     expect(page.messages).toHaveLength(10);
-    expect(page.messages[9].text).toBe(`${PAGE_SIZE + 9}`);
+    expect(page.messages[9].text).toBe(`${CHAT_PAGE_SIZE + 9}`);
     expect(page.more).toBe(true);
   });
 
@@ -288,7 +287,7 @@ describe('страницы ленты', () => {
     const page = await fresh.history('obshchii');
     const older = await fresh.older('obshchii', page.messages[0].ts, page.messages[0].id!);
     const ids = new Set([...page.messages, ...older.messages].map((m) => m.id));
-    expect(ids.size).toBe(PAGE_SIZE + 10);
+    expect(ids.size).toBe(CHAT_PAGE_SIZE + 10);
   });
 });
 
@@ -462,7 +461,7 @@ describe('переход к найденному', () => {
     const oldest = (await chat.older('obshchii', messages[0].ts, messages[0].id!)).messages[0];
 
     const down = await chat.newer('obshchii', oldest.ts, oldest.id!);
-    expect(down.messages).toHaveLength(PAGE_SIZE);
+    expect(down.messages).toHaveLength(CHAT_PAGE_SIZE);
     expect(down.messages[0].text).toBe('1');
     expect(down.moreAfter).toBe(true);
     expect(down.messages.some((m) => m.id === oldest.id)).toBe(false);

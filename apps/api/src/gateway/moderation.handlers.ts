@@ -9,10 +9,9 @@ import {
   str,
   type ModerationBanPayload,
   type ModerationBansPayload,
-  type ModerationBansResult,
-  type ModerationResult,
   type ModerationUnbanPayload,
 } from './protocol';
+import type { ModerationBansResult, ModerationResult } from '@relay/shared';
 
 /**
  * Три события модерации. Тонкие намеренно: чья это власть и что бан делает с

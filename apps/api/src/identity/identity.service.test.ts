@@ -6,9 +6,10 @@ import { DeviceRow, IdentityRow } from '../db/entities';
 import { resetDatabase, testDatabase } from '../db/testing';
 import type { SettingsService } from '../settings/settings.service';
 import { freshSettings, tune } from '../settings/settings.testkit';
-import { SIGN_ALGORITHM, authMessage, fingerprint } from './crypto';
+import { fingerprint } from './crypto';
 import { IdentityService } from './identity.service';
 import { IDENTITY_COOKIE, issueSession } from './session';
+import { SIGN_ALGORITHM, authMessage } from '@relay/shared';
 
 /**
  * Вход без регистрации проверяется настоящей криптографией и настоящей базой:

@@ -1,4 +1,4 @@
-import { certificateMessage, isPublicKey } from '@relay/shared';
+import { certificateMessage, isPublicKey, type OwnDevice, type PairOffer } from '@relay/shared';
 import { SignerError, getSigner, type Signer } from './signer';
 
 /**
@@ -10,29 +10,6 @@ import { SignerError, getSigner, type Signer } from './signer';
  * для того, кто уже внутри и ручается своей подписью. Почему так — в
  * `apps/api/src/identity/pairing.service.ts`.
  */
-
-export interface Device {
-  id: string;
-  name: string;
-  /** Отпечаток ключа устройства — им два одинаковых имени и различают. */
-  fingerprint: string;
-  createdAt: string;
-  lastSeenAt: string | null;
-  revokedAt: string | null;
-  /** То, с которого человек смотрит. Отозвать его нельзя. */
-  current: boolean;
-  /** Корень: с него личность началась, и впустил его никто. */
-  root: boolean;
-}
-
-/** Что донор видит перед тем, как впустить. */
-export interface PairOffer {
-  publicKey: string;
-  fingerprint: string;
-  deviceName: string;
-  /** Сколько коду осталось жить. Не метка времени — часы у сторон разные. */
-  expiresIn: number;
-}
 
 /**
  * Почему не вышло. Первые пять приходят от сервера и означают разные действия
@@ -114,8 +91,8 @@ async function post(path: string, body?: unknown): Promise<unknown> {
 }
 
 /** Все свои устройства, включая отозванные: отзыв должен быть виден. */
-export async function listDevices(): Promise<Device[]> {
-  return ((await ask('/api/identity/devices')) as { devices: Device[] }).devices;
+export async function listDevices(): Promise<OwnDevice[]> {
+  return ((await ask('/api/identity/devices')) as { devices: OwnDevice[] }).devices;
 }
 
 export async function revokeDevice(deviceId: string): Promise<void> {

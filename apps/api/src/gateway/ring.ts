@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import type { AppServer, AppSocket } from './socket-data';
-import type { PresenceState } from './presence';
-import type { CallMark, CallPerson, CallReplyResult, CallStartResult } from './protocol';
 import {
   settled as ringSettled,
   step as ringStep,
   missed as ringMissed,
   type Ring,
   type RingEvent,
+  type PresenceState,
+  type CallMark,
+  type CallPerson,
+  type CallReplyResult,
+  type CallStartResult,
 } from '@relay/shared';
 
 /** Личность в вызове: чем её адресовать внутри и как показать снаружи. */

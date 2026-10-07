@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { DataSource, LessThan, IsNull } from 'typeorm';
 import { OwnerClaimRow, RoleRow } from '../db/entities';
 import { AuditService } from '../settings/audit.service';
-import { hashOwnerToken, isOwnerToken, newOwnerToken } from './crypto';
+import { hashOwnerToken, newOwnerToken } from './crypto';
+import { isOwnerToken } from '@relay/shared';
 
 /**
  * Владелец инсталляции — единственная роль, которую невозможно выдать изнутри.

@@ -207,9 +207,11 @@ export const NICK_MAX = 20;
  * ленту всем остальным, а не только владельцу.
  *
  * Чистит обе стороны: клиент — чтобы человек сразу видел, что получится, и
- * сервер — потому что клиент бывает не наш.
+ * сервер — потому что клиент бывает не наш. Длина — параметр: владелец
+ * ужимает её настройкой `people.nickMaxLength`, и передать её обязан тот, кто
+ * знает настройки; `NICK_MAX` — умолчание.
  */
-export function sanitizeNick(raw: unknown): string {
+export function sanitizeNick(raw: unknown, max: number = NICK_MAX): string {
   if (typeof raw !== 'string') return '';
   return raw
     .replace(/^@+/, '')
@@ -218,5 +220,37 @@ export function sanitizeNick(raw: unknown): string {
     .replace(/[^\p{L}\p{N}_-]/gu, '')
     .replace(/-{2,}/g, '-')
     .replace(/^-+/, '')
-    .slice(0, NICK_MAX);
+    .slice(0, max);
+}
+
+/**
+ * Устройство так, как его видит хозяин (`GET /api/identity/devices`): имя,
+ * чтобы узнать, отпечаток, чтобы сверить, и три даты, чтобы понять, что оно
+ * тут делает. Публичного ключа целиком нет — отпечаток решает ту же задачу и
+ * читается человеком.
+ */
+export interface OwnDevice {
+  id: string;
+  name: string;
+  fingerprint: string;
+  createdAt: string;
+  lastSeenAt: string | null;
+  revokedAt: string | null;
+  /** То самое, с которого человек смотрит. Отозвать его нельзя. */
+  current: boolean;
+  /** Корень дерева: с него личность началась, и никто его не впускал. */
+  root: boolean;
+}
+
+/** Что донор видит перед тем, как впустить. Ключ — чтобы было чем подписать. */
+export interface PairOffer {
+  publicKey: string;
+  fingerprint: string;
+  deviceName: string;
+  /**
+   * Сколько коду жить, в миллисекундах, — а не когда он умрёт. Метка времени
+   * потребовала бы, чтобы часы телефона и сервера совпадали, а они расходятся
+   * на минуты сплошь и рядом: обратный отсчёт на экране показывал бы чушь.
+   */
+  expiresIn: number;
 }

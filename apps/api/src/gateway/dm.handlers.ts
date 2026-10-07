@@ -1,7 +1,7 @@
 import type { AppSocket } from './socket-data';
 import type { ChatSessions } from './chat-sessions';
 import type { ChatService } from './chat.service';
-import { DM_PEOPLE_LIMIT, type DmService } from './dm.service';
+import { type DmService } from './dm.service';
 import type { Perimeter } from './perimeter';
 import type { SettingsService } from '../settings/settings.service';
 import {
@@ -9,13 +9,16 @@ import {
   str,
   trimmed,
   type DmJoinPayload,
+  type DmOpenPayload,
+  type DmPeoplePayload,
+} from './protocol';
+import {
+  DM_PEOPLE_LIMIT,
   type DmJoinResult,
   type DmListResult,
-  type DmOpenPayload,
   type DmOpenResult,
-  type DmPeoplePayload,
   type DmPeopleResult,
-} from './protocol';
+} from '@relay/shared';
 
 /**
  * Дверь в личную переписку.

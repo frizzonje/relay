@@ -8,12 +8,12 @@ import type { SignalingGateway } from '../gateway/signaling.gateway';
 import { resetDatabase, testDatabase } from '../db/testing';
 import type { SettingsService } from '../settings/settings.service';
 import { freshSettings, tune } from '../settings/settings.testkit';
-import { SIGN_ALGORITHM, authMessage, certificateMessage } from './crypto';
 import { DevicesController } from './devices.controller';
 import { IdentityController } from './identity.controller';
 import { IdentityService } from './identity.service';
 import { PairingService } from './pairing.service';
 import { IDENTITY_COOKIE } from './session';
+import { SIGN_ALGORITHM, authMessage, certificateMessage } from '@relay/shared';
 
 /**
  * Связка второго устройства, список и отзыв — с настоящей базой и настоящими

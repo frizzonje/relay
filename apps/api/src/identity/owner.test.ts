@@ -7,13 +7,14 @@ import { OwnerClaimRow, RoleRow } from '../db/entities';
 import type { SignalingGateway } from '../gateway/signaling.gateway';
 import { resetDatabase, testDatabase } from '../db/testing';
 import { freshSettings } from '../settings/settings.testkit';
-import { SIGN_ALGORITHM, authMessage, hashOwnerToken, isOwnerToken } from './crypto';
+import { hashOwnerToken } from './crypto';
 import { IdentityController } from './identity.controller';
 import { IdentityService } from './identity.service';
 import { OwnerController } from './owner.controller';
 import { CLAIM_TTL_MS, OwnerService } from './owner.service';
 import { RolesService } from './roles.service';
 import { IDENTITY_COOKIE } from './session';
+import { SIGN_ALGORITHM, authMessage, isOwnerToken } from '@relay/shared';
 
 /**
  * Владелец инсталляции — с настоящей базой.

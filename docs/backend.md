@@ -121,8 +121,9 @@ SignalingGateway
 
 Тела событий читаются только через `str` / `trimmed` / `optional` и режутся по
 `LIMIT` из [`gateway/protocol.ts`](../apps/api/src/gateway/protocol.ts). Там же —
-типы тел (`Untrusted<…>` от контракта) и реэкспорт ответов из `@relay/shared`
-(см. [architecture.md](architecture.md#контракт)).
+типы тел (`Untrusted<…>` от контракта). Ответы и рассылки обработчики
+импортируют прямо из `@relay/shared` (см.
+[architecture.md](architecture.md#контракт)).
 
 ### Как добавить событие
 

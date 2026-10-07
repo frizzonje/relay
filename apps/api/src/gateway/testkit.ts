@@ -1,5 +1,5 @@
 import type { Server, Socket } from 'socket.io';
-import { PROTOCOL_VERSION } from './protocol';
+import { PROTOCOL_VERSION } from '@relay/shared';
 
 /**
  * Поддельный socket.io для тестов гейтвея.

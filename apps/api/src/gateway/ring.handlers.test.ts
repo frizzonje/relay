@@ -3,7 +3,6 @@ import { issueGuestToken } from '../auth/auth';
 import { asSocket, type FakeServer, type FakeSocket } from './testkit';
 import { MessageRow } from '../db/entities';
 import { DmService } from './dm.service';
-import { callRoom } from './voice-sessions';
 import {
   connect,
   connectAs,
@@ -17,6 +16,7 @@ import {
   useGatewayStand,
 } from './gateway.testkit';
 import type { SignalingGateway } from './signaling.gateway';
+import { callRoomOf } from '@relay/shared';
 
 /**
  * Дозвон: состояние между двумя людьми, живущее до ответа.
@@ -386,7 +386,7 @@ describe('принятый вызов становится разговором'
     // появляется вовсе (§9.3): назвать комнату обязан сервер. Не назови он —
     // клиенту неоткуда узнать, куда садиться, и «принято» не стало бы
     // разговором ни у одного из двоих.
-    const room = callRoom(DmService.address(anya.identityId, boris.identityId));
+    const room = callRoomOf(DmService.address(anya.identityId, boris.identityId));
     for (const sock of [hers, his]) {
       expect([sock.id, last(sock, 'call-state')]).toEqual([
         sock.id,
@@ -441,7 +441,7 @@ describe('второй входящий во время разговора', () 
     const res = await call(hers, boris.fingerprint);
     const ringId = res.ok ? res.ringId : '';
     expect(gw.handleCallAccept(asSocket(his), { ringId })).toEqual({ ok: true });
-    const room = callRoom(DmService.address(anya.identityId, boris.identityId));
+    const room = callRoomOf(DmService.address(anya.identityId, boris.identityId));
     gw.handleJoin(asSocket(hers), { room, name: 'Аня' });
     gw.handleJoin(asSocket(his), { room, name: 'Боря' });
     settle();

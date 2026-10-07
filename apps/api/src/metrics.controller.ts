@@ -1,5 +1,6 @@
 import { Controller, Get, Header } from '@nestjs/common';
-import { Metrics, MetricsService } from './metrics';
+import type { MetricsResponse } from '@relay/shared';
+import { MetricsService } from './metrics';
 
 /**
  * Состояние машины для главного экрана. За общим гейтом пропуска (`authGate` в
@@ -14,7 +15,7 @@ export class MetricsController {
   // Кэш здесь врал бы по определению: цифры живые, и промежуточный прокси не
   // должен подсовывать вчерашние.
   @Header('Cache-Control', 'no-store')
-  read(): Promise<Metrics> {
+  read(): Promise<MetricsResponse> {
     return this.metrics.read();
   }
 }

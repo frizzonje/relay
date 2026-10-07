@@ -10,10 +10,10 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { randomBytes } from 'crypto';
 import type { Request } from 'express';
-import { parseCookies } from './auth/auth';
 import { IDENTITY_COOKIE, readSession } from './identity/session';
 import { UploadRateGuard, UploadsEnabledGuard, uploadBudget } from './upload.guard';
-import { Attachment, MAX_UPLOAD_BYTES, UPLOAD_DIR, UploadsService } from './uploads';
+import { MAX_UPLOAD_BYTES, type Attachment, parseCookies } from '@relay/shared';
+import { UPLOAD_DIR, UploadsService } from './uploads';
 
 // multer без @types — берём через require, чтобы не тянуть декларации
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -52,6 +52,11 @@ export class UploadController {
           cb(null, randomBytes(12).toString('hex') + safeExt(file.originalname));
         },
       }),
+      // Жёсткий потолок процесса и единственный, что действует ДО того, как тело
+      // окажется на диске. Константа, а не настройка: интерсептор получает его
+      // один раз, при разборе декораторов. `files.maxUploadBytes` сужает его уже
+      // по настоящему размеру записанного файла (см. `UploadsService.register`);
+      // поднять выше некуда — то же число знает браузер и откажет до отправки.
       limits: { fileSize: MAX_UPLOAD_BYTES },
     }),
   )

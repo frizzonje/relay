@@ -1,7 +1,6 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
-import { parseCookies } from '../auth/auth';
 import { DeviceRow, IdentityRow } from '../db/entities';
 // Значением, а не `import type`: тип стирается при сборке, и
 // `emitDecoratorMetadata` записывает в довод конструктора `Function` вместо
@@ -9,15 +8,8 @@ import { DeviceRow, IdentityRow } from '../db/entities';
 // видят: они собирают сервисы руками, минуя контейнер.
 import { SettingsService } from '../settings/settings.service';
 import { IDENTITY_COOKIE, readSession } from './session';
-import {
-  authMessage,
-  fingerprint,
-  isPublicKey,
-  newNonce,
-  sanitizeDeviceName,
-  sanitizeNick,
-  verifySignature,
-} from './crypto';
+import { fingerprint, isPublicKey, newNonce, sanitizeDeviceName, verifySignature } from './crypto';
+import { parseCookies, authMessage, sanitizeNick, type OwnDevice } from '@relay/shared';
 
 /**
  * Личность на ключах: вход без регистрации, без пароля и без восстановления.
@@ -83,24 +75,6 @@ export interface Speaker {
    * базу на каждую реплику, а измениться он не может.
    */
   createdAt: number;
-}
-
-/**
- * Устройство так, как его видит хозяин: имя, чтобы узнать, отпечаток, чтобы
- * сверить, и три даты, чтобы понять, что оно тут делает. Публичного ключа
- * целиком здесь нет — отпечаток решает ту же задачу и читается человеком.
- */
-export interface DeviceView {
-  id: string;
-  name: string;
-  fingerprint: string;
-  createdAt: string;
-  lastSeenAt: string | null;
-  revokedAt: string | null;
-  /** То самое, с которого человек смотрит. Отозвать его нельзя — см. `revoke`. */
-  current: boolean;
-  /** Корень дерева: с него личность началась, и никто его не впускал. */
-  root: boolean;
 }
 
 /**
@@ -274,7 +248,7 @@ export class IdentityService {
    * единственное место, где человек может увидеть, что ключ, которому он
    * когда-то отказал, действительно отказан.
    */
-  async devices(identityId: string, currentDeviceId: string): Promise<DeviceView[]> {
+  async devices(identityId: string, currentDeviceId: string): Promise<OwnDevice[]> {
     const rows = await this.db.getRepository(DeviceRow).find({
       where: { identityId },
       order: { createdAt: 'ASC' },

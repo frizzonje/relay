@@ -8,7 +8,7 @@ import {
   type AuditAction,
   type AuditCursor,
   type AuditEntry,
-} from '../gateway/protocol';
+} from '@relay/shared';
 
 /**
  * Журнал: кто, что, с чего на что и когда.

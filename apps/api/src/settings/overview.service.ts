@@ -4,8 +4,8 @@ import { RetentionService } from '../db/retention.service';
 import { OWNER_ROLE } from '../identity/owner.service';
 import { BANNED_ROLE } from '../identity/roles.service';
 import { serverVersion } from '../version';
-import type { AdminDevice, AdminOverview, AdminPerson } from '../gateway/protocol';
 import { SettingsService } from './settings.service';
+import type { AdminDevice, AdminOverview, AdminPerson } from '@relay/shared';
 
 /**
  * Витрина панели: сводка и таблица людей.

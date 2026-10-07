@@ -2,37 +2,7 @@ import { Logger } from '@nestjs/common';
 import type { AppServer, AppSocket } from './socket-data';
 import type { VoicePresenceEntry } from './protocol';
 import { ANON_NAME } from './protocol';
-import { CALL_ROOM_PREFIX } from '@relay/shared';
-
-/**
- * С этого начинается имя голосовой комнаты беседы.
- *
- * Префикс здесь не украшение. Адрес беседы — это ещё и слаг её текстовой
- * ленты, а комнаты socket.io у ленты и у эфира общие: назови мы комнату
- * разговора самим адресом, `peer-left` и весь сигналинг звонка уезжали бы
- * каждому, кто просто открыл переписку.
- *
- * Строка общая с клиентом (`CALL_ROOM_PREFIX` контракта): разъехавшись,
- * половины посадили бы двоих в разные комнаты — и принятый вызов кончался бы
- * тишиной.
- */
-export { CALL_ROOM_PREFIX };
-
-/** Комната беседы по её адресу (`DmService.address`). */
-export function callRoom(address: string): string {
-  return CALL_ROOM_PREFIX + address;
-}
-
-/**
- * Комната беседы это или обычный голосовой канал.
- *
- * Проверяется форма целиком, а не один префикс: «voice:болталка» — законное
- * имя комнаты, и пустив его за ту же дверь, мы заперли бы обычный эфир
- * правилами разговора двоих (тот же довод, что у `isDmSlug`).
- */
-export function isCallRoom(room: string): boolean {
-  return /^voice:dm-[0-9a-f]{24}$/.test(room);
-}
+import { isCallRoom } from '@relay/shared';
 
 /**
  * Что голосовая сессия спрашивает у того, чем не владеет.

@@ -3,7 +3,13 @@ import { createHash } from 'node:crypto';
 import { existsSync, writeFileSync } from 'node:fs';
 import { DataSource, In, type EntityManager } from 'typeorm';
 import { ChannelRow, ServerRow } from '../db/entities';
-import { Channel, MIGRATED_MARKER, REGISTRY_FILE, ServerEntry, loadRegistry } from './registry';
+import {
+  ChannelEntry,
+  MIGRATED_MARKER,
+  REGISTRY_FILE,
+  ServerEntry,
+  loadRegistry,
+} from './registry';
 import { type Claimant, type PublicServer, ownedBy, publicServer } from './ownership';
 
 /**
@@ -64,7 +70,7 @@ const DEFAULT_SERVERS: ServerEntry[] = [{ id: MAIN_SERVER_ID, name: 'relay', rem
 // сервера) и один текстовый. Ни создать четвёртый, ни удалить, ни
 // переименовать эти нельзя — все запреты держит сам сервер, не интерфейс.
 // Клиент держит такой же сид (lib/constants) — id/slug совпадают.
-const DEFAULT_CHANNELS: Channel[] = [
+const DEFAULT_CHANNELS: ChannelEntry[] = [
   {
     id: 'text-obshchii',
     serverId: MAIN_SERVER_ID,
@@ -131,18 +137,18 @@ function toServerEntry(row: ServerRow): ServerEntry {
   };
 }
 
-function toChannel(row: ChannelRow): Channel {
+function toChannel(row: ChannelRow): ChannelEntry {
   return {
     id: row.id,
     // Непусто гарантирует вызывающий: сюда попадают только строки, уже
     // отфильтрованные по REGISTRY_CHANNEL_TYPES, — а у беседы (`dm`,
     // server_id = null) в реестре нет представления вовсе.
     serverId: row.serverId!,
-    type: row.type as Channel['type'],
+    type: row.type as ChannelEntry['type'],
     name: row.name,
     slug: row.slug,
     removable: row.removable,
-    ...(row.mode ? { mode: row.mode as Channel['mode'] } : {}),
+    ...(row.mode ? { mode: row.mode as ChannelEntry['mode'] } : {}),
     ...(row.creatorId ? { creatorId: row.creatorId } : {}),
     ...(row.creatorIdentityId ? { creatorIdentityId: row.creatorIdentityId } : {}),
   };
@@ -157,7 +163,7 @@ function toChannel(row: ChannelRow): Channel {
  * Переименование заметно человеку, но альтернатива — уронить переезд целиком
  * или потерять канал, а это хуже.
  */
-function dedupeSlugs(channels: Channel[]): Channel[] {
+function dedupeSlugs(channels: ChannelEntry[]): ChannelEntry[] {
   const taken = new Set<string>();
   return channels.map((c) => {
     let slug = c.slug;
@@ -245,7 +251,7 @@ export class RegistryService implements OnModuleInit {
   readonly servers: ServerEntry[] = [];
 
   /** Реестр направлений, общий на инсталляцию. Тоже из базы и в базу. */
-  readonly channels: Channel[] = [];
+  readonly channels: ChannelEntry[] = [];
 
   /**
    * Очередь записей. Реестр пишется целиком, и две одновременные записи
@@ -478,12 +484,12 @@ export class RegistryService implements OnModuleInit {
     return this.servers.find((s) => s.id === id);
   }
 
-  channel(id: string): Channel | undefined {
+  channel(id: string): ChannelEntry | undefined {
     return this.channels.find((c) => c.id === id);
   }
 
   /** Сервер, которому принадлежит канал (для проверки его пароля). */
-  serverOf(channel: Channel): ServerEntry | undefined {
+  serverOf(channel: ChannelEntry): ServerEntry | undefined {
     return this.server(channel.serverId);
   }
 
@@ -491,7 +497,7 @@ export class RegistryService implements OnModuleInit {
    * Видит ли обладатель этого набора разблокировок такой канал: канал закрытого
    * сервера — только после ввода пароля.
    */
-  canSee(unlocked: Set<string> | undefined, channel: Channel): boolean {
+  canSee(unlocked: Set<string> | undefined, channel: ChannelEntry): boolean {
     const srv = this.serverOf(channel);
     if (!srv?.passwordHash) return true;
     return unlocked?.has(srv.id) === true;
@@ -550,7 +556,7 @@ export class RegistryService implements OnModuleInit {
     id: string,
     unlocked: Set<string> | undefined,
     who: Claimant,
-  ): { channel: Channel; index: number } | { error: EditError } {
+  ): { channel: ChannelEntry; index: number } | { error: EditError } {
     const index = this.channels.findIndex((c) => c.id === id);
     if (index === -1) return { error: 'not-found' };
     const channel = this.channels[index];

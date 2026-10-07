@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import { issueGuestToken } from '../auth/auth';
-import type { Attachment } from '../uploads';
 import { asSocket } from './testkit';
 import {
   connect,
@@ -14,6 +13,7 @@ import {
   tune,
   useGatewayStand,
 } from './gateway.testkit';
+import type { Attachment } from '@relay/shared';
 
 /**
  * Чат-сессия: в какой ленте сидит сокет, под каким именем пишет и что из

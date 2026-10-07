@@ -1,7 +1,8 @@
 import { Body, Controller, Logger, Post, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { SettingsService } from '../settings/settings.service';
-import { AUTH_COOKIE, authEnabled, issueToken, passwordMatches } from './auth';
+import { authEnabled, issueToken, passwordMatches } from './auth';
+import { AUTH_COOKIE } from '@relay/shared';
 
 // Защита от подбора: на IP — не больше `access.unlockAttempts` неудач за окно.
 // Число то же самое, что у пароля закрытого сервера (FREE_FAILS в

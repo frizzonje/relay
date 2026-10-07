@@ -12,23 +12,11 @@ import { DataSource, In } from 'typeorm';
 import { AttachmentRow, MessageRow } from './db/entities';
 import { SettingsService } from './settings/settings.service';
 import { isExecutable } from './uploads.policy';
-import { MAX_UPLOAD_BYTES } from '@relay/shared';
+import type { Attachment, AttachmentKind } from '@relay/shared';
 
 // Файлы храним вне public (он монтируется read-only в превью) — отдельная
 // писучая папка, которую main.ts раздаёт по префиксу /uploads за авторизацией.
 export const UPLOAD_DIR = process.env.UPLOAD_DIR || join(__dirname, '..', 'uploads');
-/**
- * Жёсткий потолок процесса: столько multer соглашается принять на один файл, и
- * это единственное ограничение, которое действует ДО того, как тело окажется на
- * диске. Оно намеренно осталось константой — предел передаётся интерсептору
- * один раз, при разборе декораторов, и настройка его не двигает.
- *
- * Настройка `files.maxUploadBytes` сужает этот потолок и проверяется по
- * НАСТОЯЩЕМУ размеру записанного файла (см. `UploadsService.register`).
- * Поднять её выше 25 МиБ сегодня некуда: столько же знает и браузер
- * (`MAX_UPLOAD_BYTES` в `@relay/shared`), и он откажет ещё до отправки.
- */
-export { MAX_UPLOAD_BYTES };
 
 // Разбор размера из `.env` живёт в uploads.policy.ts — там же, где его
 // спрашивают настройки при первом старте. Здесь остаётся имя, под которым его
@@ -52,20 +40,6 @@ const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 mkdirSync(UPLOAD_DIR, { recursive: true });
-
-// То, как клиент рисует вложение: картинка инлайн, mp3 — плеером, прочее — карточкой
-export type AttachmentKind = 'image' | 'audio' | 'file';
-
-export interface Attachment {
-  url: string;
-  name: string;
-  size: number;
-  mime: string;
-  kind: AttachmentKind;
-  // Спойлер — метка сообщения, а не файла: реестр её не хранит, гейт добавляет
-  // при рассылке (см. handleChatMessage). Здесь — только чтобы тип совпал.
-  spoiler?: boolean;
-}
 
 /**
  * Почему загрузку не приняли. Наружу уходит кодом состояния и короткой

@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { readFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Channel, Server } from '@relay/shared';
 
 /**
  * Старый реестр серверов и каналов на диске — тот, что до 1.0 был единственным
@@ -17,21 +18,15 @@ import { join } from 'node:path';
  * инсталляции без единой строчки в логе.
  */
 
-// Реестр направлений (api намеренно не тянет @relay/shared — типы дублируем, как и
-// прочие константы здесь; формат совпадает с Channel/Server из packages/shared).
-export type ChannelType = 'text' | 'voice';
-// Транспорт голосового канала: p2p (mesh, каждый каждому) или sfu (через
-// медиасервер). Отсутствие поля = p2p — старые registry.json читаются как есть.
-export type VoiceMode = 'p2p' | 'sfu';
-// Реестровый сервер (гильдия). Имя ServerEntry, чтобы не столкнуться с socket.io
-// `Server` (WebSocketServer). Формат совпадает с Server из packages/shared.
-export interface ServerEntry {
-  id: string;
-  name: string;
-  emoji?: string;
-  removable: boolean;
+/**
+ * Сервер в реестре — то, что хранится, а не то, что видит клиент. От
+ * `Server` контракта отличается полями, которые наружу не уходят никогда:
+ * хэш пароля и создатель. Имя `ServerEntry`, а не `Server`, — чтобы не
+ * столкнуться с `Server` из socket.io.
+ */
+export interface ServerEntry extends Pick<Server, 'id' | 'name' | 'emoji' | 'removable'> {
   // Хэш пароля закрытого сервера (`salt:hash` hex, scrypt). Клиенту НЕ отдаём —
-  // наружу уходит только флаг `locked`. Персистится в registry.json.
+  // наружу уходит только флаг `locked`.
   passwordHash?: string;
   // clientId устройства-создателя (localStorage) у записей, созданных до 1.0.
   // Поле отсутствует у тех, что старше самого правила владения, — такие серверы
@@ -41,26 +36,20 @@ export interface ServerEntry {
   // в registry.json такого поля не было и быть не могло.
   creatorIdentityId?: string;
 }
-export interface Channel {
-  id: string;
-  serverId: string;
-  type: ChannelType;
-  name: string;
-  slug: string;
-  removable: boolean;
-  // Только для type: 'voice'. Меняется через channel-mode, права — как у
-  // channel-delete: дефолтные каналы (removable: false) остаются на p2p.
-  mode?: VoiceMode;
-  // clientId устройства-создателя, как у ServerEntry: владелец канала. У старых
-  // записей отсутствует — их может править любой участник.
+
+/**
+ * Канал в реестре. Без полей, которые считаются под каждый сокет (`mine`,
+ * `lastTs`), и с создателем — как у `ServerEntry`. У старых записей создателя
+ * нет: их может править любой участник.
+ */
+export interface ChannelEntry extends Omit<Channel, 'mine' | 'lastTs'> {
   creatorId?: string;
-  // Личность создателя, как у ServerEntry.
   creatorIdentityId?: string;
 }
 
 export interface PersistedRegistry {
   servers?: ServerEntry[];
-  channels?: Channel[];
+  channels?: ChannelEntry[];
 }
 
 // Куда: DATA_DIR из env, иначе `<cwd>/data` — в дев/превью процесс запускается с

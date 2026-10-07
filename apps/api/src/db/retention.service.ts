@@ -1,7 +1,8 @@
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { SettingsService } from '../settings/settings.service';
-import { describeRetention, type Retention, type RetentionMode } from './retention.policy';
+import { describeRetention, type Retention } from './retention.policy';
+import type { RetentionMode } from '@relay/shared';
 
 /**
  * Ретенция: сколько живёт переписка.

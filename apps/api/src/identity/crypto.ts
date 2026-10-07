@@ -1,7 +1,6 @@
 import { createHash, webcrypto } from 'node:crypto';
 
 import {
-  NICK_MAX,
   OWNER_TOKEN_BYTES,
   PAIR_CODE_DIGITS,
   PUBLIC_KEY_BYTES,
@@ -20,20 +19,6 @@ import {
  * и это прибито одними контрольными значениями в `identity.test.ts` здесь и
  * в shared.
  */
-
-export {
-  NICK_MAX,
-  OWNER_TOKEN_BYTES,
-  OWNER_TOKEN_CHARS,
-  PAIR_CODE_DIGITS,
-  PUBLIC_KEY_BYTES,
-  SIGNATURE_BYTES,
-  SIGN_ALGORITHM,
-  authMessage,
-  certificateMessage,
-  isOwnerToken,
-  isPairCode,
-} from '@relay/shared';
 
 const FINGERPRINT_BYTES = 8;
 const B64URL = /^[A-Za-z0-9_-]+$/;
@@ -100,27 +85,6 @@ export function newOwnerToken(): string {
  */
 export function hashOwnerToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
-}
-
-/**
- * Ник к показываемому виду: свободный и не уникальный, но не любой.
- *
- * Длину принимаем параметром, а не читаем здесь настройку: модуль чистый —
- * его зовут и вход, и переименование, и тест, — а `NICK_MAX` остаётся
- * умолчанием, то есть тем, чем длина была всегда. Владелец ужимает её ключом
- * `people.nickMaxLength`, и передать его обязан тот, кто знает настройки
- * (`identity.service.ts`).
- */
-export function sanitizeNick(raw: unknown, max: number = NICK_MAX): string {
-  if (typeof raw !== 'string') return '';
-  return raw
-    .replace(/^@+/, '')
-    .trim()
-    .replace(/\s+/g, '-')
-    .replace(/[^\p{L}\p{N}_-]/gu, '')
-    .replace(/-{2,}/g, '-')
-    .replace(/^-+/, '')
-    .slice(0, max);
 }
 
 /** Имя устройства длиннее этого в списке не помещается. */

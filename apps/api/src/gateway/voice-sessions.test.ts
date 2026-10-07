@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueGuestToken } from '../auth/auth';
 import { asSocket, type FakeSocket } from './testkit';
 import { DmService } from './dm.service';
-import { callRoom } from './voice-sessions';
 import {
   connect,
   connectAs,
@@ -16,6 +15,7 @@ import {
   useGatewayStand,
 } from './gateway.testkit';
 import type { SignalingGateway } from './signaling.gateway';
+import { callRoomOf } from '@relay/shared';
 
 /**
  * Голосовая сессия: кто в эфире, что о нём знают остальные и как между
@@ -702,7 +702,7 @@ describe('комната беседы', () => {
     const hers = await connectAs(gw, server, anya.cookie, { id: 'аня' });
     const his = await connectAs(gw, server, boris.cookie, { id: 'боря' });
     settle();
-    const room = callRoom(DmService.address(anya.identityId, boris.identityId));
+    const room = callRoomOf(DmService.address(anya.identityId, boris.identityId));
     const ring = await gw.handleCallStart(asSocket(hers), { fingerprint: boris.fingerprint });
     const ringId = ring.ok ? ring.ringId : '';
     return { ...stand, anya, boris, hers, his, room, ringId };
@@ -789,7 +789,7 @@ describe('комната беседы', () => {
     // Адрес правильной формы, но такого разговора нет. Дверь в него заперта не
     // тем, что имя трудно угадать, а тем, что комнаты без принятого вызова не
     // существует вовсе.
-    gw.handleJoin(asSocket(hers), { room: callRoom('dm-0123456789abcdef01234567') });
+    gw.handleJoin(asSocket(hers), { room: callRoomOf('dm-0123456789abcdef01234567') });
 
     expect(hers.data.room).toBeUndefined();
     expect(hers.last('voice-refused')).toEqual({ reason: 'not-in-call' });
@@ -958,7 +958,7 @@ describe('комната беседы', () => {
     // живого разговора. Места обязаны уцелеть: обнулись они, `freeSeat` отвечал
     // бы «ушёл не участник» обоим, разговор стало бы нечем кончить, а
     // оставшийся навсегда числился бы «в голосе».
-    expect(callRoom(DmService.address(anya.identityId, boris.identityId))).toBe(room);
+    expect(callRoomOf(DmService.address(anya.identityId, boris.identityId))).toBe(room);
     gw.handleLeave(asSocket(hers));
     expect([his.data.room, his.last('call-over')]).toEqual([undefined, { room }]);
   });
