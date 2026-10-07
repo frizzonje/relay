@@ -1,64 +1,61 @@
 'use client';
 
-import type { RtpCapabilities, RtpParameters } from 'mediasoup-client/types';
+import type {
+  DtlsParameters,
+  IceParameters,
+  RtpCapabilities,
+  RtpParameters,
+  TransportOptions,
+} from 'mediasoup-client/types';
+import type {
+  SfuAck,
+  SfuConsumer,
+  SfuConsumerLayers,
+  SfuEvents,
+  SfuPeerSnapshot,
+  SfuProducerInfo,
+  SfuRequests,
+  SfuSource,
+} from '@relay/shared';
 
 /**
  * Что чем является на проводе между нами и медиасервером.
  *
- * Здесь только контракт: имена событий разбирает `index.ts`, а формы, которые
- * в них ездят, и профили кодирования, о которых мы договорились с роутером, —
- * тут. Ни состояния, ни зависимостей: этот файл — лист.
- *
- * Вторая сторона контракта — `apps/sfu/src/gateway/sfu.gateway.ts`. Менять
- * что-либо здесь в одиночку нельзя: клиент прошлой версии обязан звонить
- * клиенту новой.
+ * Формы разговора — из контракта (`@relay/shared`, файл `sfu.ts`), вторая его
+ * сторона — `apps/sfu`. Здесь они получают медиатипы браузерного
+ * `mediasoup-client` и привычные этому каталогу имена; плюс профили
+ * кодирования, о которых мы договорились с роутером. Ни состояния, ни
+ * зависимостей: этот файл — лист.
  */
 
-/** Роль дорожки. Совпадает с `ProducerSource` на сервере — контракт общий. */
-export type Source = 'mic' | 'cam' | 'screen' | 'screen-audio';
-
-export interface ProducerInfo {
-  id: string;
-  kind: 'audio' | 'video';
-  source: Source;
-}
-
-export interface PeerSnapshot {
-  peerId: string;
-  name: string;
-  producers: ProducerInfo[];
-}
-
-export interface WelcomePayload {
-  peerId: string;
-  routerRtpCapabilities: RtpCapabilities;
-  peers: PeerSnapshot[];
-}
-
-export interface ConsumerPayload {
-  id: string;
-  producerId: string;
-  peerId: string;
-  kind: 'audio' | 'video';
+/** Медиатипы браузерной стороны. */
+export interface ClientMedia {
+  rtpCapabilities: RtpCapabilities;
   rtpParameters: RtpParameters;
-  source: Source;
+  dtlsParameters: DtlsParameters;
+  iceParameters: IceParameters;
+  transportParams: TransportOptions;
 }
 
-/** Слой simulcast, который сервер реально отдаёт по этому consumer'у. */
-export interface ConsumerLayers {
-  consumerId: string;
-  spatialLayer: number | null;
-  temporalLayer: number | null;
-}
-
-/** Ответ на запрос с подтверждением: либо полезная нагрузка, либо причина отказа. */
-export type Ack<T> = ({ ok: true } & T) | { ok: false; error: string };
+export type Source = SfuSource;
+export type ProducerInfo = SfuProducerInfo;
+export type PeerSnapshot = SfuPeerSnapshot;
+export type ConsumerPayload = SfuConsumer<ClientMedia>;
+export type ConsumerLayers = SfuConsumerLayers;
+export type ServerEvents = SfuEvents<ClientMedia>;
+export type WelcomePayload = ServerEvents['welcome'];
+export type Requests = SfuRequests<ClientMedia>;
+export type Ack<T = object> = SfuAck<T>;
 
 /**
- * Спросить сервер и дождаться ответа. Отказ приезжает как `null` — сокет
- * принадлежит `index.ts`, и всем остальным он виден только этой функцией.
+ * Спросить сервер и дождаться ответа. Имя запроса, его тело и ответ сверяются
+ * с контрактом. Отказ приезжает как `null` — сокет принадлежит `index.ts`, и
+ * всем остальным он виден только этой функцией.
  */
-export type Ask = <T>(event: string, payload: unknown) => Promise<({ ok: true } & T) | null>;
+export type Ask = <E extends keyof Requests>(
+  event: E,
+  payload: Requests[E][0],
+) => Promise<({ ok: true } & Requests[E][1]) | null>;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Профили кодирования

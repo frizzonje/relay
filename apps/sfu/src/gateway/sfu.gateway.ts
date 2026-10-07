@@ -12,13 +12,28 @@ import { Server, Socket } from 'socket.io';
 import {
   Peer,
   PRODUCER_SOURCES,
+  type TransportParams,
   ProducerSource,
   producerInfo,
   RoomsService,
 } from '../media/rooms.service';
 import { verifySfuToken } from '../token';
+import type { SfuAck, SfuRequest, SfuRequests, Untrusted } from '@relay/shared';
 
-type Ack<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
+/** Медиатипы серверной стороны контракта. */
+interface ServerMedia {
+  rtpCapabilities: types.RtpCapabilities;
+  rtpParameters: types.RtpParameters;
+  dtlsParameters: types.DtlsParameters;
+  iceParameters: types.IceParameters;
+  transportParams: TransportParams;
+}
+
+type Requests = SfuRequests<ServerMedia>;
+/** Тело запроса — форма из контракта, значения не проверены. */
+type Body<E extends SfuRequest> = Untrusted<Requests[E][0]>;
+/** Ответ на запрос — ровно то, что ждёт клиент. */
+type Reply<E extends SfuRequest> = SfuAck<Requests[E][1]>;
 
 function fail(error: string): { ok: false; error: string } {
   return { ok: false, error };
@@ -30,39 +45,6 @@ function fail(error: string): { ok: false; error: string } {
  * сам или его выгнал сервер, — и ждать такого назад незачем.
  */
 const RECOVERABLE = new Set(['transport error', 'transport close', 'forced close', 'ping timeout']);
-
-interface CreateTransportPayload {
-  direction?: unknown;
-}
-interface ConnectTransportPayload {
-  transportId?: unknown;
-  dtlsParameters?: unknown;
-}
-interface ProducePayload {
-  transportId?: unknown;
-  kind?: unknown;
-  rtpParameters?: unknown;
-  source?: unknown;
-}
-interface ProducerPayload {
-  producerId?: unknown;
-}
-interface RestartIcePayload {
-  transportId?: unknown;
-}
-interface ConsumePayload {
-  transportId?: unknown;
-  producerId?: unknown;
-  rtpCapabilities?: unknown;
-}
-interface ConsumerPayload {
-  consumerId?: unknown;
-}
-interface LayersPayload {
-  consumerId?: unknown;
-  spatialLayer?: unknown;
-  temporalLayer?: unknown;
-}
 
 /**
  * Сигналинг медиасервера — отдельный сокет, рядом с основным сокетом api.
@@ -246,8 +228,8 @@ export class SfuGateway implements OnGatewayConnection {
   @SubscribeMessage('create-transport')
   async handleCreateTransport(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: CreateTransportPayload,
-  ): Promise<Ack<{ params: unknown; direction: 'send' | 'recv' }>> {
+    @MessageBody() payload: Body<'create-transport'>,
+  ): Promise<Reply<'create-transport'>> {
     const peer = this.peers.get(client.id);
     if (!peer) return fail('no-peer');
     if (peer.transports.size >= SfuGateway.MAX_TRANSPORTS_PER_PEER) {
@@ -267,8 +249,8 @@ export class SfuGateway implements OnGatewayConnection {
   @SubscribeMessage('connect-transport')
   async handleConnectTransport(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: ConnectTransportPayload,
-  ): Promise<Ack> {
+    @MessageBody() payload: Body<'connect-transport'>,
+  ): Promise<Reply<'connect-transport'>> {
     const peer = this.peers.get(client.id);
     if (!peer) return fail('no-peer');
     const transport = this.transportOf(peer, payload?.transportId);
@@ -291,8 +273,8 @@ export class SfuGateway implements OnGatewayConnection {
   @SubscribeMessage('restart-ice')
   async handleRestartIce(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: RestartIcePayload,
-  ): Promise<Ack<{ iceParameters: types.IceParameters }>> {
+    @MessageBody() payload: Body<'restart-ice'>,
+  ): Promise<Reply<'restart-ice'>> {
     const peer = this.peers.get(client.id);
     if (!peer) return fail('no-peer');
     const transport = this.transportOf(peer, payload?.transportId);
@@ -316,8 +298,8 @@ export class SfuGateway implements OnGatewayConnection {
   @SubscribeMessage('close-transport')
   handleCloseTransport(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: RestartIcePayload,
-  ): Ack {
+    @MessageBody() payload: Body<'close-transport'>,
+  ): Reply<'close-transport'> {
     const peer = this.peers.get(client.id);
     if (!peer) return fail('no-peer');
     const transport = this.transportOf(peer, payload?.transportId);
@@ -329,8 +311,8 @@ export class SfuGateway implements OnGatewayConnection {
   @SubscribeMessage('produce')
   async handleProduce(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: ProducePayload,
-  ): Promise<Ack<{ id: string }>> {
+    @MessageBody() payload: Body<'produce'>,
+  ): Promise<Reply<'produce'>> {
     const peer = this.peers.get(client.id);
     if (!peer) return fail('no-peer');
     // Слушатель отдавать не вправе — и это единственное место, где такой запрет
@@ -386,8 +368,8 @@ export class SfuGateway implements OnGatewayConnection {
   @SubscribeMessage('close-producer')
   handleCloseProducer(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: ProducerPayload,
-  ): Ack {
+    @MessageBody() payload: Body<'close-producer'>,
+  ): Reply<'close-producer'> {
     const peer = this.peers.get(client.id);
     if (!peer) return fail('no-peer');
     const id = typeof payload?.producerId === 'string' ? payload.producerId : '';
@@ -413,9 +395,7 @@ export class SfuGateway implements OnGatewayConnection {
    * пропали — клиент сверяет по снимку, на что он так и не подписался.
    */
   @SubscribeMessage('snapshot')
-  handleSnapshot(
-    @ConnectedSocket() client: Socket,
-  ): Ack<{ peers: ReturnType<RoomsService['producersFor']> }> {
+  handleSnapshot(@ConnectedSocket() client: Socket): Reply<'snapshot'> {
     const peer = this.peers.get(client.id);
     if (!peer) return fail('no-peer');
     return { ok: true, peers: this.rooms.producersFor(peer) };
@@ -424,8 +404,8 @@ export class SfuGateway implements OnGatewayConnection {
   @SubscribeMessage('consume')
   async handleConsume(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: ConsumePayload,
-  ): Promise<Ack<{ consumer: unknown }>> {
+    @MessageBody() payload: Body<'consume'>,
+  ): Promise<Reply<'consume'>> {
     const peer = this.peers.get(client.id);
     if (!peer) return fail('no-peer');
     const router = this.rooms.router(peer.room);
@@ -511,8 +491,8 @@ export class SfuGateway implements OnGatewayConnection {
   @SubscribeMessage('resume')
   async handleResume(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: ConsumerPayload,
-  ): Promise<Ack> {
+    @MessageBody() payload: Body<'resume'>,
+  ): Promise<Reply<'resume'>> {
     const peer = this.peers.get(client.id);
     if (!peer) return fail('no-peer');
     const id = typeof payload?.consumerId === 'string' ? payload.consumerId : '';
@@ -539,8 +519,8 @@ export class SfuGateway implements OnGatewayConnection {
   @SubscribeMessage('pause')
   async handlePause(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: ConsumerPayload,
-  ): Promise<Ack> {
+    @MessageBody() payload: Body<'pause'>,
+  ): Promise<Reply<'pause'>> {
     const peer = this.peers.get(client.id);
     if (!peer) return fail('no-peer');
     const id = typeof payload?.consumerId === 'string' ? payload.consumerId : '';
@@ -564,8 +544,8 @@ export class SfuGateway implements OnGatewayConnection {
   @SubscribeMessage('close-consumer')
   handleCloseConsumer(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: ConsumerPayload,
-  ): Ack {
+    @MessageBody() payload: Body<'close-consumer'>,
+  ): Reply<'close-consumer'> {
     const peer = this.peers.get(client.id);
     if (!peer) return fail('no-peer');
     const id = typeof payload?.consumerId === 'string' ? payload.consumerId : '';
@@ -583,8 +563,8 @@ export class SfuGateway implements OnGatewayConnection {
   @SubscribeMessage('preferred-layers')
   async handlePreferredLayers(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: LayersPayload,
-  ): Promise<Ack> {
+    @MessageBody() payload: Body<'preferred-layers'>,
+  ): Promise<Reply<'preferred-layers'>> {
     const peer = this.peers.get(client.id);
     if (!peer) return fail('no-peer');
     const id = typeof payload?.consumerId === 'string' ? payload.consumerId : '';

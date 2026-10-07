@@ -9,16 +9,20 @@ RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
 # Сначала только манифесты — слой кэшируется, пока package.json не менялись.
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY apps/sfu/package.json ./apps/sfu/
+COPY packages/shared/package.json ./packages/shared/
 RUN pnpm install --frozen-lockfile --filter @relay/sfu...
 
 # ── Stage 2: компиляция TypeScript ───────────────────────────────────────────
 FROM deps AS builder
 COPY apps/sfu ./apps/sfu
-RUN pnpm --filter @relay/sfu build
+COPY packages/shared ./packages/shared
+# `...` — вместе с зависимостями: sfu импортирует собранный @relay/shared.
+RUN pnpm --filter "@relay/sfu..." build
 
 # ── Stage 3: pnpm deploy — только прод-зависимости + dist ────────────────────
 FROM deps AS pruner
 COPY --from=builder /mono/apps/sfu/dist ./apps/sfu/dist
+COPY --from=builder /mono/packages/shared/dist ./packages/shared/dist
 RUN pnpm deploy --filter @relay/sfu --prod /deploy
 
 # ── Stage 4: минимальный runtime ─────────────────────────────────────────────

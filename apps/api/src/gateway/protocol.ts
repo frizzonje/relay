@@ -1,5 +1,6 @@
 import { LIMITS } from '@relay/shared';
 import type * as wire from '@relay/shared';
+import type { Untrusted } from '@relay/shared';
 
 /**
  * Форма сообщений сигналинга со стороны сервера.
@@ -14,12 +15,10 @@ import type * as wire from '@relay/shared';
  * `optional`).
  */
 
-/** Форма тела из контракта, без доверия к значениям. */
-export type Untrusted<T> = { [K in keyof T]?: unknown };
-
 export { PROTOCOL_VERSION, SYSTEM_ACTOR_NICK, UNKNOWN_ACTOR_NICK } from '@relay/shared';
 
 export type {
+  Untrusted,
   AdminAction,
   AdminActionResult,
   AdminAuditResult,

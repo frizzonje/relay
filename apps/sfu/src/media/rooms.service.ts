@@ -1,5 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { types } from 'mediasoup';
+import {
+  SFU_SOURCES,
+  type SfuPeerSnapshot,
+  type SfuProducerInfo,
+  type SfuSource,
+} from '@relay/shared';
 import { MEDIA_CODECS, webRtcTransportOptions } from './media.config';
 import { WorkersService } from './workers.service';
 
@@ -8,9 +14,9 @@ import { WorkersService } from './workers.service';
  * пересылает остальным вместе с producerId — по нему дирижёр решает, куда
  * приткнуть входящий трек: микрофон в микшер, камера/экран в плитку.
  */
-export type ProducerSource = 'mic' | 'cam' | 'screen' | 'screen-audio';
+export type ProducerSource = SfuSource;
 
-export const PRODUCER_SOURCES: ProducerSource[] = ['mic', 'cam', 'screen', 'screen-audio'];
+export const PRODUCER_SOURCES = SFU_SOURCES;
 
 export interface Peer {
   /** Совпадает с id участника в основном сигналинге — плитки общие. */
@@ -184,7 +190,7 @@ export class RoomsService {
   }
 
   /** Все чужие producer'ы комнаты — то, что новичку надо начать слушать. */
-  producersFor(peer: Peer): { peerId: string; name: string; producers: ProducerInfo[] }[] {
+  producersFor(peer: Peer): SfuPeerSnapshot[] {
     return this.peers(peer.room)
       .filter((p) => p.id !== peer.id)
       .map((p) => ({
@@ -202,11 +208,7 @@ export interface TransportParams {
   dtlsParameters: types.DtlsParameters;
 }
 
-export interface ProducerInfo {
-  id: string;
-  kind: types.MediaKind;
-  source: ProducerSource;
-}
+export type ProducerInfo = SfuProducerInfo;
 
 export function producerInfo(producer: types.Producer): ProducerInfo {
   return {

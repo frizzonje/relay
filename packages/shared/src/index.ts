@@ -13,6 +13,13 @@
 
 export const APP_NAME = 'relay';
 
+/**
+ * Форма тела из контракта — без доверия к значениям. Так серверы (api, sfu)
+ * описывают то, что прислал клиент: какие поля бывают, известно отсюда, а
+ * что в них лежит, решает разбор, — тело события socket.io не проверяет никто.
+ */
+export type Untrusted<T> = { [K in keyof T]?: unknown };
+
 // Пропуск-кука и проверка HMAC-токена (подпись завязана на SITE_PASSWORD).
 // Единый формат для Next (middleware) и Nest — см. ./auth.
 export { AUTH_COOKIE, TOKEN_TTL_MS, issueToken, verifyToken, parseCookies } from './auth';
@@ -80,6 +87,9 @@ export {
 // Отдельным файлом, а не здесь, потому что панель — единственная часть
 // контракта, которой пользуется один экран из всех, — см. ./admin.
 export * from './admin';
+
+// Протокол медиасервера (сокет `/sfu/`) — см. ./sfu.
+export * from './sfu';
 import type {
   AdminActionPayload,
   AdminActionResult,

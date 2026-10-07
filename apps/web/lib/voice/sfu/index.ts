@@ -1,15 +1,15 @@
 'use client';
 
 import { Device } from 'mediasoup-client';
-import type { IceParameters, Transport, TransportOptions } from 'mediasoup-client/types';
+import type { Transport } from 'mediasoup-client/types';
 import { io, type Socket } from 'socket.io-client';
 import { tx } from '@/lib/i18n';
 import type { TransportHost, VoiceTransport } from '../types';
 import {
   type Ack,
   type ConsumerLayers,
-  type PeerSnapshot,
   type ProducerInfo,
+  type Requests,
   type Source,
   type WelcomePayload,
 } from './protocol';
@@ -118,11 +118,14 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
   }
 
   /** Запрос с ack. Ошибку не глотаем — возвращаем `null` и пишем в консоль. */
-  function ask<T>(event: string, payload: unknown): Promise<({ ok: true } & T) | null> {
+  function ask<E extends keyof Requests>(
+    event: E,
+    payload: Requests[E][0],
+  ): Promise<({ ok: true } & Requests[E][1]) | null> {
     const s = sock;
     if (!s) return Promise.resolve(null);
     return new Promise((resolve) => {
-      s.timeout(10_000).emit(event, payload, (err: unknown, res: Ack<T>) => {
+      s.timeout(10_000).emit(event, payload, (err: unknown, res: Ack<Requests[E][1]>) => {
         if (err || !res || !res.ok) {
           console.warn(`[sfu] ${event} failed:`, err ?? (res as { error?: string })?.error);
           resolve(null);
@@ -138,7 +141,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
   /** Создаёт транспорт нужного направления и вешает на него обработчики. */
   async function openTransport(direction: 'send' | 'recv'): Promise<Transport | null> {
     if (!device) return null;
-    const res = await ask<{ params: TransportOptions }>('create-transport', { direction });
+    const res = await ask('create-transport', { direction });
     if (!res) return null;
     const transport =
       direction === 'send'
@@ -153,7 +156,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
 
     if (direction === 'send') {
       transport.on('produce', ({ kind, rtpParameters, appData }, done, fail) => {
-        void ask<{ id: string }>('produce', {
+        void ask('produce', {
           transportId: transport.id,
           kind,
           rtpParameters,
@@ -276,7 +279,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
   async function restartIce() {
     for (const transport of [sendTransport, recvTransport]) {
       if (!transport) continue;
-      const res = await ask<{ iceParameters: IceParameters }>('restart-ice', {
+      const res = await ask('restart-ice', {
         transportId: transport.id,
       });
       if (!res) continue;
@@ -361,7 +364,7 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     const stale = () => sock !== session;
     await publisher.publishLocal();
     if (stale()) return;
-    const res = await ask<{ peers: PeerSnapshot[] }>('snapshot', {});
+    const res = await ask('snapshot', {});
     if (!res || stale()) return;
     for (const peer of res.peers) {
       if (subscriber.nameOf(peer.peerId) === undefined) subscriber.addPeer(peer.peerId, peer.name);

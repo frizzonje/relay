@@ -324,7 +324,7 @@ export function createSubscriber({
       let c: ConsumerPayload;
       let consumer: Consumer;
       try {
-        const res = await ask<{ consumer: ConsumerPayload }>('consume', {
+        const res = await ask('consume', {
           transportId: transport.id,
           producerId: info.id,
           rtpCapabilities: dev.rtpCapabilities,
