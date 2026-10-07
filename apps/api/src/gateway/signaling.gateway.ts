@@ -129,7 +129,7 @@ import {
  * единственным каналом, который у отвергнутого сокета есть. Клиент по этой
  * строке показывает экран «вас забанили», а не бесконечное «переподключаюсь».
  */
-export const BANNED_ERROR = 'banned';
+const BANNED_ERROR = 'banned';
 
 /**
  * Отказ во входе клиенту не той версии контракта. Тоже текстом ошибки — другого
@@ -137,8 +137,8 @@ export const BANNED_ERROR = 'banned';
  * приложение» и «на этом сервере старая версия relay» это противоположные
  * советы, и дать не тот значит послать человека чинить не то.
  */
-export const CLIENT_OUTDATED_ERROR = 'client-outdated';
-export const SERVER_OUTDATED_ERROR = 'server-outdated';
+const CLIENT_OUTDATED_ERROR = 'client-outdated';
+const SERVER_OUTDATED_ERROR = 'server-outdated';
 
 /**
  * Отказ во входе на время обслуживания. Тем же каналом и по той же причине, что
@@ -146,7 +146,7 @@ export const SERVER_OUTDATED_ERROR = 'server-outdated';
  * баном, — «сервер закрыт на час» и «вас забанили» человек переживает
  * по-разному, и сказать одно вместо другого значит соврать.
  */
-export const MAINTENANCE_ERROR = 'maintenance';
+const MAINTENANCE_ERROR = 'maintenance';
 
 /**
  * Отказ во входе с закрытого адреса. Слово своё, не банное, и это решение, а не
@@ -154,7 +154,7 @@ export const MAINTENANCE_ERROR = 'maintenance';
  * под маску мог не делать ничего. «Ваш адрес закрыт» и «вас забанили» — разные
  * новости, и делать по ним надо разное.
  */
-export const BLOCKED_ERROR = 'blocked';
+const BLOCKED_ERROR = 'blocked';
 
 /**
  * Версия контракта, названная клиентом. `undefined` — не назвал вовсе, то есть

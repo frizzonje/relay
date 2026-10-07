@@ -10,7 +10,8 @@ import { resetDatabase, testDatabase } from './db/testing';
 import { SettingsService } from './settings/settings.service';
 import { tune } from './settings/settings.testkit';
 import { UploadByteBudget, UploadsEnabledGuard } from './upload.guard';
-import { UploadsService, parseBytes } from './uploads';
+import { UploadsService } from './uploads';
+import { parseBytes } from './uploads.policy';
 
 /**
  * Загрузки — единственный путь, которым посторонний пишет на диск сервера.

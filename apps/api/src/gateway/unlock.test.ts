@@ -124,13 +124,13 @@ describe('clientIp', () => {
 
 describe('UnlockAttempts', () => {
   it('до порога не мешает', () => {
-    const a = new UnlockAttempts(3, 1000, 60_000);
+    const a = new UnlockAttempts({ free: 3, cooldownMs: 1000, maxCooldownMs: 60_000 });
     for (let i = 0; i < 3; i++) a.fail('ip', 'srv', 0);
     expect(a.blockedUntil('ip', 'srv', 0)).toBe(0);
   });
 
   it('после порога назначает растущий простой', () => {
-    const a = new UnlockAttempts(3, 1000, 60_000);
+    const a = new UnlockAttempts({ free: 3, cooldownMs: 1000, maxCooldownMs: 60_000 });
     for (let i = 0; i < 4; i++) a.fail('ip', 'srv', 0);
     expect(a.blockedUntil('ip', 'srv', 0)).toBe(1000);
     a.fail('ip', 'srv', 0);
@@ -140,33 +140,33 @@ describe('UnlockAttempts', () => {
   });
 
   it('простой не растёт выше потолка', () => {
-    const a = new UnlockAttempts(0, 1000, 3000);
+    const a = new UnlockAttempts({ free: 0, cooldownMs: 1000, maxCooldownMs: 3000 });
     for (let i = 0; i < 10; i++) a.fail('ip', 'srv', 0);
     expect(a.blockedUntil('ip', 'srv', 0)).toBe(3000);
   });
 
   it('простой кончается сам', () => {
-    const a = new UnlockAttempts(0, 1000, 60_000);
+    const a = new UnlockAttempts({ free: 0, cooldownMs: 1000, maxCooldownMs: 60_000 });
     a.fail('ip', 'srv', 0);
     expect(a.blockedUntil('ip', 'srv', 999)).toBe(1000);
     expect(a.blockedUntil('ip', 'srv', 1001)).toBe(0);
   });
 
   it('счёт раздельный по серверам: заперли один — остальные открыты', () => {
-    const a = new UnlockAttempts(0, 1000, 60_000);
+    const a = new UnlockAttempts({ free: 0, cooldownMs: 1000, maxCooldownMs: 60_000 });
     a.fail('ip', 'srv-1', 0);
     expect(a.blockedUntil('ip', 'srv-1', 0)).toBe(1000);
     expect(a.blockedUntil('ip', 'srv-2', 0)).toBe(0);
   });
 
   it('счёт раздельный по адресам', () => {
-    const a = new UnlockAttempts(0, 1000, 60_000);
+    const a = new UnlockAttempts({ free: 0, cooldownMs: 1000, maxCooldownMs: 60_000 });
     a.fail('ip-1', 'srv', 0);
     expect(a.blockedUntil('ip-2', 'srv', 0)).toBe(0);
   });
 
   it('удачная попытка обнуляет счёт', () => {
-    const a = new UnlockAttempts(1, 1000, 60_000);
+    const a = new UnlockAttempts({ free: 1, cooldownMs: 1000, maxCooldownMs: 60_000 });
     a.fail('ip', 'srv', 0);
     a.succeed('ip', 'srv');
     a.fail('ip', 'srv', 0); // снова первая, а не вторая
@@ -174,7 +174,7 @@ describe('UnlockAttempts', () => {
   });
 
   it('удалённый сервер уносит свои записи: id можно занять заново', () => {
-    const a = new UnlockAttempts(0, 1000, 60_000);
+    const a = new UnlockAttempts({ free: 0, cooldownMs: 1000, maxCooldownMs: 60_000 });
     a.fail('ip', 'srv', 0);
     a.forgetServer('srv');
     expect(a.blockedUntil('ip', 'srv', 0)).toBe(0);

@@ -16,7 +16,7 @@ import type { MessageKey } from '@/lib/i18n';
  * Текст говорит, ЧТО нельзя, а не «операция отклонена»: причины разделены
  * сервером именно для того, чтобы совет был выполнимым.
  */
-export const CHAT_REFUSAL_KEYS: Record<ChatRefusal, MessageKey> = {
+const CHAT_REFUSAL_KEYS: Record<ChatRefusal, MessageKey> = {
   'read-only': 'refused.chat.read-only',
   rate: 'refused.chat.rate',
   'banned-word': 'refused.chat.banned-word',
@@ -44,7 +44,7 @@ export const CHAT_REFUSAL_KEYS: Record<ChatRefusal, MessageKey> = {
  * Отсюда и текст этой строки: она называет единственный случай, в котором её
  * теперь читают, — разговор не собрался, садились слишком долго.
  */
-export const VOICE_REFUSAL_KEYS: Record<VoiceRefusal, MessageKey> = {
+const VOICE_REFUSAL_KEYS: Record<VoiceRefusal, MessageKey> = {
   'video-off': 'refused.voice.video-off',
   'screen-share-off': 'refused.voice.screen-share-off',
   'room-full': 'refused.voice.room-full',
@@ -84,7 +84,7 @@ export type AdminFieldError = AdminRefusal | 'timeout';
  * значение. Полнота по типу (`Record<AdminFieldError, …>`) держит её честной:
  * причина, заведённая на сервере завтра, не соберётся здесь молча.
  */
-export const ADMIN_REFUSAL_KEYS: Record<AdminFieldError, MessageKey> = {
+const ADMIN_REFUSAL_KEYS: Record<AdminFieldError, MessageKey> = {
   forbidden: 'refused.admin.forbidden',
   'needs-confirm': 'refused.admin.needs-confirm',
   'unknown-key': 'refused.admin.unknown-key',

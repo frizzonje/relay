@@ -32,9 +32,6 @@ export const DEFAULT_SETUP: Readonly<Record<ScreenMode, ScreenSetup>> = {
   fps: { height: 1080, fps: 60 },
 };
 
-/** Потолки высоты, которые владелец может выставить в панели (`voice.screenMaxHeight`). */
-export const INSTALL_HEIGHTS = SCREEN_HEIGHTS;
-
 /**
  * Mesh — прямые соединения: каждый собеседник получает свой поток прямо с
  * аплинка стримера, и на троих это уже три потока. Поэтому выбор человека там

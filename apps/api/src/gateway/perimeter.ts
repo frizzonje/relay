@@ -92,11 +92,10 @@ export class Perimeter {
   // Порог неудач и потолок простоя приезжают из настроек (`access.unlockAttempts`,
   // `access.unlockLockoutMinutes`) — функциями, а не числами: настройку меняют
   // под живым процессом, и снятая один раз копия действовала бы до перезапуска.
-  private readonly unlockAttempts = new UnlockAttempts(
-    () => this.settings.get<number>('access.unlockAttempts'),
-    undefined,
-    () => this.settings.get<number>('access.unlockLockoutMinutes') * 60_000,
-  );
+  private readonly unlockAttempts = new UnlockAttempts({
+    free: () => this.settings.get<number>('access.unlockAttempts'),
+    maxCooldownMs: () => this.settings.get<number>('access.unlockLockoutMinutes') * 60_000,
+  });
 
   // Уже проверенные пароли: ключ — HMAC от «хэш + пароль» на случайном ключе
   // процесса (голый sha256 пароля в памяти — плохая идея, а так дамп кучи не

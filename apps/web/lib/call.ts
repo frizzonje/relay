@@ -66,7 +66,12 @@ let closedByLeave = false;
 
 let initialized = false;
 
-/** Комната идущего разговора — или `null`. */
+/**
+ * Комната идущего разговора — или `null`. Снаружи её читают только тесты
+ * (через динамический импорт, которого knip не видит).
+ *
+ * @internal
+ */
 export function callRoom(): string | null {
   return room;
 }

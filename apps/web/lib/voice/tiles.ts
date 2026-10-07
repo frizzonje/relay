@@ -62,11 +62,6 @@ export function tileOf(peerId: string): VoiceTile | undefined {
   return tiles.get(peerId);
 }
 
-/** Сколько собеседников в комнате (себя не считаем). */
-export function remoteCount(): number {
-  return tiles.size - (tiles.has('local') ? 1 : 0);
-}
-
 // ─────────────────────────────────────────────────────────────────────────
 // Персональная громкость собеседников. Ползунок ходит 0–3 (0–300%), значение
 // применяется к GainNode как есть (без урезания).
@@ -81,7 +76,7 @@ export function remoteCount(): number {
 // версиями по имени продолжает работать как запасной вариант.
 // ─────────────────────────────────────────────────────────────────────────
 
-export const PEER_VOL_MAX = 3;
+const PEER_VOL_MAX = 3;
 type PeerVol = { voice?: number; screen?: number };
 
 function loadPeerVols(): Record<string, PeerVol> {
@@ -353,7 +348,7 @@ export function toggleFocus(id: string) {
   else setFocus(id);
 }
 
-export function setFocus(id: string) {
+function setFocus(id: string) {
   if (!tiles.has(id)) return;
   focusedTileId = id;
   useVoiceStore.getState().setFocus(id);

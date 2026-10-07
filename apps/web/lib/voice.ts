@@ -103,9 +103,7 @@ import {
 // уезжают отсюда же: компоненты знают один адрес, `@/lib/voice`.
 export {
   clearFocus,
-  PEER_VOL_MAX,
   reportTileView,
-  setFocus,
   setPeerScreenVolume,
   setPeerVolume,
   toggleFocus,

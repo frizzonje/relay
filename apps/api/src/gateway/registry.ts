@@ -56,7 +56,7 @@ export interface PersistedRegistry {
 // `-w /app/apps/api` на bind-примонтированном репозитории, так что `apps/api/data/`
 // ложится на ХОСТ и переживает пересоздание контейнера без всяких доп-монтирований.
 // В проде DATA_DIR задаём явно на persistent-том uploads (см. docker-compose.yml).
-export const DATA_DIR = process.env.DATA_DIR || join(process.cwd(), 'data');
+const DATA_DIR = process.env.DATA_DIR || join(process.cwd(), 'data');
 export const REGISTRY_FILE = join(DATA_DIR, 'registry.json');
 
 /**

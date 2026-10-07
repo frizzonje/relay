@@ -178,14 +178,8 @@ export function clientIp(handshake: {
   return handshake.address || 'unknown';
 }
 
-// Порог тот же, что у входа на сайт (MAX_ATTEMPTS в auth.controller): ошибиться
-// восемь раз подряд живой человек ещё может, дальше это уже не опечатки. Оба
-// числа с этапа C — умолчания настроек `access.unlockAttempts` и
-// `access.unlockLockoutMinutes`; здесь они остаются на случай, когда счётчик
-// заводят без них (тесты самого счётчика).
-export const FREE_FAILS = 8;
+// Первый простой; дальше он удваивается до потолка из настроек.
 const COOLDOWN_MS = 30_000;
-export const COOLDOWN_MAX_MS = 5 * 60_000;
 // Тишина в течение часа = разговор окончен, запись можно забыть.
 const FORGET_MS = 60 * 60_000;
 const MAX_TRACKED = 10_000;
@@ -204,15 +198,32 @@ interface Attempt {
  */
 type Amount = number | (() => number);
 
+interface Limits {
+  /** Сколько неудач подряд прощается — `access.unlockAttempts`. */
+  free: Amount;
+  /** Потолок простоя — `access.unlockLockoutMinutes`. */
+  maxCooldownMs: Amount;
+  /** Первый простой; растёт вдвое с каждой следующей неудачей. */
+  cooldownMs?: Amount;
+}
+
 /** Неудачные попытки разблокировки, по паре «адрес + сервер». */
 export class UnlockAttempts {
   private readonly entries = new Map<string, Attempt>();
 
-  constructor(
-    private readonly free: Amount = FREE_FAILS,
-    private readonly cooldownMs: Amount = COOLDOWN_MS,
-    private readonly maxCooldownMs: Amount = COOLDOWN_MAX_MS,
-  ) {}
+  private readonly free: Amount;
+  private readonly cooldownMs: Amount;
+  private readonly maxCooldownMs: Amount;
+
+  /**
+   * Порог и потолок — без умолчаний: их знает каталог настроек, и второе
+   * число здесь разошлось бы с ним при первой же правке.
+   */
+  constructor(limits: Limits) {
+    this.free = limits.free;
+    this.cooldownMs = limits.cooldownMs ?? COOLDOWN_MS;
+    this.maxCooldownMs = limits.maxCooldownMs;
+  }
 
   private static amount(value: Amount): number {
     return typeof value === 'function' ? value() : value;

@@ -88,7 +88,7 @@ export function hashOwnerToken(token: string): string {
 }
 
 /** Имя устройства длиннее этого в списке не помещается. */
-export const DEVICE_NAME_MAX = 40;
+const DEVICE_NAME_MAX = 40;
 
 /**
  * Имя устройства — не ник, и правила у него свои: «Chrome · macOS» обязано

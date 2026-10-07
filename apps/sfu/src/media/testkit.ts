@@ -49,7 +49,7 @@ export class FakeProducer extends Emitter {
   }
 }
 
-export class FakeConsumer extends Emitter {
+class FakeConsumer extends Emitter {
   readonly id = nextId('consumer');
   paused: boolean;
   preferred: unknown;
@@ -150,7 +150,7 @@ export class FakeTransport extends Emitter {
   }
 }
 
-export class FakeRouter {
+class FakeRouter {
   readonly id = nextId('router');
   closed = false;
   readonly transports: FakeTransport[] = [];

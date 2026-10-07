@@ -359,12 +359,3 @@ export function analyserRms(an: AnalyserNode): number {
   }
   return Math.sqrt(sum / vadBuf.length);
 }
-
-/**
- * Уже поднятый контекст — или `null`. Отдельно от `getAudioCtx`, и это не
- * синоним: тот контекст СОЗДАЁТ, а спрашивают его там, где ответ «ещё нет»
- * означает «делать нечего» (гейт микрофона, разбор цепочки на выходе).
- */
-export function audioContext(): AudioContext | null {
-  return audioCtx;
-}

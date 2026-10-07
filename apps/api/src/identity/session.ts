@@ -32,7 +32,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
  * инсталляцию (`auth.ts`), и столько же обещает каталог настроек: срок
  * задаётся `access.sessionTtlDays`, а это число — то, чем он был всегда.
  */
-export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export const IDENTITY_COOKIE = 'relay_id';
 

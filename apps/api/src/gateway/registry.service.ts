@@ -33,7 +33,7 @@ import { type Claimant, type PublicServer, ownedBy, publicServer } from './owner
  */
 
 /** Типы каналов, которыми распоряжается реестр. Беседы (`dm`) — не его дело. */
-export const REGISTRY_CHANNEL_TYPES = ['text', 'voice'];
+const REGISTRY_CHANNEL_TYPES = ['text', 'voice'];
 
 /**
  * Потолки. Их два вида, и они про разное (audit S2).
@@ -173,7 +173,7 @@ function dedupeSlugs(channels: ChannelEntry[]): ChannelEntry[] {
  * Слаг направления из произвольного ввода: строчные, пробелы → дефис, только
  * буквы/цифры/дефис/подчёркивание (кириллица сохраняется), схлопываем дубли, 32.
  */
-export function slugifyChannel(name: string): string {
+function slugifyChannel(name: string): string {
   return name
     .trim()
     .toLowerCase()

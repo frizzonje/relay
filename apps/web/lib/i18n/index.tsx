@@ -6,7 +6,6 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useMemo,
   useState,
   type ReactNode,
 } from 'react';
@@ -16,7 +15,6 @@ import {
   LOCALE_COOKIE,
   LOCALE_COOKIE_MAX_AGE,
   isLocale,
-  matchLocale,
   resolveLocale,
   type Locale,
 } from './config';
@@ -103,24 +101,6 @@ export function useRichT(): (
 }
 
 /**
- * Locale-aware Intl formatters, memoised per render. Dates, times and numbers
- * are formatted by Intl rather than by hand, so a new language needs no extra
- * dictionary entries for them.
- */
-export function useFormatters() {
-  const locale = useLocale();
-  return useMemo(
-    () => ({
-      locale,
-      time: new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }),
-      date: new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'long', year: 'numeric' }),
-      number: new Intl.NumberFormat(locale),
-    }),
-    [locale],
-  );
-}
-
-/**
  * Switches the language: persists the choice in the cookie the server reads and
  * reloads. A reload rather than a state swap because the locale also decides
  * server-rendered pieces (`<html lang>`, document title) — this keeps the one
@@ -152,14 +132,8 @@ function syncCurrentLocale(locale: Locale): void {
   if (typeof window !== 'undefined') currentLocale = locale;
 }
 
-/** Locale guess for code that runs before the provider mounts (e.g. the theme-style init). */
-export function detectBrowserLocale(): Locale {
-  if (typeof navigator === 'undefined') return DEFAULT_LOCALE;
-  return matchLocale(navigator.languages?.length ? navigator.languages : [navigator.language]);
-}
-
 /** Reads the cookie directly — for the rare client path that runs outside React. */
-export function readLocaleCookie(): Locale | null {
+function readLocaleCookie(): Locale | null {
   if (typeof document === 'undefined') return null;
   const hit = document.cookie.match(new RegExp(`(?:^|; )${LOCALE_COOKIE}=([^;]*)`));
   const value = hit?.[1] && decodeURIComponent(hit[1]);

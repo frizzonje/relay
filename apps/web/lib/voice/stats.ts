@@ -101,7 +101,7 @@ interface StatsRecord {
  * своим отчётом, а плитка у него одна. Счётчики складываются, RTT берётся
  * лучший (вместе с путём, который его дал), остальное — последнее известное.
  */
-export function mergeStats(a: StatsSnapshot, b: StatsSnapshot): StatsSnapshot {
+function mergeStats(a: StatsSnapshot, b: StatsSnapshot): StatsSnapshot {
   const better = b.rttMs !== null && (a.rttMs === null || b.rttMs < a.rttMs);
   return {
     rttMs: better ? b.rttMs : a.rttMs,

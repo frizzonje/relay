@@ -57,7 +57,6 @@
   --radius-card: 15px; /* карточки/окна 14–16px */
   --radius-control: 10px; /* поля/крупные кнопки 9–11px */
   --radius-chip: 8px; /* мелкие иконки-кнопки 7–10px */
-  --radius-glass: 15px; /* совместимость: старое имя = карточка */
 
   /* — Анимации как утилиты animate-* — */
   --animate-pulse-dot: pulseDot 2s infinite;
@@ -334,18 +333,12 @@
      хексами (#0b0c0e и #101216), отличавшимися от bg-deep и bg-elev на единицу
      по каналу — то есть неразличимо глазом, но мимо палитры: тему они не
      слушали, и меню с тостами оставались тёмными где угодно. */
-  .glass-1 {
-    background: var(--color-bg-deep);
-  }
   .glass-2 {
     background: var(--color-bg-panel);
   }
   .glass-3 {
     background: var(--color-bg-elev);
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-  }
-  /* Ранее «жидкий» шум — в relay плоско, класс оставлен как no-op */
-  .glass-noise {
   }
 
   /* Каркасные панели shell-а (рейка/сайдбар/состав/топбар) — встык, без радиуса */

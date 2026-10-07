@@ -23,7 +23,6 @@ export const UPLOAD_DIR = process.env.UPLOAD_DIR || join(__dirname, '..', 'uploa
 // Разбор размера из `.env` живёт в uploads.policy.ts — там же, где его
 // спрашивают настройки при первом старте. Здесь остаётся имя, под которым его
 // знает всё остальное.
-export { parseBytes } from './uploads.policy';
 
 /**
  * Сколько живёт файл, которого никто не отправил в чат. Раньше TTL был общим
@@ -97,7 +96,7 @@ export interface Uploader {
  * по mime разошёлся бы с первым, и человек получил бы отказ на то, что в чате
  * выглядит картинкой.
  */
-export function detectKind(mime: string, name: string): AttachmentKind {
+function detectKind(mime: string, name: string): AttachmentKind {
   if (mime.startsWith('image/')) return 'image';
   // Нативный плеер — только для mp3, как просили
   if (mime === 'audio/mpeg' || /\.mp3$/i.test(name)) return 'audio';

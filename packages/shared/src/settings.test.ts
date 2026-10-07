@@ -299,8 +299,7 @@ describe('умолчание равно сегодняшнему поведен�
     expect(d['spaces.maxVoiceOccupants']).toBe(0);
     expect(d['invites.maxGuestsPerChannel']).toBe(0);
     // А вот у каталога загрузок потолок ЕСТЬ и сегодня: 2 ГиБ, за которыми
-    // вытесняются самые старые вложения (DEFAULT_MAX_TOTAL_BYTES в
-    // apps/api/src/uploads.policy.ts). Ноль здесь означал бы «без квоты» —
+    // вытесняются самые старые вложения. Ноль здесь означал бы «без квоты» —
     // то есть поведение, которого до панели не было.
     expect(d['files.installQuotaBytes']).toBe(2 * 1024 ** 3);
     // Сутки сироты — ORPHAN_TTL_MS, каким он был константой.

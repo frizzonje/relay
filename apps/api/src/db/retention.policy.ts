@@ -8,7 +8,7 @@
  * сервисе, и два модуля начнут импортировать друг друга.
  */
 
-export const DEFAULT_RETENTION_DAYS = 14;
+const DEFAULT_RETENTION_DAYS = 14;
 
 /**
  * Три исхода, а не число, — потому что «хранить N дней», «хранить всегда» и
@@ -20,7 +20,7 @@ export type Retention =
   | { mode: 'forever' }
   | { mode: 'ephemeral' };
 
-export const DEFAULT_RETENTION: Retention = { mode: 'days', days: DEFAULT_RETENTION_DAYS };
+const DEFAULT_RETENTION: Retention = { mode: 'days', days: DEFAULT_RETENTION_DAYS };
 
 /** Слова, которыми настройка называется вслух. Первое — каноническое. */
 const FOREVER_WORDS = ['forever', 'never', 'unlimited', 'off'];

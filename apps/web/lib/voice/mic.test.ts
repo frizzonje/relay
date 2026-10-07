@@ -38,9 +38,6 @@ const h = vi.hoisted(() => {
 vi.mock('@/lib/voice/output', () => ({
   ANALYSER_FFT_SIZE: 512,
   analyserRms: () => h.rms,
-  // audioContext новому mic.ts не нужен; он здесь, чтобы старый код падал на
-  // проверках, а не на TypeError в таймере гейта (шаг 2).
-  audioContext: () => h.ctx,
   getAudioCtx: () => h.ctx,
   refreshOutputDevices: () => {},
 }));

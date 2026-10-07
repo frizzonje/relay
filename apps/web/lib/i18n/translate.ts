@@ -23,7 +23,7 @@ const DICTIONARIES: Record<Locale, Messages> = {
   ru: ru as Messages,
 };
 
-export function messagesFor(locale: Locale): Messages {
+function messagesFor(locale: Locale): Messages {
   return DICTIONARIES[locale] ?? DICTIONARIES[DEFAULT_LOCALE];
 }
 

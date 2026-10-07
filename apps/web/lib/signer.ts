@@ -121,7 +121,7 @@ async function inStore<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => I
 }
 
 /** Штатное хранилище браузера. В оболочке десктопа не используется никогда. */
-export function indexedDbStore(): KeyStore {
+function indexedDbStore(): KeyStore {
   return {
     load: () => inStore<StoredPair | undefined>('readonly', (s) => s.get(RECORD)),
     save: async (pair) => {

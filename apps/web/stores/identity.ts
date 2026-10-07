@@ -169,8 +169,3 @@ export const useIdentityStore = create<IdentityState>((set, get) => {
     },
   };
 });
-
-/** Отпечаток своего ключа — короткий доступ для мест, где личности может не быть. */
-export function myFingerprint(): string {
-  return useIdentityStore.getState().me?.fingerprint ?? '';
-}

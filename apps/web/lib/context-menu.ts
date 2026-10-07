@@ -21,14 +21,14 @@ import { tx } from '@/lib/i18n';
 // ── Горячие клавиши ─────────────────────────────────────────────────────────
 
 /** macOS (в т.ч. WKWebView десктопа) подписываем ⌘, остальных — Ctrl. */
-export function isApplePlatform(): boolean {
+function isApplePlatform(): boolean {
   if (typeof navigator === 'undefined') return false;
   const ua = `${navigator.platform ?? ''} ${navigator.userAgent ?? ''}`;
   return /mac|iphone|ipad|ipod/i.test(ua);
 }
 
 /** Подпись горячей клавиши для правой колонки пункта. */
-export function shortcut(key: string): string {
+function shortcut(key: string): string {
   return isApplePlatform() ? `⌘${key}` : `Ctrl+${key}`;
 }
 
@@ -137,7 +137,7 @@ function sep(id: string): MenuEntry {
 }
 
 /** Текст, выделенный на странице (вне полей ввода). */
-export function pageSelection(): string {
+function pageSelection(): string {
   if (typeof window === 'undefined') return '';
   return (window.getSelection()?.toString() ?? '').trim();
 }

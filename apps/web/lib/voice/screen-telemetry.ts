@@ -131,7 +131,7 @@ export interface RxSample {
 }
 
 /** Входящее видео трансляции из отчёта consumer'а зрителя. */
-export function readRx(report: RTCStatsReport): RxSample | null {
+function readRx(report: RTCStatsReport): RxSample | null {
   let sample: RxSample | null = null;
   report.forEach((raw) => {
     const r = raw as Rec;
@@ -151,7 +151,7 @@ export function readRx(report: RTCStatsReport): RxSample | null {
 }
 
 /** «6.2M» — мегабиты с десятыми; меньше мегабита — килобитами. */
-export function mbit(kbps: number | null): string {
+function mbit(kbps: number | null): string {
   if (kbps == null) return '?';
   return kbps >= 1000 ? `${(kbps / 1000).toFixed(1)}M` : `${kbps}k`;
 }
@@ -166,7 +166,7 @@ function txKey(s: TxSample): string {
   return `${layers.join(',')}|${s.codec}|${s.impl}`;
 }
 
-export function formatTx(s: TxSample, rates: Map<string, number | null>): string {
+function formatTx(s: TxSample, rates: Map<string, number | null>): string {
   const layers = s.layers.map((l) =>
     l.sending
       ? `${l.rid} ${l.width}x${l.height}@${l.fps ?? '?'} ${mbit(rates.get(l.key) ?? null)}/${mbit(l.targetKbps)}${LIMIT_TAG[l.limit] ?? ` ${l.limit}`}`
@@ -175,7 +175,7 @@ export function formatTx(s: TxSample, rates: Map<string, number | null>): string
   return `${layers.join(' | ')} | bwe ${mbit(s.bweKbps)} ${s.codec ?? '?'} ${s.impl ?? ''}`.trim();
 }
 
-export function formatRx(s: RxSample, kbps: number | null, layer: number | null): string {
+function formatRx(s: RxSample, kbps: number | null, layer: number | null): string {
   return (
     `${s.width}x${s.height}@${s.fps ?? '?'} ${mbit(kbps)} layer ${layer ?? '?'} ` +
     `${s.codec ?? '?'} ${s.impl ?? ''} dropped ${s.dropped} freezes ${s.freezes}`

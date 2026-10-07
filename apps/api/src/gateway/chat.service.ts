@@ -170,7 +170,7 @@ export interface NewMessage {
  * положись экран на имя, и человек, назвавшийся так же, подделал бы системное
  * сообщение.
  */
-export const SYSTEM_AUTHOR = 'system';
+const SYSTEM_AUTHOR = 'system';
 
 /** Страница ленты: реплики по возрастанию времени и есть ли что-то выше. */
 export interface Page {

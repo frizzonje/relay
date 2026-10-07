@@ -74,7 +74,7 @@ function isSpeaking(
  * Вне звонка гасим всё разом: анализаторы мертвы, а рамка на пустой сцене —
  * привет из прошлого разговора.
  */
-export function updateSpeaking(inCall: boolean) {
+function updateSpeaking(inCall: boolean) {
   if (!inCall) {
     if (lastSpeakingKey) {
       lastSpeakingKey = '';
