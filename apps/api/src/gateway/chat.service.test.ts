@@ -105,7 +105,7 @@ describe('переписка переживает рестарт', () => {
 
   it('и реакции вместе с ним', async () => {
     const msg = await say('привет');
-    await chat.saveReactions(msg.id!, { '👍': [{ fingerprint: 'бб', nick: 'Б' }] });
+    await chat.react('obshchii', msg.id!, { fingerprint: 'бб', nick: 'Б' }, '👍');
 
     const after = await restart();
     const [restored] = (await after.history('obshchii')).messages;
@@ -917,6 +917,41 @@ describe('мусор от клиента', () => {
     await expect(chat.add('нет-такого', { name: 'А', text: 'ау' })).resolves.toBeUndefined();
     await expect(chat.history('нет-такого')).resolves.toEqual({ messages: [], more: false });
     await expect(chat.count('нет-такого')).resolves.toBe(0);
+  });
+});
+
+describe('гонки', () => {
+  it('одновременные реакции разных людей не стирают друг друга', async () => {
+    // Набор реакций лежит в реплике целиком: без блокировки строки каждый из
+    // двенадцати прочёл бы пустой набор и записал бы его со своей реакцией.
+    const msg = await say('голосуем');
+    const people = Array.from({ length: 12 }, (_, i) => ({
+      fingerprint: `отпечаток-${i}`,
+      nick: `Ч${i}`,
+    }));
+    await Promise.all(people.map((who) => chat.react('obshchii', msg.id!, who, '👍')));
+    const [saved] = (await chat.history('obshchii')).messages;
+    expect(saved.reactions?.['👍']).toHaveLength(people.length);
+  });
+
+  it('повтор снимает свою реакцию, а набор возвращается уже новым', async () => {
+    const msg = await say('привет');
+    const who = { fingerprint: 'аа', nick: 'А' };
+    expect(await chat.react('obshchii', msg.id!, who, '👍')).toEqual({ '👍': [who] });
+    expect(await chat.react('obshchii', msg.id!, who, '👍')).toEqual({});
+  });
+
+  it('реакция мимо канала или по мусорному id — пустой ответ', async () => {
+    const msg = await say('привет');
+    const who = { fingerprint: 'аа', nick: 'А' };
+    await expect(chat.react('нет-канала', msg.id!, who, '👍')).resolves.toBeUndefined();
+    await expect(chat.react('obshchii', 'мусор', who, '👍')).resolves.toBeUndefined();
+  });
+
+  it('правка реплики, которую успели удалить, — пустой ответ, а не ошибка', async () => {
+    const msg = await say('было');
+    await chat.remove(msg.id!);
+    await expect(chat.edit(msg.id!, 'стало', [])).resolves.toBeUndefined();
   });
 });
 

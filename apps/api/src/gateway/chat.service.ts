@@ -10,6 +10,7 @@ import { SettingsService } from '../settings/settings.service';
 import { DmService } from './dm.service';
 import { RegistryService } from './registry.service';
 import { MESSAGE_RELATIONS, isUuid, messageQuery, toMessage } from './chat-rows';
+import { toggleReaction } from './reactions';
 import { SEARCH_CONFIG, SEARCH_PAGE_SIZE, searchTerms, tsquery } from './chat-search';
 import {
   CHAT_PREFIX,
@@ -17,6 +18,7 @@ import {
   type CallMark,
   type ChatMessage,
   type Person,
+  type PersonOrGuest,
   type ReactionMap,
   type ReplyRef,
 } from '@relay/shared';
@@ -431,13 +433,14 @@ export class ChatService implements OnModuleInit {
   }
 
   /**
-   * Новый текст своей реплики. Возвращает время правки — тоже с часов базы.
+   * Новый текст своей реплики. Возвращает время правки — тоже с часов базы, —
+   * или `undefined`, если реплики уже нет.
    *
    * Упоминания переписываются вместе с текстом, а не остаются от прежней
    * редакции: имя из реплики могли убрать, и «упомянут» без имени в тексте —
    * ровно тот беззвучный вызов, который не пускает `mentionedIn`.
    */
-  async edit(id: string, text: string, mentions: Person[]): Promise<number> {
+  async edit(id: string, text: string, mentions: Person[]): Promise<number | undefined> {
     const res = await this.db
       .getRepository(MessageRow)
       .createQueryBuilder()
@@ -446,7 +449,9 @@ export class ChatService implements OnModuleInit {
       .where({ id })
       .returning('edited_at')
       .execute();
-    return new Date(res.raw[0].edited_at).getTime();
+    // Строки нет — реплику удалили между проверкой правки и самой правкой.
+    const row: { edited_at: Date } | undefined = res.raw[0];
+    return row ? new Date(row.edited_at).getTime() : undefined;
   }
 
   /** Убирает реплику из ленты. `false` — такой в канале нет. */
@@ -456,9 +461,35 @@ export class ChatService implements OnModuleInit {
     return (res.affected ?? 0) > 0;
   }
 
-  /** Записывает новый набор реакций реплики. */
-  async saveReactions(id: string, reactions: ReactionMap): Promise<void> {
-    await this.db.getRepository(MessageRow).update({ id }, { reactions });
+  /**
+   * Переключить реакцию человека и вернуть новый набор — или `undefined`, если
+   * такой реплики в канале нет. Ставить можно на любую, системные тоже.
+   *
+   * Прочитать, переключить и записать — одной транзакцией под блокировкой
+   * строки. Набор лежит в реплике целиком, и без блокировки двое, нажавшие
+   * реакцию в одну и ту же секунду, прочли бы один набор и записали бы каждый
+   * свой: вторая запись молча стёрла бы первую реакцию.
+   */
+  async react(
+    slug: string,
+    id: string,
+    who: PersonOrGuest,
+    emoji: string,
+  ): Promise<ReactionMap | undefined> {
+    const channelId = this.channelIdOf(slug);
+    if (!channelId || !isUuid(id)) return undefined;
+    return this.db.transaction(async (m) => {
+      const messages = m.getRepository(MessageRow);
+      const row = await messages.findOne({
+        where: { id, channelId },
+        select: { id: true, reactions: true },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!row) return undefined;
+      const reactions = toggleReaction(row.reactions, who, emoji);
+      await messages.update({ id }, { reactions });
+      return reactions;
+    });
   }
 
   /**

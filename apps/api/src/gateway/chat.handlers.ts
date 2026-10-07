@@ -13,7 +13,7 @@ import { BROADCAST_DEBOUNCE_MS } from './directory';
 import type { ChatService } from './chat.service';
 import type { PinsService } from './pins.service';
 import { searchTerms } from './chat-search';
-import { knownReaction, toggleReaction } from './reactions';
+import { knownReaction } from './reactions';
 import {
   LIMIT,
   str,
@@ -565,6 +565,8 @@ export class ChatHandlers {
 
     const mentions = await this.mentions.resolve(text, payload?.mentions);
     const editedTs = await this.chat.edit(id, text, mentions);
+    // Реплику удалили, пока проверяли правку, — править нечего.
+    if (editedTs === undefined) return;
     this.server.to(room).emit('chat-edited', { id, text, editedTs, mentions });
 
     // Позвали правкой — значит позвали. Молчать здесь означало бы, что имя,
@@ -717,17 +719,14 @@ export class ChatHandlers {
     const emoji = str(payload?.emoji);
     if (!id || !knownReaction(emoji)) return;
 
-    const msg = await this.chat.findAny(this.chat.slug(room), id);
-    if (!msg) return;
-
     // Подпись реакции — отпечаток ключа, а ник рядом с ним лишь снимок того,
     // как этот человек звался в ту минуту (audit S1).
     const speaker = this.perimeter.speaker(client);
     const who = speaker
       ? { fingerprint: speaker.fingerprint, nick: speaker.nick }
       : { nick: this.chats.nameOf(client) };
-    const reactions = toggleReaction(msg, who, emoji);
-    await this.chat.saveReactions(id, reactions);
+    const reactions = await this.chat.react(this.chat.slug(room), id, who, emoji);
+    if (!reactions) return;
 
     this.server.to(room).emit('chat-reaction', { id, reactions });
   }

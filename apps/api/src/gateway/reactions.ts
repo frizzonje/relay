@@ -1,9 +1,4 @@
-import {
-  REACTION_EMOJIS,
-  type ChatMessage,
-  type PersonOrGuest,
-  type ReactionMap,
-} from '@relay/shared';
+import { REACTION_EMOJIS, type PersonOrGuest, type ReactionMap } from '@relay/shared';
 
 /** Реакции: закрытый набор эмодзи и тогл «своей» — по отпечатку, а не по нику. */
 
@@ -32,8 +27,12 @@ export function knownReaction(emoji: string): boolean {
  * записи без отпечатка — а такие остались от прежних версий — своим считается
  * только тот, у кого ключа нет тоже: иначе достаточно было бы назваться.
  */
-export function toggleReaction(msg: ChatMessage, who: PersonOrGuest, emoji: string): ReactionMap {
-  const reactions: ReactionMap = { ...(msg.reactions ?? {}) };
+export function toggleReaction(
+  current: ReactionMap | undefined,
+  who: PersonOrGuest,
+  emoji: string,
+): ReactionMap {
+  const reactions: ReactionMap = { ...(current ?? {}) };
   const list = reactions[emoji] ?? [];
   const mine = list.filter((r) => sameReactor(r, who));
   if (mine.length) {
