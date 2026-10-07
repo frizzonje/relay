@@ -10,12 +10,11 @@ import {
   PIN_LIMIT,
   TOKEN_TTL_MS,
 } from './index';
+import { addressBlocked, normalizeAddressPrefix } from './net';
 import {
   SETTINGS,
   SETTING_GROUPS,
-  addressBlocked,
   defaults,
-  normalizeAddressPrefix,
   settingSpec,
   validateSetting,
   type SettingGroup,

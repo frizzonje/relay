@@ -45,7 +45,7 @@
 | Модуль | Код / всего | Разрез |
 | ------ | ----------- | ------ |
 | ✅ `packages/shared/src/index.ts` | 771 / 1849 | Разрезан чистым переносом (декларации дословно, импорты посчитаны по дереву разбора): `common.ts` (версия протокола, пределы, `Person`), `chat.ts`, `dm.ts`, `call.ts`, `presence.ts`, `registry.ts`, `voice.ts` (сигналинг mesh, гости, отказы), `http.ts` (ICE-конфиг, метрики, вход, загрузка), `events.ts` — только две карты событий; `BannedRelay` — к модерации. `index.ts` — реэкспорты соседних модулей и `export *` доменов. Самый большой домен — `chat.ts`, 387 строк вместе с комментариями. |
-| `packages/shared/src/settings.ts` | 1148 / 1565 | Каталог `SETTINGS` (≈1060 строк данных) → `settings/catalog/<группа>.ts` по `SETTING_GROUPS`; разбор адресных префиксов (IPv4/IPv6, ≈200 строк, к настройкам отношения не имеет) → `net.ts`; `validateSetting` и типы → `settings/index.ts`. |
+| ✅ `packages/shared/src/settings.ts` | 1149 / 1574 | Разрезан чистым переносом: 13 групп каталога — `settings/catalog/<группа>.ts` (105 ключей в прежнем порядке, тексты дословно), типы — `settings/spec.ts`, единицы и потолки ввода — `settings/limits.ts`, разбор адресов и масок — `net.ts`, сборка `SETTINGS` и `validateSetting` — `settings/index.ts`. Самый большой файл — `catalog/voice.ts`, 145 строк. |
 | `apps/api/src/db/entities.ts` | 297 / 717 | По сущности на файл в `db/entities/` — принятая в TypeORM раскладка; `ENTITIES` в `index.ts`. Низкий приоритет: файл однородный, одна причина меняться. |
 | `apps/web/components/ui/icon.tsx` | 361 / 406 | Не режем: это таблица глифов. Исключение записывается в настройку `max-lines`. |
 

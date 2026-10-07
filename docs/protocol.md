@@ -8,7 +8,7 @@
 (`ClientToServerEvents`, `ServerToClientEvents`), payload'ы и ответы — в файле
 своего домена рядом (`chat.ts`, `dm.ts`, `registry.ts`, `voice.ts`, `call.ts`…), админка — в
 [`admin.ts`](../packages/shared/src/admin.ts), каталог настроек — в
-[`settings.ts`](../packages/shared/src/settings.ts). Этот документ объясняет,
+[`settings/`](../packages/shared/src/settings) (группы — в `catalog/`). Этот документ объясняет,
 что они значат и в каком порядке их слать. Меняете контракт — правьте оба
 места в одном коммите. `pnpm docs:check` ([`tools/check-docs.mjs`](../tools/check-docs.mjs))
 падает, если событие из `@relay/shared` или `@SubscribeMessage` из гейтвеев
@@ -666,7 +666,7 @@ C→S join {room, name?, clientId?, transport: 'p2p'|'sfu'}
 
 S→C `settings` — `SettingsSnapshot` `Record<key, value>`: при входе и при каждом
 изменении, всем одинаково. В него попадают только параметры с флагом `client`
-в каталоге ([`shared/src/settings.ts`](../packages/shared/src/settings.ts)), секретов
+в каталоге ([`shared/src/settings/catalog`](../packages/shared/src/settings/catalog)), секретов
 нет. Клиент берёт отсюда пределы (длина реплики, размер файла), умолчания звука,
 битрейты, включённость функций.
 

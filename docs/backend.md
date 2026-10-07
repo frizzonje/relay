@@ -196,9 +196,10 @@ SignalingGateway
 
 ## Настройки инсталляции
 
-Каталог — [`shared/src/settings.ts`](../packages/shared/src/settings.ts), один
-на сервер и панель. У каждого
-параметра: ключ `группа.имя`, тип, границы, умолчание, `applies` (когда
+Каталог — [`shared/src/settings/catalog`](../packages/shared/src/settings/catalog),
+по файлу на группу, проверка —
+[`settings/index.ts`](../packages/shared/src/settings/index.ts); один на сервер и
+панель. У каждого параметра: ключ `группа.имя`, тип, границы, умолчание, `applies` (когда
 действует), флаги `client` (уезжает клиентам в `settings`), `secret`, `danger`,
 `readOnly` + `env` (живёт в `.env`, панель только показывает).
 
