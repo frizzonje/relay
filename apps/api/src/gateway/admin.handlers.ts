@@ -16,7 +16,7 @@ import {
   settingSpec,
   type SettingGroup,
   type SettingValue,
-} from '../settings/catalog';
+} from '@relay/shared';
 import {
   LIMIT,
   PROTOCOL_VERSION,

@@ -16,7 +16,7 @@ import {
   type SettingGroup,
   type SettingSpec,
   type SettingValue,
-} from './catalog';
+} from '@relay/shared';
 
 /**
  * Действующие настройки инсталляции.

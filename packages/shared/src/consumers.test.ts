@@ -35,8 +35,6 @@ import { SETTINGS } from './settings';
 
 const dirOf = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
 
-/** Каталог существует в двух побайтово одинаковых копиях — обе не в счёт. */
-const CATALOGUE = new Set(['settings.ts', 'catalog.ts']);
 const SKIP_DIRS = new Set(['node_modules', '.next', 'coverage', 'dist', 'test-results']);
 
 function sources(dir: string): string[] {
@@ -48,7 +46,7 @@ function sources(dir: string): string[] {
     // Тесты не в счёт: ключ, помянутый только в собственной проверке, не
     // означает, что его кто-то читает в работе.
     if (/\.test\.tsx?$/.test(name)) return [];
-    return CATALOGUE.has(name) ? [] : [path];
+    return [path];
   });
 }
 

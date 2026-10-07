@@ -1,25 +1,39 @@
 import { createHash, webcrypto } from 'node:crypto';
 
+import {
+  NICK_MAX,
+  OWNER_TOKEN_BYTES,
+  PAIR_CODE_DIGITS,
+  PUBLIC_KEY_BYTES,
+  SIGNATURE_BYTES,
+  SIGN_ALGORITHM,
+} from '@relay/shared';
+
 /**
- * Криптография личности на стороне сервера — sync-близнец
- * `packages/shared/src/identity.ts`.
+ * Криптография личности на стороне сервера.
  *
- * Копия, а не импорт, по той же причине, что и у пропуска (`../auth/auth.ts`):
- * api намеренно не зависит от пакета фронта, и контракт держится совпадением.
- * Здесь эта цена выше обычного — разъехавшийся отпечаток не поймает ни
- * компилятор, ни типы, — поэтому обе стороны прибиты одними и теми же
- * контрольными значениями в тестах (см. `identity.test.ts` тут и
- * `identity.test.ts` в shared). Меняешь одно — второй тест падает.
- *
- * Отличается только реализацией, не поведением: на сервере base64url считает
- * Buffer, а не `btoa`, и хэш — `node:crypto`, а не `subtle.digest`. Байты на
- * выходе те же.
+ * Константы, тексты подписываемых сообщений и формы кодов — из контракта
+ * (`@relay/shared`), одни на обе стороны. Своё здесь только то, что сервер
+ * обязан делать иначе: разбор ключа и подписи из сети на `Buffer` (на мусоре
+ * он ведёт себя предсказуемее `atob`) и синхронный отпечаток на `node:crypto`
+ * — у клиента он асинхронный, на Web Crypto. Байты отпечатка на выходе те же,
+ * и это прибито одними контрольными значениями в `identity.test.ts` здесь и
+ * в shared.
  */
 
-export const SIGN_ALGORITHM = 'Ed25519';
-export const PUBLIC_KEY_BYTES = 32;
-export const SIGNATURE_BYTES = 64;
-export const NICK_MAX = 20;
+export {
+  NICK_MAX,
+  OWNER_TOKEN_BYTES,
+  OWNER_TOKEN_CHARS,
+  PAIR_CODE_DIGITS,
+  PUBLIC_KEY_BYTES,
+  SIGNATURE_BYTES,
+  SIGN_ALGORITHM,
+  authMessage,
+  certificateMessage,
+  isOwnerToken,
+  isPairCode,
+} from '@relay/shared';
 
 const FINGERPRINT_BYTES = 8;
 const B64URL = /^[A-Za-z0-9_-]+$/;
@@ -52,27 +66,6 @@ export function fingerprint(publicKey: string): string {
   return (hex.match(/.{4}/g) ?? []).join('-');
 }
 
-/** Что подписывает устройство, входя. Префикс отделяет вход от всего прочего. */
-export function authMessage(nonce: string): string {
-  return `relay-auth-v1:${nonce}`;
-}
-
-/**
- * Что подписывает донор, впуская новый ключ в свою личность: «ключ такой-то
- * принадлежит личности такой-то». Обе половины обязательны, префикс свой — см.
- * близнеца в shared.
- */
-export function certificateMessage(identityId: string, publicKey: string): string {
-  return `relay-device-v1:${identityId}:${publicKey}`;
-}
-
-/** Код связки — шесть цифр, см. близнеца в shared. */
-export const PAIR_CODE_DIGITS = 6;
-
-export function isPairCode(text: unknown): text is string {
-  return typeof text === 'string' && new RegExp(`^\\d{${PAIR_CODE_DIGITS}}$`).test(text);
-}
-
 /**
  * Новый код связки. Считается тем же генератором, что и нонс: код живёт две
  * минуты и пускает чужое устройство в личность — предсказуемым он быть не
@@ -88,14 +81,6 @@ export function newPairCode(): string {
     value = webcrypto.getRandomValues(new Uint32Array(1))[0];
   } while (value >= limit);
   return String(value % span).padStart(PAIR_CODE_DIGITS, '0');
-}
-
-/** Ключ владельца — 32 байта, см. близнеца в shared. */
-export const OWNER_TOKEN_BYTES = 32;
-export const OWNER_TOKEN_CHARS = Math.ceil((OWNER_TOKEN_BYTES * 4) / 3);
-
-export function isOwnerToken(text: unknown): text is string {
-  return typeof text === 'string' && new RegExp(`^[A-Za-z0-9_-]{${OWNER_TOKEN_CHARS}}$`).test(text);
 }
 
 export function newOwnerToken(): string {

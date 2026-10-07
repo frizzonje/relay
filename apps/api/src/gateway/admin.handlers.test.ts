@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { Socket } from 'socket.io';
 import { asSocket } from './testkit';
 import type { SignalingGateway } from './signaling.gateway';
-import { SETTINGS } from '../settings/catalog';
+import { SETTINGS } from '@relay/shared';
 import { readSession } from '../identity/session';
 import {
   connect,

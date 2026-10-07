@@ -4,7 +4,7 @@ import { IdentityService, type Speaker } from '../identity/identity.service';
 import { OwnerService } from '../identity/owner.service';
 import { RolesService } from '../identity/roles.service';
 import type { AddressDoor } from '../auth/auth';
-import { addressBlocked } from '../settings/catalog';
+import { addressBlocked } from '@relay/shared';
 import type { SettingsService } from '../settings/settings.service';
 import type { AppServer, AppSocket, TokenBucket } from './socket-data';
 import { Channel, ServerEntry } from './registry';

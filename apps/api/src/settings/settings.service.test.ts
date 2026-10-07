@@ -15,7 +15,7 @@ import {
   verifyToken,
 } from '../auth/auth';
 import { issueSession, readSession } from '../identity/session';
-import { SETTINGS, type SettingValue } from './catalog';
+import { SETTINGS, type SettingValue } from '@relay/shared';
 import { SEEDED_FROM_ENV, SettingsService } from './settings.service';
 
 /**

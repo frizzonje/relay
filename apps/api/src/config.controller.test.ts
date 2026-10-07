@@ -8,7 +8,7 @@ vi.mock('./sfu/sfu-health', () => ({ sfuHealthy }));
 import { ConfigController } from './config.controller';
 import { RetentionService } from './db/retention.service';
 import { resetDatabase, testDatabase } from './db/testing';
-import { SETTINGS } from './settings/catalog';
+import { SETTINGS } from '@relay/shared';
 import { SettingsService } from './settings/settings.service';
 import { signTurnUsername } from './turn';
 
