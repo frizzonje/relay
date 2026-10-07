@@ -52,6 +52,7 @@ jobs:
       - run: pnpm lint
       - run: pnpm format:check
       - run: pnpm docs:check
+      - run: pnpm contract:check
       - run: pnpm turbo run typecheck test build
 
   # Known-vulnerable dependencies in what we actually ship. `--prod` on purpose:

@@ -85,15 +85,19 @@
 шаг в CI. Сначала в режиме отчёта с потолком «не хуже сегодняшнего», после
 этапа 3 — строгий гейт.
 
-1. **Тени контракта** — `tools/check-contract-shadows.mjs`: имена, которые
-   экспортирует `@relay/shared` и заново объявляет `apps/*` (кроме
-   `Untrusted<…>`-обёрток в `apps/api/src/gateway/protocol.ts` и намеренных
-   реализаций — `isPublicKey`/`isSignature` на `Buffer`). Плюс реэкспорт
-   имён контракта через модули приложений: у имени один путь. Гейт: 0.
-2. **Копии по форме** — интерфейсы с одинаковым набором полей в разных
-   пакетах. Проверка по именам их не видит: на ней `DmPeerView`, `BanView`,
-   `Metrics`, `GuestClaims` прошли незамеченными. Гейт: только список
-   разрешённых пар (тест-киты, роли одной формы внутри shared).
+1. ✅ **Тени контракта и второй путь** — `tools/check-contract.mjs`
+   (`pnpm contract:check`, шаг CI): имена, которые экспортирует
+   `@relay/shared` и заново объявляет `apps/*`; реэкспорт имён контракта;
+   второе имя для них (`type Source = SfuSource`). `Untrusted<wire.X>` под
+   именем `X` разрешён по построению, синхронные двойники api
+   (`auth.ts`, `identity/crypto.ts`) — списком с причинами. Первый же запуск
+   нашёл девять вторых имён (`ProducerSource`, `ProducerInfo` в sfu;
+   `Source`, `ProducerInfo`, `PeerSnapshot`, `ConsumerLayers`, `Ack` в
+   клиенте SFU; `Draft` в `ChatPanel`) — убраны. Гейт: 0.
+2. ✅ **Копии по форме** — тот же скрипт: тип в приложении с тем же набором
+   полей (от трёх), что у типа в другом пакете. Интерфейс, который
+   `extends` тип контракта, — реализация (`ServerMedia extends SfuMedia`).
+   Нашёл `IncomingScreen` = `CallIncomingRelay` — убран.
 3. **Клоны** — jscpd с порогом из замера; цель — только осознанные исключения
    (тест-киты api↔sfu).
 4. **Циклы** — madge `--circular` по трём приложениям; циклы на одних типах
@@ -177,8 +181,7 @@ HTTP API устройств, которые api и web объявляли каж
 **Остальное из сравнения форм (D2):** два токен-бакета в api
 (`TokenBucket` в `gateway/socket-data.ts` и `Budget` в `upload.guard.ts`) —
 одна реализация лимитера; `DeleteChannelTarget`/`RenameChannelTarget` в web —
-`Pick<Channel, …>` контракта; `IncomingScreen` в `stores/ring.ts` против
-`CallIncomingRelay`. Пять ролей формы `{ fingerprint, nick }` внутри shared
+`Pick<Channel, …>` контракта (детектор их не видит: два поля). Пять ролей формы `{ fingerprint, nick }` внутри shared
 (`DmPeer`, `MentionRef`, `Reactor`, `RosterPerson`, `CallPerson`) — решить:
 один `PersonRef` с алиасами или осознанно разные имена.
 

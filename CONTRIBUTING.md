@@ -50,6 +50,13 @@ E2e (Playwright) гоняются в CI на каждый push; локально
 node tools/check-docs.mjs   # или pnpm docs:check
 ```
 
+Контракт — тоже: имя или форма из `@relay/shared`, объявленные в приложении
+заново (под тем же именем или под другим), роняют CI:
+
+```bash
+node tools/check-contract.mjs   # или pnpm contract:check
+```
+
 Форматирование и линт:
 
 ```bash
