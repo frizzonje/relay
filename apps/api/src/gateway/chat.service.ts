@@ -448,33 +448,16 @@ export class ChatService implements OnModuleInit {
     const channelId = this.channelId(slug);
     if (!channelId) return undefined;
 
-    const id = randomUUID();
-    await this.db
-      .getRepository(MessageRow)
-      .createQueryBuilder()
-      .insert()
-      .values({
-        id,
-        channelId,
-        authorName: input.name,
-        text: input.text,
-        system: false,
-        spoiler: input.spoiler === true,
-        reactions: {},
-        attachmentId: (await this.attachmentId(input.uploadId)) ?? null,
-        replyTo: await this.replySnapshot(channelId, input.replyToId),
-        mentions: input.mentions ?? [],
-        editedAt: null,
-        authorIdentityId: input.identityId ?? null,
-      })
-      .execute();
-
-    // Читаем записанное обратно, а не собираем ответ из того, что отправили:
-    // время ставила база, вложение лежит отдельной строкой, и второй сборкой
-    // тех же данных руками мы бы завели второе место, где они могут разойтись.
-    const saved = await this.one(slug, id, true);
-    if (saved) this.lastActivity.set(channelId, saved.ts);
-    return saved;
+    return this.write(slug, channelId, {
+      authorName: input.name,
+      text: input.text,
+      system: false,
+      spoiler: input.spoiler === true,
+      attachmentId: (await this.attachmentId(input.uploadId)) ?? null,
+      replyTo: await this.replySnapshot(channelId, input.replyToId),
+      mentions: input.mentions ?? [],
+      authorIdentityId: input.identityId ?? null,
+    });
   }
 
   /**
@@ -499,31 +482,13 @@ export class ChatService implements OnModuleInit {
     const channelId = this.channelId(slug);
     if (!channelId) return undefined;
 
-    const id = randomUUID();
-    await this.db
-      .getRepository(MessageRow)
-      .createQueryBuilder()
-      .insert()
-      .values({
-        id,
-        channelId,
-        authorName: SYSTEM_AUTHOR,
-        text,
-        system: true,
-        spoiler: false,
-        reactions: {},
-        attachmentId: null,
-        replyTo: null,
-        mentions: [],
-        editedAt: null,
-        // Личности у системной строки нет — и лица рядом с ней тоже.
-        authorIdentityId: null,
-      })
-      .execute();
-
-    const saved = await this.one(slug, id, true);
-    if (saved) this.lastActivity.set(channelId, saved.ts);
-    return saved;
+    return this.write(slug, channelId, {
+      authorName: SYSTEM_AUTHOR,
+      text,
+      system: true,
+      // Личности у системной строки нет — и лица рядом с ней тоже.
+      authorIdentityId: null,
+    });
   }
 
   /**
@@ -556,6 +521,34 @@ export class ChatService implements OnModuleInit {
     const channelId = this.channelId(slug);
     if (!channelId) return undefined;
 
+    return this.write(slug, channelId, {
+      authorName: mark.name,
+      // Текст словами — на случай клиента, который поля `call` не знает: он
+      // покажет обычную системную строку и не соврёт. Он же едет превью в
+      // список переписок. Не переведён намеренно и ровно как «X was banned»:
+      // язык читающего сервер не знает, а собрать «21:04 · 38 с дозвона» на
+      // своём языке клиенту всё равно предстоит самому — из `call`.
+      text: 'missed call',
+      system: true,
+      call: { state: mark.state, ms: mark.ms },
+      authorIdentityId: mark.identityId,
+    });
+  }
+
+  /**
+   * Записать реплику и вернуть её такой, какой её прочтёт лента. Чего у
+   * реплики нет — вложения, цитаты, упоминаний, — пусто.
+   *
+   * Читаем записанное обратно, а не собираем ответ из того, что отправили:
+   * время ставила база, вложение лежит отдельной строкой, и второй сборкой
+   * тех же данных руками мы бы завели второе место, где они могут разойтись.
+   */
+  private async write(
+    slug: string,
+    channelId: string,
+    fields: Pick<MessageRow, 'authorName' | 'text' | 'system' | 'authorIdentityId'> &
+      Partial<Pick<MessageRow, 'spoiler' | 'attachmentId' | 'replyTo' | 'mentions' | 'call'>>,
+  ): Promise<ChatMessage | undefined> {
     const id = randomUUID();
     await this.db
       .getRepository(MessageRow)
@@ -564,22 +557,13 @@ export class ChatService implements OnModuleInit {
       .values({
         id,
         channelId,
-        authorName: mark.name,
-        // Текст словами — на случай клиента, который поля `call` не знает: он
-        // покажет обычную системную строку и не соврёт. Он же едет превью в
-        // список переписок. Не переведён намеренно и ровно как «X was banned»:
-        // язык читающего сервер не знает, а собрать «21:04 · 38 с дозвона» на
-        // своём языке клиенту всё равно предстоит самому — из `call`.
-        text: 'missed call',
-        system: true,
-        call: { state: mark.state, ms: mark.ms },
         spoiler: false,
         reactions: {},
         attachmentId: null,
         replyTo: null,
         mentions: [],
         editedAt: null,
-        authorIdentityId: mark.identityId,
+        ...fields,
       })
       .execute();
 

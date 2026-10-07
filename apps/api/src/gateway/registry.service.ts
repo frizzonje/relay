@@ -114,6 +114,41 @@ function toChannel(row: ChannelRow): ChannelEntry {
 }
 
 /**
+ * Запись реестра → строка базы, обратное `toServerEntry`: «поля нет»
+ * становится `null`, позиция — место в списке. `removable` сравнивается с
+ * `false`: в `registry.json` прошлых версий поля могло не быть вовсе, и такой
+ * сервер — удаляемый.
+ */
+export function serverRow(s: ServerEntry, position: number) {
+  return {
+    id: s.id,
+    name: s.name,
+    emoji: s.emoji ?? null,
+    removable: s.removable !== false,
+    passwordHash: s.passwordHash ?? null,
+    creatorId: s.creatorId ?? null,
+    creatorIdentityId: s.creatorIdentityId ?? null,
+    position,
+  };
+}
+
+/** Запись реестра → строка базы, обратное `toChannel`. */
+export function channelRow(c: ChannelEntry, position: number) {
+  return {
+    id: c.id,
+    serverId: c.serverId,
+    type: c.type,
+    name: c.name,
+    slug: c.slug,
+    removable: c.removable !== false,
+    mode: c.mode ?? null,
+    creatorId: c.creatorId ?? null,
+    creatorIdentityId: c.creatorIdentityId ?? null,
+    position,
+  };
+}
+
+/**
  * Развод одинаковых слагов при переезде. До 1.0 слаг ничем не проверялся, и два
  * канала одного типа могли получить один и тот же — они молча делили комнату
  * socket.io и историю на двоих. В базе такая пара просто не поместится
@@ -323,36 +358,10 @@ export class RegistryService implements OnModuleInit {
       const channelIds = this.channels.map((c) => c.id);
 
       if (serverIds.length) {
-        await m.getRepository(ServerRow).upsert(
-          this.servers.map((s, position) => ({
-            id: s.id,
-            name: s.name,
-            emoji: s.emoji ?? null,
-            removable: s.removable,
-            passwordHash: s.passwordHash ?? null,
-            creatorId: s.creatorId ?? null,
-            creatorIdentityId: s.creatorIdentityId ?? null,
-            position,
-          })),
-          ['id'],
-        );
+        await m.getRepository(ServerRow).upsert(this.servers.map(serverRow), ['id']);
       }
       if (channelIds.length) {
-        await m.getRepository(ChannelRow).upsert(
-          this.channels.map((c, position) => ({
-            id: c.id,
-            serverId: c.serverId,
-            type: c.type,
-            name: c.name,
-            slug: c.slug,
-            removable: c.removable,
-            mode: c.mode ?? null,
-            creatorId: c.creatorId ?? null,
-            creatorIdentityId: c.creatorIdentityId ?? null,
-            position,
-          })),
-          ['id'],
-        );
+        await m.getRepository(ChannelRow).upsert(this.channels.map(channelRow), ['id']);
       }
       // Удаляем построителем, а не `delete({ id: Not(In(...)) })`: пустой
       // список — законное состояние (в реестре может не остаться ни одного
@@ -395,17 +404,7 @@ export class RegistryService implements OnModuleInit {
           .getRepository(ServerRow)
           .createQueryBuilder()
           .insert()
-          .values(
-            servers.map((s, position) => ({
-              id: s.id,
-              name: s.name,
-              emoji: s.emoji ?? null,
-              removable: s.removable !== false,
-              passwordHash: s.passwordHash ?? null,
-              creatorId: s.creatorId ?? null,
-              position,
-            })),
-          )
+          .values(servers.map(serverRow))
           .orIgnore()
           .execute();
       }
@@ -414,19 +413,7 @@ export class RegistryService implements OnModuleInit {
           .getRepository(ChannelRow)
           .createQueryBuilder()
           .insert()
-          .values(
-            channels.map((c, position) => ({
-              id: c.id,
-              serverId: c.serverId,
-              type: c.type,
-              name: c.name,
-              slug: c.slug,
-              removable: c.removable !== false,
-              mode: c.mode ?? null,
-              creatorId: c.creatorId ?? null,
-              position,
-            })),
-          )
+          .values(channels.map(channelRow))
           .orIgnore()
           .execute();
       }

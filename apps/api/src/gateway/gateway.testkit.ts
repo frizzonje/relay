@@ -20,7 +20,7 @@ import type { UploadsService } from '../uploads';
 import type { PersistedRegistry } from './registry';
 import { ChatService } from './chat.service';
 import { DmService } from './dm.service';
-import { RegistryService, channelSlug } from './registry.service';
+import { RegistryService, channelRow, channelSlug, serverRow } from './registry.service';
 import { SignalingGateway } from './signaling.gateway';
 import { FakeServer, asSocket, type FakeSocket } from './testkit';
 import { MAIN_SERVER_ID, type Attachment } from '@relay/shared';
@@ -188,34 +188,10 @@ export async function makeGateway(saved: PersistedRegistry = {}) {
   await stopGateway();
   await resetDatabase(db);
   if (saved.servers?.length) {
-    await db.getRepository(ServerRow).insert(
-      saved.servers.map((s, position) => ({
-        id: s.id,
-        name: s.name,
-        emoji: s.emoji ?? null,
-        removable: s.removable !== false,
-        passwordHash: s.passwordHash ?? null,
-        creatorId: s.creatorId ?? null,
-        creatorIdentityId: s.creatorIdentityId ?? null,
-        position,
-      })),
-    );
+    await db.getRepository(ServerRow).insert(saved.servers.map(serverRow));
   }
   if (saved.channels?.length) {
-    await db.getRepository(ChannelRow).insert(
-      saved.channels.map((c, position) => ({
-        id: c.id,
-        serverId: c.serverId,
-        type: c.type,
-        name: c.name,
-        slug: c.slug,
-        removable: c.removable !== false,
-        mode: c.mode ?? null,
-        creatorId: c.creatorId ?? null,
-        creatorIdentityId: c.creatorIdentityId ?? null,
-        position,
-      })),
-    );
+    await db.getRepository(ChannelRow).insert(saved.channels.map(channelRow));
   }
 
   const server = new FakeServer();
