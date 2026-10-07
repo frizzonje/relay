@@ -133,9 +133,10 @@ flowchart LR
 
 Сервис — [`apps/sfu`](../apps/sfu) (NestJS + mediasoup), клиент —
 [`apps/web/lib/voice/sfu/`](../apps/web/lib/voice/sfu/). Контракт между ними:
-сервер [`sfu.gateway.ts`](../apps/sfu/src/gateway/sfu.gateway.ts), клиент
-[`sfu/protocol.ts`](../apps/web/lib/voice/sfu/protocol.ts). Типов в
-`@relay/shared` у этого протокола нет — меняйте обе стороны вместе.
+[`shared/src/sfu.ts`](../packages/shared/src/sfu.ts) — карта запросов (событие →
+тело и ответ) и событий сервера. По ней типизированы и обработчики
+[`sfu.gateway.ts`](../apps/sfu/src/gateway/sfu.gateway.ts), и `ask()` клиента
+([`sfu/protocol.ts`](../apps/web/lib/voice/sfu/protocol.ts)).
 
 ### Как устроен сервис
 

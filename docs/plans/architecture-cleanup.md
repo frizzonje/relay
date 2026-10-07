@@ -43,7 +43,23 @@ docker run --rm -v "$PWD":/mono -w /mono -e TEST_DATABASE_URL=postgresql://relay
 
 ---
 
-## Фаза 1 — один контракт
+## Фаза 1 — один контракт ✅
+
+> **Сделано** в ветке `refactor/one-contract` (2026-10-07). Отличия от плана:
+> протокол SFU стал картой запросов `SfuRequests` (событие → тело, ответ), и
+> `ask()` веба типизирован по ней; `Untrusted<T>` переехал в shared — им
+> пользуются оба сервера; `turbo.json` не упростился, а починился: тесты
+> shared законно читают api и web, и web во входах задачи не было.
+>
+> **Найдено по дороге** (в следующие фазы):
+> - тесты api не проходят `tsc` вовсе — `tsconfig.json` их исключает, и
+>   ошибок типов в них накопилось много (`directory.channels.test.ts`,
+>   `chat.service.test.ts`, `import.meta` в CommonJS). Нужен
+>   `tsconfig.test.json` и шаг в CI;
+> - сервер socket.io в api не типизирован (`AppServer` на `DefaultEventsMap`),
+>   хотя `ClientToServerEvents`/`ServerToClientEvents` в контракте есть.
+>   Типизировать — естественный первый шаг фазы 2: после него `emit` с не
+>   тем именем или телом не соберётся.
 
 **Проблема.** api не импортирует `@relay/shared`, потому что пакет отдаётся
 сырым ESM-TypeScript (`main: ./src/index.ts`), а api — CommonJS под `tsc` с

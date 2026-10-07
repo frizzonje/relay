@@ -95,7 +95,7 @@ SignalingGateway
 | `ChatSessions` | [`chat-sessions.ts`](../apps/api/src/gateway/chat-sessions.ts) | кто в какой ленте, ростеры, `chat-closed` |
 | `VoiceSessions` | [`voice-sessions.ts`](../apps/api/src/gateway/voice-sessions.ts) | голосовая комната сокета, транспорт, пропуск SFU, мут, грейс 24 с, выгон «призраков», комнаты бесед |
 | `Presence` | [`presence.ts`](../apps/api/src/gateway/presence.ts) | присутствие личностей на инсталляции |
-| `Rings` | [`ring.ts`](../apps/api/src/gateway/ring.ts) | живые вызовы, таймауты, исходы; переходы — [`ring-machine.ts`](../apps/api/src/gateway/ring-machine.ts) |
+| `Rings` | [`ring.ts`](../apps/api/src/gateway/ring.ts) | живые вызовы, таймауты, исходы; переходы — машина [`ring.ts`](../packages/shared/src/ring.ts) из контракта |
 | `Mentions` | [`mentions.ts`](../apps/api/src/gateway/mentions.ts) | разбор `@` и счётчики упоминаний |
 | `Moderation` | [`moderation.ts`](../apps/api/src/gateway/moderation.ts) | кто модерирует, как вывести забаненного |
 
@@ -121,13 +121,14 @@ SignalingGateway
 
 Тела событий читаются только через `str` / `trimmed` / `optional` и режутся по
 `LIMIT` из [`gateway/protocol.ts`](../apps/api/src/gateway/protocol.ts). Там же —
-копии типов ответов из `@relay/shared` (см. [architecture.md](architecture.md#контракт-и-его-копии)).
+типы тел (`Untrusted<…>` от контракта) и реэкспорт ответов из `@relay/shared`
+(см. [architecture.md](architecture.md#контракт)).
 
 ### Как добавить событие
 
 1. Тип payload и ответа — в [`packages/shared/src/index.ts`](../packages/shared/src/index.ts)
-   (`ClientToServerEvents` / `ServerToClientEvents`), копию ответа — в
-   `gateway/protocol.ts`.
+   (`ClientToServerEvents` / `ServerToClientEvents`); в `gateway/protocol.ts` —
+   реэкспорт ответа и `Untrusted<…>` для тела.
 2. Логику — в подходящий `*.handlers.ts`; состояние сокета — через владельца.
 3. `@SubscribeMessage` в гейтвее — одна строка, передающая управление обработчику.
 4. Первой строкой обработчика — `perimeter.allow(client)` (кроме негоциации) и
@@ -192,8 +193,8 @@ SignalingGateway
 
 ## Настройки инсталляции
 
-Каталог — [`settings/catalog.ts`](../apps/api/src/settings/catalog.ts) (копия
-[`shared/src/settings.ts`](../packages/shared/src/settings.ts)). У каждого
+Каталог — [`shared/src/settings.ts`](../packages/shared/src/settings.ts), один
+на сервер и панель. У каждого
 параметра: ключ `группа.имя`, тип, границы, умолчание, `applies` (когда
 действует), флаги `client` (уезжает клиентам в `settings`), `secret`, `danger`,
 `readOnly` + `env` (живёт в `.env`, панель только показывает).

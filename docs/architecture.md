@@ -66,38 +66,41 @@ flowchart LR
 по ссылке из терминала сервера (`relay owner-link`). Он видит панель и может
 всё; модератор сервера — власть только над своим сервером.
 
-## Контракт и его копии
+## Контракт
 
 ```
-packages/shared  (@relay/shared)      ← web импортирует напрямую
-     ▲
-     │  тесты сверяют строки и числа
-     │
-apps/api/src/…  «близнецы»            ← api НЕ зависит от @relay/shared
-apps/sfu        свой маленький протокол ← с web/lib/voice/sfu/protocol.ts
+                packages/shared  (@relay/shared)
+               ▲              ▲               ▲
+  исходник TS  │   CommonJS   │    CommonJS   │
+               │   (dist/)    │    (dist/)    │
+          apps/web        apps/api        apps/sfu
 ```
 
-[`packages/shared`](../packages/shared/src) — источник правды для клиентов:
-socket-события, DTO, константы, каталог настроек, машина состояний вызова,
-крипто-примитивы личности. Web импортирует его как есть.
+[`packages/shared`](../packages/shared/src) — один контракт на все три
+стороны: socket-события и их тела, ответы, константы, каталог настроек,
+машина состояний вызова, крипто-примитивы личности и протокол медиасервера
+([`sfu.ts`](../packages/shared/src/sfu.ts)). Web берёт исходник
+(`transpilePackages` в Next), api и sfu — сборку в CommonJS из `dist/`.
+Разойтись половинам мешает компилятор.
 
-**api пакет не импортирует** — он держит копии того, что ему нужно:
+Тела, которые присылает клиент, сервер описывает как `Untrusted<T>` от формы
+контракта: какие поля бывают — известно, что в них лежит — решает разбор
+(`str` / `trimmed` / `optional` в
+[`gateway/protocol.ts`](../apps/api/src/gateway/protocol.ts)).
 
-| В shared | Копия в api |
+Своё у сервера осталось в двух местах, и оба — реализация, а не копия формы:
+
+| Что | Почему отдельно |
 |---|---|
-| [`index.ts`](../packages/shared/src/index.ts) — константы, типы ответов, причины отказов | [`gateway/protocol.ts`](../apps/api/src/gateway/protocol.ts) |
-| [`settings.ts`](../packages/shared/src/settings.ts) — каталог настроек | [`settings/catalog.ts`](../apps/api/src/settings/catalog.ts) |
-| [`ring.ts`](../packages/shared/src/ring.ts) — машина состояний вызова | [`gateway/ring-machine.ts`](../apps/api/src/gateway/ring-machine.ts) |
-| [`identity.ts`](../packages/shared/src/identity.ts) — ключи, отпечатки | [`identity/crypto.ts`](../apps/api/src/identity/crypto.ts) |
-| [`auth.ts`](../packages/shared/src/auth.ts) — токены на Web Crypto (для Edge-middleware Next) | [`auth/auth.ts`](../apps/api/src/auth/auth.ts) — на `node:crypto` |
+| [`auth/auth.ts`](../apps/api/src/auth/auth.ts) ↔ [`shared/src/auth.ts`](../packages/shared/src/auth.ts) | пропуск проверяют и api (синхронно, `node:crypto`, пароль из панели), и Edge-middleware Next (Web Crypto). Формат один — его держит перекрёстный тест в [`auth.test.ts`](../apps/api/src/auth/auth.test.ts) |
+| [`identity/crypto.ts`](../apps/api/src/identity/crypto.ts) | разбор ключа и подписи из сети на `Buffer` и синхронный отпечаток. Константы и тексты подписи — из контракта |
 
-Расхождение копий ловят тесты в `packages/shared`: они читают исходники api и
-сравнивают — [`index.test.ts`](../packages/shared/src/index.test.ts),
-[`settings.test.ts`](../packages/shared/src/settings.test.ts),
-[`ring.test.ts`](../packages/shared/src/ring.test.ts),
-[`consumers.test.ts`](../packages/shared/src/consumers.test.ts) (каждый параметр
-каталога кем-то читается). Меняете контракт — правите обе половины и
-[protocol.md](protocol.md), иначе CI покраснеет.
+Компилятор не проверит две вещи, и их держат тесты: что каждое событие панели
+из контракта кто-то слушает на сервере
+([`index.test.ts`](../packages/shared/src/index.test.ts)) и что каждый
+параметр каталога кем-то читается
+([`consumers.test.ts`](../packages/shared/src/consumers.test.ts)). Меняете
+контракт — правите его и [protocol.md](protocol.md).
 
 Нативные клиенты (`clients/`) не могут импортировать TS и реализуют контракт по
 [protocol.md](protocol.md). Web — эталонная реализация.

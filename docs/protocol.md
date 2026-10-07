@@ -56,7 +56,7 @@ Socket.io — не голый WebSocket: нужен клиент Socket.IO v4 / 
 
 | Что | Где выдаётся | Формат | Живёт | Код |
 |---|---|---|---|---|
-| **`relay_pass`** — пропуск на инсталляцию | `POST /api/login` | `<exp>.<HMAC-SHA256>`, ключ `relay-auth-v1:` + пароль (или его scrypt-хэш, если пароль задан из панели) | 30 дней; смена пароля отзывает все | [`auth/auth.ts`](../apps/api/src/auth/auth.ts), web-близнец [`shared/src/auth.ts`](../packages/shared/src/auth.ts) |
+| **`relay_pass`** — пропуск на инсталляцию | `POST /api/login` | `<exp>.<HMAC-SHA256>`, ключ `relay-auth-v1:` + пароль (или его scrypt-хэш, если пароль задан из панели) | 30 дней; смена пароля отзывает все | [`auth/auth.ts`](../apps/api/src/auth/auth.ts), Edge-реализация [`shared/src/auth.ts`](../packages/shared/src/auth.ts) |
 | **`relay_id`** — сессия личности | `POST /api/identity/verify` | `<identity>.<device>.<exp>.<HMAC>`, ключ случайный на процесс | `access.sessionTtlDays` (30), **рестарт api отзывает все** — клиент молча проходит вход заново | [`identity/session.ts`](../apps/api/src/identity/session.ts) |
 | Гостевая ссылка | `invite-create` | `g2.<b64url(slug)>.<talk\|listen>.<exp>.<HMAC>`, ключ `relay-guest-v1:` + пароль | `invites.ttlHours` (24 ч) | `issueGuestToken` в [`auth/auth.ts`](../apps/api/src/auth/auth.ts) |
 | Пропуск на закрытый сервер | `server-create` / `server-unlock` | `u1.<b64url(serverId)>.<exp>.<HMAC>`, подписан хэшем пароля сервера | 30 дней; смена пароля сервера отзывает | `issueUnlockToken` в [`gateway/unlock.ts`](../apps/api/src/gateway/unlock.ts) |

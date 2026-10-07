@@ -76,12 +76,11 @@ pnpm audit --prod --audit-level=high
 ## Стиль и соглашения
 
 - **Контракт клиент↔сервер** живёт в `packages/shared` (типы, socket-события,
-  токены, каталог настроек). api его не импортирует и держит копии
-  (`gateway/protocol.ts`, `settings/catalog.ts`, `gateway/ring-machine.ts`,
-  `identity/crypto.ts`) — совпадение сверяют тесты `packages/shared`. Меняете
-  формат сообщений — правьте обе половины и [docs/protocol.md](docs/protocol.md),
+  токены, каталог настроек, протокол медиасервера). Его импортируют все
+  три стороны — web, api и sfu, — так что разойтись им мешает компилятор.
+  Меняете формат сообщений — правьте контракт и [docs/protocol.md](docs/protocol.md),
   держите web-клиент эталонной реализацией. Подробно —
-  [docs/architecture.md](docs/architecture.md#контракт-и-его-копии).
+  [docs/architecture.md](docs/architecture.md#контракт).
 - **Сиды серверов/каналов** дублируются во фронте (`apps/web/lib/constants.ts`) и
   в реестре api (`apps/api/src/gateway/registry.service.ts`) — id и slug обязаны
   совпадать байт-в-байт.
