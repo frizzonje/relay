@@ -225,10 +225,12 @@ export function createMeshTransport(host: TransportHost): VoiceTransport {
           host.setTileState(peerId, 'tile.state.reconnecting');
           ladder.recover(peerId);
           break;
-        // 'connecting' — промежуточное состояние, в том числе сразу после
-        // restartIce. Сторож ступени здесь НЕ трогаем: раньше он на этом переходе
-        // гасился, и связь, не дошедшая до connected, застревала в
-        // «переподключении…» навсегда — до перезахода в канал.
+        case 'connecting':
+          // Промежуточное состояние, в том числе сразу после restartIce.
+          // Сторож ступени здесь НЕ трогаем: раньше он на этом переходе
+          // гасился, и связь, не дошедшая до connected, застревала в
+          // «переподключении…» навсегда — до перезахода в канал.
+          break;
       }
     };
     pc.onconnectionstatechange = handleStateChange;

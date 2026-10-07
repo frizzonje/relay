@@ -82,16 +82,27 @@ export function LinkDevicePanel({ onClose }: { onClose?: () => void }) {
   useEffect(() => {
     if (phase.kind !== 'showing') return;
     let alive = true;
-    const timer = setInterval(async () => {
-      const me = await whoAmI().catch(() => null);
-      if (!alive) return;
-      if (me && me.id === before.current) return;
-      setPhase({ kind: 'linked' });
-      // Перезагрузка, а не тихое обновление стора: за старой личностью тянутся
-      // сокет, лента и состав каналов, и собирать их заново по кусочку — это
-      // десяток мест, каждое из которых однажды забудут.
-      setTimeout(() => location.reload(), 1200);
-    }, POLL_MS);
+    // Вопрос за вопросом, а не внахлёст: ответ на медленной сети бывает дольше
+    // периода, и два ответа «уже не ты» завели бы две перезагрузки.
+    let busy = false;
+    const poll = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const me = await whoAmI().catch(() => null);
+        if (!alive) return;
+        if (me && me.id === before.current) return;
+        alive = false;
+        setPhase({ kind: 'linked' });
+        // Перезагрузка, а не тихое обновление стора: за старой личностью тянутся
+        // сокет, лента и состав каналов, и собирать их заново по кусочку — это
+        // десяток мест, каждое из которых однажды забудут.
+        setTimeout(() => location.reload(), 1200);
+      } finally {
+        busy = false;
+      }
+    };
+    const timer = setInterval(() => void poll(), POLL_MS);
     return () => {
       alive = false;
       clearInterval(timer);

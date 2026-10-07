@@ -63,7 +63,9 @@ function click(label: string) {
     (b) => b.textContent?.includes(label) || b.getAttribute('aria-label')?.includes(label),
   );
   if (!button) throw new Error(`кнопки «${label}» на отметке нет`);
-  act(() => button.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  act(() => {
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
 }
 
 describe('отметка о пропущенном', () => {

@@ -781,7 +781,8 @@ export const VideoTile = memo(function VideoTile({
     }
     const nativeEl = d.fullscreenElement ?? d.webkitFullscreenElement ?? null;
     if (nativeEl === el) {
-      (d.exitFullscreen ?? d.webkitExitFullscreen)?.call(d);
+      // Отказ выйти значит, что полноэкранного режима уже нет, — делать нечего.
+      Promise.resolve((d.exitFullscreen ?? d.webkitExitFullscreen)?.call(d)).catch(() => {});
       return;
     }
 

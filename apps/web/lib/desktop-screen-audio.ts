@@ -127,7 +127,7 @@ export async function startNativeScreenAudio(): Promise<MediaStreamTrack | null>
     };
 
     void t
-      .listen<{ sampleRate: number }>('screen-audio-format', onFormat)
+      .listen<{ sampleRate: number }>('screen-audio-format', (e) => void onFormat(e))
       .then((u) => unlisten.push(u));
     void t.listen<string>('screen-audio-frame', onFrame).then((u) => unlisten.push(u));
 

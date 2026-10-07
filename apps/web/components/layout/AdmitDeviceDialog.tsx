@@ -238,12 +238,22 @@ function Scanner({ onFound, onGiveUp }: { onFound: (text: string) => void; onGiv
         const detector = new (
           window as unknown as { BarcodeDetector: BarcodeDetectorLike }
         ).BarcodeDetector({ formats: ['qr_code'] });
-        timer = setInterval(async () => {
-          if (!video.current) return;
-          const found = await detector.detect(video.current).catch(() => []);
-          const text = found[0]?.rawValue;
-          if (text) onFound(text);
-        }, 300);
+        // Кадр за кадром, но не внахлёст: распознавание на слабом телефоне
+        // бывает дольше периода, и без `busy` два тика читали бы один и тот же
+        // код — и отдавали его в `onFound` дважды.
+        let busy = false;
+        const scan = async () => {
+          if (busy || !video.current) return;
+          busy = true;
+          try {
+            const found = await detector.detect(video.current).catch(() => []);
+            const text = found[0]?.rawValue;
+            if (alive && text) onFound(text);
+          } finally {
+            busy = false;
+          }
+        };
+        timer = setInterval(() => void scan(), 300);
       } catch {
         if (alive) setDenied(true);
       }

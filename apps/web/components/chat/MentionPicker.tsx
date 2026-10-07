@@ -47,10 +47,11 @@ export function useMentionSuggest(query: string | null): {
       return;
     }
     let live = true;
-    const timer = setTimeout(async () => {
-      const res = await request('mention-suggest', { prefix: query });
-      if (!live) return;
-      setState({ people: res?.people ?? [], asked: true });
+    const timer = setTimeout(() => {
+      void request('mention-suggest', { prefix: query }).then((res) => {
+        if (!live) return;
+        setState({ people: res?.people ?? [], asked: true });
+      });
     }, TYPING_PAUSE_MS);
     return () => {
       live = false;

@@ -24,4 +24,7 @@ async function bootstrap() {
   console.log(`SFU listening on http://localhost:${port} (socket path /sfu/)`);
 }
 
-bootstrap();
+bootstrap().catch((e) => {
+  console.error('sfu не запустился:', e);
+  process.exit(1);
+});

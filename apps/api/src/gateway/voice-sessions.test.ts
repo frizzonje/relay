@@ -703,7 +703,7 @@ describe('комната беседы', () => {
     const his = await connectAs(gw, server, boris.cookie, { id: 'боря' });
     settle();
     const room = callRoomOf(DmService.address(anya.identityId, boris.identityId));
-    const ring = await gw.handleCallStart(asSocket(hers), { fingerprint: boris.fingerprint });
+    const ring = gw.handleCallStart(asSocket(hers), { fingerprint: boris.fingerprint });
     const ringId = ring.ok ? ring.ringId : '';
     return { ...stand, anya, boris, hers, his, room, ringId };
   }
@@ -951,7 +951,7 @@ describe('комната беседы', () => {
     await tune(settings, 'calls.busyWhenInVoice', false);
     server.clearAll();
 
-    const again = await gw.handleCallStart(asSocket(hers), { fingerprint: boris.fingerprint });
+    const again = gw.handleCallStart(asSocket(hers), { fingerprint: boris.fingerprint });
     accept(gw, his, again.ok ? again.ringId : '');
 
     // Комната та же — адрес считается из двух id, — и заново её открыли поверх
@@ -1071,7 +1071,7 @@ describe('комната беседы', () => {
     // И «занят» с него снялось: комната была последним, что держало его в
     // голосе, — иначе дозвониться до него было бы нельзя до конца дня.
     settle();
-    expect(await gw.handleCallStart(asSocket(hers), { fingerprint: boris.fingerprint })).toEqual(
+    expect(gw.handleCallStart(asSocket(hers), { fingerprint: boris.fingerprint })).toEqual(
       expect.objectContaining({ ok: true }),
     );
   });

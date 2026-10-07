@@ -158,11 +158,11 @@ describe('экран исходящего вызова', () => {
     const hangUpButton = host.querySelectorAll('button')[1] as HTMLButtonElement;
     expect(document.activeElement).toBe(hangUpButton);
 
-    act(() =>
+    act(() => {
       document.activeElement!.dispatchEvent(
         new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
-      ),
-    );
+      );
+    });
     expect(hangUp).toHaveBeenCalledTimes(1);
     expect(markup()).toBe('');
 
