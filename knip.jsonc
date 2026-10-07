@@ -1,0 +1,43 @@
+// Мёртвый код: файлы, которые никто не импортирует, экспорты без потребителя и
+// зависимости, которых нет в коде. Запуск: pnpm deadcode:check.
+//
+// Тесты — тоже точки входа: тест — потребитель кода, и то, что нужно только
+// ему, мёртвым не считается. Типы и интерфейсы, на которые ссылается сам их
+// файл, — форма экспортируемых функций, а не отдельный экспорт: их не трогаем.
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  // `@internal` — экспорт только для тестов, которые берут модуль динамическим
+  // импортом (`await import(...)`): такой доступ knip не прослеживает.
+  "tags": ["-@internal"],
+  "ignoreExportsUsedInFile": { "interface": true, "type": true },
+  "workspaces": {
+    ".": {
+      "entry": ["tools/*.mjs"],
+      "project": ["tools/*.mjs"],
+      // Грузится через createRequire (tools/check-clones.mjs) — knip этого не видит.
+      "ignoreDependencies": ["jscpd"],
+      // Ставится и запускается внутри clients/desktop-linux, это не пакет монорепо.
+      "ignoreBinaries": ["electron-builder"],
+    },
+    "apps/api": {
+      // owner-link — разовая команда (`node dist/owner-link.js`), а не модуль сервиса.
+      "entry": ["src/main.ts", "src/owner-link.ts", "src/**/*.test.ts"],
+      "project": ["src/**/*.ts"],
+    },
+    "apps/sfu": {
+      "entry": ["src/main.ts", "src/**/*.test.ts"],
+      "project": ["src/**/*.ts"],
+    },
+    "apps/web": {
+      "entry": ["app/**/*.{ts,tsx}", "{lib,stores,components}/**/*.test.{ts,tsx}"],
+      "project": ["{app,components,lib,stores}/**/*.{ts,tsx}"],
+      // tailwindcss подключён из CSS (`@import 'tailwindcss'`), postcss — сам Next.
+      "ignoreDependencies": ["tailwindcss", "postcss"],
+    },
+    "packages/shared": {
+      "entry": ["src/**/*.test.ts"],
+      "project": ["src/**/*.ts"],
+    },
+  },
+  "ignoreWorkspaces": ["apps/web/e2e"],
+}

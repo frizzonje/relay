@@ -57,6 +57,16 @@ node tools/check-docs.mjs   # или pnpm docs:check
 node tools/check-contract.mjs   # или pnpm contract:check
 ```
 
+Код — тремя гейтами: циклы импортов, клоны (от 8 строк) и мёртвое —
+файлы, экспорты и зависимости, которыми никто не пользуется. Намеренное
+исключение записывается в сам скрипт или в `knip.jsonc`, с причиной:
+
+```bash
+pnpm cycles:check
+pnpm clones:check
+pnpm deadcode:check   # knip
+```
+
 Форматирование и линт:
 
 ```bash
