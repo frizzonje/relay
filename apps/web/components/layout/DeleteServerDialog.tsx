@@ -1,16 +1,12 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import type { Server } from '@relay/shared';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { DeletionCost, useDeletionStats } from '@/components/layout/deletion';
 import { deleteServer, serverStats } from '@/lib/servers';
 import { useT } from '@/lib/i18n';
 
-export interface DeleteServerTarget {
-  id: string;
-  name: string;
-}
-
-type Stats = { channels: number; messages: number; occupants: number };
+export type DeleteServerTarget = Pick<Server, 'id' | 'name'>;
 
 /**
  * Подтверждение удаления сервера. Спрашиваем всегда — сервер уносит все свои
@@ -35,27 +31,7 @@ export function DeleteServerDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const t = useT();
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (!target) return;
-    setStats(null);
-    setBusy(false);
-    let alive = true;
-    void serverStats(target.id).then((s) => {
-      if (alive) setStats(s);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [target]);
-
-  // Диалог закрывается с анимацией, а `target` обнуляется сразу — держим
-  // последний, иначе на выходе мелькнёт «Удалить сервер «»?».
-  const last = useRef<DeleteServerTarget | null>(null);
-  if (target) last.current = target;
-  const shown = target ?? last.current;
+  const { stats, busy, setBusy, shown } = useDeletionStats(target, serverStats);
 
   // Пока в эфирах сервера кто-то есть — сервер откажет (occupied), и кнопку мы
   // не предлагаем: отключённая с объяснением честнее отказа после клика.
@@ -81,55 +57,21 @@ export function DeleteServerDialog({
       busy={busy}
       confirmDisabled={blocked || !stats}
       onConfirm={() => void confirm()}
-      details={<Details target={shown} stats={stats} blocked={blocked} />}
+      details={
+        shown && (
+          <DeletionCost
+            stats={stats}
+            counting={t('deleteServer.counting')}
+            blocked={
+              blocked ? (s) => t('deleteServer.occupied', { count: s.occupants }) : undefined
+            }
+            lines={(s) => [
+              s.channels > 0 && t('deleteServer.channels', { count: s.channels }),
+              s.messages > 0 && t('deleteServer.messages', { count: s.messages }),
+            ]}
+          />
+        )
+      }
     />
-  );
-}
-
-/** Цена решения: что именно исчезнет. До ответа сервера — честное «считаем». */
-function Details({
-  target,
-  stats,
-  blocked,
-}: {
-  target: DeleteServerTarget | null;
-  stats: Stats | null;
-  blocked: boolean;
-}) {
-  const t = useT();
-  if (!target) return null;
-
-  if (!stats) {
-    return (
-      <p className="rounded-lg border border-line bg-bg-deep/60 px-3 py-2.5 text-[13px] text-text-muted">
-        {t('deleteServer.counting')}
-      </p>
-    );
-  }
-
-  if (blocked) {
-    return (
-      <p className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2.5 text-[13px] leading-snug text-danger">
-        {t('deleteServer.occupied', { count: stats.occupants })}
-      </p>
-    );
-  }
-
-  const lines: string[] = [];
-  if (stats.channels > 0) lines.push(t('deleteServer.channels', { count: stats.channels }));
-  if (stats.messages > 0) lines.push(t('deleteServer.messages', { count: stats.messages }));
-  if (!lines.length) return null;
-
-  return (
-    <ul className="flex flex-col gap-1 rounded-lg border border-line bg-bg-deep/60 px-3 py-2.5 text-[13px] leading-snug text-text-muted">
-      {lines.map((line) => (
-        <li key={line} className="flex gap-2">
-          <span aria-hidden className="text-text-faint">
-            —
-          </span>
-          <span>{line}</span>
-        </li>
-      ))}
-    </ul>
   );
 }

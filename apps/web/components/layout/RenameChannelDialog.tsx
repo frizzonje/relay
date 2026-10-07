@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import type { ChannelType } from '@relay/shared';
+import type { Channel } from '@relay/shared';
 import {
   Dialog,
   DialogContent,
@@ -11,16 +11,12 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Icon } from '@/components/ui/icon';
+import { ChannelNameField } from '@/components/layout/ChannelNameField';
 import { renameChannel } from '@/lib/channels';
 import { useT } from '@/lib/i18n';
 import { useSetting } from '@/stores/config';
 
-export interface RenameChannelTarget {
-  id: string;
-  name: string;
-  type: ChannelType;
-}
+export type RenameChannelTarget = Pick<Channel, 'id' | 'name' | 'type'>;
 
 /**
  * Переименование канала. Меняется только подпись: адрес канала (slug) остаётся
@@ -81,32 +77,14 @@ export function RenameChannelDialog({
         </DialogHeader>
 
         <form onSubmit={submit} className="flex flex-col gap-4">
-          <div>
-            <label
-              htmlFor="channel-rename"
-              className="mb-1.5 block text-[11px] font-bold uppercase tracking-[0.3px] text-text-muted"
-            >
-              {t('common.name')}
-            </label>
-            <div className="flex items-center gap-2 rounded-lg border border-black/40 bg-bg-deep/70 px-3 focus-within:border-accent focus-within:ring-1 focus-within:ring-accent/60">
-              {isText ? (
-                <span className="text-lg leading-none text-text-muted">#</span>
-              ) : (
-                <Icon name="volume-2" className="text-[18px] text-text-muted" />
-              )}
-              <input
-                id="channel-rename"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                maxLength={nameMaxLength}
-                autoFocus
-                // Открываем с выделенным именем: заменить целиком — обычный
-                // случай, дописать букву — всё равно один клик.
-                onFocus={(e) => e.currentTarget.select()}
-                className="min-w-0 flex-1 border-0 bg-transparent py-2.5 text-[15px] text-text outline-none placeholder:text-text-muted/60"
-              />
-            </div>
-          </div>
+          <ChannelNameField
+            id="channel-rename"
+            type={isText ? 'text' : 'voice'}
+            value={name}
+            onChange={setName}
+            maxLength={nameMaxLength}
+            selectOnFocus
+          />
 
           <DialogFooter>
             <Button

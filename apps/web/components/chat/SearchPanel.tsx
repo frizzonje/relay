@@ -1,11 +1,10 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
 import { isDmSlug, type SearchHit, type SearchScope } from '@relay/shared';
 import { cn } from '@/lib/utils';
 import { Icon } from '@/components/ui/icon';
-import { Identicon } from '@/components/ui/Identicon';
+import { ChatDrawer, DrawerClose, MessageExcerpt } from '@/components/chat/ChatDrawer';
 import { fmtDayTime } from '@/lib/format';
 import { excerpt, highlight } from '@/lib/search';
 import { useT } from '@/lib/i18n';
@@ -72,19 +71,7 @@ function Hit({ hit, terms, onOpen }: { hit: SearchHit; terms: string[]; onOpen: 
         <span className="truncate font-medium text-text">{place}</span>
         <span className="shrink-0">{fmtDayTime(msg.ts)}</span>
       </div>
-      <div className="mt-1.5 flex items-start gap-2">
-        {msg.fingerprint ? (
-          <Identicon fingerprint={msg.fingerprint} size={20} className="mt-0.5" />
-        ) : (
-          <span className="mt-0.5 h-5 w-5 shrink-0 rounded-full bg-bg-active" aria-hidden />
-        )}
-        <div className="min-w-0 flex-1">
-          <span className="text-[13px] font-semibold text-text-header">{msg.name}</span>
-          <p className="break-words text-[13px] leading-[1.45] text-text">
-            {msg.text ? <HitText text={msg.text} terms={terms} /> : t('chat.attachment')}
-          </p>
-        </div>
-      </div>
+      <MessageExcerpt msg={msg} text={msg.text && <HitText text={msg.text} terms={terms} />} />
     </button>
   );
 }
@@ -131,108 +118,87 @@ export function SearchPanel() {
       ];
 
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.aside
-          initial={{ opacity: 0, x: 16 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: 16 }}
-          transition={{ duration: 0.16 }}
-          // Панель поверх ленты, а не рядом: раздвигать колонки на время поиска
-          // значило бы перекладывать разговор туда-сюда под руками у человека.
-          className="panel absolute inset-y-0 right-0 z-30 flex w-[380px] flex-col border-l border-line shadow-[-8px_0_24px_rgba(0,0,0,0.28)] max-md:inset-0 max-md:w-auto max-md:border-l-0"
-          role="dialog"
-          aria-label={t('search.title')}
-        >
-          <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2.5">
-            <Icon name="search" className="shrink-0 text-[17px] text-text-muted" />
-            <input
-              ref={inputRef}
-              value={query}
-              onChange={(e) => useSearchStore.getState().setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') useSearchStore.getState().setOpen(false);
-              }}
-              maxLength={100}
-              autoComplete="off"
-              placeholder={t('search.placeholder')}
-              className="min-w-0 flex-1 bg-transparent py-1 text-[14px] text-text outline-none placeholder:text-text-muted/70"
-            />
+    <ChatDrawer open={open} label={t('search.title')}>
+      <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2.5">
+        <Icon name="search" className="shrink-0 text-[17px] text-text-muted" />
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={(e) => useSearchStore.getState().setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') useSearchStore.getState().setOpen(false);
+          }}
+          maxLength={100}
+          autoComplete="off"
+          placeholder={t('search.placeholder')}
+          className="min-w-0 flex-1 bg-transparent py-1 text-[14px] text-text outline-none placeholder:text-text-muted/70"
+        />
+        <DrawerClose onClose={() => useSearchStore.getState().setOpen(false)} />
+      </div>
+
+      {scopes.length > 0 && (
+        <div className="flex shrink-0 gap-1 border-b border-line px-3 py-2">
+          {scopes.map((s) => (
             <button
+              key={s.id}
               type="button"
-              onClick={() => useSearchStore.getState().setOpen(false)}
-              aria-label={t('common.close')}
-              className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-text-muted transition-colors hover:bg-bg-hover hover:text-text"
+              onClick={() => useSearchStore.getState().setScope(s.id)}
+              aria-pressed={scope === s.id}
+              className={cn(
+                'truncate rounded-full px-2.5 py-1 text-[12px] transition-colors',
+                scope === s.id
+                  ? 'bg-accent-strong/20 text-text-header'
+                  : 'text-text-muted hover:bg-bg-hover hover:text-text',
+              )}
             >
-              <Icon name="x" className="text-[13px]" />
+              {s.label}
             </button>
-          </div>
+          ))}
+        </div>
+      )}
 
-          {scopes.length > 0 && (
-            <div className="flex shrink-0 gap-1 border-b border-line px-3 py-2">
-              {scopes.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  onClick={() => useSearchStore.getState().setScope(s.id)}
-                  aria-pressed={scope === s.id}
-                  className={cn(
-                    'truncate rounded-full px-2.5 py-1 text-[12px] transition-colors',
-                    scope === s.id
-                      ? 'bg-accent-strong/20 text-text-header'
-                      : 'text-text-muted hover:bg-bg-hover hover:text-text',
-                  )}
-                >
-                  {s.label}
-                </button>
-              ))}
-            </div>
-          )}
-
-          <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {/* Пять состояний, и они разные: ещё не спрашивали, ищем, не
+      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        {/* Пять состояний, и они разные: ещё не спрашивали, ищем, не
                 нашлось, сервер не ответил, вот находки. Свести их к одному
                 пустому месту значит на все пять вопросов промолчать. */}
-            {!query.trim() ? (
-              <p className="px-3 py-6 text-[13px] leading-relaxed text-text-muted">
-                {t('search.hint')}
-              </p>
-            ) : loading && !hits.length ? (
-              <p className="px-3 py-6 text-[13px] text-text-muted">{t('search.searching')}</p>
-            ) : failed ? (
-              <p className="px-3 py-6 text-[13px] text-text-muted">{t('search.failed')}</p>
-            ) : asked && !hits.length ? (
-              <p className="px-3 py-6 text-[13px] leading-relaxed text-text-muted">
-                {t('search.empty', { query: query.trim() })}
-              </p>
-            ) : (
-              <>
-                <p className="px-3 py-1.5 text-[11px] uppercase tracking-[0.1em] text-text-muted">
-                  {t('search.count', { count: hits.length })}
-                </p>
-                {hits.map((hit) => (
-                  <Hit
-                    key={hit.message.id ?? `${hit.slug}-${hit.message.ts}`}
-                    hit={hit}
-                    terms={terms}
-                    onOpen={() => void useSearchStore.getState().openHit(hit)}
-                  />
-                ))}
-                {more && (
-                  <button
-                    type="button"
-                    onClick={() => void useSearchStore.getState().loadMore()}
-                    disabled={loading}
-                    className="mt-1 w-full rounded-[10px] border border-line px-3 py-2 text-[12.5px] text-text-muted transition-colors hover:bg-bg-hover hover:text-text disabled:opacity-60"
-                  >
-                    {t(loading ? 'search.searching' : 'search.more')}
-                  </button>
-                )}
-              </>
+        {!query.trim() ? (
+          <p className="px-3 py-6 text-[13px] leading-relaxed text-text-muted">
+            {t('search.hint')}
+          </p>
+        ) : loading && !hits.length ? (
+          <p className="px-3 py-6 text-[13px] text-text-muted">{t('search.searching')}</p>
+        ) : failed ? (
+          <p className="px-3 py-6 text-[13px] text-text-muted">{t('search.failed')}</p>
+        ) : asked && !hits.length ? (
+          <p className="px-3 py-6 text-[13px] leading-relaxed text-text-muted">
+            {t('search.empty', { query: query.trim() })}
+          </p>
+        ) : (
+          <>
+            <p className="px-3 py-1.5 text-[11px] uppercase tracking-[0.1em] text-text-muted">
+              {t('search.count', { count: hits.length })}
+            </p>
+            {hits.map((hit) => (
+              <Hit
+                key={hit.message.id ?? `${hit.slug}-${hit.message.ts}`}
+                hit={hit}
+                terms={terms}
+                onOpen={() => void useSearchStore.getState().openHit(hit)}
+              />
+            ))}
+            {more && (
+              <button
+                type="button"
+                onClick={() => void useSearchStore.getState().loadMore()}
+                disabled={loading}
+                className="mt-1 w-full rounded-[10px] border border-line px-3 py-2 text-[12.5px] text-text-muted transition-colors hover:bg-bg-hover hover:text-text disabled:opacity-60"
+              >
+                {t(loading ? 'search.searching' : 'search.more')}
+              </button>
             )}
-          </div>
-        </motion.aside>
-      )}
-    </AnimatePresence>
+          </>
+        )}
+      </div>
+    </ChatDrawer>
   );
 }

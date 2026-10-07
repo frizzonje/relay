@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
+import { ChannelNameField } from '@/components/layout/ChannelNameField';
 import { cn } from '@/lib/utils';
 import { createChannel } from '@/lib/channels';
 import { useSfuAvailable } from '@/lib/use-sfu';
@@ -166,32 +167,15 @@ export function CreateChannelDialog({
             </div>
           )}
 
-          {/* Имя канала */}
-          <div>
-            <label
-              htmlFor="channel-name"
-              className="mb-1.5 block text-[11px] font-bold uppercase tracking-[0.3px] text-text-muted"
-            >
-              {t('common.name')}
-            </label>
-            <div className="flex items-center gap-2 rounded-lg border border-black/40 bg-bg-deep/70 px-3 focus-within:border-accent focus-within:ring-1 focus-within:ring-accent/60">
-              {isText ? (
-                <span className="text-lg leading-none text-text-muted">#</span>
-              ) : (
-                <Icon name="volume-2" className="text-[18px] text-text-muted" />
-              )}
-              <input
-                id="channel-name"
-                ref={inputRef}
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={t(isText ? 'createChannel.name.text' : 'createChannel.name.voice')}
-                maxLength={nameMaxLength}
-                autoFocus
-                className="min-w-0 flex-1 border-0 bg-transparent py-2.5 text-[15px] text-text outline-none placeholder:text-text-muted/60"
-              />
-            </div>
-          </div>
+          <ChannelNameField
+            id="channel-name"
+            ref={inputRef}
+            type={type}
+            value={name}
+            onChange={setName}
+            placeholder={t(isText ? 'createChannel.name.text' : 'createChannel.name.voice')}
+            maxLength={nameMaxLength}
+          />
 
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>

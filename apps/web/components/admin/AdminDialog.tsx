@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { cn } from '@/lib/utils';
 import { springTab, tabPanel } from '@/lib/motion';
+import { PaneHeader } from '@/components/ui/pane-header';
 import { useT, type MessageKey } from '@/lib/i18n';
 import { adminRefusalKey } from '@/lib/refusals';
 import { useAdminStore } from '@/stores/admin';
@@ -194,30 +195,12 @@ export function AdminDialog() {
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex h-[52px] shrink-0 items-center justify-between border-b border-line px-5 max-md:px-4">
-            <h2 className="overflow-hidden text-[15px] font-semibold text-text-header">
-              <AnimatePresence mode="wait" initial={false}>
-                <motion.span
-                  key={active ?? 'none'}
-                  variants={tabPanel}
-                  initial="hidden"
-                  animate="show"
-                  exit="exit"
-                  className="block"
-                >
-                  {active ? tabName(t, active) : t('admin.title')}
-                </motion.span>
-              </AnimatePresence>
-            </h2>
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              aria-label={t('admin.close')}
-              className="grid h-7 w-7 place-items-center rounded-[7px] text-lg leading-none text-text-muted outline-none transition-colors hover:bg-bg-hover hover:text-text-header"
-            >
-              ×
-            </button>
-          </div>
+          <PaneHeader
+            title={active ? tabName(t, active) : t('admin.title')}
+            titleKey={active ?? 'none'}
+            closeLabel={t('admin.close')}
+            onClose={() => setOpen(false)}
+          />
 
           {/* Отказ на всю панель и «ещё спрашиваем» стоят ВНЕ анимации смены
               вкладок: у `mode="wait"` следующий кадр ждёт, пока уйдёт прежний,

@@ -6,6 +6,7 @@ import { sanitizeNick } from '@relay/shared';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Identicon } from '@/components/ui/Identicon';
+import { NickField } from '@/components/ui/nick-field';
 import { randomCallsign } from '@/lib/avatar';
 import type { LoginFailure } from '@/lib/identity-login';
 import { useIdentityStore } from '@/stores/identity';
@@ -148,28 +149,13 @@ export function IdentityGate() {
             </p>
 
             <form onSubmit={submit} className="mt-5 flex flex-col gap-2.5">
-              <div className="flex items-center gap-2 rounded-lg border border-black/40 bg-bg-deep/70 px-3 focus-within:border-accent focus-within:ring-1 focus-within:ring-accent/60">
-                <span className="select-none text-lg font-bold text-text-muted">@</span>
-                <input
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  placeholder={t('identity.nick.placeholder')}
-                  maxLength={24}
-                  autoFocus
-                  spellCheck={false}
-                  autoComplete="off"
-                  className="min-w-0 flex-1 border-0 bg-transparent py-2.5 text-[15px] font-semibold text-text-header outline-none placeholder:font-normal placeholder:text-text-muted/60"
-                />
-                <button
-                  type="button"
-                  onClick={() => setDraft(randomCallsign())}
-                  title={t('identity.reroll')}
-                  aria-label={t('identity.reroll.nick')}
-                  className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-base text-text-muted outline-none transition-colors hover:bg-bg-hover hover:text-text focus-visible:ring-2 focus-visible:ring-accent"
-                >
-                  🎲
-                </button>
-              </div>
+              <NickField
+                value={draft}
+                onChange={setDraft}
+                onReroll={() => setDraft(randomCallsign())}
+                placeholder="identity.nick.placeholder"
+                rerollLabel="identity.reroll.nick"
+              />
 
               <Button
                 type="submit"

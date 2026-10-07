@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { Icon } from '@/components/ui/icon';
 import { Switch } from '@/components/ui/switch';
 import { springTab, tabPanel } from '@/lib/motion';
+import { PaneHeader } from '@/components/ui/pane-header';
 import { AboutPanel } from '@/components/layout/AboutPanel';
 import { DevicesPanel } from '@/components/layout/DevicesPanel';
 import { StreamSettings } from '@/components/layout/StreamSettings';
@@ -646,33 +647,15 @@ export function SettingsDialog({
 
         {/* Правая колонка — контент вкладки */}
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex h-[52px] shrink-0 items-center justify-between border-b border-line px-5 max-md:px-4">
-            <h2 className="overflow-hidden text-[15px] font-semibold text-text-header">
-              <AnimatePresence mode="wait" initial={false}>
-                <motion.span
-                  key={tab}
-                  variants={tabPanel}
-                  initial="hidden"
-                  animate="show"
-                  exit="exit"
-                  className="block"
-                >
-                  {(() => {
-                    const current = tabs.find((item) => item.id === tab);
-                    return current ? t(current.label) : null;
-                  })()}
-                </motion.span>
-              </AnimatePresence>
-            </h2>
-            <button
-              type="button"
-              onClick={() => onOpenChange(false)}
-              aria-label={t('settings.close')}
-              className="grid h-7 w-7 place-items-center rounded-[7px] text-lg leading-none text-text-muted outline-none transition-colors hover:bg-bg-hover hover:text-text-header"
-            >
-              ×
-            </button>
-          </div>
+          <PaneHeader
+            title={(() => {
+              const current = tabs.find((item) => item.id === tab);
+              return current ? t(current.label) : null;
+            })()}
+            titleKey={tab}
+            closeLabel={t('settings.close')}
+            onClose={() => onOpenChange(false)}
+          />
 
           {/* mode="wait": прежний раздел гаснет, затем приезжает новый — иначе
               два разных набора полей встали бы стопкой и дёрнули прокрутку. */}
