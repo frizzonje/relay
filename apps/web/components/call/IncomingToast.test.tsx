@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CallIncomingRelay, CallPerson } from '@relay/shared';
+import type { CallIncomingRelay, Person } from '@relay/shared';
 
 /**
  * Тост входящего (задача 7 плана B). `lib/call.ts` подделан тем же приёмом,
@@ -31,7 +31,7 @@ const { answerCall, declineCall } = await import('@/lib/call');
 const { useRingStore } = await import('@/stores/ring');
 const { IncomingToast } = await import('./IncomingToast');
 
-const PEER: CallPerson = { fingerprint: 'ff', nick: 'Боря' };
+const PEER: Person = { fingerprint: 'ff', nick: 'Боря' };
 
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;

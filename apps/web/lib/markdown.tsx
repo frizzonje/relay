@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode } from 'react';
-import type { MentionRef } from '@relay/shared';
+import type { Person } from '@relay/shared';
 import { cn } from '@/lib/utils';
 import { splitMentions } from '@/lib/mentions';
 
@@ -64,7 +64,7 @@ function linkify(text: string, keyBase: string): ReactNode[] {
  */
 function mentionize(
   text: string,
-  mentions: MentionRef[],
+  mentions: Person[],
   me: string | undefined,
   keyBase: string,
 ): ReactNode[] {
@@ -96,7 +96,7 @@ const BOLD_RE = /\*\*([^*\n]+?)\*\*/g;
 function renderText(
   text: string,
   keyBase: string,
-  mentions: MentionRef[],
+  mentions: Person[],
   me: string | undefined,
 ): ReactNode[] {
   const out: ReactNode[] = [];
@@ -125,11 +125,7 @@ const CODE_RE = /`([^`\n]+)`/g;
  * Разбирает текст сообщения в React-узлы (жирный / код / упоминания / ссылки).
  * `me` — отпечаток читающего: своё имя в чужой реплике выделено сильнее.
  */
-export function renderMarkdownMini(
-  text: string,
-  mentions: MentionRef[] = [],
-  me?: string,
-): ReactNode {
+export function renderMarkdownMini(text: string, mentions: Person[] = [], me?: string): ReactNode {
   const out: ReactNode[] = [];
   let last = 0;
   let m: RegExpExecArray | null;

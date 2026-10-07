@@ -18,9 +18,9 @@ import {
   type Attachment,
   type CallMark,
   type ChatMessage,
-  type MentionRef,
+  type Person,
   type ReactionMap,
-  type Reactor,
+  type PersonOrGuest,
   type ReplyRef,
 } from '@relay/shared';
 
@@ -118,11 +118,11 @@ export const MENTION_SUGGEST_LIMIT = 8;
  */
 export function mentionedIn(
   text: string,
-  people: MentionRef[],
+  people: Person[],
   limit: number = LIMIT.mentions,
-): MentionRef[] {
+): Person[] {
   const haystack = text.toLowerCase();
-  const out: MentionRef[] = [];
+  const out: Person[] = [];
   const seen = new Set<string>();
   for (const person of people) {
     if (!person.nick || seen.has(person.fingerprint)) continue;
@@ -160,7 +160,7 @@ export interface NewMessage {
   /** На какое сообщение отвечаем. Снимок цитаты снимается здесь. */
   replyToId?: string;
   /** Кого назвали — уже сверенные с текстом (см. `mentionedIn`). */
-  mentions?: MentionRef[];
+  mentions?: Person[];
 }
 
 /**
@@ -243,7 +243,7 @@ function toMessage(row: MessageRow): ChatMessage {
  * Один ли это человек. Отпечаток сильнее ника и не сравнивается с ним никогда:
  * «у меня ключ, а у записи его нет» — это разные люди, даже если имя совпало.
  */
-function sameReactor(a: Reactor, b: Reactor): boolean {
+function sameReactor(a: PersonOrGuest, b: PersonOrGuest): boolean {
   if (a.fingerprint || b.fingerprint) return a.fingerprint === b.fingerprint;
   return a.nick === b.nick;
 }
@@ -605,7 +605,7 @@ export class ChatService implements OnModuleInit {
    * редакции: имя из реплики могли убрать, и «упомянут» без имени в тексте —
    * ровно тот беззвучный вызов, который не пускает `mentionedIn`.
    */
-  async edit(id: string, text: string, mentions: MentionRef[]): Promise<number> {
+  async edit(id: string, text: string, mentions: Person[]): Promise<number> {
     const res = await this.db
       .getRepository(MessageRow)
       .createQueryBuilder()
@@ -747,14 +747,14 @@ export class ChatService implements OnModuleInit {
    * было бы написать любое имя, и снимок упоминания врал бы про того, кого
    * адресует.
    */
-  async peopleByFingerprint(fingerprints: string[]): Promise<MentionRef[]> {
+  async peopleByFingerprint(fingerprints: string[]): Promise<Person[]> {
     if (!fingerprints.length) return [];
     const rows = await this.db
       .getRepository(IdentityRow)
       .createQueryBuilder('i')
       .select(['i.fingerprint AS fingerprint', 'i.nick AS nick'])
       .where('i.fingerprint IN (:...fingerprints)', { fingerprints })
-      .getRawMany<MentionRef>();
+      .getRawMany<Person>();
     return rows;
   }
 
@@ -768,7 +768,7 @@ export class ChatService implements OnModuleInit {
    * подсказку из посторонних, а заодно раздачу всякому вошедшему полного
    * списка людей. Кто здесь говорил — тот здесь и есть.
    */
-  async mentionCandidates(channelIds: string[], prefix: string): Promise<MentionRef[]> {
+  async mentionCandidates(channelIds: string[], prefix: string): Promise<Person[]> {
     if (!channelIds.length) return [];
     // ILIKE — искать по началу имени, не различая регистр. Спецсимволы шаблона
     // экранируем: `%` в набранном человеком префиксе иначе означал бы «любой
@@ -785,7 +785,7 @@ export class ChatService implements OnModuleInit {
       .addGroupBy('i.nick')
       .orderBy('MAX(m.created_at)', 'DESC')
       .limit(MENTION_SUGGEST_LIMIT)
-      .getRawMany<MentionRef>();
+      .getRawMany<Person>();
   }
 
   /**
@@ -824,7 +824,7 @@ export class ChatService implements OnModuleInit {
    * записи без отпечатка — а такие остались от прежних версий — своим считается
    * только тот, у кого ключа нет тоже: иначе достаточно было бы назваться.
    */
-  toggleReaction(msg: ChatMessage, who: Reactor, emoji: string): ReactionMap {
+  toggleReaction(msg: ChatMessage, who: PersonOrGuest, emoji: string): ReactionMap {
     const reactions: ReactionMap = { ...(msg.reactions ?? {}) };
     const list = reactions[emoji] ?? [];
     const mine = list.filter((r) => sameReactor(r, who));

@@ -2,7 +2,7 @@ import { describe, expect, it, vi, type Mock } from 'vitest';
 import type {
   CallEndedRelay,
   CallIncomingRelay,
-  CallPerson,
+  Person,
   CallStartResult,
   DmOpenResult,
 } from '@relay/shared';
@@ -35,7 +35,7 @@ vi.mock('@/lib/request', () => ({
 }));
 vi.mock('@/stores/ui', () => ({ useUiStore: { getState: vi.fn(() => ({ openDm: vi.fn() })) } }));
 
-const PEER: CallPerson = { fingerprint: 'ff', nick: 'Боря' };
+const PEER: Person = { fingerprint: 'ff', nick: 'Боря' };
 
 async function fresh() {
   vi.resetModules();

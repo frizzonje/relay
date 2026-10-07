@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DmActivityRelay, DmPeer } from '@relay/shared';
+import type { DmActivityRelay, Person } from '@relay/shared';
 
 /**
  * `SocketProvider` до этой задачи не имел ни одного теста: он держит один
@@ -106,8 +106,8 @@ import { useRingStore } from '@/stores/ring';
 
 const slugA = 'dm-aaaaaaaaaaaaaaaaaaaaaaaa';
 const slugB = 'dm-bbbbbbbbbbbbbbbbbbbbbbbb';
-const peerA: DmPeer = { fingerprint: '1111-aaaa-2222-bbbb', nick: 'Аня' };
-const peerB: DmPeer = { fingerprint: '3333-cccc-4444-dddd', nick: 'Боря' };
+const peerA: Person = { fingerprint: '1111-aaaa-2222-bbbb', nick: 'Аня' };
+const peerB: Person = { fingerprint: '3333-cccc-4444-dddd', nick: 'Боря' };
 
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;

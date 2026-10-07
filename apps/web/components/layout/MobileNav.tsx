@@ -10,7 +10,7 @@ import { avatarStyle } from '@/lib/avatar';
 import { Identicon } from '@/components/ui/Identicon';
 import { PresenceDot } from '@/components/ui/PresenceDot';
 import { shortFingerprint } from '@/lib/format';
-import type { RosterPerson } from '@relay/shared';
+import type { PersonOrGuest } from '@relay/shared';
 import { useUiStore, type MobilePanel } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import { useChatStore } from '@/stores/chat';
@@ -34,7 +34,7 @@ function PeopleButton({
   onClick,
   label,
 }: {
-  people: RosterPerson[];
+  people: PersonOrGuest[];
   onClick: () => void;
   label: string;
 }) {
@@ -152,7 +152,7 @@ export function MobileNav() {
   const people = effective === 'people';
   // В голосе состав — плитки звонка, в тексте — ростер; и то и другое уже люди
   // с лицами, так что шапке остаётся привести их к одному виду.
-  const crowd: RosterPerson[] =
+  const crowd: PersonOrGuest[] =
     view === 'voice'
       ? tiles.map((tile) => ({ nick: tile.name, fingerprint: tile.fingerprint }))
       : roster;

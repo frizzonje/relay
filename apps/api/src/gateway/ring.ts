@@ -8,13 +8,13 @@ import {
   type RingEvent,
   type PresenceState,
   type CallMark,
-  type CallPerson,
+  type Person,
   type CallReplyResult,
   type CallStartResult,
 } from '@relay/shared';
 
 /** Личность в вызове: чем её адресовать внутри и как показать снаружи. */
-export interface RingPerson extends CallPerson {
+export interface RingPerson extends Person {
   id: string;
 }
 
@@ -82,7 +82,7 @@ interface Live {
 }
 
 /** На провод уезжает лицо и подпись: id личности в протоколе не появляется. */
-function shown(who: RingPerson): CallPerson {
+function shown(who: RingPerson): Person {
   return { fingerprint: who.fingerprint, nick: who.nick };
 }
 
@@ -412,7 +412,7 @@ export class Rings {
    * сторона глазами получателя. Разошли мы всем одинаковый снимок, каждый
    * увидел бы в поле «собеседник» в том числе и себя.
    */
-  private send(live: Live, event: string, make: (peer: CallPerson) => unknown): void {
+  private send(live: Live, event: string, make: (peer: Person) => unknown): void {
     for (const sock of this.socketsOf(live.ring.from)) sock.emit(event, make(shown(live.to)));
     for (const sock of this.socketsOf(live.ring.to)) sock.emit(event, make(shown(live.from)));
   }

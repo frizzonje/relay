@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ChatMessage, MentionRef, ReactionMap, RosterPerson } from '@relay/shared';
+import type { ChatMessage, Person, ReactionMap, PersonOrGuest } from '@relay/shared';
 
 /**
  * Состояние открытого текстового канала: лента сообщений, состав и кто печатает.
@@ -9,8 +9,8 @@ import type { ChatMessage, MentionRef, ReactionMap, RosterPerson } from '@relay/
  */
 interface ChatState {
   messages: ChatMessage[];
-  /** Кто в канале: люди с лицами, а не строки с именами (см. RosterPerson). */
-  roster: RosterPerson[];
+  /** Кто в канале: люди с лицами, а не строки с именами (см. PersonOrGuest). */
+  roster: PersonOrGuest[];
   /** Теги тех, кто прямо сейчас печатает в открытом канале (кроме тебя). */
   typing: string[];
   /**
@@ -45,11 +45,11 @@ interface ChatState {
   setJump: (id: string | null) => void;
   setLoadingMore: (value: boolean) => void;
   setLoadingAfter: (value: boolean) => void;
-  setRoster: (people: RosterPerson[]) => void;
+  setRoster: (people: PersonOrGuest[]) => void;
   setTyping: (names: string[]) => void;
   applyReaction: (id: string, reactions: ReactionMap) => void;
   /** Правка: текст, время и упоминания новой редакции (имя могли и убрать). */
-  applyEdit: (id: string, text: string, editedTs: number, mentions?: MentionRef[]) => void;
+  applyEdit: (id: string, text: string, editedTs: number, mentions?: Person[]) => void;
   applyDelete: (id: string) => void;
   /** Реплику закрепили или открепили — пометка в ленте. */
   applyPinned: (id: string, pinned: boolean) => void;

@@ -47,10 +47,7 @@ const SHADOW_ALLOWED = {
  * Совпадения по форме, которые копиями не являются: набор полей → почему.
  * Ключ — поля через запятую в алфавитном порядке, как их печатает отчёт.
  */
-const SHAPE_ALLOWED = {
-  'fingerprint,nick':
-    'роль «человек»: у каждой своё имя по смыслу (DmPeer, MentionRef, Reactor, RosterPerson, CallPerson)',
-};
+const SHAPE_ALLOWED = {};
 
 /** Форма короче этого — не форма, а совпадение (`{ ok, error }`). */
 const MIN_FIELDS = 3;

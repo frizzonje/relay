@@ -1,6 +1,6 @@
 'use client';
 
-import type { CallPerson } from '@relay/shared';
+import type { Person } from '@relay/shared';
 import { getSfx } from '@/lib/sfx';
 import { inShell, shellRingStart, shellRingStop } from '@/lib/shell-bridge';
 import { tx } from '@/lib/i18n';
@@ -246,7 +246,7 @@ function wantsSystemNotice(): boolean {
  * разрешение спрашивается асинхронно и вызов кончился раньше ответа, флаг
  * `cancelled` не даёт показать окошко о вызове, которого уже нет.
  */
-export function notifyCall(from: CallPerson, video: boolean): CallNotification {
+export function notifyCall(from: Person, video: boolean): CallNotification {
   const flash = flashTitle(tx('call.title.incoming', { nick: from.nick }));
   const notice = wantsSystemNotice();
   shellRingStart({ nick: from.nick, video, notify: notice });

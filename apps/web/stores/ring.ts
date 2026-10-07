@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type {
   CallEndedRelay,
   CallIncomingRelay,
-  CallPerson,
+  Person,
   CallRefusal,
   CallStateRelay,
 } from '@relay/shared';
@@ -51,7 +51,7 @@ type RingRefusal = Exclude<CallRefusal, 'busy' | 'offline'> | 'silent';
 
 /** Что нарисовано на экране исходящего вызова. */
 export interface OutgoingScreen {
-  peer: CallPerson;
+  peer: Person;
   video: boolean;
   /**
    * Машина дозвона. `id` пуст, пока не пришёл ack `call-start`, — экран уже
@@ -94,7 +94,7 @@ interface RingStoreState {
   /** «Отклонить» — тем же немедленным закрытием, отбой шлёт `lib/call.ts` (`declineCall`). */
   declineIncoming: () => void;
   /** Позвонить: открывает экран, шлёт `call-start` через `lib/call.ts`. */
-  start: (peer: CallPerson, video?: boolean) => Promise<void>;
+  start: (peer: Person, video?: boolean) => Promise<void>;
   /**
    * Рассылка `call-state`. Смотрит на ОБА экрана разом и трогает то, чей
    * `ringId` совпал, — не выбирая заранее, кто её получатель: `ringing`

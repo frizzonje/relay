@@ -225,8 +225,12 @@ export interface ChatMessage {
   replyTo?: ReplyRef;
   /** Метка последнего редактирования (проставляется на сервере при chat-edit). */
   editedTs?: number;
-  /** Кого назвали в реплике. Пусто — никого, и ключа в реплике нет. */
-  mentions?: MentionRef[];
+  /**
+   * Кого назвали в реплике. Адресат — отпечаток ключа: ники свободные и не
+   * уникальные. Ник — как его написали: по нему клиент находит в тексте то
+   * самое слово, хотя человек с тех пор мог переименоваться. Пусто — никого.
+   */
+  mentions?: Person[];
   /**
    * Реплика закреплена. Видно это прямо в ленте, а не только в списке
    * закреплённого, потому что закрепление — единственное исключение из
@@ -237,33 +241,30 @@ export interface ChatMessage {
 }
 
 /**
- * Названный в реплике: отпечаток ключа (это и есть адресат — ники свободные и
- * не уникальные) и ник, как он был написан. По нику клиент находит в тексте то
- * самое слово и рисует его упоминанием; человек к этому времени мог
- * переименоваться, но сказанное вчера от этого не меняется.
+ * Человек так, как его показывают и адресуют: лицо и адрес — отпечаток ключа,
+ * подпись — ник. Ники свободные и не уникальные, поэтому сверяют всегда по
+ * отпечатку, а ник лишь подписывает — каким он был в тот момент.
  */
-export interface MentionRef {
+export interface Person {
   fingerprint: string;
   nick: string;
 }
 
 /**
- * Кто поставил реакцию: отпечаток ключа и ник, каким он был в тот момент.
- *
- * Именем реакция подписывалась до 1.0, и это была последняя дверь, открытая
- * самоназванием (audit S1): переименовавшийся в чужой ник снимал чужую реакцию
- * и ставил свою от чужого имени. Ники свободные и не уникальные — сверять по
- * ним нечего.
- *
- * Отпечатка нет у того, кто реагировал до 1.0, и у клиента без ключа.
+ * Человек, у которого ключа может не быть: гость по инвайту (ключа ему не
+ * выдавали) или запись, сделанная до 1.0. Лицом такому остаётся градиент по
+ * имени.
  */
-export interface Reactor {
-  fingerprint?: string;
-  nick: string;
-}
+export type PersonOrGuest = Pick<Person, 'nick'> & Partial<Pick<Person, 'fingerprint'>>;
 
-/** Реакции сообщения: эмодзи → те, кто его поставил. Пустые ключи сервер удаляет. */
-export type ReactionMap = Record<string, Reactor[]>;
+/**
+ * Реакции сообщения: эмодзи → кто поставил. Подписаны отпечатком: именем
+ * реакция подписывалась до 1.0, и это была последняя дверь, открытая
+ * самоназванием (audit S1) — переименовавшийся в чужой ник снимал чужую
+ * реакцию. Отпечатка нет у реакций до 1.0 и у клиента без ключа. Пустые ключи
+ * сервер удаляет.
+ */
+export type ReactionMap = Record<string, PersonOrGuest[]>;
 
 /**
  * Разрешённый набор реакций. Сервер валидирует входящий эмодзи по этому списку,
@@ -324,14 +325,8 @@ export function isCallRoom(room: string): boolean {
   return /^voice:dm-[0-9a-f]{24}$/.test(room);
 }
 
-/** Собеседник: лицо рисуется по отпечатку, подпись — ником. */
-export interface DmPeer {
-  fingerprint: string;
-  nick: string;
-}
-
-/** Человек в списке выбора: тот же собеседник плюс «когда его видели». */
-export interface DmPerson extends DmPeer {
+/** Человек в списке выбора: собеседник плюс «когда его видели». */
+export interface DmPerson extends Person {
   /** 0 — не видели ни разу. */
   lastSeenTs: number;
 }
@@ -340,7 +335,7 @@ export interface DmPerson extends DmPeer {
 export interface DmConversation {
   /** Адрес беседы: он же слаг ленты, в которую входит `dm-join`. */
   slug: string;
-  peer: DmPeer;
+  peer: Person;
   /** Время последней реплики; 0 — переписки ещё не было. */
   lastTs: number;
   /** Последняя реплика, обрезанная до DM_PREVIEW_LIMIT. */
@@ -394,7 +389,7 @@ export interface DmActivityRelay {
   ts: number;
   preview: string;
   previewMine: boolean;
-  peer: DmPeer;
+  peer: Person;
   /** См. `DmConversation.call` — то же поле, тем же путём, что и превью. */
   call?: CallMark;
 }
@@ -1048,22 +1043,8 @@ export interface MentionSuggestPayload {
  */
 export type MentionSuggestResult = {
   ok: true;
-  people: { fingerprint: string; nick: string; online: boolean }[];
+  people: (Person & { online: boolean })[];
 };
-
-/**
- * Кто сейчас в текстовом канале. Не строка с именем, а человек: имена в relay
- * свободные и не уникальные, и список из одних имён не отличает двух «Ань» —
- * ни на глаз, ни в коде. Отпечаток даёт лицо (см. web/lib/identicon) и заодно
- * служит ключом: одна личность, вошедшая с двух устройств, — одна строка.
- *
- * У гостя по инвайту отпечатка нет: ключа ему не выдавали. Такой стоит в списке
- * сам по себе, лицом ему остаётся градиент по имени.
- */
-export interface RosterPerson {
-  nick: string;
-  fingerprint?: string;
-}
 
 /** Удаление своего сообщения — по id. Автор проверяется по тегу. */
 export interface ChatDeletePayload {
@@ -1449,12 +1430,6 @@ export interface ScreenWatchRelay {
 
 // ── Дозвон ──────────────────────────────────────────────────────────────────
 
-/** Участник вызова так, как его показывают собеседнику: лицо и подпись. */
-export interface CallPerson {
-  fingerprint: string;
-  nick: string;
-}
-
 /**
  * Почему позвонить не вышло. Пять причин, и разными они сделаны намеренно:
  * «выключено», «нельзя», «не в сети», «занято» и «слишком часто» объясняют
@@ -1496,7 +1471,7 @@ export type CallReplyResult = { ok: true } | { ok: false; error: 'unknown' };
 /** Входящий вызов — приходит на ВСЕ устройства: звонят человеку, а не вкладке. */
 export interface CallIncomingRelay {
   ringId: string;
-  from: CallPerson;
+  from: Person;
   /** Когда начался дозвон, мс Unix по часам сервера. */
   at: number;
   video: boolean;
@@ -1507,7 +1482,7 @@ export interface CallStateRelay {
   ringId: string;
   state: 'ringing' | 'accepted';
   /** Вторая сторона — глазами того, кому событие адресовано. */
-  peer: CallPerson;
+  peer: Person;
   at: number;
   video: boolean;
   /**
@@ -1538,7 +1513,7 @@ export interface CallOverRelay {
 export interface CallEndedRelay {
   ringId: string;
   state: 'declined' | 'no-answer' | 'busy' | 'cancelled' | 'failed';
-  peer: CallPerson;
+  peer: Person;
   at: number;
   /** Оставит ли этот исход отметку в переписке. */
   missed: boolean;
@@ -1591,7 +1566,12 @@ export interface ServerToClientEvents {
   'call-over': (payload: CallOverRelay) => void;
   chat: (message: ChatMessage) => void;
   'chat-history': (page: ChatHistoryPage) => void;
-  'chat-roster': (people: RosterPerson[]) => void;
+  /**
+   * Кто сейчас в текстовом канале. Люди, а не имена: список из одних имён не
+   * отличает двух «Ань». Отпечаток заодно ключ строки — одна личность с двух
+   * устройств стоит одной строкой; гость без ключа — сам по себе.
+   */
+  'chat-roster': (people: PersonOrGuest[]) => void;
   'chat-reaction': (payload: ChatReactionRelay) => void;
   /** Сообщение отредактировали — обновить текст и показать пометку «изменено». */
   'chat-edited': (payload: ChatEditRelay) => void;
@@ -1743,7 +1723,7 @@ export interface ChatEditRelay {
    * убрать, и клиенту проще заменить список, чем складывать из правок то, что
    * сервер уже сложил.
    */
-  mentions?: MentionRef[];
+  mentions?: Person[];
 }
 
 /** Удаление сообщения — id, всем в канале. */

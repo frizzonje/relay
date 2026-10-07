@@ -1,4 +1,4 @@
-import type { MentionRef } from '@relay/shared';
+import type { Person } from '@relay/shared';
 
 /**
  * Упоминания в тексте: где они написаны и что из набранного ими считается.
@@ -17,7 +17,7 @@ import type { MentionRef } from '@relay/shared';
 export interface MentionSegment {
   text: string;
   /** Кого назвали этим куском. Пусто — обычный текст. */
-  mention?: MentionRef;
+  mention?: Person;
 }
 
 /** Максимум того, что считается набранным после `@` (ник длиннее не бывает). */
@@ -29,7 +29,7 @@ const QUERY_MAX = 20;
  * Длинные имена пробуем первыми: у «Аня» и «Аня К» общее начало, и совпади
  * первое — второе имя оказалось бы наполовину упоминанием, наполовину текстом.
  */
-export function splitMentions(text: string, mentions: MentionRef[]): MentionSegment[] {
+export function splitMentions(text: string, mentions: Person[]): MentionSegment[] {
   if (!text || !mentions.length) return text ? [{ text }] : [];
   const people = [...mentions].sort((a, b) => b.nick.length - a.nick.length);
   const lower = text.toLowerCase();
@@ -99,7 +99,7 @@ export function insertMention(
  * потом проверит сервер: выбранное в подсказке имя человек мог и стереть, и
  * посылать вслед отпечаток стёртого — значит звать молча.
  */
-export function writtenIn(text: string, people: MentionRef[]): MentionRef[] {
+export function writtenIn(text: string, people: Person[]): Person[] {
   const lower = text.toLowerCase();
   const seen = new Set<string>();
   return people.filter((p) => {
@@ -111,6 +111,6 @@ export function writtenIn(text: string, people: MentionRef[]): MentionRef[] {
 }
 
 /** Названа ли в реплике эта личность — то, из-за чего строка ленты подсвечена. */
-export function mentions(list: MentionRef[] | undefined, fingerprint: string | undefined): boolean {
+export function mentions(list: Person[] | undefined, fingerprint: string | undefined): boolean {
   return !!fingerprint && !!list?.some((m) => m.fingerprint === fingerprint);
 }

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CallPerson } from '@relay/shared';
+import type { Person } from '@relay/shared';
 
 /**
  * Уведомление о входящем. У звука проверяем два правила, из-за которых он либо
@@ -198,7 +198,7 @@ describe('какой из трёх сигналов звучит', () => {
  * кнопки «включить уведомления» без звонка, который её оправдывает, в relay нет.
  */
 describe('системное уведомление о звонке', () => {
-  const person: CallPerson = { fingerprint: 'ff', nick: 'Аня' };
+  const person: Person = { fingerprint: 'ff', nick: 'Аня' };
 
   /** Достаточно `Notification`, чтобы notify.ts было с чем работать — не EventTarget. */
   class FakeNotification {
@@ -333,7 +333,7 @@ describe('системное уведомление о звонке', () => {
  * плане однажды уже находили.
  */
 describe('входящий и нативная оболочка', () => {
-  const person: CallPerson = { fingerprint: 'ff', nick: 'Аня' };
+  const person: Person = { fingerprint: 'ff', nick: 'Аня' };
 
   function setHiddenSilently(hidden: boolean) {
     Object.defineProperty(document, 'visibilityState', {

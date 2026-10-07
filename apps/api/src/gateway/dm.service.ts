@@ -7,7 +7,7 @@ import {
   DM_PREVIEW_LIMIT,
   type CallMark,
   type DmConversation,
-  type DmPeer,
+  type Person,
   type DmPerson,
 } from '@relay/shared';
 
@@ -62,7 +62,7 @@ export class DmService implements OnModuleInit {
    * так же, как `known`: на старте одним запросом, дальше — по одной строке на
    * каждое открытие и по звонку `rememberNick` на переименование.
    */
-  private readonly nicks = new Map<string, DmPeer>();
+  private readonly nicks = new Map<string, Person>();
 
   constructor(private readonly db: DataSource) {}
 
@@ -298,7 +298,7 @@ export class DmService implements OnModuleInit {
   }
 
   /** Как показать эту личность собеседнику: лицо и подпись. */
-  peerView(identityId: string): DmPeer | undefined {
+  peerView(identityId: string): Person | undefined {
     return this.nicks.get(identityId);
   }
 

@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import type { CallPerson, DmOpenResult } from '@relay/shared';
+import type { Person, DmOpenResult } from '@relay/shared';
 
 /**
  * Экран исходящего вызова (задача 6 плана B). `lib/call.ts` и `lib/request.ts`
@@ -27,7 +27,7 @@ const { request } = await import('@/lib/request');
 const { useRingStore } = await import('@/stores/ring');
 const { OutgoingCall } = await import('./OutgoingCall');
 
-const PEER: CallPerson = { fingerprint: 'ff', nick: 'Боря' };
+const PEER: Person = { fingerprint: 'ff', nick: 'Боря' };
 
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;

@@ -223,8 +223,11 @@ HTTP API устройств, которые api и web объявляли каж
 (`TokenBucket` в `gateway/socket-data.ts` и `Budget` в `upload.guard.ts`) — ✅
 один расчёт ведра в `token-bucket.ts`, списание (токен за сообщение, байты
 за файл) осталось у владельцев; `DeleteChannelTarget`/`RenameChannelTarget` в web — ✅ `Pick<Channel, …>`. Пять ролей формы `{ fingerprint, nick }` внутри shared
-(`DmPeer`, `MentionRef`, `Reactor`, `RosterPerson`, `CallPerson`) — решить:
-один `PersonRef` с алиасами или осознанно разные имена.
+(`DmPeer`, `MentionRef`, `Reactor`, `RosterPerson`, `CallPerson`) — ✅ два
+понятия вместо пяти имён: `Person` (ключ есть) и `PersonOrGuest` (ключа может
+не быть — гость, запись до 1.0). Псевдонимы отвергнуты: псевдоним — то же
+второе имя. Смысл роли («названный в реплике», «поставил реакцию») переехал в
+комментарий к полю, где роль и возникает.
 
 ## Этап 2 — проход по каждому файлу
 

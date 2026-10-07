@@ -1,6 +1,6 @@
 import type { AppServer, AppSocket } from './socket-data';
 import { ANON_NAME } from './protocol';
-import type { RosterPerson } from '@relay/shared';
+import type { PersonOrGuest } from '@relay/shared';
 
 /** Что чат-сессия спрашивает у того, чем не владеет. */
 export interface ChatSurroundings {
@@ -120,9 +120,9 @@ export class ChatSessions {
     this.server.to(room).emit('chat-roster', this.roster(room));
   }
 
-  private roster(room: string): RosterPerson[] {
+  private roster(room: string): PersonOrGuest[] {
     const ids = this.server.sockets.adapter.rooms.get(room) ?? new Set<string>();
-    const people: RosterPerson[] = [];
+    const people: PersonOrGuest[] = [];
     const seen = new Set<string>();
     for (const id of ids) {
       const sock = this.server.sockets.sockets.get(id);

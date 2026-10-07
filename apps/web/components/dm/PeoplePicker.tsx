@@ -39,7 +39,7 @@ function PersonRow({ person, onOpen }: { person: DmPerson; onOpen: () => void })
   // хуже отсутствующего.
   const showLastSeen = useSetting<boolean>('people.lastSeenVisible');
   // «Когда видели» — то самое поле `lastSeenTs`, ради которого `DmPerson`
-  // вообще отличается от `DmPeer` (см. комментарий у типа в packages/shared).
+  // вообще отличается от `Person` (см. комментарий у типа в packages/shared).
   // 0 не «сегодня в полночь», а «никогда».
   //
   // Точку присутствия оно не дублирует, и потому осталось на месте: точка

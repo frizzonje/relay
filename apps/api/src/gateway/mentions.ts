@@ -6,7 +6,7 @@ import type { RegistryService } from './registry.service';
 import type { SettingsService } from '../settings/settings.service';
 import { mentionedIn } from './chat.service';
 import { LIMIT, trimmed } from './protocol';
-import type { MentionRef } from '@relay/shared';
+import type { Person } from '@relay/shared';
 
 /**
  * Упоминания: кого назвали, кому об этом сказать и сколько раз назвали, пока
@@ -48,7 +48,7 @@ export class Mentions {
    * Ник в снимок берётся из базы, а не из тела сообщения: иначе рядом с чужим
    * лицом можно было бы написать любое имя.
    */
-  async resolve(text: string, claimed: unknown): Promise<MentionRef[]> {
+  async resolve(text: string, claimed: unknown): Promise<Person[]> {
     if (!text || !Array.isArray(claimed) || !claimed.length) return [];
     const cap = this.cap();
     if (cap <= 0) return [];
@@ -73,7 +73,7 @@ export class Mentions {
    * тоже: у него нет личности, а значит и счётчика, который это зажигает.
    * Тому, кому канал не виден, — тем более: событие несёт слаг.
    */
-  ping(from: AppSocket, mentions: MentionRef[], slug: string, ts: number): void {
+  ping(from: AppSocket, mentions: Person[], slug: string, ts: number): void {
     if (!mentions.length) return;
     // В переписке двоих упоминание не адресует: адресат и так один, и счётчик
     // «тебя звали» дублировал бы непрочитанное.

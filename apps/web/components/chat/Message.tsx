@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { REACTION_EMOJIS, type ChatMessage, type MentionRef, type ReplyRef } from '@relay/shared';
+import { REACTION_EMOJIS, type ChatMessage, type Person, type ReplyRef } from '@relay/shared';
 import { cn } from '@/lib/utils';
 import { Icon } from '@/components/ui/icon';
 import { copyText, openContextMenu } from '@/lib/context-menu';
@@ -82,15 +82,7 @@ function fitsBelow(trigger: HTMLElement | null): boolean {
 }
 
 /** Текст сообщения с markdown-мини (жирный / код / упоминания / авто-ссылки). */
-function MessageText({
-  text,
-  mentions,
-  me,
-}: {
-  text: string;
-  mentions?: MentionRef[];
-  me?: string;
-}) {
+function MessageText({ text, mentions, me }: { text: string; mentions?: Person[]; me?: string }) {
   return (
     <div className="whitespace-pre-wrap break-words text-[15px] leading-[1.4] text-text">
       {renderMarkdownMini(text, mentions ?? [], me)}
