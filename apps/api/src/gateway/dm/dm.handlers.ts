@@ -71,11 +71,29 @@ export class DmHandlers {
    * Спрашивается только на заведении: правило про «писать первым» не должно
    * обрывать разговор, который уже идёт.
    */
-  private async mayStart(meId: string, peerId: string): Promise<boolean> {
+  private async mayStart(
+    meId: string,
+    peerId: string,
+    reserved: { ts?: number },
+  ): Promise<boolean> {
     const who = this.settings.get<string>('direct.whoCanStart');
     if (who === 'nobody') return false;
     if (who === 'seen-together' && !(await this.dm.seenTogether(meId, peerId))) return false;
-    return this.withinFirstMessageQuota(meId);
+    if (!this.withinFirstMessageQuota(meId)) return false;
+    // Место в квоте занимаем сразу, той же синхронной частью, что и проверка:
+    // между ними и заведением беседы стоит поход в базу, и пачка `dm-open`,
+    // посланная разом, иначе прошла бы проверку вся. Не завелась — `open`
+    // место вернёт.
+    reserved.ts = Date.now();
+    this.started.set(meId, [...(this.started.get(meId) ?? []), reserved.ts]);
+    return true;
+  }
+
+  /** Вернуть занятое место: беседа так и не завелась. */
+  private release(meId: string, ts: number): void {
+    const left = (this.started.get(meId) ?? []).filter((t) => t !== ts);
+    if (left.length) this.started.set(meId, left);
+    else this.started.delete(meId);
   }
 
   /**
@@ -102,19 +120,27 @@ export class DmHandlers {
     const fingerprint = trimmed(payload?.fingerprint, LIMIT.dmQuery);
     if (!fingerprint) return { ok: false, error: 'unknown' };
 
-    const res = await this.dm.open(meId, fingerprint, {
-      blockBanned: this.settings.get<boolean>('direct.blockFromBanned'),
-      previewLimit: this.settings.get<number>('messages.replyPreviewLength'),
-      mayStart: (peerId) => this.mayStart(meId, peerId),
-    });
+    const reserved: { ts?: number } = {};
+    let res: Awaited<ReturnType<DmService['open']>> | undefined;
+    try {
+      res = await this.dm.open(meId, fingerprint, {
+        blockBanned: this.settings.get<boolean>('direct.blockFromBanned'),
+        previewLimit: this.settings.get<number>('messages.replyPreviewLength'),
+        mayStart: (peerId) => this.mayStart(meId, peerId, reserved),
+      });
+    } finally {
+      // Квота держит заведённые, а не попытки: неудачная (незнакомый отпечаток,
+      // свой собственный, упавшая база, беседу успел завести собеседник) часа
+      // не тратит.
+      if (reserved.ts !== undefined && !(res?.ok && res.created)) {
+        this.release(meId, reserved.ts);
+      }
+    }
     // «Нельзя писать первым» — это отказ в праве, а не «такого человека нет»:
     // спрашивавший видит собеседника в списке и обязан понять, почему беседа не
     // открылась.
     if (!res.ok)
       return { ok: false, error: res.reason === 'not-allowed' ? 'forbidden' : res.reason };
-    // Счётчик пополняется по факту заведения, а не по попытке: неудачная
-    // (незнакомый отпечаток, свой собственный) не должна тратить час.
-    if (res.created) this.started.set(meId, [...(this.started.get(meId) ?? []), Date.now()]);
     return { ok: true, conversation: res.view };
   }
 

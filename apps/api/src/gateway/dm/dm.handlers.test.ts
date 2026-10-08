@@ -487,6 +487,33 @@ describe('настройки личной переписки', () => {
     expect((await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint })).ok).toBe(true);
   });
 
+  // Проверка квоты и запись о новой беседе разделены походом в базу. Пачка
+  // `dm-open` к разным людям, посланная разом, проходила проверку вся — до того,
+  // как первая успевала записаться.
+  it('квота держит и пачку одновременных открытий', async () => {
+    const { mine } = await pair();
+    const strangers = await Promise.all(['а', 'б', 'в', 'г', 'д'].map((n) => personCookie(n)));
+    await tune(settings, 'direct.firstMessagesPerHour', 2);
+
+    const results = await Promise.all(
+      strangers.map((p) => gw.handleDmOpen(asSocket(mine), { fingerprint: p.fingerprint })),
+    );
+    expect(results.filter((r) => r.ok)).toHaveLength(2);
+  });
+
+  it('отказ в беседе не съедает квоту', async () => {
+    const { mine } = await pair();
+    const later = await personCookie('потом');
+    await tune(settings, 'direct.firstMessagesPerHour', 1);
+    expect(await gw.handleDmOpen(asSocket(mine), { fingerprint: 'нет-такого' })).toEqual({
+      ok: false,
+      error: 'unknown',
+    });
+    expect((await gw.handleDmOpen(asSocket(mine), { fingerprint: later.fingerprint })).ok).toBe(
+      true,
+    );
+  });
+
   it('вложение в беседе выключается отдельно от вложений в каналах', async () => {
     const { you, mine } = await pair();
     const opened = await gw.handleDmOpen(asSocket(mine), { fingerprint: you.fingerprint });
