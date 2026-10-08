@@ -266,10 +266,18 @@ export function notifyCall(from: Person, video: boolean): CallNotification {
 
   const show = () => {
     if (cancelled) return;
-    shown = new Notification(from.nick, {
-      body: tx(video ? 'call.videoCall' : 'call.incoming.ringing'),
-      tag: 'relay-call',
-    });
+    try {
+      shown = new Notification(from.nick, {
+        body: tx(video ? 'call.videoCall' : 'call.incoming.ringing'),
+        tag: 'relay-call',
+      });
+    } catch {
+      // Android Chrome: API и разрешение есть, а конструктор бросает «Illegal
+      // constructor» — окошки там только через service worker. Окошка не
+      // будет; бросок же отсюда ронял эффект тоста и оставлял заголовок
+      // мигать навсегда.
+      return;
+    }
     // Клик по системному окошку возвращает к вкладке, где и лежит тост с
     // настоящими «принять»/«отклонить» — окошко само эти кнопки не несёт.
     shown.onclick = () => {

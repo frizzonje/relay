@@ -307,6 +307,21 @@ describe('системное уведомление о звонке', () => {
     expect(instances[0].close).toHaveBeenCalledTimes(1);
   });
 
+  it('движок без конструктора окошка (Android Chrome) — звонок не роняет, сигналы живы', async () => {
+    // Там `Notification` есть и разрешение выдаётся, но `new Notification`
+    // бросает «Illegal constructor»: окошки — только через service worker.
+    class Refusing extends FakeNotification {
+      constructor(title: string, options?: NotificationOptions) {
+        super(title, options);
+        throw new TypeError('Illegal constructor');
+      }
+    }
+    vi.stubGlobal('Notification', Refusing);
+    const { notifyCall } = await boot();
+    const handle = notifyCall(person, false);
+    expect(() => handle.close()).not.toThrow();
+  });
+
   it('close() до ответа на разрешение отменяет показ — вызов кончился раньше, чем спросили', async () => {
     FakeNotification.permission = 'default';
     const settle = deferPermission();
