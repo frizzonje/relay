@@ -78,6 +78,53 @@ describe('список переписок', () => {
   });
 });
 
+describe('снимок списка и живые реплики', () => {
+  it('реплика, пришедшая пока список ехал, не откатывается старым снимком', async () => {
+    useDmStore.getState().reload();
+    // Снимок сервер снял раньше, а реплика обогнала его ответ.
+    useDmStore
+      .getState()
+      .applyActivity({ slug, ts: 300, preview: 'ты тут?', previewMine: false, peer });
+    answerLast({
+      ok: true,
+      conversations: [{ slug, peer, lastTs: 100, preview: 'привет', previewMine: false }],
+    });
+    await vi.waitFor(() => expect(useDmStore.getState().loading).toBe(false));
+    const [c] = useDmStore.getState().conversations;
+    expect(c.preview).toBe('ты тут?');
+    expect(useDmStore.getState().activity[slug]).toBe(300);
+  });
+
+  it('беседа, заведённая репликой на лету, не пропадает из списка', async () => {
+    const other = 'dm-bbbbbbbbbbbbbbbbbbbbbbbb';
+    useDmStore.getState().reload();
+    useDmStore.getState().applyActivity({
+      slug: other,
+      ts: 500,
+      preview: 'привет, это я',
+      previewMine: false,
+      peer: { fingerprint: 'fp-b', nick: 'б' },
+    });
+    answerLast({
+      ok: true,
+      conversations: [{ slug, peer, lastTs: 100, preview: 'привет', previewMine: false }],
+    });
+    await vi.waitFor(() => expect(useDmStore.getState().loading).toBe(false));
+    expect(useDmStore.getState().conversations.map((c) => c.slug)).toEqual([other, slug]);
+  });
+
+  it('снимок новее того, что знали, — побеждает снимок', () => {
+    useDmStore
+      .getState()
+      .applyActivity({ slug, ts: 100, preview: 'привет', previewMine: false, peer });
+    useDmStore
+      .getState()
+      .setConversations([{ slug, peer, lastTs: 400, preview: 'уже другое', previewMine: true }]);
+    expect(useDmStore.getState().conversations[0].preview).toBe('уже другое');
+    expect(useDmStore.getState().activity[slug]).toBe(400);
+  });
+});
+
 describe('remember() открытой переписки', () => {
   it('сохраняет активность беседы, а не только её карточку', () => {
     // Беседу открыли не с пустого места — в ней уже была история (lastTs>0).

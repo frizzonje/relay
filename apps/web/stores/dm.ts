@@ -118,16 +118,27 @@ export const useDmStore = create<DmState>((set, get) => {
 
     reload: () => attempt(0),
 
-    // Снимок с сервера (`dm-list`) — заменяем список целиком и следом за ним
-    // карту активности: без этого свежий снимок с уже прочитанными беседами
-    // выглядел бы непрочитанным до первой живой реплики.
-    setConversations: (list) => {
-      const activity: Record<string, number> = {};
-      for (const c of list) {
-        if (c.lastTs) activity[c.slug] = c.lastTs;
-      }
-      set({ conversations: [...list].sort((a, b) => b.lastTs - a.lastTs), activity });
-    },
+    // Снимок с сервера (`dm-list`) сливаем с тем, что уже знаем, — по каждой
+    // беседе побеждает более свежая запись, и карта активности идёт следом за
+    // ней. Заменить целиком нельзя: снимок снят до того, как ответ доехал, и
+    // реплика, обогнавшая его по сокету, откатилась бы к прежнему превью, а
+    // беседа, которую она завела, пропала бы из списка до следующей реплики.
+    // Удалённых бесед, которые слияние оставило бы висеть, нет: беседы не
+    // удаляются.
+    setConversations: (list) =>
+      set((s) => {
+        const bySlug = new Map(s.conversations.map((c) => [c.slug, c]));
+        for (const c of list) {
+          const known = bySlug.get(c.slug);
+          if (!known || c.lastTs >= known.lastTs) bySlug.set(c.slug, c);
+        }
+        const conversations = [...bySlug.values()].sort((a, b) => b.lastTs - a.lastTs);
+        const activity = { ...s.activity };
+        for (const c of conversations) {
+          if (c.lastTs > (activity[c.slug] ?? 0)) activity[c.slug] = c.lastTs;
+        }
+        return { conversations, activity };
+      }),
 
     applyActivity: (relay) =>
       set((s) => {
@@ -191,7 +202,6 @@ export function useUnreadIn(slug: string, active = false): boolean {
   return !active && activityTs > lastRead;
 }
 
-/** Есть ли непрочитанное в этой беседе (сверяется с отметками чтения). */
 /**
  * Сколько бесед ждут ответа. Тем же сравнением, что `useUnreadIn`, и намеренно
  * без исключения открытой: пока в неё смотрят, отметка чтения едет следом, и
@@ -209,6 +219,7 @@ export function useUnreadCount(): number {
   );
 }
 
+/** Есть ли непрочитанное в этой беседе (сверяется с отметками чтения). */
 export function unreadIn(slug: string): boolean {
   const ts = useDmStore.getState().activity[slug] ?? 0;
   const lastRead = useUnreadStore.getState().lastRead[slug] ?? 0;
