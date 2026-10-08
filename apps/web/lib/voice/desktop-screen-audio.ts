@@ -61,6 +61,18 @@ let dest: MediaStreamAudioDestinationNode | null = null;
 let unlisten: UnlistenFn[] = [];
 let startTimer: ReturnType<typeof setTimeout> | null = null;
 
+/**
+ * Номер сеанса. Остановка асинхронна (`AudioContext.close`), и следующий старт
+ * начинается, пока она идёт, — а граф собирается тоже через `await`. Всё, что
+ * доезжает после смены сеанса (граф, подписка на события), в текущий не
+ * ложится, а разбирается на месте: иначе запоздавшая остановка стёрла бы
+ * свежий граф, а запоздавшая сборка — легла бы поверх остановленного.
+ */
+let session = 0;
+
+/** Отпустить ещё не ответивший старт: его остановили, звука не будет. */
+let abandonStart: (() => void) | null = null;
+
 /** base64(i16 LE) → Float32Array в диапазоне [-1, 1]. */
 function decodeFrame(b64: string): Float32Array {
   const bin = atob(b64);
@@ -87,34 +99,52 @@ export async function startNativeScreenAudio(): Promise<MediaStreamTrack | null>
   const t = shellBridge();
   if (!t) return null;
   await stopNativeScreenAudio(); // не копим два сеанса
+  const mine = session;
 
   return new Promise<MediaStreamTrack | null>((resolve) => {
     let settled = false;
+    let building = false;
     const finish = (track: MediaStreamTrack | null) => {
       if (settled) return;
       settled = true;
+      if (abandonStart === abandon) abandonStart = null;
       if (startTimer) {
         clearTimeout(startTimer);
         startTimer = null;
       }
       resolve(track);
     };
+    const abandon = () => finish(null);
+    abandonStart = abandon;
 
-    // Формат приходит один раз — по нему строим граф под точную частоту дискретизации.
+    // Формат приходит один раз — по нему строим граф под точную частоту
+    // дискретизации. Строим в свои переменные и отдаём модулю, только если
+    // сеанс всё ещё наш: пока шла сборка, его могли остановить.
     const onFormat = async (e: ShellEvent<{ sampleRate: number }>) => {
-      if (ctx) return; // граф уже собран
+      if (building || mine !== session) return; // граф уже собирается
+      building = true;
       const sampleRate = e.payload?.sampleRate || 48000;
+      let built: AudioContext | null = null;
       try {
-        ctx = new AudioContext({ sampleRate });
-        await ctx.audioWorklet.addModule('/screen-audio-worklet.js');
-        node = new AudioWorkletNode(ctx, 'screen-audio-processor');
-        dest = ctx.createMediaStreamDestination();
-        node.connect(dest);
-        if (ctx.state === 'suspended') await ctx.resume();
-        finish(dest.stream.getAudioTracks()[0] ?? null);
+        built = new AudioContext({ sampleRate });
+        await built.audioWorklet.addModule('/screen-audio-worklet.js');
+        const worklet = new AudioWorkletNode(built, 'screen-audio-processor');
+        const out = built.createMediaStreamDestination();
+        worklet.connect(out);
+        if (built.state === 'suspended') await built.resume();
+        if (mine !== session) {
+          void built.close().catch(() => {});
+          finish(null);
+          return;
+        }
+        ctx = built;
+        node = worklet;
+        dest = out;
+        finish(out.stream.getAudioTracks()[0] ?? null);
       } catch (err) {
         console.warn('native screen-audio graph failed:', err);
-        void stopNativeScreenAudio();
+        if (built) void built.close().catch(() => {});
+        if (mine === session) void stopNativeScreenAudio();
         finish(null);
       }
     };
@@ -126,17 +156,22 @@ export async function startNativeScreenAudio(): Promise<MediaStreamTrack | null>
       node.port.postMessage(pcm, [pcm.buffer]);
     };
 
+    // Подписка доезжает асинхронно: остановленному сеансу она уже не нужна.
+    const keep = (u: UnlistenFn) => {
+      if (mine === session) unlisten.push(u);
+      else u();
+    };
     void t
       .listen<{ sampleRate: number }>('screen-audio-format', (e) => void onFormat(e))
-      .then((u) => unlisten.push(u));
-    void t.listen<string>('screen-audio-frame', onFrame).then((u) => unlisten.push(u));
+      .then(keep);
+    void t.listen<string>('screen-audio-frame', onFrame).then(keep);
 
     // Просим Rust начать захват.
     void t.emit('screen-audio-start');
 
     // Нет формата за 4 с — считаем, что нативный путь недоступен, идём без звука.
     startTimer = setTimeout(() => {
-      if (!ctx) {
+      if (!ctx && mine === session) {
         console.warn('native screen-audio: no format within timeout');
         void stopNativeScreenAudio();
       }
@@ -148,6 +183,8 @@ export async function startNativeScreenAudio(): Promise<MediaStreamTrack | null>
 /** Остановить нативный захват и разобрать граф. Безопасно звать повторно. */
 export async function stopNativeScreenAudio(): Promise<void> {
   const t = shellBridge();
+  session += 1;
+  abandonStart?.();
   if (startTimer) {
     clearTimeout(startTimer);
     startTimer = null;
@@ -161,14 +198,17 @@ export async function stopNativeScreenAudio(): Promise<void> {
   }
   unlisten = [];
   if (t) void t.emit('screen-audio-stop');
+  // Ссылки снимаем ДО ожидания закрытия: за это время начинается следующий
+  // сеанс, и обнулять потом значило бы стереть уже его граф.
+  const [oldCtx, oldNode, oldDest] = [ctx, node, dest];
+  ctx = null;
+  node = null;
+  dest = null;
   try {
-    node?.disconnect();
-    dest?.disconnect();
-    if (ctx && ctx.state !== 'closed') await ctx.close();
+    oldNode?.disconnect();
+    oldDest?.disconnect();
+    if (oldCtx && oldCtx.state !== 'closed') await oldCtx.close();
   } catch {
     /* игнор */
   }
-  node = null;
-  dest = null;
-  ctx = null;
 }
