@@ -666,8 +666,14 @@ export class SignalingGateway
       // ссылка уже на руках. Отвечаем тем же событием, что и выгнанному, —
       // клиент умеет показать «сюда нельзя», а молча оборванный сокет он
       // переподключал бы вечно.
+      //
+      // И после этого сокет закрываем: гостем он не стал, личности у него нет,
+      // а дверь пропустила его по инвайту — оставь его жить, и он был бы тем
+      // безличным участником, которого дверь не пускает. Сервер-сторонний
+      // разрыв клиент сам не переподключает, так что «вечного стука» нет.
       if (!this.perimeter.guestsAllowed()) {
         client.emit('kicked', { room: guest.slug });
+        client.disconnect(true);
         return;
       }
       this.perimeter.admit(client, guest);
@@ -676,6 +682,7 @@ export class SignalingGateway
       // многоразовая и живёт сутки.
       if (this.perimeter.guestBanned(client, guest.slug)) {
         client.emit('kicked', { room: guest.slug });
+        client.disconnect(true);
         return;
       }
       // Настройки гостю шлём наравне со всеми, в отличие от реестров: снимок
