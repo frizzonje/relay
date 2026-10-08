@@ -25,7 +25,14 @@ let socket: RelaySocket | null = null;
 export function guestTokenFromLocation(): string | null {
   if (typeof window === 'undefined') return null;
   const m = /^\/invite\/([^/]+)/.exec(window.location.pathname);
-  return m ? decodeURIComponent(m[1]) : null;
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    // Битая кодировка (обрезанная ссылка) — токена нет: вызывают из провайдера
+    // сокета и запроса конфига, бросок отсюда ронял бы страницу целиком.
+    return null;
+  }
 }
 
 export function getSocket(): RelaySocket {
