@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { ChannelNameField } from '@/components/layout/ChannelNameField';
+import { ChannelNameField } from '@/components/servers/ChannelNameField';
 import { renameChannel } from '@/lib/channels';
 import { useT } from '@/lib/i18n';
 import { useSetting } from '@/stores/config';

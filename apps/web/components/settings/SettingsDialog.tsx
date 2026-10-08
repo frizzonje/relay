@@ -8,9 +8,9 @@ import { Icon } from '@/components/ui/icon';
 import { Switch } from '@/components/ui/switch';
 import { springTab, tabPanel } from '@/lib/motion';
 import { PaneHeader } from '@/components/ui/pane-header';
-import { AboutPanel } from '@/components/layout/AboutPanel';
-import { DevicesPanel } from '@/components/layout/DevicesPanel';
-import { StreamSettings } from '@/components/layout/StreamSettings';
+import { AboutPanel } from '@/components/settings/AboutPanel';
+import { DevicesPanel } from '@/components/devices/DevicesPanel';
+import { StreamSettings } from '@/components/settings/StreamSettings';
 import {
   checkForUpdates,
   installUpdate,

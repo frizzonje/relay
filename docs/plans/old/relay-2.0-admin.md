@@ -1139,7 +1139,7 @@ TLS. Инструмент против потока — файрвол или Ca
 (близнецы, правятся одинаково), `apps/api/src/gateway/perimeter.ts`,
 `apps/api/src/gateway/signaling.gateway.ts`, `apps/api/src/http-gate.ts`,
 `apps/api/src/auth/auth.ts`, `apps/web/components/providers/SocketProvider.tsx`,
-`apps/web/stores/contract.ts`, `apps/web/components/layout/BlockedGate.tsx`, i18n, тесты.
+`apps/web/stores/contract.ts`, `apps/web/components/gates/BlockedGate.tsx`, i18n, тесты.
 
 **Решения, принятые заранее:**
 

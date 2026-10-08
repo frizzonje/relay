@@ -60,7 +60,7 @@
 `calls`), `apps/api/src/gateway/signaling.gateway.ts`, `voice-sessions.ts`, `perimeter.ts`,
 `gateway.testkit.ts`, `apps/web/components/layout/Toolbar.tsx` (цель Call оживает),
 `components/dm/DmThread.tsx`, `DmPeerCard.tsx`, `DmList.tsx` (точки присутствия),
-`components/layout/Members.tsx`, `OnlineMembers.tsx`, `components/providers/SocketProvider.tsx`,
+`components/members/Members.tsx`, `OnlineMembers.tsx`, `components/providers/SocketProvider.tsx`,
 `lib/sfx.ts` (звонок), `lib/notify.ts`, `clients/desktop` (трей и нативное уведомление),
 `lib/i18n/messages/*.json`, `docs/protocol.md`.
 

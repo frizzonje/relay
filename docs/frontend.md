@@ -33,14 +33,14 @@ Motion, Radix. Web-клиент — эталонная реализация пр
 2. Параллельно [`stores/identity.ts`](../apps/web/stores/identity.ts) восстанавливает
    личность: `GET /api/identity/me` → при `401` вход ключом
    ([`lib/identity-login.ts`](../apps/web/lib/identity-login.ts)) → если сервер ответил
-   `created`, [`IdentityGate`](../apps/web/components/layout/IdentityGate.tsx) спрашивает имя.
+   `created`, [`IdentityGate`](../apps/web/components/gates/IdentityGate.tsx) спрашивает имя.
 3. Как только личность появилась, сокет переподключается — сервер узнаёт личность
    только на рукопожатии.
 4. Гейты поверх каркаса показывают отказы рукопожатия:
-   [`OutdatedGate`](../apps/web/components/layout/OutdatedGate.tsx),
-   [`BannedGate`](../apps/web/components/layout/BannedGate.tsx),
-   [`BlockedGate`](../apps/web/components/layout/BlockedGate.tsx),
-   [`MaintenanceGate`](../apps/web/components/layout/MaintenanceGate.tsx).
+   [`OutdatedGate`](../apps/web/components/gates/OutdatedGate.tsx),
+   [`BannedGate`](../apps/web/components/gates/BannedGate.tsx),
+   [`BlockedGate`](../apps/web/components/gates/BlockedGate.tsx),
+   [`MaintenanceGate`](../apps/web/components/gates/MaintenanceGate.tsx).
 
 ## Ключ устройства
 
@@ -78,9 +78,21 @@ AppShell
 └─ гейты, диалоги, IncomingToast (входящий звонок), DmToast
 ```
 
-Компоненты — в [`components/`](../apps/web/components/): `layout/`, `stage/`,
-`chat/`, `dm/`, `call/`, `admin/` (панель владельца), `ui/` (примитивы: `glass`,
-`button`, `dialog`, `icon`, `Logo`, `Identicon`).
+Компоненты — в [`components/`](../apps/web/components/), по доменам:
+
+| Каталог | Что |
+|---|---|
+| `layout/` | каркас: `AppShell`, сайдбар, рейка серверов, панель управления, мобильная навигация |
+| `gates/` | экраны «не пускаем»: личность, бан, закрытый адрес, обслуживание, устаревший клиент |
+| `stage/` | сцена: лобби, сетка видео, гостевой эфир, разблокировка звука |
+| `chat/`, `dm/`, `call/` | лента канала, беседы 1:1, вызов |
+| `servers/` | диалоги серверов и каналов: создать, удалить, открыть паролем, приглашение |
+| `members/` | составы: участники канала, в сети, в эфире |
+| `settings/` | настройки клиента и «о программе» |
+| `devices/` | связка устройств одной личности |
+| `admin/` | панель владельца и взятие владения |
+| `ui/` | примитивы: `button`, `dialog`, `icon`, `Logo`, `Identicon`, … |
+| `providers/` | `SocketProvider` — подписки на события сокета |
 
 ## Состояние (Zustand)
 

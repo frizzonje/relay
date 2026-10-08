@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
-import { ChannelNameField } from '@/components/layout/ChannelNameField';
+import { ChannelNameField } from '@/components/servers/ChannelNameField';
 import { cn } from '@/lib/utils';
 import { createChannel } from '@/lib/channels';
 import { useSfuAvailable } from '@/lib/use-sfu';

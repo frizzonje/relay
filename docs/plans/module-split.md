@@ -77,7 +77,7 @@
 | ------ | ----------- | ------ |
 | `stage/VideoTile.tsx` | 857 / 1093 | Подкомпоненты уже отдельные функции — переносом в `stage/tile/`: `VolumeSlider`, `SignalBars` + таблицы `NET_*`, `AmbientWash`, `StreamCover`, `SendBadge`, полноэкранный режим (`Fs*`, `leaveImmersive`) → хук `useImmersive`. В самой плитке 9 эффектов — каждый в именованный хук по его заботе. |
 | `chat/ChatPanel.tsx` | 757 / 957 | `PendingAttachments` + перетаскивание файлов → `useUploads`; прокрутка, «прыжок к сообщению» и подгрузка → `useFeedScroll`; ответ, правка, удаление, пин — `useMessageActions`. Панель остаётся раскладкой. |
-| `layout/SettingsDialog.tsx` | 671 / 784 | По вкладке на файл в `layout/settings/` (`av`, `stream`, `appearance`, `hotkeys`, `app`, `account`, `about`); общие поля (`SelectField`, `Toggle`, `KeybindRow`) — в `settings/fields.tsx`. Диалог — только вкладки и роутинг. |
+| `settings/SettingsDialog.tsx` | 671 / 784 | По вкладке на файл в `settings/` (`av`, `stream`, `appearance`, `hotkeys`, `app`, `account`, `about`); общие поля (`SelectField`, `Toggle`, `KeybindRow`) — в `settings/fields.tsx`. Диалог — только вкладки и роутинг. |
 | `layout/Sidebar.tsx` | 664 / 832 | `ChannelRow`, `Category`, пинги и метки каналов → `layout/sidebar/`. |
 | `chat/Message.tsx` | 647 / 788 | `ReactionBar` + `AddReaction`, капсула действий (`CapsuleMenu`, `MoreMenu`, `ActionBtn`), `EditBox`, `ReplyQuote` → `chat/message/`. |
 | `admin/SettingField.tsx` | 473 / 592 | Контрол на вид поля (`SecretControl`, `SelectControl`, `ListControl`, `NumberControl`, `TextControl`) → `admin/controls/`. |

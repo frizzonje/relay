@@ -1,6 +1,6 @@
 import { AppShell } from '@/components/layout/AppShell';
-import { AudioUnlock } from '@/components/layout/AudioUnlock';
-import { IdentityGate } from '@/components/layout/IdentityGate';
+import { AudioUnlock } from '@/components/stage/AudioUnlock';
+import { IdentityGate } from '@/components/gates/IdentityGate';
 
 /**
  * Главный экран. Каркас (рейка / сайдбар / сцена / состав) живёт в AppShell —

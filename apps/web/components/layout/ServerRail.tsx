@@ -16,9 +16,9 @@ import { useVoiceStore } from '@/stores/voice';
 import { useUnreadStore, channelMentions, isChannelUnread } from '@/stores/unread';
 import { AddHostDialog } from '@/components/layout/AddHostDialog';
 import { RemoveHostDialog } from '@/components/layout/RemoveHostDialog';
-import { CreateServerDialog } from '@/components/layout/CreateServerDialog';
-import { UnlockServerDialog } from '@/components/layout/UnlockServerDialog';
-import { SettingsDialog } from '@/components/layout/SettingsDialog';
+import { CreateServerDialog } from '@/components/servers/CreateServerDialog';
+import { UnlockServerDialog } from '@/components/servers/UnlockServerDialog';
+import { SettingsDialog } from '@/components/settings/SettingsDialog';
 import { useT } from '@/lib/i18n';
 
 /**

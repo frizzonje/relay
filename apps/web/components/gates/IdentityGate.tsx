@@ -12,7 +12,7 @@ import type { LoginFailure } from '@/lib/identity-login';
 import { useIdentityStore } from '@/stores/identity';
 import { useSetting } from '@/stores/config';
 import { useT, type MessageKey } from '@/lib/i18n';
-import { LinkDevicePanel } from '@/components/layout/LinkDevicePanel';
+import { LinkDevicePanel } from '@/components/devices/LinkDevicePanel';
 
 /**
  * Первый вход. Регистрации нет и быть не может: личность — это ключевая пара,

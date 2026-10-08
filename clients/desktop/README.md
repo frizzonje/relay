@@ -241,7 +241,7 @@ cargo tauri dev                                # dev-окно с экраном 
   `check_updates` / `install_update`); удалённому web-UI JS-API апдейтера НЕ
   даём — обмен только событиями Tauri (`check-updates` / `install-update` →
   `update-status`), как PTT/трей. Web-сторона — кнопка в
-  [`SettingsDialog.tsx`](../../apps/web/components/layout/SettingsDialog.tsx) +
+  [`SettingsDialog.tsx`](../../apps/web/components/settings/SettingsDialog.tsx) +
   [`lib/desktop.ts`](../../apps/web/lib/desktop.ts) +
   [`stores/desktop.ts`](../../apps/web/stores/desktop.ts) (вне Tauri блок скрыт).
 - **Ключи** — `plugins.updater.pubkey` в

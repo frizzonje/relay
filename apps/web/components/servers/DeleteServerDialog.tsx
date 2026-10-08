@@ -2,7 +2,7 @@
 
 import type { Server } from '@relay/shared';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { DeletionCost, useDeletionStats } from '@/components/layout/deletion';
+import { DeletionCost, useDeletionStats } from '@/components/servers/deletion';
 import { deleteServer, serverStats } from '@/lib/servers';
 import { useT } from '@/lib/i18n';
 

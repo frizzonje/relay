@@ -34,23 +34,23 @@ import { previewMessageSound } from '@/lib/notify';
 import { openContextMenu } from '@/lib/context-menu';
 import { useSfuAvailable } from '@/lib/use-sfu';
 import { useVoiceStore } from '@/stores/voice';
-import { VoiceMembers } from '@/components/layout/VoiceMembers';
-import { CreateChannelDialog } from '@/components/layout/CreateChannelDialog';
+import { VoiceMembers } from '@/components/members/VoiceMembers';
+import { CreateChannelDialog } from '@/components/servers/CreateChannelDialog';
 import {
   DeleteChannelDialog,
   type DeleteChannelTarget,
-} from '@/components/layout/DeleteChannelDialog';
+} from '@/components/servers/DeleteChannelDialog';
 import {
   RenameChannelDialog,
   type RenameChannelTarget,
-} from '@/components/layout/RenameChannelDialog';
-import { InviteDialog } from '@/components/layout/InviteDialog';
+} from '@/components/servers/RenameChannelDialog';
+import { InviteDialog } from '@/components/servers/InviteDialog';
 import {
   DeleteServerDialog,
   type DeleteServerTarget,
-} from '@/components/layout/DeleteServerDialog';
-import { ChannelModeDialog, type ChannelModeTarget } from '@/components/layout/ChannelModeDialog';
-import { BannedDialog, type BansTarget } from '@/components/layout/BannedDialog';
+} from '@/components/servers/DeleteServerDialog';
+import { ChannelModeDialog, type ChannelModeTarget } from '@/components/servers/ChannelModeDialog';
+import { BannedDialog, type BansTarget } from '@/components/servers/BannedDialog';
 
 /**
  * Вспышка «пришло новое»: контур строки отходит от её краёв наружу и тает.

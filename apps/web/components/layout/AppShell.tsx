@@ -11,12 +11,12 @@ import { usePairingStore } from '@/stores/pairing';
 import { AdminDialog } from '@/components/admin/AdminDialog';
 import { OutgoingCall } from '@/components/call/OutgoingCall';
 import { IncomingToast } from '@/components/call/IncomingToast';
-import { AdmitDeviceDialog } from '@/components/layout/AdmitDeviceDialog';
-import { OwnerClaimDialog } from '@/components/layout/OwnerClaimDialog';
-import { BannedGate } from '@/components/layout/BannedGate';
-import { MaintenanceGate } from '@/components/layout/MaintenanceGate';
-import { BlockedGate } from '@/components/layout/BlockedGate';
-import { OutdatedGate } from '@/components/layout/OutdatedGate';
+import { AdmitDeviceDialog } from '@/components/devices/AdmitDeviceDialog';
+import { OwnerClaimDialog } from '@/components/admin/OwnerClaimDialog';
+import { BannedGate } from '@/components/gates/BannedGate';
+import { MaintenanceGate } from '@/components/gates/MaintenanceGate';
+import { BlockedGate } from '@/components/gates/BlockedGate';
+import { OutdatedGate } from '@/components/gates/OutdatedGate';
 import { ServerRail } from '@/components/layout/ServerRail';
 import { Toolbar } from '@/components/layout/Toolbar';
 import { Sidebar } from '@/components/layout/Sidebar';
@@ -25,12 +25,12 @@ import { DmDrawer } from '@/components/dm/DmDrawer';
 import { PeoplePicker } from '@/components/dm/PeoplePicker';
 import { Topbar } from '@/components/layout/Topbar';
 import { Controls } from '@/components/layout/Controls';
-import { Members } from '@/components/layout/Members';
-import { OnlineMembers } from '@/components/layout/OnlineMembers';
+import { Members } from '@/components/members/Members';
+import { OnlineMembers } from '@/components/members/OnlineMembers';
 import { MobileNav } from '@/components/layout/MobileNav';
 import { Stage } from '@/components/stage/Stage';
-import { InstallAppearance } from '@/components/layout/InstallAppearance';
-import { MaintenanceBanner } from '@/components/layout/MaintenanceBanner';
+import { InstallAppearance } from '@/components/settings/InstallAppearance';
+import { MaintenanceBanner } from '@/components/gates/MaintenanceBanner';
 
 /**
  * Мягкое проявление панели, ставшей активной на мобиле. Только прозрачность:

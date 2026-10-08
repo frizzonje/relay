@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
 import { Logo } from '@/components/ui/Logo';
 import { NickField } from '@/components/ui/nick-field';
-import { AudioUnlock } from '@/components/layout/AudioUnlock';
+import { AudioUnlock } from '@/components/stage/AudioUnlock';
 import { VideoGrid } from '@/components/stage/VideoGrid';
 import { Controls } from '@/components/layout/Controls';
 import { avatarStyle } from '@/lib/avatar';
