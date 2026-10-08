@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AdminOverview, SettingSpec, SettingsSnapshot } from '@relay/shared';
+import type {
+  AdminOverview,
+  AdminPerson,
+  AuditEntry,
+  SettingSpec,
+  SettingsSnapshot,
+} from '@relay/shared';
 
 /**
  * Стор панели инсталляции.
@@ -311,5 +317,58 @@ describe('пароль инсталляции', () => {
     replyLast({ ok: false, error: 'needs-confirm' });
     await saving;
     expect(admin().errors[PASSWORD]).toBe('needs-confirm');
+  });
+});
+
+describe('списки панели: страница «ещё» после перечитывания', () => {
+  const person = (fingerprint: string): AdminPerson => ({
+    fingerprint,
+    nick: fingerprint,
+    createdAt: 1,
+    lastSeenAt: null,
+    devices: [],
+    banned: false,
+    owner: false,
+  });
+  const entry = (id: string): AuditEntry => ({
+    id,
+    at: 1,
+    actorNick: 'я',
+    action: 'setting-changed',
+    detail: {},
+  });
+
+  it('люди: «ещё» по прошлому списку не дописывается в перечитанный', async () => {
+    const first = admin().loadPeople('ма');
+    replyLast({ ok: true, people: [person('a')], cursor: 'c1' });
+    await first;
+
+    const more = admin().morePeople();
+    // Тот же запрос ещё раз (Enter в поле поиска), пока «ещё» в полёте.
+    const again = admin().loadPeople('ма');
+    replyLast({ ok: true, people: [person('a')], cursor: 'c1' });
+    await again;
+    replyTo(1, { ok: true, people: [person('b')] });
+    await more;
+
+    expect(admin().people.map((p) => p.fingerprint)).toEqual(['a']);
+    expect(admin().peopleCursor).toBe('c1');
+  });
+
+  it('журнал: «ещё» от закрытой панели не дописывается в открытую заново', async () => {
+    const first = admin().loadAudit();
+    replyLast({ ok: true, entries: [entry('1')], more: true });
+    await first;
+
+    const more = admin().moreAudit();
+    admin().reset();
+    const again = admin().loadAudit();
+    replyLast({ ok: true, entries: [entry('1')], more: true });
+    await again;
+    replyTo(1, { ok: true, entries: [entry('0')], more: false });
+    await more;
+
+    expect(admin().audit.map((e) => e.id)).toEqual(['1']);
+    expect(admin().auditMore).toBe(true);
   });
 });

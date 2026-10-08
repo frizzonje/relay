@@ -68,6 +68,16 @@ const pending = new Map<string, number>();
  */
 const confirmed = new Map<string, SettingValue>();
 
+/**
+ * Поколения списков людей и журнала. Перечитывание с первой страницы (новый
+ * поиск, тот же поиск по Enter, панель открыли заново) начинает новое
+ * поколение, и страница «ещё», запрошенная в прошлом, в него не дописывается:
+ * иначе первые строки шли бы дважды. Сверять по тексту поиска мало — повтор
+ * того же текста его проходит.
+ */
+let peopleGen = 0;
+let auditGen = 0;
+
 interface AdminState {
   /** Состояние панели приехало. До этого рисовать нечего — каталог с сервера. */
   loaded: boolean;
@@ -379,6 +389,7 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
 
   loadPeople: async (query) => {
     const asked = query ?? get().peopleQuery;
+    const gen = (peopleGen += 1);
     patch({ peopleQuery: asked, peopleBusy: true, listError: null });
     const res = await answered(
       // Поиск серверный: людей может быть тысяча, и выбирать нужного из
@@ -387,7 +398,7 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
     );
     // Пока летел ответ, человек дописал запрос. Страница по «ма» поверх
     // страницы по «маша» выглядит как поиск, который врёт через раз.
-    if (get().peopleQuery !== asked) return;
+    if (gen !== peopleGen) return;
     if (!res.ok) {
       patch({ peopleBusy: false, listError: res.error });
       return;
@@ -405,11 +416,12 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
     // Курсор приходит, только если ниже что-то осталось (§9.3): его отсутствие
     // и есть конец списка, а не повод спросить ещё раз.
     if (!cursor || peopleBusy) return;
+    const gen = peopleGen;
     patch({ peopleBusy: true, listError: null });
     const res = await answered(
       request('admin-people', asked ? { query: asked, cursor } : { cursor }),
     );
-    if (get().peopleQuery !== asked) return;
+    if (gen !== peopleGen) return;
     if (!res.ok) {
       patch({ peopleBusy: false, listError: res.error });
       return;
@@ -477,9 +489,11 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
   },
 
   loadAudit: async () => {
+    const gen = (auditGen += 1);
     patch({ auditBusy: true, auditError: null });
     // Без курсора — с самого верха: сервер отдаёт от свежих к старым.
     const res = await answered(request('admin-audit', {}));
+    if (gen !== auditGen) return;
     if (!res.ok) {
       patch({ auditBusy: false, auditError: res.error });
       return;
@@ -498,8 +512,10 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
     // записей (сброс группы пишет их пачкой), и страница по одному времени
     // теряла бы соседку по этой миллисекунде — молча и навсегда.
     const cursor: AuditCursor = { at: last.at, id: last.id };
+    const gen = auditGen;
     patch({ auditBusy: true, auditError: null });
     const res = await answered(request('admin-audit', { cursor }));
+    if (gen !== auditGen) return;
     if (!res.ok) {
       patch({ auditBusy: false, auditError: res.error });
       return;
@@ -537,6 +553,8 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
   reset: () => {
     pending.clear();
     confirmed.clear();
+    peopleGen += 1;
+    auditGen += 1;
     patch({ ...initial });
   },
 }));
