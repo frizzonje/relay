@@ -1,5 +1,5 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
-import { DataSource, IsNull } from 'typeorm';
+import { DataSource, In, IsNull, type EntityManager } from 'typeorm';
 import { DeviceRow, IdentityRow, MessageRow, RoleRow } from '../db/entities';
 // Значением, а не `import type`: тип стирается при сборке, и
 // `emitDecoratorMetadata` записывает в довод конструктора `Function` вместо
@@ -70,6 +70,12 @@ interface Waiting {
   publicKey: string;
   deviceName: string;
   expiresAt: number;
+  /**
+   * Подтверждение уже в пути. Ставится синхронно, до первого `await`: два
+   * подтверждения одного кода разом (двойной клик, две личности, увидевшие
+   * один экран) иначе прошли бы оба, и «впустили» сказали бы обоим.
+   */
+  taken?: boolean;
 }
 
 @Injectable()
@@ -91,7 +97,8 @@ export class PairingService {
    */
   async ask(device: DeviceRow): Promise<PairResult<{ code: string; expiresIn: number }>> {
     const { id: deviceId, identityId } = device;
-    if (!(await this.stillborn(identityId, deviceId))) return { ok: false, reason: 'has-history' };
+    if (!(await this.stillborn(this.db.manager, identityId, deviceId)))
+      return { ok: false, reason: 'has-history' };
 
     this.sweep();
     if (this.waiting.size >= MAX_PENDING) {
@@ -150,24 +157,47 @@ export class PairingService {
     const found = this.find(code, donor.identityId);
     if (!found.ok) return found;
     const { waiting } = found;
+    if (waiting.taken) return { ok: false, reason: 'bad-code' };
+    waiting.taken = true;
+    try {
+      const done = await this.attach(waiting, donor, signature);
+      if (done.ok) this.waiting.delete(code as string);
+      return done;
+    } finally {
+      waiting.taken = false;
+    }
+  }
 
+  private async attach(
+    waiting: Waiting,
+    donor: DeviceRow,
+    signature: unknown,
+  ): Promise<PairResult<{ deviceId: string }>> {
     const message = certificateMessage(donor.identityId, waiting.publicKey);
     if (!(await verifySignature(donor.publicKey, message, signature)))
       return { ok: false, reason: 'bad-signature' };
 
-    // Проверка та же, что и при просьбе, но за три минуты человек мог успеть
-    // сказать в чат — а сказанное держит личность, которую мы собрались снести.
-    if (!(await this.stillborn(waiting.identityId, waiting.deviceId)))
-      return { ok: false, reason: 'has-history' };
-
-    // Сколько устройств держать — дело владельца инсталляции. Спрашиваем здесь,
-    // а не при показе кода: код показывает НОВИЧОК, а предел принадлежит той
-    // личности, в которую его впускают, и до подтверждения она неизвестна.
-    if (!(await this.roomForDevice(donor.identityId)))
-      return { ok: false, reason: 'too-many-devices' };
-
     const guest = waiting.identityId;
-    await this.db.transaction(async (m) => {
+    const refused = await this.db.transaction(async (m): Promise<PairFailure | null> => {
+      // Обе личности — под замок, в одном порядке (иначе две встречные связки
+      // ждали бы друг друга вечно). Проверки ниже без него устаревали бы к
+      // записи: второе подтверждение разом прошло бы предел устройств, а реплика
+      // новичка, сказанная между проверкой и сносом, ушла бы вместе с ним.
+      await m.getRepository(IdentityRow).find({
+        where: { id: In([guest, donor.identityId]) },
+        order: { id: 'ASC' },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      // Проверка та же, что и при просьбе, но за три минуты человек мог успеть
+      // сказать в чат — а сказанное держит личность, которую мы собрались снести.
+      if (!(await this.stillborn(m, guest, waiting.deviceId))) return 'has-history';
+
+      // Сколько устройств держать — дело владельца инсталляции. Спрашиваем здесь,
+      // а не при показе кода: код показывает НОВИЧОК, а предел принадлежит той
+      // личности, в которую его впускают, и до подтверждения она неизвестна.
+      if (!(await this.roomForDevice(m, donor.identityId))) return 'too-many-devices';
+
       // Порядок один и не переставляется: устройство уходит из личности до
       // того, как та исчезнет, иначе каскад унесёт его с собой.
       await m.getRepository(DeviceRow).update(
@@ -179,9 +209,10 @@ export class PairingService {
         },
       );
       await m.getRepository(IdentityRow).delete({ id: guest });
+      return null;
     });
+    if (refused) return { ok: false, reason: refused };
 
-    this.waiting.delete(code as string);
     this.logger.log(
       `устройство ${fingerprint(waiting.publicKey)} связано с личностью ${donor.identityId}`,
     );
@@ -215,15 +246,18 @@ export class PairingService {
    * ни одной реплики и ни одной роли: ровно то, чем личность бывает через
    * минуту после автоматического входа и никогда — после дня жизни.
    */
-  private async stillborn(identityId: string, deviceId: string): Promise<boolean> {
-    const devices = await this.db.getRepository(DeviceRow).find({
+  private async stillborn(
+    m: EntityManager,
+    identityId: string,
+    deviceId: string,
+  ): Promise<boolean> {
+    const devices = await m.getRepository(DeviceRow).find({
       where: { identityId },
       select: { id: true },
     });
     if (devices.length !== 1 || devices[0].id !== deviceId) return false;
-    if (await this.db.getRepository(MessageRow).countBy({ authorIdentityId: identityId }))
-      return false;
-    return !(await this.db.getRepository(RoleRow).countBy({ identityId }));
+    if (await m.getRepository(MessageRow).countBy({ authorIdentityId: identityId })) return false;
+    return !(await m.getRepository(RoleRow).countBy({ identityId }));
   }
 
   /**
@@ -235,12 +269,10 @@ export class PairingService {
    * живого оно не должно — иначе связка ломалась бы тем чаще, чем аккуратнее
    * человек отзывает потерянные ключи.
    */
-  private async roomForDevice(identityId: string): Promise<boolean> {
+  private async roomForDevice(m: EntityManager, identityId: string): Promise<boolean> {
     const limit = this.settings.get<number>('access.maxDevicesPerIdentity');
     if (limit <= 0) return true;
-    const live = await this.db
-      .getRepository(DeviceRow)
-      .countBy({ identityId, revokedAt: IsNull() });
+    const live = await m.getRepository(DeviceRow).countBy({ identityId, revokedAt: IsNull() });
     return live < limit;
   }
 

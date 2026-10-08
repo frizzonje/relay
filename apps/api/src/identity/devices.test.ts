@@ -582,3 +582,64 @@ describe('сколько устройств держать — дело влад
     expect((await attach(borya)).out.code).toBe(409);
   });
 });
+
+describe('подтверждения разом', () => {
+  /**
+   * Подтверждение — проверки, потом транзакция. Два подтверждения, посланные
+   * разом, проходят проверки оба, пока первое ещё пишет; держим запись, чтобы
+   * второе успело спросить.
+   */
+  function slowWrites() {
+    const real = db.transaction.bind(db) as (...args: unknown[]) => Promise<unknown>;
+    vi.spyOn(db, 'transaction').mockImplementation((async (...args: unknown[]) => {
+      await new Promise((r) => setTimeout(r, 50));
+      return real(...args);
+    }) as never);
+  }
+
+  /** Посмотреть и подписать заранее — чтобы в дверь оба вошли одновременно. */
+  async function readied(donor: Signed, code: string) {
+    const seen = res();
+    await devices.look(req(donor.cookie), seen, code);
+    const { publicKey } = seen.body as { publicKey: string };
+    const signature = await donor.key.sign(certificateMessage(donor.identityId, publicKey));
+    return async () => {
+      const out = res();
+      await devices.confirm(req(donor.cookie), out, { code, signature });
+      return out;
+    };
+  }
+
+  it('предел устройств держится и против двух подтверждений разом', async () => {
+    const donor = await signIn(await device(), 'Аня');
+    await tune(settings, 'access.maxDevicesPerIdentity', 2);
+    const first = await readied(donor, await ask(await signIn(await device())));
+    const second = await readied(donor, await ask(await signIn(await device())));
+    slowWrites();
+
+    const outs = await Promise.all([first(), second()]);
+
+    expect(outs.map((o) => o.code).sort()).toEqual([200, 409]);
+    vi.restoreAllMocks();
+    expect(await listOf(donor)).toHaveLength(2);
+  });
+
+  it('один код, подтверждённый двумя личностями разом, впускает в одну', async () => {
+    const anya = await signIn(await device(), 'Аня');
+    const borya = await signIn(await device(), 'Боря');
+    const guest = await signIn(await device());
+    const code = await ask(guest);
+    const byAnya = await readied(anya, code);
+    const byBorya = await readied(borya, code);
+    slowWrites();
+
+    const [a, b] = await Promise.all([byAnya(), byBorya()]);
+
+    // Оба «впустили» — значит, одному из двоих сказали неправду: устройство
+    // живёт в одной личности, и это та, что записала последней.
+    expect([a.code, b.code].filter((c) => c === 200)).toHaveLength(1);
+    vi.restoreAllMocks();
+    const winner = a.code === 200 ? anya : borya;
+    expect((await signIn(guest.key)).identityId).toBe(winner.identityId);
+  });
+});
