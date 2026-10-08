@@ -105,8 +105,9 @@ export class RolesService {
 
     // Повторный бан — не ошибка (два модератора нажали одновременно, человек
     // забанен на сервере и следом на инсталляции). Молча оставляем первую
-    // строку: она и есть след, и переписывать её задним числом незачем.
-    await this.db
+    // строку: она и есть след, и переписывать её задним числом незачем. В
+    // журнал повтор тоже не идёт: «забанил второй» было бы неправдой.
+    const inserted = await this.db
       .getRepository(RoleRow)
       .createQueryBuilder()
       .insert()
@@ -119,7 +120,9 @@ export class RolesService {
         createdAt: new Date(this.now()),
       })
       .orIgnore()
+      .returning('id')
       .execute();
+    if (!(inserted.raw as unknown[]).length) return { ok: true };
 
     this.logger.log(`бан личности ${identityId} (${serverId ?? 'вся инсталляция'}) от ${by}`);
     // После бана, а не вместо него: журнал не вправе отменить состоявшееся

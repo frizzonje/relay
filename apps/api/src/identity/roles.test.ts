@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { IdentityRow, RoleRow } from '../db/entities';
+import { AuditRow, IdentityRow, RoleRow } from '../db/entities';
 import { resetDatabase, testDatabase } from '../db/testing';
 import { fingerprint as fingerprintOf } from './crypto';
 import { OwnerService } from './owner.service';
@@ -86,6 +86,10 @@ describe('бан', () => {
     const rows = await db.getRepository(RoleRow).findBy({ identityId: anya.id });
     expect(rows).toHaveLength(1);
     expect(rows[0].grantedBy).toBe(first.id);
+    // И журнал помнит один бан — от первого: второй ничего не сделал, и
+    // строка «забанил Второй» была бы неправдой через год.
+    const logged = await db.getRepository(AuditRow).findBy({ action: 'ban' });
+    expect(logged.map((r) => r.actor)).toEqual([first.id]);
   });
 
   it('себя забанить нельзя, неизвестного — тоже', async () => {
