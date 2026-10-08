@@ -418,13 +418,24 @@ export class Perimeter {
     return this.isGuest(client) ? client.data.guestRoom : undefined;
   }
 
-  /** Ключ отлучения: комната + устройство (а если оно не назвалось — сеть). */
-  private banKey(client: AppSocket, room: string): string {
-    const device = client.data.clientId || `ip:${this.network(client)}`;
+  /**
+   * Ключи отлучения: комната + всё, что о госте известно, — сеть, устройство и
+   * личность, если она есть. Дверь закрыта, если совпал любой.
+   *
+   * Одного устройства мало: `clientId` называет сам клиент, и «выгнать» значило
+   * бы «поменять строку в localStorage». Сеть — /64 у IPv6 (см.
+   * client-address), иначе выгнанный сменил бы адрес внутри своего блока. Цена
+   * сети известна: соседа за тем же NAT в этот канал тоже не пустят, пока идёт
+   * пауза, — по ссылке, которую выдали явно не ему одному, но и ненадолго.
+   */
+  private banKeys(client: AppSocket, room: string): string[] {
     // Разделитель — NUL, записанный escape-последовательностью: сырой байт
     // делает весь файл двоичным для grep и file. Ни в имени комнаты, ни в id
     // устройства он встретиться не может, поэтому склейка однозначна.
-    return `${room}\0${device}`;
+    const keys = [`${room}\0ip:${this.network(client)}`];
+    if (client.data.clientId) keys.push(`${room}\0dev:${client.data.clientId}`);
+    if (client.data.identity) keys.push(`${room}\0id:${client.data.identity.id}`);
+    return keys;
   }
 
   /**
@@ -438,16 +449,13 @@ export class Perimeter {
       if (until <= now) this.guestBans.delete(key);
     }
     const minutes = this.settings.get<number>('invites.guestKickCooldownMinutes');
-    this.guestBans.set(this.banKey(client, room), now + minutes * 60_000);
+    for (const key of this.banKeys(client, room)) this.guestBans.set(key, now + minutes * 60_000);
   }
 
   /** Закрыта ли дверь этому гостю прямо сейчас. */
   guestBanned(client: AppSocket, room: string): boolean {
-    const until = this.guestBans.get(this.banKey(client, room));
-    if (until === undefined) return false;
-    if (until > Date.now()) return true;
-    this.guestBans.delete(this.banKey(client, room));
-    return false;
+    const now = Date.now();
+    return this.banKeys(client, room).some((key) => (this.guestBans.get(key) ?? 0) > now);
   }
 
   // ── Замки ─────────────────────────────────────────────────────────────────

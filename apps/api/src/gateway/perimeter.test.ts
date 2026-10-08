@@ -583,6 +583,41 @@ describe('guest-kick', () => {
     expect(again.rooms.has('voice-obshchii')).toBe(false);
   });
 
+  // `clientId` называет сам клиент: смени его — и устройство «новое». Поэтому
+  // отлучение держится на всём, что о госте известно, а не на одном поле.
+  it('новый clientId из той же сети не открывает дверь', async () => {
+    const { gw, server, a } = await withGuest();
+    gw.handleGuestKick(asSocket(a), { id: 'guest' });
+    const { token } = issueGuestToken('voice-obshchii');
+    const again = server.connect({ id: 'guest-2', auth: { clientId: 'dev-new', guest: token } });
+    gw.handleConnection(asSocket(again));
+    expect(again.last('kicked')).toEqual({ room: 'voice-obshchii' });
+  });
+
+  it('гость с личностью не возвращается и с другого адреса', async () => {
+    const { gw, server } = await makeGateway();
+    const a = connect(gw, server, { id: 'a', clientId: 'dev-a' });
+    const anya = await personCookie('Аня');
+    const { token } = issueGuestToken('voice-obshchii');
+    const guest = await connectAs(gw, server, anya.cookie, {
+      id: 'g',
+      clientId: 'dev-g',
+      guest: token,
+    });
+    gw.handleJoin(asSocket(guest), { room: 'voice-obshchii', name: 'Аня' });
+    gw.handleGuestKick(asSocket(a), { id: 'g' });
+
+    const again = server.connect({
+      id: 'g-2',
+      cookie: anya.cookie,
+      ip: '198.51.100.7',
+      auth: { clientId: 'dev-other', guest: token },
+    });
+    await server.run(again);
+    gw.handleConnection(asSocket(again));
+    expect(again.last('kicked')).toEqual({ room: 'voice-obshchii' });
+  });
+
   it('час прошёл — пускают снова', async () => {
     const { gw, server, a } = await withGuest();
     gw.handleGuestKick(asSocket(a), { id: 'guest' });
