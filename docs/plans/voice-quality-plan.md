@@ -37,7 +37,7 @@ Playwright 1.55.
 
 ```bash
 # web: один файл тестов
-docker run --rm -v "$PWD":/mono -w /mono/apps/web node:20-alpine sh -c './node_modules/.bin/vitest run lib/sdp.test.ts'
+docker run --rm -v "$PWD":/mono -w /mono/apps/web node:20-alpine sh -c './node_modules/.bin/vitest run lib/voice/sdp.test.ts'
 # web: типы
 docker run --rm -v "$PWD":/mono -w /mono/apps/web node:20-alpine node /mono/node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
 # sfu: тесты и типы
@@ -53,8 +53,8 @@ docker run --rm -v "$PWD":/mono -w /mono node:20-alpine node node_modules/pretti
 ### Задача 1. Голос моно, демонстрация стерео (А2)
 
 **Файлы:**
-- Изменить: `apps/web/lib/sdp.ts` (блок Opus: `OPUS_FMTP_PARAMS`, `boostAudioBitrate`, `mergeFmtp`)
-- Тест: `apps/web/lib/sdp.test.ts` (блок `describe('boostAudioBitrate')`)
+- Изменить: `apps/web/lib/voice/sdp.ts` (блок Opus: `OPUS_FMTP_PARAMS`, `boostAudioBitrate`, `mergeFmtp`)
+- Тест: `apps/web/lib/voice/sdp.test.ts` (блок `describe('boostAudioBitrate')`)
 - Документация: `docs/media.md` (раздел «Дорожки и битрейт»)
 
 **Интерфейсы:**
@@ -62,7 +62,7 @@ docker run --rm -v "$PWD":/mono -w /mono node:20-alpine node node_modules/pretti
   подпись та же, поведение по-секционное. `OPUS_MAX_BITRATE` остаётся экспортом.
 
 - [ ] **Шаг 1: переписать тесты `boostAudioBitrate`.** Заменить весь блок
-  `describe('boostAudioBitrate', …)` в `apps/web/lib/sdp.test.ts`:
+  `describe('boostAudioBitrate', …)` в `apps/web/lib/voice/sdp.test.ts`:
 
 ```ts
 // Голос и звук демонстрации — две аудиолинии, как у собеседника, который
@@ -168,10 +168,10 @@ describe('boostAudioBitrate', () => {
 ```
 
 - [ ] **Шаг 2: убедиться, что тесты падают.**
-  Run: `…/vitest run lib/sdp.test.ts` (команда web выше).
+  Run: `…/vitest run lib/voice/sdp.test.ts` (команда web выше).
   Expected: FAIL в «голос — первая аудиолиния — моно…» (сегодня там `stereo=1`).
 
-- [ ] **Шаг 3: реализация.** В `apps/web/lib/sdp.ts` заменить блок от комментария
+- [ ] **Шаг 3: реализация.** В `apps/web/lib/voice/sdp.ts` заменить блок от комментария
   «Качество голоса (Opus)» до конца `mergeFmtp` на:
 
 ```ts
@@ -278,7 +278,7 @@ function mergeFmtp(existing: string, ours: Record<string, string>): string {
 }
 ```
 
-- [ ] **Шаг 4: тесты зелёные.** Run: `…/vitest run lib/sdp.test.ts`. Expected: PASS.
+- [ ] **Шаг 4: тесты зелёные.** Run: `…/vitest run lib/voice/sdp.test.ts`. Expected: PASS.
   Потом весь веб: `…/vitest run` — PASS (никто больше не завязан на `stereo=1`
   голоса; если что-то упало — читать, а не чинить ожидания вслепую).
 
@@ -294,7 +294,7 @@ function mergeFmtp(existing: string, ours: Record<string, string>): string {
 - [ ] **Шаг 6: коммит.**
 
 ```bash
-git add apps/web/lib/sdp.ts apps/web/lib/sdp.test.ts docs/media.md
+git add apps/web/lib/voice/sdp.ts apps/web/lib/voice/sdp.test.ts docs/media.md
 git commit -m "fix(voice): send the mic mono in direct calls, keep screen audio stereo
 
 Every Opus line got stereo=1, so the mic was encoded as two identical

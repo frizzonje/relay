@@ -191,8 +191,8 @@ HTTP API устройств, которые api и web объявляли каж
 `ack` в `stores/admin.ts`, `ask` в `lib/channels.ts` (нетипизированный —
 событие строкой, тип ответа называл вызывающий), `ask` в `lib/moderation.ts`,
 ручные таймеры в `stores/dm.ts` и `InviteDialog.tsx`, `timeout().emitWithAck`
-в `lib/voice.ts`. Без срока вовсе ждали `dialCall` и `answerCall`
-(`lib/call.ts`) и `kickGuest` (`lib/voice.ts`): оборвись сокет посреди
+в `lib/voice/index.ts`. Без срока вовсе ждали `dialCall` и `answerCall`
+(`lib/call.ts`) и `kickGuest` (`lib/voice/index.ts`): оборвись сокет посреди
 набора, экран дозвона пульсировал «дозваниваемся» до отбоя, которым нечего
 было отбить. Теперь одна дорога — `lib/request.ts`: тип ответа выводится из
 `ClientToServerEvents`, срок — встроенный `timeout()` socket.io. Он, в
@@ -243,7 +243,7 @@ HTTP API устройств, которые api и web объявляли каж
 | 2.2 | `apps/api/src/gateway` | ~45 | R1, R5, R7: состояние в памяти + база |
 | 2.3 | `apps/api/src` (остальное: db, identity, auth, settings, uploads) | ~50 | C5, R6, транзакции |
 | 2.4 | `packages/shared/src` | ~15 | D1 (обратная сторона), C1, совместимость контракта |
-| 2.5 | `apps/web/lib/voice/**`, `lib/voice.ts`, `lib/call.ts` | ~30 | R3, R4, R5 — пересекается с фазой 3 |
+| 2.5 | `apps/web/lib/voice/**`, `lib/voice/index.ts`, `lib/call.ts` | ~30 | R3, R4, R5 — пересекается с фазой 3 |
 | 2.6 | `apps/web/stores`, `lib` (остальное), `providers` | ~60 | R3, R5, D2 |
 | 2.7 | `apps/web/components`, `app` | ~100 | R4 в эффектах, D4, C2 |
 

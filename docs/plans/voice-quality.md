@@ -88,7 +88,7 @@ RED; мы шлём им тем, что стоит первым у них, — Op
 
 ## А2. Голос моно, демонстрация стерео (mesh)
 
-`boostAudioBitrate` в [sdp.ts](../../apps/web/lib/sdp.ts) сегодня правит строки
+`boostAudioBitrate` в [sdp.ts](../../apps/web/lib/voice/sdp.ts) сегодня правит строки
 Opus во всём SDP подряд и ставит всем `stereo=1; sprop-stereo=1`. Становится
 **по-секционным**: первая аудио m-секция — `stereo=0; sprop-stereo=0`, остальные —
 `stereo=1; sprop-stereo=1`. Остальное (`maxaveragebitrate`, `useinbandfec`,

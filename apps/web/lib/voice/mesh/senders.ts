@@ -1,6 +1,6 @@
 'use client';
 
-import { boostVideoBitrate, boostAudioBitrate } from '@/lib/sdp';
+import { boostVideoBitrate, boostAudioBitrate } from '@/lib/voice/sdp';
 import { setting } from '@/stores/config';
 import type { TransportHost } from '../types';
 import { meshScreenEncoding } from '../screen-profile';
@@ -63,7 +63,7 @@ interface Slots {
 /**
  * Поднять потолки в SDP: и видео (x-google-bitrate), и голос (Opus:
  * стерео/битрейт/FEC) — иначе звонок звучит глухо на дефолтном ~32 кбит/с моно.
- * Чистая функция: сам разбор SDP лежит в `lib/sdp.ts`.
+ * Чистая функция: сам разбор SDP лежит в `lib/voice/sdp.ts`.
  */
 export function tuneSdp(sdp: string | undefined): string | undefined {
   return boostAudioBitrate(boostVideoBitrate(sdp));

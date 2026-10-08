@@ -89,7 +89,7 @@ export function VideoGrid() {
   }, []);
 
   // Состояния (раздел 07 референса): пустой канал (вы один) и слабое соединение
-  // (у части собеседников связь переустанавливается — tile.state в lib/voice.ts).
+  // (у части собеседников связь переустанавливается — tile.state в lib/voice/index.ts).
   const peers = tiles.filter((t) => !t.isLocal);
   const reconnecting = peers.filter((t) => t.state === 'tile.state.reconnecting').length;
   const alone = peers.length === 0;

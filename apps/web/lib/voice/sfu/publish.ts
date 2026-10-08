@@ -4,7 +4,7 @@ import type { SfuSource } from '@relay/shared';
 import type { Device, Producer, RtpCodecCapability, Transport } from 'mediasoup-client/types';
 import type { UplinkStatus } from '@/stores/voice';
 import { setting } from '@/stores/config';
-import { SDP_START_BITRATE_KBPS } from '@/lib/sdp';
+import { SDP_START_BITRATE_KBPS } from '@/lib/voice/sdp';
 import type { TransportHost } from '../types';
 import { readSendVideo, readStats, worseUplink, type SendVideo } from '../stats';
 import { sfuScreenEncodings, type ScreenProfile } from '../screen-profile';

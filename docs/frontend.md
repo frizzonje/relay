@@ -109,7 +109,7 @@ AppShell
 | Модуль | Что |
 |---|---|
 | [`socket.ts`](../apps/web/lib/socket.ts) | единственный Socket.io-клиент |
-| [`voice.ts`](../apps/web/lib/voice.ts) + [`voice/`](../apps/web/lib/voice/) | звонки — см. [media.md](media.md#клиентская-архитектура) |
+| [`voice/`](../apps/web/lib/voice/) | звонки — см. [media.md](media.md#клиентская-архитектура) |
 | [`call.ts`](../apps/web/lib/call.ts) | вход в комнату беседы после `call-state{accepted}` |
 | [`config.ts`](../apps/web/lib/config.ts) | `GET /api/config`, ICE-серверы |
 | [`channels.ts`](../apps/web/lib/channels.ts), [`servers.ts`](../apps/web/lib/servers.ts) | действия над реестром (сервер — источник правды) |
@@ -118,7 +118,7 @@ AppShell
 | [`prefs.ts`](../apps/web/lib/prefs.ts) | личные настройки (`prefs-set`) |
 | [`mentions.ts`](../apps/web/lib/mentions.ts), [`markdown.tsx`](../apps/web/lib/markdown.tsx), [`search.ts`](../apps/web/lib/search.ts) | разметка сообщений, упоминания, подсветка поиска |
 | [`refusals.ts`](../apps/web/lib/refusals.ts) | причины отказов сервера → текст для человека |
-| [`shell-bridge.ts`](../apps/web/lib/shell-bridge.ts), [`desktop.ts`](../apps/web/lib/desktop.ts), [`desktop-screen-audio.ts`](../apps/web/lib/desktop-screen-audio.ts) | мост к десктоп-оболочке |
+| [`shell-bridge.ts`](../apps/web/lib/shell-bridge.ts), [`desktop.ts`](../apps/web/lib/desktop.ts), [`voice/desktop-screen-audio.ts`](../apps/web/lib/voice/desktop-screen-audio.ts) | мост к десктоп-оболочке |
 | [`sfx.ts`](../apps/web/lib/sfx.ts) | звуки эфира и чата (`public/sfx`, генерируются [`tools/gen-sfx.py`](../tools/gen-sfx.py)) |
 | [`hotkeys.ts`](../apps/web/lib/hotkeys.ts) | горячие клавиши и push-to-talk в браузере |
 | [`theme.ts`](../apps/web/lib/theme.ts) | светлая/тёмная тема |

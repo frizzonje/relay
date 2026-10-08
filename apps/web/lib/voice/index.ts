@@ -11,7 +11,7 @@ import { tx as msg } from '@/lib/i18n';
 import type { MessageKey, Vars } from '@/lib/i18n/translate';
 import { useVoiceStore } from '@/stores/voice';
 import { createMeshTransport } from '@/lib/voice/mesh';
-import { voiceSupport } from '@/lib/voice-support';
+import { voiceSupport } from '@/lib/voice/support';
 import { diag } from '@/lib/voice/diag';
 import { mediaErrorText } from '@/lib/voice/device-error';
 import { forgetSpeaker, resetSpeaking, startSpeakingWatch } from '@/lib/voice/speaking';

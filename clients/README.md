@@ -18,7 +18,7 @@
   друга; `@relay/shared` — только для JS-мира. Изменил контракт — обнови
   `packages/shared` **и** `docs/protocol.md` в одном коммите.
 - **Web — референс.** Поведение спорных мест сверяется с `apps/web`
-  (`lib/voice.ts` и `lib/voice/mesh/` — эталон сигналинга и perfect
+  (`lib/voice/index.ts` и `lib/voice/mesh/` — эталон сигналинга и perfect
   negotiation, см. [docs/media.md](../docs/media.md)).
 - **Оболочки говорят одними событиями.** У десктопа две оболочки (Tauri и
   Electron), но мост с web-UI один: имена событий и payload'ы общие, и web

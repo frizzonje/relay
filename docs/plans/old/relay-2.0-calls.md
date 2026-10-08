@@ -229,7 +229,7 @@ it('лимит звонков в час срабатывает и не меша�
 ### Задача 5: Принятый вызов становится разговором
 
 **Файлы:** изменить `apps/api/src/gateway/voice/voice-sessions.ts`, `ring.ts`, `perimeter.ts`,
-`apps/web/lib/voice.ts`, `apps/web/lib/call.ts` (новый).
+`apps/web/lib/voice/index.ts`, `apps/web/lib/call.ts` (новый).
 
 **Что делает:** принятый вызов сажает двоих в голосовую комнату беседы
 (`voice:<адрес беседы>`), всегда mesh. Комната живёт, пока в ней двое; уход любого —

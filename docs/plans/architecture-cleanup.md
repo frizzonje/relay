@@ -402,7 +402,7 @@ gateway/
 
 ## Фаза 3 — голосовая сессия как машина состояний
 
-**Проблема.** [`lib/voice.ts`](../../apps/web/lib/voice.ts) (1155 строк) держит
+**Проблема.** [`lib/voice/index.ts`](../../apps/web/lib/voice/index.ts) (1155 строк) держит
 ~25 изменяемых переменных модуля (`room`, `transport`, `roomMode`,
 `sfuMisses`, `sfuOutage`, `migration`, `splitHandled`, `settleUntil`,
 `serverLostTimer`, …) — неявный автомат, переходы которого нигде не названы.
@@ -430,7 +430,7 @@ idle ─join→ joining ─ok→ live(mesh|sfu) ─split/outage→ migrating ─
 
 1. **Чистая машина** `apps/web/lib/voice/session-machine.ts`: состояния,
    события, `next()`. Таблица переходов покрыта тестами, включая сценарии
-   из `voice-switching.test.ts` и `voice-fallback.test.ts` (переносятся как
+   из `voice/switching.test.ts` и `voice/fallback.test.ts` (переносятся как
    последовательности событий). Без DOM и сокета.
 2. **`VoiceSession`** — оболочка: исполняет эффекты (`openTransport`,
    `closeTransport`, `emit`, таймеры), владеет таймерами и транспортами.

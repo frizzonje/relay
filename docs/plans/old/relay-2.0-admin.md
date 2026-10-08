@@ -821,7 +821,7 @@ git commit -m "feat(admin): perimeter, chat and direct messages obey the panel"
 `invites.maxGuestsPerChannel`, `voice.videoEnabled`, `voice.screenShareEnabled`.
 
 `voice.sfuThreshold` и `voice.iceRestartSeconds` переехали в задачу 5в: их потребитель —
-браузер (`MESH_FALLBACK_MAX_PEERS` в `apps/web/lib/voice.ts` и `RECOVER_WINDOW_MS` в
+браузер (`MESH_FALLBACK_MAX_PEERS` в `apps/web/lib/voice/index.ts` и `RECOVER_WINDOW_MS` в
 `apps/web/lib/voice/sfu/recovery.ts`), а на сервере механизма, который бы их читал, нет
 вовсе — режим канала выбирает владелец реестра, транспорт называет сам клиент. Отсюда и
 `applies: 'new'` у обоих. Порог, применённый на сервере, к тому же поменял бы поведение при

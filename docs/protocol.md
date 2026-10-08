@@ -560,7 +560,7 @@ C→S join {room, name?, clientId?, transport: 'p2p'|'sfu'}
 
 С 2.0.1 sfu-канал не откатывается на mesh: пока медиасервер недоступен, клиент
 сидит в комнате без медиа и повторяет `sfu-token` с растущей паузой
-(web — `requestRoute` / `enterRoom` в [`lib/voice.ts`](../apps/web/lib/voice.ts)).
+(web — `requestRoute` / `enterRoom` в [`lib/voice/index.ts`](../apps/web/lib/voice/index.ts)).
 Инсталляция без `SFU_URL`/`SFU_SECRET` отвечает `not-sfu` на любой канал.
 
 `transport` в `join` — чем клиент реально звонит; сервер пишет его в

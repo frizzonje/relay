@@ -8,7 +8,7 @@ import {
   notifyScreenPicker,
   startNativeScreenAudio,
   stopNativeScreenAudio,
-} from '@/lib/desktop-screen-audio';
+} from '@/lib/voice/desktop-screen-audio';
 import { useVoiceStore, type ScreenMode } from '@/stores/voice';
 import { setting } from '@/stores/config';
 import { setTileScreen } from '@/lib/voice/tiles';

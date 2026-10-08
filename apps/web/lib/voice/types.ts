@@ -6,7 +6,7 @@ import type { TileNet, TileSend, UplinkStatus, VoicePing } from '@/stores/voice'
 import type { ScreenProfile } from './screen-profile';
 
 /**
- * Шов между дирижёром (`lib/voice.ts`) и транспортом медиа.
+ * Шов между дирижёром (`lib/voice/index.ts`) и транспортом медиа.
  *
  * Дирижёр владеет устройствами, гейтом микрофона, микшером входящего звука,
  * плитками и всем UI-состоянием. Транспорт не знает ни про то, ни про другое —

@@ -13,7 +13,7 @@ export type VoiceStatus = { key: MessageKey; vars?: Vars } | null;
 /**
  * Реактивная «витрина» голосового канала. Вся императивная механика mesh-WebRTC
  * (RTCPeerConnection, MediaStream, sender'ы, perfect negotiation) живёт в
- * `lib/voice.ts`; сюда менеджер выкладывает лишь то, что нужно для отрисовки
+ * `lib/voice/index.ts`; сюда менеджер выкладывает лишь то, что нужно для отрисовки
  * React-компонентами (плитки, состояние кнопок, состав голосовых каналов,
  * фокус-режим).
  */

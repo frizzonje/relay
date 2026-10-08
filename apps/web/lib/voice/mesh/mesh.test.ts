@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
 import { answeringWith } from '@/lib/testing/socket';
 
 /**
- * Mesh-транспорт целиком, через публичный API дирижёра (`lib/voice.ts`).
+ * Mesh-транспорт целиком, через публичный API дирижёра (`lib/voice/index.ts`).
  *
  * Через дирижёра, а не по файлам: mesh разрезан на предметы — переговоры,
  * лестница, сторож тишины, метрики, публикация дорожек, — и ценно здесь ровно

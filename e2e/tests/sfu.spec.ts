@@ -88,7 +88,7 @@ test('режим канала переключается посреди разг
   await connected(boris);
 
   // И обратно: переезд туда и переезд оттуда — разные дороги в коде, и
-  // проверяются обе (см. `remigrate` в apps/web/lib/voice.ts).
+  // проверяются обе (см. `remigrate` в apps/web/lib/voice/index.ts).
   await switchMode(anya, 'p2p');
   await route(anya, 'direct');
   await route(boris, 'direct');

@@ -361,7 +361,7 @@ function useScreenProfiles(): Record<ScreenMode, ScreenProfile> {
 /**
  * Панель управления звонком (#controls, index.html:1581-1590). Видна в голосовом
  * виде: микрофон, камера, демонстрация экрана (+тумблер Качество/ФПС во время
- * трансляции), отключение. Всё завязано на mesh-менеджер (lib/voice.ts).
+ * трансляции), отключение. Всё завязано на mesh-менеджер (lib/voice/index.ts).
  */
 export function Controls() {
   const t = useT();

@@ -7,7 +7,7 @@
  *   • Linux — Electron (`clients/desktop-linux`), мост живёт в
  *     `window.__RELAY_SHELL__`. Он там потому, что системный WebKitGTK, который
  *     берёт Tauri, собран без WebRTC — звонков в нём нет и не будет
- *     (см. lib/voice-support.ts и clients/desktop-linux/README.md).
+ *     (см. lib/voice/support.ts и clients/desktop-linux/README.md).
  *
  * Веб-UI об этой разнице знать не должен: имена событий, payload'ы и форма
  * вызовов у обеих оболочек одинаковые (listen → Promise<unlisten>, handler

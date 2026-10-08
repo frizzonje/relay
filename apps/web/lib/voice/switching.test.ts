@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { answeringWith } from '@/lib/testing/socket';
 import { toast } from 'sonner';
-import type { TransportHost } from './voice/types';
+import type { TransportHost } from './types';
 
 /**
  * Прыжки по каналам. Вход в канал — не одно действие, а цепочка с двумя
@@ -155,13 +155,13 @@ const getUserMedia = vi.fn(async () => {
   return mic.stream;
 });
 
-let voice: typeof import('./voice');
+let voice: typeof import('./index');
 
 beforeAll(async () => {
   vi.useFakeTimers();
   vi.stubGlobal('RTCPeerConnection', FakePC);
   vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
-  voice = await import('./voice');
+  voice = await import('./index');
   voice.initVoice();
 });
 

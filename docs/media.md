@@ -34,7 +34,7 @@ flowchart LR
 | Сервер видит медиа | нет | да — SFU расшифровывает, чтобы маршрутизировать |
 
 Транспорт выбирает клиент по ответу `sfu-token` (web — `requestRoute` и
-`enterRoom` в [`lib/voice.ts`](../apps/web/lib/voice.ts)):
+`enterRoom` в [`lib/voice/index.ts`](../apps/web/lib/voice/index.ts)):
 
 - `not-sfu` → mesh;
 - `{token, url}` → медиасервер;
@@ -46,15 +46,15 @@ flowchart LR
 
 ## Клиентская архитектура
 
-Всё голосовое на вебе — в [`apps/web/lib/voice.ts`](../apps/web/lib/voice.ts)
-(«дирижёр») и [`apps/web/lib/voice/`](../apps/web/lib/voice/). Дирижёр владеет
+Всё голосовое на вебе — в [`apps/web/lib/voice/`](../apps/web/lib/voice/);
+вход в него — [`index.ts`](../apps/web/lib/voice/index.ts) («дирижёр»). Дирижёр владеет
 локальными устройствами и плитками, транспорт — соединениями. Контракт между
 ними — `TransportHost` / `VoiceTransport` в
 [`voice/types.ts`](../apps/web/lib/voice/types.ts).
 
 | Файл | Что |
 |---|---|
-| [`voice.ts`](../apps/web/lib/voice.ts) | вход/выход, выбор транспорта, переезд между каналами, ожидание медиасервера |
+| [`index.ts`](../apps/web/lib/voice/index.ts) | вход/выход, выбор транспорта, переезд между каналами, ожидание медиасервера |
 | [`voice/mic.ts`](../apps/web/lib/voice/mic.ts) | захват микрофона, шумодав/эхо/автоусиление, порог (затвор через `track.enabled`, анализатор на клоне), push-to-talk |
 | [`voice/camera.ts`](../apps/web/lib/voice/camera.ts) | камера и демонстрация экрана (один видеослот), звук экрана |
 | [`voice/output.ts`](../apps/web/lib/voice/output.ts) | воспроизведение, микшер громкости 0–300 %, выбор динамика, deafen |
@@ -65,7 +65,7 @@ flowchart LR
 | [`voice/mesh/`](../apps/web/lib/voice/mesh/) | транспорт `p2p` |
 | [`voice/sfu/`](../apps/web/lib/voice/sfu/) | транспорт `sfu` (mediasoup-client, грузится по требованию) |
 
-Перед входом [`voice-support.ts`](../apps/web/lib/voice-support.ts) проверяет,
+Перед входом [`support.ts`](../apps/web/lib/voice/support.ts) проверяет,
 что в движке вообще есть `RTCPeerConnection` — в дистрибутивном WebKitGTK его нет.
 
 ## Mesh
@@ -96,7 +96,7 @@ flowchart LR
 
 ### Дорожки и битрейт
 
-[`mesh/senders.ts`](../apps/web/lib/voice/mesh/senders.ts), [`lib/sdp.ts`](../apps/web/lib/sdp.ts):
+[`mesh/senders.ts`](../apps/web/lib/voice/mesh/senders.ts), [`lib/voice/sdp.ts`](../apps/web/lib/voice/sdp.ts):
 
 - Звук всегда. Камера и экран делят **один видеослот** — одновременно едет
   что-то одно. Звук демонстрации — отдельная аудиодорожка.

@@ -46,7 +46,7 @@ Tauri-оболочке там не бывает (`clients/desktop-linux`).
 ## iOS (Swift/SwiftUI)
 
 Готовы этапы 1–3: логин + сокет, каналы и чат, аудио-звонок mesh/WebRTC (порт
-`apps/web/lib/voice.ts`), сборка зелёная под симулятором.
+`apps/web/lib/voice/index.ts`), сборка зелёная под симулятором.
 
 Осталось:
 

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { answeringWith } from '@/lib/testing/socket';
 import { toast } from 'sonner';
-import type { TransportHost } from './voice/types';
+import type { TransportHost } from './types';
 
 /**
  * Что дирижёр делает, когда медиасервер не даётся.
@@ -137,7 +137,7 @@ const fakeStream = {
   getTracks: () => [audioTrack],
 };
 
-let voice: typeof import('./voice');
+let voice: typeof import('./index');
 
 beforeAll(async () => {
   vi.useFakeTimers();
@@ -145,7 +145,7 @@ beforeAll(async () => {
   vi.stubGlobal('navigator', {
     mediaDevices: { getUserMedia: vi.fn(async () => fakeStream) },
   });
-  voice = await import('./voice');
+  voice = await import('./index');
   voice.initVoice();
 });
 

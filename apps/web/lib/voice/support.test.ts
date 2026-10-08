@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { voiceSupport } from './voice-support';
+import { voiceSupport } from './support';
 
 /**
  * Регрессия на «Linux: запускается, но голоса нет».
