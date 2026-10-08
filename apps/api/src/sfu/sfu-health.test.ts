@@ -102,3 +102,11 @@ it('в лог идут только переходы, а не каждый пи�
   expect(warn).toHaveBeenCalledTimes(1);
   expect(String(warn.mock.calls[0][0])).toContain('fall back to p2p');
 });
+
+it('запросы разом при пустом кэше делят один пинг, а не шлют по своему', async () => {
+  // Так приходит каждый клиент после рестарта api: `/api/config` от всех разом.
+  const { sfuHealthy } = await freshModule();
+  const answers = await Promise.all(Array.from({ length: 5 }, () => sfuHealthy()));
+  expect(answers).toEqual([true, true, true, true, true]);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});

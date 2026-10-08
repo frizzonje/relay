@@ -16,6 +16,11 @@ const PING_TIMEOUT_MS = 1500;
 
 const logger = new Logger('SfuHealth');
 let last: { ts: number; ok: boolean } | null = null;
+/**
+ * Пинг в пути. Кэш пуст ровно тогда, когда спрашивают все разом (рестарт api —
+ * и `/api/config` от каждого клиента): без общего ожидания каждый слал бы свой.
+ */
+let pending: Promise<boolean> | null = null;
 
 function healthUrl(): string {
   // Отдельная переменная, не SFU_URL: та — публичный адрес для клиента (обычно
@@ -26,8 +31,14 @@ function healthUrl(): string {
 
 export async function sfuHealthy(): Promise<boolean> {
   if (!sfuConfigured()) return false;
-  const now = Date.now();
-  if (last && now - last.ts < CACHE_MS) return last.ok;
+  if (last && Date.now() - last.ts < CACHE_MS) return last.ok;
+  pending ??= ping().finally(() => {
+    pending = null;
+  });
+  return pending;
+}
+
+async function ping(): Promise<boolean> {
   let ok = false;
   try {
     const res = await fetch(healthUrl(), { signal: AbortSignal.timeout(PING_TIMEOUT_MS) });
@@ -41,6 +52,6 @@ export async function sfuHealthy(): Promise<boolean> {
     if (ok) logger.log(`sfu is up (${healthUrl()})`);
     else logger.warn(`sfu is down (${healthUrl()}) — no passes issued, calls fall back to p2p`);
   }
-  last = { ts: now, ok };
+  last = { ts: Date.now(), ok };
   return ok;
 }
