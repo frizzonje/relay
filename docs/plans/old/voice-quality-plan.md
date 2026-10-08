@@ -67,7 +67,7 @@ docker run --rm -v "$PWD":/mono -w /mono node:20-alpine node node_modules/pretti
 ```ts
 // Голос и звук демонстрации — две аудиолинии, как у собеседника, который
 // показывает экран. Opus = 111 в обеих: BUNDLE это разрешает, разведка
-// (docs/plans/voice-quality.md) проверила на Chromium, WebKit и Firefox.
+// (docs/plans/old/voice-quality.md) проверила на Chromium, WebKit и Firefox.
 const call = [
   'v=0',
   'a=group:BUNDLE 0 1 2',
@@ -588,7 +588,7 @@ import { preferRedForVoice } from './red';
   строки про Opus:
 
 ```markdown
-- RED ([`mesh/red.ts`](../apps/web/lib/voice/mesh/red.ts)): голосу — избыточность
+- RED ([`mesh/red.ts`](../../apps/web/lib/voice/mesh/red.ts)): голосу — избыточность
   RFC 2198, каждый пакет несёт копию прошлого кадра. Только в mesh (mediasoup RED
   не знает) и только там, где браузер умеет (Chromium, WebKit; Firefox — нет,
   откат на Opus). Идёт поверх потолка голоса, ~×2 трафика голоса.
@@ -1033,7 +1033,7 @@ import {
  *
  * Раньше при пороге > 0 голос шёл через GainNode и MediaStreamDestination, и
  * собеседникам уходил выход Web Audio — вторая дорожка, пересэмплирование на
- * частоту вывода и подозреваемый в треске на Linux. См. docs/plans/voice-quality.md.
+ * частоту вывода и подозреваемый в треске на Linux. См. docs/plans/old/voice-quality.md.
  */
 ```
 
@@ -1263,7 +1263,7 @@ export function teardownMic(): void {
   `voice/mic.ts` заменить на:
 
 ```markdown
-| [`voice/mic.ts`](../apps/web/lib/voice/mic.ts) | захват микрофона, шумодав/эхо/автоусиление, порог (затвор через `track.enabled`, анализатор на клоне), push-to-talk |
+| [`voice/mic.ts`](../../apps/web/lib/voice/mic.ts) | захват микрофона, шумодав/эхо/автоусиление, порог (затвор через `track.enabled`, анализатор на клоне), push-to-talk |
 ```
 
 - [ ] **Шаг 13: коммит.**
@@ -1820,7 +1820,7 @@ import { connected, joinVoice, person, test, unique } from '../fixtures/stand';
 /**
  * Что уходит в сеть со звуком — то, чего не видно глазами и не слышно в CI.
  *
- * Три обещания из docs/plans/voice-quality.md, каждое из которых ломается
+ * Три обещания из docs/plans/old/voice-quality.md, каждое из которых ломается
  * молча: голос договорён с RED (порядок кодеков в голосовой m-линии — по нему
  * и выбирают, чем слать; getStats RED не показывает), голос моно (stereo=0),
  * а при пороге в сеть уходит дорожка устройства, которую затвор выключает, —
@@ -1980,7 +1980,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Задача 7. Разведка: RED через SFU (А1′)
 
 **Файлы:**
-- Изменить: `docs/plans/voice-quality.md` (раздел «А1′. Разведка RED через SFU» — дописать итог)
+- Изменить: `docs/plans/old/voice-quality.md` (раздел «А1′. Разведка RED через SFU» — дописать итог)
 - Изменить: `docs/media.md` (одна строка в «Кодирование» раздела SFU)
 
 Кода нет. Итог — рекомендация с источниками.
@@ -2000,19 +2000,19 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
      кодер включает FEC (`packetLossPercentage`/RTCP-отчёты), и что mediasoup
      шлёт производителю в RTCP — потери своего плеча или агрегат потребителей.
 
-- [ ] **Шаг 2: записать итог.** В `docs/plans/voice-quality.md` под заголовком
+- [ ] **Шаг 2: записать итог.** В `docs/plans/old/voice-quality.md` под заголовком
   «А1′» — подраздел «Итог разведки»: ответы 1–4 и одна рекомендация (что
   делать дальше и во что обойдётся), со ссылками.
 
 - [ ] **Шаг 3: строка в media.md.** В `docs/media.md`, «Кодирование» (SFU),
   после «Голос — те же потолки Opus, что в mesh.» добавить одну строку — вывод
   разведки (например: «RED в SFU нет: mediasoup не знает `audio/red`; см.
-  docs/plans/voice-quality.md»), формулировку взять из итога.
+  docs/plans/old/voice-quality.md»), формулировку взять из итога.
 
 - [ ] **Шаг 4: коммит.**
 
 ```bash
-git add docs/plans/voice-quality.md docs/media.md
+git add docs/plans/old/voice-quality.md docs/media.md
 git commit -m "docs(sfu): what it would take to carry RED through the media server
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -2029,7 +2029,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   iOS, пункт в список «Осталось»:
 
 ```markdown
-- **голос моно и RED, как в вебе** (docs/plans/voice-quality.md, А1–А2):
+- **голос моно и RED, как в вебе** (docs/plans/old/voice-quality.md, А1–А2):
   `Core/SDP.swift` ставит `stereo=1` всем Opus-линиям — голос уходит стерео;
   RED — `setCodecPreferences` голосовому трансиверу в `CallEngine`. Совместимость
   не страдает и без этого: iOS просто не получает выгоды.

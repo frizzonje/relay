@@ -39,5 +39,4 @@
       "project": ["src/**/*.ts"],
     },
   },
-  "ignoreWorkspaces": ["apps/web/e2e"],
 }

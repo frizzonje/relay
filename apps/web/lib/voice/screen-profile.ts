@@ -12,7 +12,7 @@
  * и видео: наоборот. Разрешение и кадры у каждого режима свои и выбираются
  * порознь; режим же решает, чем жертвовать, когда канала или процессора мало.
  *
- * См. docs/plans/screen-share.md.
+ * См. docs/plans/old/screen-share.md.
  */
 
 export type ScreenMode = 'quality' | 'fps';

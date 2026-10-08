@@ -177,7 +177,9 @@ clients/
   ios/            Swift / SwiftUI
 infra/            Caddyfile, TLS-режимы, coturn, relay CLI, dev/e2e compose
 e2e/              Playwright: сценарии двумя людьми на прод-стеке
-tools/            gen-sfx.py (звуки), keyprobe (проба ключей в движках), check-docs.mjs
-docs/             эта документация; plans/ — проектные заметки по релизам
+tools/            гейты CI: check-contract, check-cycles, check-clones, check-docs;
+                  report-size (отчёт о размерах); gen-sfx.py (звуки);
+                  keyprobe (проба хранения ключа в движках)
+docs/             эта документация; plans/ — открытые планы, plans/old/ — сделанные
 install.sh        установщик одной командой
 ```

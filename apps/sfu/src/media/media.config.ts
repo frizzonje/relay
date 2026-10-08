@@ -58,7 +58,7 @@ export const MEDIA_CODECS: types.RouterRtpCodecCapability[] = [
       // профилю, уровень ни с кем не спорит, а вот кодировщику он — потолок.
       // 3.1 по стандарту — это 720p30, и аппаратный H264 трансляции (WebKit
       // берёт уровень из SDP прямо в VideoToolbox) на 1440p60 упирался бы в
-      // него. 5.1 вмещает 1440p60 с запасом (docs/plans/screen-share.md).
+      // него. 5.1 вмещает 1440p60 с запасом (docs/plans/old/screen-share.md).
       'profile-level-id': '42e033',
       'level-asymmetry-allowed': 1,
       'x-google-start-bitrate': 1000,

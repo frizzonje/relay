@@ -66,7 +66,7 @@ describe('boostVideoBitrate', () => {
 
 // Голос и звук демонстрации — две аудиолинии, как у собеседника, который
 // показывает экран. Opus = 111 в обеих: BUNDLE это разрешает, разведка
-// (docs/plans/voice-quality.md) проверила на Chromium, WebKit и Firefox.
+// (docs/plans/old/voice-quality.md) проверила на Chromium, WebKit и Firefox.
 const call = [
   'v=0',
   'a=group:BUNDLE 0 1 2',

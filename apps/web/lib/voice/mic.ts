@@ -27,7 +27,7 @@ import {
  *
  * Раньше при пороге > 0 голос шёл через GainNode и MediaStreamDestination, и
  * собеседникам уходил выход Web Audio — вторая дорожка, пересэмплирование на
- * частоту вывода и подозреваемый в треске на Linux. См. docs/plans/voice-quality.md.
+ * частоту вывода и подозреваемый в треске на Linux. См. docs/plans/old/voice-quality.md.
  */
 
 /**

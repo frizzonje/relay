@@ -230,7 +230,7 @@ Socket.io на пути `/sfu/` (Caddy проксирует на `:3100`). Вс�
 - Голос — те же потолки Opus, что в mesh.
 - RED в SFU нет: mediasoup не знает `audio/red`; от потерь спасает in-band FEC,
   который говорящий наращивает под худшего слушателя (см.
-  [plans/voice-quality.md](plans/voice-quality.md#итог-разведки-2026-09-24)).
+  [plans/voice-quality.md](plans/old/voice-quality.md#итог-разведки-2026-09-24)).
 
 Восстановление — [`sfu/recovery.ts`](../apps/web/lib/voice/sfu/recovery.ts):
 ICE-restart транспорта, при неудаче — переподключение с новым пропуском.

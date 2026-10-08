@@ -16,7 +16,7 @@ import type { ScreenProfile } from '../screen-profile';
  * Кандидат один — H264: simulcast на медиасервере умеют только VP8 и H264 (см.
  * `IsValidTypeForCodec` в mediasoup), а без двух слоёв не будет ни плитки за
  * копейки, ни 1440p для развернувших. VP9 и AV1 там живут как SVC — отдельная
- * разведка (docs/plans/screen-share.md).
+ * разведка (docs/plans/old/screen-share.md).
  *
  * Аппаратный ли кодировщик — говорит `mediaCapabilities.encodingInfo`
  * (`powerEfficient`). WebKit на этот вопрос для `webrtc` не отвечает, но H264
