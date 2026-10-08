@@ -356,6 +356,10 @@ export class SfuGateway implements OnGatewayConnection {
           ? { keyFrameRequestDelay: SfuGateway.SCREEN_KEYFRAME_DELAY_MS }
           : {}),
       });
+      if (this.gone(peer, transport)) {
+        producer.close();
+        return fail('no-transport');
+      }
       // На роль — одна дорожка: клиент держит по producer'у на роль, и второй
       // той же роли значит, что ответ на прошлый до него не дошёл (сокет
       // моргнул посреди `produce`). Прежний остался бы у нас сиротой без RTP —
@@ -457,6 +461,10 @@ export class SfuGateway implements OnGatewayConnection {
         rtpCapabilities,
         paused: true,
       });
+      if (this.gone(peer, transport)) {
+        consumer.close();
+        return fail('no-transport');
+      }
       peer.consumers.set(consumer.id, consumer);
       consumer.on('transportclose', () => peer.consumers.delete(consumer.id));
       // Какой слой simulcast реально доехал. Клиент просит слой сам
@@ -595,6 +603,16 @@ export class SfuGateway implements OnGatewayConnection {
       this.logger.warn(`preferred-layers failed for ${peer.id}: ${String(err)}`);
       return fail('layers-failed');
     }
+  }
+
+  /**
+   * Пока `produce`/`consume` ходил в воркер, транспорт закрыли (клиент его
+   * пересобрал или ушёл совсем). Рождённая после закрытия дорожка своего
+   * `transportclose` уже не услышит: оставь её — участник числил бы живой
+   * мёртвую, а комната получила бы о ней `new-producer`.
+   */
+  private gone(peer: Peer, transport: types.WebRtcTransport): boolean {
+    return transport.closed || !this.rooms.has(peer);
   }
 
   private transportOf(peer: Peer, id: unknown): types.WebRtcTransport | undefined {

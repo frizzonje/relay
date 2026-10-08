@@ -101,6 +101,12 @@ export class FakeTransport extends Emitter {
   failConnect = false;
   failProduce = false;
   failConsume = false;
+  /**
+   * Пока не разрешится — `produce`/`consume` в пути. Окно, в которое запрос
+   * ушёл в воркер, а транспорт успели закрыть: настоящий mediasoup отдаёт
+   * дорожку и после этого, но `transportclose` она уже не услышит.
+   */
+  hold: Promise<void> | null = null;
 
   async connect(opts: unknown): Promise<void> {
     if (this.failConnect) throw new Error('dtls отвалился');
@@ -122,6 +128,7 @@ export class FakeTransport extends Emitter {
     keyFrameRequestDelay?: number;
   }): Promise<FakeProducer> {
     if (this.failProduce) throw new Error('нет rtpParameters');
+    if (this.hold) await this.hold;
     const producer = new FakeProducer(opts.kind, opts.appData);
     this.produced.push(producer);
     this.produceOptions.set(producer.id, opts);
@@ -134,6 +141,7 @@ export class FakeTransport extends Emitter {
     kind?: 'audio' | 'video';
   }): Promise<FakeConsumer> {
     if (this.failConsume) throw new Error('не смог');
+    if (this.hold) await this.hold;
     const consumer = new FakeConsumer(opts.kind ?? 'video', opts.producerId, opts.paused);
     this.consumed.push(consumer);
     return consumer;

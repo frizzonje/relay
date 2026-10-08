@@ -898,3 +898,80 @@ describe('снимок комнаты по запросу', () => {
     expect(gw.handleSnapshot(sock(io.connect()))).toEqual({ ok: false, error: 'no-peer' });
   });
 });
+
+describe('дорожка в пути', () => {
+  /**
+   * Между `produce`/`consume` и ответом воркера транспорт могут закрыть:
+   * клиент пересобрал его или ушёл совсем. Дорожка, рождённая после закрытия,
+   * `transportclose` уже не услышит — у участника она числилась бы живой, а
+   * комната получила бы объявление о мёртвой.
+   */
+  function gate() {
+    let open!: () => void;
+    const hold = new Promise<void>((r) => (open = r));
+    return { hold, open };
+  }
+
+  it('produce на закрытом за время ожидания транспорте — отказ, комнате ни слова', async () => {
+    const { s, transportId } = await withTransport('эфир', 'a');
+    const other = await connect('эфир', 'b');
+    const transport = workers.routers[0].transports[0];
+    const g = gate();
+    transport.hold = g.hold;
+    other.clear();
+
+    const pending = gw.handleProduce(sock(s), {
+      transportId,
+      kind: 'video',
+      rtpParameters: {},
+      source: 'cam',
+    });
+    gw.handleCloseTransport(sock(s), { transportId });
+    g.open();
+
+    expect(await pending).toEqual({ ok: false, error: 'no-transport' });
+    expect(transport.produced[0]?.closed).toBe(true);
+    expect(other.got('new-producer')).toBe(false);
+  });
+
+  it('ушедший посреди produce не объявляется комнате заново', async () => {
+    const { s, transportId } = await withTransport('эфир', 'a');
+    const other = await connect('эфир', 'b');
+    const transport = workers.routers[0].transports[0];
+    const g = gate();
+    transport.hold = g.hold;
+
+    const pending = gw.handleProduce(sock(s), {
+      transportId,
+      kind: 'audio',
+      rtpParameters: {},
+      source: 'mic',
+    });
+    s.drop('client namespace disconnect');
+    other.clear();
+    g.open();
+
+    expect(await pending).toMatchObject({ ok: false });
+    expect(other.got('new-producer')).toBe(false);
+  });
+
+  it('consume на закрытом за время ожидания транспорте — отказ, подписка закрыта', async () => {
+    const a = await publishing('эфир', 'a', 'cam');
+    const b = await withTransport('эфир', 'b');
+    const transport = workers.routers[0].transports.find((t) => t.id === b.transportId)!;
+    const g = gate();
+    transport.hold = g.hold;
+
+    const pending = gw.handleConsume(sock(b.s), {
+      transportId: b.transportId,
+      producerId: a.producerId,
+      rtpCapabilities: { codecs: [] },
+    });
+    gw.handleCloseTransport(sock(b.s), { transportId: b.transportId });
+    g.open();
+
+    expect(await pending).toEqual({ ok: false, error: 'no-transport' });
+    expect(transport.consumed[0]?.closed).toBe(true);
+  });
+});
+
