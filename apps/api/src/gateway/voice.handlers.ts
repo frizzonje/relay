@@ -5,6 +5,7 @@ import type { Perimeter } from './perimeter';
 import type { RegistryService } from './registry.service';
 import type { SettingsService } from '../settings/settings.service';
 import { type VoiceSessions } from './voice-sessions';
+import { candidateOf, sdpOf } from './negotiation';
 import { sfuHealthy } from '../sfu/sfu-health';
 import { issueSfuToken, sfuSecret } from '../sfu/sfu-token';
 import {
@@ -304,16 +305,19 @@ export class VoiceHandlers {
     this.voice.leave(client);
   }
   offer(client: AppSocket, payload: SignalPayload) {
-    this.relay(client, 'offer', payload?.to, {
-      name: this.voice.nameOf(client),
-      sdp: payload?.sdp,
-    });
+    const sdp = sdpOf(payload?.sdp);
+    if (!sdp) return;
+    this.relay(client, 'offer', payload?.to, { name: this.voice.nameOf(client), sdp });
   }
   answer(client: AppSocket, payload: SignalPayload) {
-    this.relay(client, 'answer', payload?.to, { sdp: payload?.sdp });
+    const sdp = sdpOf(payload?.sdp);
+    if (!sdp) return;
+    this.relay(client, 'answer', payload?.to, { sdp });
   }
   iceCandidate(client: AppSocket, payload: SignalPayload) {
-    this.relay(client, 'ice-candidate', payload?.to, { candidate: payload?.candidate });
+    const candidate = candidateOf(payload?.candidate);
+    if (!candidate) return;
+    this.relay(client, 'ice-candidate', payload?.to, { candidate });
   }
   /**
    * «Смотреть» в прямом канале: зритель просит стримера слать ему трансляцию
@@ -358,9 +362,12 @@ export class VoiceHandlers {
     if (changed) this.voice.broadcast();
   }
 
-  // Пересылаем сигнал только участнику той же комнаты, что и отправитель
+  // Пересылаем сигнал только участнику той же комнаты, что и отправитель.
+  // Ведро у негоциации своё (`allowSignal`): она законно бурстовая, и общий
+  // бакет её не выдержал бы, но и бездонной ей быть нельзя — это поток в чужой
+  // сокет.
   private relay(client: AppSocket, event: string, to: unknown, data: Record<string, unknown>) {
-    if (typeof to !== 'string') return;
+    if (typeof to !== 'string' || !this.perimeter.allowSignal(client)) return;
     const room = this.voice.roomOf(client);
     if (!room) return;
     const target = this.server.sockets.sockets.get(to);

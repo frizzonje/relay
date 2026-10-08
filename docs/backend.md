@@ -121,7 +121,9 @@ SignalingGateway
 
 Тела событий читаются только через `str` / `trimmed` / `optional` и режутся по
 `LIMIT` из [`gateway/protocol.ts`](../apps/api/src/gateway/protocol.ts). Там же —
-типы тел (`Untrusted<…>` от контракта). Ответы и рассылки обработчики
+типы тел (`Untrusted<…>` от контракта). Тела негоциации (SDP и ICE), которые
+сервер пересылает соседу, собираются заново по форме WebRTC в
+[`gateway/negotiation.ts`](../apps/api/src/gateway/negotiation.ts). Ответы и рассылки обработчики
 импортируют прямо из `@relay/shared` (см.
 [architecture.md](architecture.md#контракт)).
 

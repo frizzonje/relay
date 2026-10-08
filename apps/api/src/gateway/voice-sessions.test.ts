@@ -401,6 +401,9 @@ describe('media-update', () => {
   });
 });
 
+const OFFER = { type: 'offer', sdp: 'v=0' } as const;
+const ANSWER = { type: 'answer', sdp: 'v=0-ответ' } as const;
+
 describe('сигналинг', () => {
   async function pair() {
     const { gw, server } = await makeGateway();
@@ -415,15 +418,15 @@ describe('сигналинг', () => {
 
   it('offer доходит адресату вместе с именем отправителя', async () => {
     const { gw, a, b } = await pair();
-    gw.handleOffer(asSocket(a), { to: 'b', sdp: 'v=0' });
-    expect(b.last('offer')).toEqual({ from: 'a', name: 'A', sdp: 'v=0' });
+    gw.handleOffer(asSocket(a), { to: 'b', sdp: OFFER });
+    expect(b.last('offer')).toEqual({ from: 'a', name: 'A', sdp: OFFER });
   });
 
   it('answer и ice-candidate ходят так же', async () => {
     const { gw, a, b } = await pair();
-    gw.handleAnswer(asSocket(b), { to: 'a', sdp: 'v=0-ответ' });
+    gw.handleAnswer(asSocket(b), { to: 'a', sdp: ANSWER });
     gw.handleIceCandidate(asSocket(a), { to: 'b', candidate: { candidate: 'host' } });
-    expect(a.last('answer')).toEqual({ from: 'b', sdp: 'v=0-ответ' });
+    expect(a.last('answer')).toEqual({ from: 'b', sdp: ANSWER });
     expect(b.last('ice-candidate')).toEqual({ from: 'a', candidate: { candidate: 'host' } });
   });
 
@@ -436,20 +439,47 @@ describe('сигналинг', () => {
     expect(a.last('screen-watch')).toEqual({ from: 'b', on: false });
   });
 
+  // Сервер пересылает чужое тело соседу — значит, отвечает за то, что именно
+  // он пересылает: только поля описания и кандидата, и в их размерах.
+  it('пересылается только форма описания и кандидата, лишнее отрезается', async () => {
+    const { gw, a, b } = await pair();
+    gw.handleOffer(asSocket(a), { to: 'b', sdp: { ...OFFER, html: '<script>' } });
+    expect(b.last('offer')).toEqual({ from: 'a', name: 'A', sdp: OFFER });
+    gw.handleIceCandidate(asSocket(a), {
+      to: 'b',
+      candidate: { candidate: 'host', sdpMid: '0', sdpMLineIndex: 0, extra: 'x'.repeat(1000) },
+    });
+    expect(b.last('ice-candidate')).toEqual({
+      from: 'a',
+      candidate: { candidate: 'host', sdpMid: '0', sdpMLineIndex: 0 },
+    });
+  });
+
+  it('битое и непомерное тело не пересылается вовсе', async () => {
+    const { gw, a, b } = await pair();
+    gw.handleOffer(asSocket(a), { to: 'b', sdp: 'v=0' });
+    gw.handleOffer(asSocket(a), { to: 'b', sdp: { type: 'бред', sdp: 'v=0' } });
+    gw.handleOffer(asSocket(a), { to: 'b', sdp: { type: 'offer', sdp: 'v'.repeat(1_000_000) } });
+    gw.handleIceCandidate(asSocket(a), { to: 'b', candidate: 42 });
+    gw.handleIceCandidate(asSocket(a), { to: 'b', candidate: { candidate: 'c'.repeat(100_000) } });
+    expect(b.got('offer')).toBe(false);
+    expect(b.got('ice-candidate')).toBe(false);
+  });
+
   it('в чужую комнату сигнал не пересылают', async () => {
     const { gw, server, a } = await pair();
     const outsider = connect(gw, server, { id: 'outsider' });
     gw.handleJoin(asSocket(outsider), { room: 'voice-obshchii-sfu', name: 'O' });
     outsider.clear();
-    gw.handleOffer(asSocket(a), { to: 'outsider', sdp: 'v=0' });
+    gw.handleOffer(asSocket(a), { to: 'outsider', sdp: OFFER });
     expect(outsider.got('offer')).toBe(false);
   });
 
   it('несуществующий адресат, нестроковый адрес и отправитель вне комнаты — молчание', async () => {
     const { gw, server } = await makeGateway();
     const loner = connect(gw, server, { id: 'loner' });
-    gw.handleOffer(asSocket(loner), { to: 'нет', sdp: 'v=0' });
-    gw.handleOffer(asSocket(loner), { to: 42, sdp: 'v=0' });
+    gw.handleOffer(asSocket(loner), { to: 'нет', sdp: OFFER });
+    gw.handleOffer(asSocket(loner), { to: 42, sdp: OFFER });
     expect(loner.emitted).toHaveLength(0);
   });
 });

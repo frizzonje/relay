@@ -776,7 +776,7 @@ describe('ограничение частоты', () => {
     expect(a.got('chat')).toBe(true);
   });
 
-  it('негоциацию бакет не трогает: она бывает бурстовой законно', async () => {
+  it('негоциацию общий бакет не трогает: она бывает бурстовой законно', async () => {
     const { gw, server } = await makeGateway();
     const a = connect(gw, server, { id: 'a' });
     const b = connect(gw, server, { id: 'b' });
@@ -784,9 +784,28 @@ describe('ограничение частоты', () => {
     gw.handleJoin(asSocket(b), { room: 'voice-obshchii', name: 'B' });
     b.clear();
     for (let i = 0; i < 200; i++) {
-      gw.handleIceCandidate(asSocket(a), { to: 'b', candidate: i });
+      gw.handleIceCandidate(asSocket(a), { to: 'b', candidate: { candidate: `c${i}` } });
     }
     expect(b.all('ice-candidate')).toHaveLength(200);
+    // И после бурста человек по-прежнему говорит: ведро у негоциации своё.
+    await gw.handleChatJoin(asSocket(a), { room: 'obshchii', name: 'A' });
+    await gw.handleChatMessage(asSocket(a), { text: 'после бурста' });
+    expect(a.got('chat')).toBe(true);
+  });
+
+  it('но и негоциация не бездонна: поток сигналов соседу гасится', async () => {
+    const { gw, server } = await makeGateway();
+    const a = connect(gw, server, { id: 'a' });
+    const b = connect(gw, server, { id: 'b' });
+    gw.handleJoin(asSocket(a), { room: 'voice-obshchii', name: 'A' });
+    gw.handleJoin(asSocket(b), { room: 'voice-obshchii', name: 'B' });
+    b.clear();
+    for (let i = 0; i < 5000; i++) {
+      gw.handleIceCandidate(asSocket(a), { to: 'b', candidate: { candidate: `c${i}` } });
+    }
+    const got = b.all('ice-candidate').length;
+    expect(got).toBeGreaterThanOrEqual(200);
+    expect(got).toBeLessThan(5000);
   });
 });
 

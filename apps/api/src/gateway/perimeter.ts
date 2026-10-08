@@ -68,9 +68,10 @@ export const RL_REFILL_PER_SEC = 20;
  *    видит вовсе.
  * 3. **Замок** (`unlock*`, `canSee`, `mayEnter`): пароль закрытого сервера. Он
  *    же запирает и слаги его каналов — иначе пароль обходится одной строкой.
- * 4. **Лимитер** (`allow`, `allowDiag`, `allowMessage`): три раздельных ведра —
- *    чтобы телеметрия не съедала звонок, а настроенный владельцем предел реплик
- *    не трогал скорость остальных действий.
+ * 4. **Лимитер** (`allow`, `allowDiag`, `allowSignal`, `allowMessage`): четыре
+ *    раздельных ведра — чтобы телеметрия не съедала звонок, негоциация не
+ *    упиралась в общий предел, а настроенный владельцем предел реплик не трогал
+ *    скорость остальных действий.
  */
 export class Perimeter {
   // ── Лимитер ───────────────────────────────────────────────────────────────
@@ -85,6 +86,14 @@ export class Perimeter {
   // потому что отказ здесь молчаливый.
   private static readonly DIAG_CAPACITY = 20;
   private static readonly DIAG_REFILL_PER_SEC = 5;
+  //
+  // Негоциация (offer/answer/ICE/screen-watch) — тоже отдельно, по обратной
+  // причине: она бурстовая законно. Вход в канал на десятерых — это пара сотен
+  // кандидатов за секунду, и общий бакет отказал бы ровно звонку. Но и без
+  // ведра нельзя: это поток в чужой сокет, и сломанный или злой клиент одного
+  // участника не должен заваливать клиент соседа.
+  private static readonly SIGNAL_CAPACITY = 500;
+  private static readonly SIGNAL_REFILL_PER_SEC = 100;
 
   // ── Замки ─────────────────────────────────────────────────────────────────
   // Общий бакет (20/с) от перебора пароля не защищает: 20 попыток в секунду с
@@ -595,6 +604,16 @@ export class Perimeter {
     return this.spend(client, 'rlDiag', Perimeter.DIAG_CAPACITY, Perimeter.DIAG_REFILL_PER_SEC);
   }
 
+  /** Бакет негоциации — свой: бурст законен, бездонный поток соседу — нет. */
+  allowSignal(client: AppSocket): boolean {
+    return this.spend(
+      client,
+      'rlSignal',
+      Perimeter.SIGNAL_CAPACITY,
+      Perimeter.SIGNAL_REFILL_PER_SEC,
+    );
+  }
+
   /**
    * Бакет реплик — тот, которым владелец ужимает разговор
    * (`moderation.messageRatePerMinute` и `moderation.messageBurst`).
@@ -614,7 +633,7 @@ export class Perimeter {
 
   private spend(
     client: AppSocket,
-    key: 'rl' | 'rlDiag' | 'rlMsg',
+    key: 'rl' | 'rlDiag' | 'rlMsg' | 'rlSignal',
     capacity: number,
     refillPerSec: number,
   ): boolean {
