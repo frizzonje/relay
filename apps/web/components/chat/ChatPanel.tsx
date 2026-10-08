@@ -40,6 +40,7 @@ import { usePinsStore } from '@/stores/pins';
 import { insertMention, typedMention, writtenIn } from '@/lib/mentions';
 import { useIdentityStore } from '@/stores/identity';
 import { tx, useRichT, useT } from '@/lib/i18n';
+import { apiUrl } from '@/lib/api-url';
 
 interface PendingFile {
   id: string;
@@ -511,8 +512,7 @@ export function ChatPanel() {
     try {
       const fd = new FormData();
       fd.append('file', p.file);
-      const base = process.env.NEXT_PUBLIC_API_URL || '';
-      const res = await fetch(`${base}/api/upload`, {
+      const res = await fetch(apiUrl('/api/upload'), {
         method: 'POST',
         body: fd,
         credentials: 'include',

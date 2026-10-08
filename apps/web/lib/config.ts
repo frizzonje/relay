@@ -1,6 +1,7 @@
 import type { ConfigResponse, IceServer, RetentionMode } from '@relay/shared';
 import { useConfigStore } from '@/stores/config';
 import { guestTokenFromLocation } from './socket';
+import { apiUrl } from './api-url';
 
 /**
  * Конфиг с бэка (`GET /api/config`): ICE-серверы (туда подставляются STUN/TURN
@@ -43,11 +44,10 @@ const CACHE_MAX_AGE_SEC = 10 * 60;
 let fetchedAt = 0;
 
 function fetchConfig(): Promise<ConfigResponse> {
-  const base = process.env.NEXT_PUBLIC_API_URL || '';
   // У гостя куки нет — он предъявляет инвайт-токен. Без этого конфиг отвечал
   // 401, гость оставался на публичном STUN и за строгим NAT сидел без звука.
   const guest = guestTokenFromLocation();
-  return fetch(`${base}/api/config`, {
+  return fetch(apiUrl('/api/config'), {
     credentials: 'include',
     ...(guest ? { headers: { authorization: `Bearer ${guest}` } } : {}),
   })

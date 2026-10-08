@@ -1,4 +1,5 @@
 import { isOwnerToken } from '@relay/shared';
+import { apiUrl } from './api-url';
 
 /**
  * Владелец инсталляции со стороны клиента.
@@ -27,10 +28,6 @@ export class OwnerError extends Error {
   }
 }
 
-function base(): string {
-  return process.env.NEXT_PUBLIC_API_URL || '';
-}
-
 /** Код ответа → причина. Тела не читаем: отказ здесь однозначно виден по коду. */
 function failureOf(status: number): OwnerError {
   if (status === 409) return new OwnerError('used');
@@ -43,7 +40,7 @@ function failureOf(status: number): OwnerError {
 /** Владелец ли эта личность. `false` и при отсутствии сессии — вопрос про себя. */
 export async function amIOwner(): Promise<boolean> {
   try {
-    const res = await fetch(`${base()}/api/identity/owner`, { credentials: 'include' });
+    const res = await fetch(apiUrl('/api/identity/owner'), { credentials: 'include' });
     if (!res.ok) return false;
     return ((await res.json()) as { owner: boolean }).owner;
   } catch {
@@ -60,7 +57,7 @@ export async function claimOwner(token: string): Promise<void> {
   if (!isOwnerToken(token)) throw new OwnerError('bad-token');
   let res: Response;
   try {
-    res = await fetch(`${base()}/api/identity/owner/claim`, {
+    res = await fetch(apiUrl('/api/identity/owner/claim'), {
       method: 'POST',
       credentials: 'include',
       headers: { 'content-type': 'application/json' },

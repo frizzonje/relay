@@ -1,5 +1,6 @@
 import { certificateMessage, isPublicKey, type OwnDevice, type PairOffer } from '@relay/shared';
 import { SignerError, getSigner, type Signer } from './signer';
+import { apiUrl } from './api-url';
 
 /**
  * Устройства личности со стороны клиента: список, отзыв и связка нового.
@@ -54,10 +55,6 @@ const KNOWN: DeviceFailure[] = [
   'unknown',
 ];
 
-function base(): string {
-  return process.env.NEXT_PUBLIC_API_URL || '';
-}
-
 /**
  * Ответ сервера → причина. Всё непонятое становится `network`: врать человеку
  * точной причиной, которой мы не знаем, хуже, чем предложить повторить.
@@ -73,7 +70,7 @@ async function failureOf(res: Response): Promise<DeviceError> {
 async function ask(path: string, init?: RequestInit): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetch(`${base()}${path}`, { credentials: 'include', ...init });
+    res = await fetch(apiUrl(path), { credentials: 'include', ...init });
   } catch (err) {
     // Оборванная сеть отвергает промис, а не отдаёт ответ.
     throw new DeviceError('network', err);

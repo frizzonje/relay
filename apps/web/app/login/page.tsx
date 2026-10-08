@@ -5,6 +5,7 @@ import { motion, useAnimationControls } from 'framer-motion';
 import { Logo } from '@/components/ui/Logo';
 import { Icon } from '@/components/ui/icon';
 import { useT } from '@/lib/i18n';
+import { apiUrl } from '@/lib/api-url';
 
 /**
  * Экран входа. POST /api/login: 200 → на главную; 401 — отказ; 429 — перебор
@@ -35,8 +36,7 @@ export default function LoginPage() {
     setBusy(true);
     setErr('');
     try {
-      const base = process.env.NEXT_PUBLIC_API_URL || '';
-      const r = await fetch(`${base}/api/login`, {
+      const r = await fetch(apiUrl('/api/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',

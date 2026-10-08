@@ -47,6 +47,7 @@ import {
   setPushToTalk,
   getMicLevel,
 } from '@/lib/voice';
+import { apiUrl } from '@/lib/api-url';
 
 type Tab = 'av' | 'stream' | 'appearance' | 'hotkeys' | 'app' | 'account' | 'about';
 
@@ -571,8 +572,7 @@ export function SettingsDialog({
 
   async function logout() {
     try {
-      const base = process.env.NEXT_PUBLIC_API_URL || '';
-      await fetch(`${base}/api/logout`, { method: 'POST', credentials: 'include' });
+      await fetch(apiUrl('/api/logout'), { method: 'POST', credentials: 'include' });
     } catch {
       /* всё равно уводим на вход — middleware не пустит без валидной куки */
     }

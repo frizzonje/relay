@@ -1,6 +1,7 @@
 import { authMessage } from '@relay/shared';
 import { inShell } from './shell-bridge';
 import { SignerError, type Signer, getSigner } from './signer';
+import { apiUrl } from './api-url';
 
 /**
  * Вход личности со стороны клиента: три запроса, ни одного поля ввода.
@@ -41,12 +42,8 @@ export class LoginError extends Error {
   }
 }
 
-function base(): string {
-  return process.env.NEXT_PUBLIC_API_URL || '';
-}
-
 async function post(path: string, body: unknown): Promise<Response> {
-  return fetch(`${base()}${path}`, {
+  return fetch(apiUrl(path), {
     method: 'POST',
     credentials: 'include',
     headers: { 'content-type': 'application/json' },
@@ -73,7 +70,7 @@ async function failureOf(res: Response): Promise<LoginFailure> {
  * обычное состояние первого захода и любого захода после рестарта api.
  */
 export async function whoAmI(): Promise<Identity | null> {
-  const res = await fetch(`${base()}/api/identity/me`, { credentials: 'include' });
+  const res = await fetch(apiUrl('/api/identity/me'), { credentials: 'include' });
   if (res.status === 401) return null;
   if (!res.ok) throw new LoginError(await failureOf(res));
   return (await res.json()) as Identity;

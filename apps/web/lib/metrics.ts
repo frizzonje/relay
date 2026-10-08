@@ -1,4 +1,5 @@
 import type { MetricsResponse } from '@relay/shared';
+import { apiUrl } from './api-url';
 
 /**
  * Состояние машины, на которой стоит инсталляция (`GET /api/metrics`).
@@ -25,8 +26,7 @@ export const METRICS_POLL_MS = 2000;
 export const CPU_HISTORY = 48;
 
 export async function fetchMetrics(signal?: AbortSignal): Promise<MetricsResponse> {
-  const base = process.env.NEXT_PUBLIC_API_URL || '';
-  const res = await fetch(`${base}/api/metrics`, { credentials: 'include', signal });
+  const res = await fetch(apiUrl('/api/metrics'), { credentials: 'include', signal });
   if (!res.ok) throw new Error(`metrics ${res.status}`);
   return (await res.json()) as MetricsResponse;
 }
