@@ -152,6 +152,19 @@ describe('POST /api/login', () => {
     expect(blocked.cookies[AUTH_COOKIE]).toBeUndefined();
   });
 
+  // Простой проверяется до сверки пароля, а неудача записывалась после неё:
+  // пачка запросов, посланных разом, проходила проверку вся.
+  it('пачка одновременных попыток не обходит простой', async () => {
+    const c = controller();
+    const wrong = Array.from({ length: 20 }, (_, i) =>
+      c.login(req('9.9.9.9'), res(), { password: `мимо-${i}` }),
+    );
+    const last = res();
+    await Promise.all([...wrong, c.login(req('9.9.9.9'), last, { password: 'верный-пароль' })]);
+    expect(last.code).toBe(429);
+    expect(last.cookies[AUTH_COOKIE]).toBeUndefined();
+  });
+
   it('счётчик у каждого адреса свой — сосед не страдает', async () => {
     const c = controller();
     for (let i = 0; i < 8; i++) await c.login(req('9.9.9.9'), res(), { password: 'мимо' });

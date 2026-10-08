@@ -73,8 +73,11 @@ export class AuthController {
     }
 
     const password = typeof body?.password === 'string' ? body.password : '';
+    // Попытка записывается неудачей ДО сверки, той же синхронной частью, что и
+    // проверка простоя выше, — успех её снимет. Запиши мы неудачу по ответу,
+    // пачка запросов, посланных разом, прошла бы проверку простоя вся.
+    this.recordFailure(ip);
     if (!password || !(await passwordMatches(password))) {
-      this.recordFailure(ip);
       res.status(401).json({ error: 'invalid password' });
       return;
     }
