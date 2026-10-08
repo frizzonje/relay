@@ -131,7 +131,9 @@ export class AuditService {
     const params: unknown[] = [];
     let where = '';
     if (cursor) {
-      if (!Number.isFinite(cursor.at) || !UUID_RE.test(cursor.id)) {
+      // Не «конечное число», а «дата»: `new Date(1e300)` — Invalid Date, и
+      // запрос к базе упал бы вместо пустой страницы.
+      if (Number.isNaN(new Date(cursor.at).getTime()) || !UUID_RE.test(cursor.id)) {
         this.logger.warn(`журнал: негодный курсор ${JSON.stringify(cursor)} — страница пуста`);
         return { entries: [], more: false };
       }

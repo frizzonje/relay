@@ -318,7 +318,13 @@ describe('страницы', () => {
       entries: [],
       more: false,
     });
-    expect(warn).toHaveBeenCalledTimes(2);
+    // Конечное число, но не дата: `new Date(1e300)` — Invalid Date, и запрос
+    // к базе упал бы вместо пустой страницы.
+    expect(await audit.page({ at: 1e300, id: randomUUID() })).toEqual({
+      entries: [],
+      more: false,
+    });
+    expect(warn).toHaveBeenCalledTimes(3);
   });
 
   it('размер страницы не выходит за потолок и не бывает нулевым', async () => {
