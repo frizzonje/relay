@@ -975,3 +975,33 @@ describe('дорожка в пути', () => {
   });
 });
 
+describe('одна подписка на дорожку', () => {
+  /**
+   * Клиент держит по подписке на дорожку (по её producerId). Вторая на ту же
+   * значит, что ответ на первую не дошёл, — или что клиент чужой и заводит их
+   * в цикле: без потолка каждая — это память и пакеты однопоточного воркера.
+   */
+  it('повторный consume той же дорожки заменяет прежнюю подписку', async () => {
+    const a = await publishing('эфир', 'a', 'cam');
+    const b = await withTransport('эфир', 'b');
+    const ask = () =>
+      gw.handleConsume(sock(b.s), {
+        transportId: b.transportId,
+        producerId: a.producerId,
+        rtpCapabilities: { codecs: [] },
+      });
+
+    const first = await ask();
+    for (let i = 0; i < 5; i++) await ask();
+    const last = await ask();
+
+    if (!first.ok || !last.ok) throw new Error('consume не прошёл');
+    const consumed = workers.routers[0].transports.flatMap((t) => t.consumed);
+    expect(consumed.filter((c) => !c.closed).map((c) => c.id)).toEqual([last.consumer.id]);
+    // Старая подписка снята и с участника: пауза по её id — уже отказ.
+    expect(await gw.handleResume(sock(b.s), { consumerId: first.consumer.id })).toEqual({
+      ok: false,
+      error: 'no-consumer',
+    });
+  });
+});

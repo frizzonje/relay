@@ -465,6 +465,15 @@ export class SfuGateway implements OnGatewayConnection {
         consumer.close();
         return fail('no-transport');
       }
+      // На дорожку — одна подписка: клиент держит их по producerId, и вторая
+      // значит, что ответ на первую не дошёл. Без замены чужой клиент заводил
+      // бы их в цикле — каждая стоит памяти и пакетов однопоточного воркера.
+      for (const old of [...peer.consumers.values()]) {
+        if (old.producerId === producerId) {
+          old.close();
+          peer.consumers.delete(old.id);
+        }
+      }
       peer.consumers.set(consumer.id, consumer);
       consumer.on('transportclose', () => peer.consumers.delete(consumer.id));
       // Какой слой simulcast реально доехал. Клиент просит слой сам
