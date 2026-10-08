@@ -123,6 +123,37 @@ describe('дозвон: набор и подтверждение', () => {
   });
 });
 
+describe('дозвон: повторный набор раньше ack прошлого', () => {
+  it('прошлый вызов отбит до нового набора, и экран не берёт его номер', async () => {
+    const { ring, call } = await fresh();
+    const first = pendingDial();
+    const second = pendingDial();
+    vi.mocked(call.dialCall).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+    // Набрал, передумал, набрал снова — всё раньше, чем сервер ответил на первый.
+    const a = ring.useRingStore.getState().start(PEER);
+    ring.useRingStore.getState().hangUp();
+    const b = ring.useRingStore.getState().start(PEER);
+
+    // Личность звонит не больше чем в одном вызове: второй `call-start`,
+    // ушедший раньше отбоя первого, сервер встретил бы «занято».
+    await Promise.resolve();
+    expect(call.dialCall).toHaveBeenCalledTimes(1);
+
+    first.resolve({ ok: true, ringId: 'r1' });
+    await a;
+    await vi.waitFor(() => expect(call.dialCall).toHaveBeenCalledTimes(2));
+    // Номер первого вернули (тот самый повторный отбой из теста выше)...
+    expect(call.hangUp).toHaveBeenCalledTimes(2);
+    // ...и чужим номером экран не назвался.
+    expect(ring.useRingStore.getState().outgoing!.ring.id).toBe('');
+
+    second.resolve({ ok: true, ringId: 'r2' });
+    await b;
+    expect(ring.useRingStore.getState().outgoing!.ring.id).toBe('r2');
+  });
+});
+
 describe('дозвон: отказ ДО того, как что-либо зазвонило', () => {
   it.each([
     ['busy', { key: 'call.state.busy', color: 'text-warn' }],

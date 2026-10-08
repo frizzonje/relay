@@ -201,6 +201,12 @@ const END_EVENT: Record<
   failed: 'peer-gone',
 };
 
+/**
+ * Набор, чей ack ещё не пришёл, — очередь для следующего (см. `start`). Пуст,
+ * когда ждать некого.
+ */
+let dialing: Promise<void> | null = null;
+
 export const useRingStore = create<RingStoreState>((set, get) => ({
   outgoing: null,
   incoming: null,
@@ -232,17 +238,38 @@ export const useRingStore = create<RingStoreState>((set, get) => ({
 
   start: async (peer, video = false) => {
     const now = Date.now();
-    set({
-      outgoing: { peer, video, ring: ringingRing('', peer.fingerprint, now), refusal: null },
+    const screen: OutgoingScreen = {
+      peer,
+      video,
+      ring: ringingRing('', peer.fingerprint, now),
+      refusal: null,
+    };
+    set({ outgoing: screen });
+    // Прошлый набор ещё ждёт ack (набрал, бросил, набрал снова) — новый ждёт
+    // своей очереди. Личность звонит не больше чем в одном вызове, а отбить
+    // прошлый можно только по номеру из его ack: уйди второй `call-start`
+    // раньше, сервер ответил бы «занято», а у собеседника звонил бы вызов,
+    // о котором экран уже не знает. Экран за время ожидания закрыли — не
+    // набираем вовсе.
+    const asked = dialing
+      ? dialing.then(() => (get().outgoing === screen ? dialCall(peer.fingerprint, video) : null))
+      : dialCall(peer.fingerprint, video);
+    const settled = asked.then(
+      () => undefined,
+      () => undefined,
+    );
+    dialing = settled;
+    void settled.then(() => {
+      if (dialing === settled) dialing = null;
     });
-    const res = await dialCall(peer.fingerprint, video);
+    const res = await asked;
     const current = get().outgoing;
-    // Экран уже закрыли (отбой, «написать вместо») раньше, чем пришёл ack, —
-    // не дождавшись номера, отбить было нечем (`lib/call.ts` не знает `mine`
-    // ДО ack). Номер уже есть — самое время вернуть вызов, которого больше не
-    // ждут. Сверка по отпечатку — на случай, если экран успели переоткрыть
-    // на другого собеседника: тогда ack тоже не про то, что сейчас на экране.
-    if (!current || current.peer.fingerprint !== peer.fingerprint) {
+    // Экран уже закрыли (отбой, «написать вместо») или открыли заново раньше,
+    // чем пришёл ack, — не дождавшись номера, отбить было нечем (`lib/call.ts`
+    // не знает `mine` ДО ack). Номер уже есть — самое время вернуть вызов,
+    // которого больше не ждут. Сверка по самому экрану, а не по собеседнику:
+    // переоткрытый на того же человека экран — уже другой набор.
+    if (current !== screen) {
       if (res?.ok) hangUpCall();
       return;
     }
