@@ -1,0 +1,80 @@
+import {
+  BadRequestException,
+  Controller,
+  Post,
+  Req,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { randomBytes } from 'crypto';
+import type { Request } from 'express';
+import { IDENTITY_COOKIE, readSession } from '../identity/session';
+import { UploadRateGuard, UploadsEnabledGuard, uploadBudget } from './upload.guard';
+import { MAX_UPLOAD_BYTES, type Attachment, parseCookies } from '@relay/shared';
+import { UPLOAD_DIR, UploadsService } from './uploads.service';
+import { requestNetwork } from '../client-address';
+
+// multer без @types — берём через require, чтобы не тянуть декларации
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { diskStorage } = require('multer');
+
+// Расширение из исходного имени: только безопасные символы, иначе без него.
+// Расширение нужно, чтобы статика отдавала картинки/аудио с верным Content-Type.
+function safeExt(name: string): string {
+  const m = /\.([a-zA-Z0-9]{1,8})$/.exec(name || '');
+  return m ? '.' + m[1].toLowerCase() : '';
+}
+
+interface MulterFile {
+  filename: string;
+  originalname: string;
+  size: number;
+  mimetype: string;
+}
+
+@Controller('api')
+export class UploadController {
+  constructor(private readonly uploads: UploadsService) {}
+
+  @Post('upload')
+  // Гарды — до интерсептора: отказ приходит раньше, чем multer начнёт писать
+  // тело на диск. Порядок в Nest именно такой (guards → interceptors), и
+  // держится вся защита на нём. Выключенные в панели загрузки отвергаются
+  // здесь же — принять тело, чтобы потом его удалить, было бы честно, но
+  // дороже ровно на весь файл.
+  @UseGuards(UploadsEnabledGuard, UploadRateGuard)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: UPLOAD_DIR,
+        filename: (_req: unknown, file: MulterFile, cb: (e: unknown, name: string) => void) => {
+          cb(null, randomBytes(12).toString('hex') + safeExt(file.originalname));
+        },
+      }),
+      // Жёсткий потолок процесса и единственный, что действует ДО того, как тело
+      // окажется на диске. Константа, а не настройка: интерсептор получает его
+      // один раз, при разборе декораторов. `files.maxUploadBytes` сужает его уже
+      // по настоящему размеру записанного файла (см. `UploadsService.register`);
+      // поднять выше некуда — то же число знает браузер и откажет до отправки.
+      limits: { fileSize: MAX_UPLOAD_BYTES },
+    }),
+  )
+  async upload(
+    @Req() req: Request,
+    @UploadedFile() file?: MulterFile,
+  ): Promise<Attachment & { id: string }> {
+    if (!file) throw new BadRequestException('файл не получен');
+    uploadBudget.charge(requestNetwork(req), file.size);
+    // Кто принёс — нужно суточной квоте (`files.perIdentityDailyBytes`).
+    // Личность берём из куки сессии и ничего у неё не спрашиваем: квоте нужен
+    // ключ, а не права — их уже проверил гейт. Устройство сюда не идёт
+    // намеренно: квота у человека одна на все его вкладки и телефоны.
+    const session = readSession(parseCookies(req.headers.cookie)[IDENTITY_COOKIE]);
+    return this.uploads.register(file, {
+      identityId: session?.identityId,
+      network: requestNetwork(req),
+    });
+  }
+}

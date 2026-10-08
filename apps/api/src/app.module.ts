@@ -14,19 +14,19 @@ import { RolesService } from './identity/roles.service';
 import { ConfigController } from './config.controller';
 import { HealthController } from './health.controller';
 import { MetricsController } from './metrics.controller';
-import { UploadController } from './upload.controller';
+import { UploadController } from './uploads/upload.controller';
 import { SignalingGateway } from './gateway/signaling.gateway';
-import { ChatService } from './gateway/chat.service';
-import { MentionsService } from './gateway/mentions.service';
-import { PinsService } from './gateway/pins.service';
-import { DmService } from './gateway/dm.service';
-import { RegistryService } from './gateway/registry.service';
+import { ChatService } from './gateway/chat/chat.service';
+import { MentionsService } from './gateway/chat/mentions.service';
+import { PinsService } from './gateway/chat/pins.service';
+import { DmService } from './gateway/dm/dm.service';
+import { RegistryService } from './gateway/registry/registry.service';
 import { MetricsService } from './metrics';
 import { RetentionService } from './db/retention.service';
 import { AuditService } from './settings/audit.service';
 import { OverviewService } from './settings/overview.service';
 import { SettingsService } from './settings/settings.service';
-import { UploadsService } from './uploads';
+import { UploadsService } from './uploads/uploads.service';
 
 /**
  * Модуль собирается вокруг уже открытой базы, а не открывает её сам.

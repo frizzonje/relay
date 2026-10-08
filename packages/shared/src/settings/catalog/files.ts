@@ -20,7 +20,7 @@ export const FILES_SETTINGS: readonly SettingSpec[] = [
     min: 1 * KIB,
     max: 25 * MIB,
   },
-  // Виды — ровно те, что различает detectKind (apps/api/src/uploads.ts): картинка,
+  // Виды — ровно те, что различает detectKind (apps/api/src/uploads/uploads.service.ts): картинка,
   // mp3 и всё остальное. Четвёртым тут стояло «video», которого в коде нет: ролик
   // сегодня приезжает как `file`, и снятая галочка «видео» не сделала бы ничего,
   // а снятая «файл» молча унесла бы с роликами и pdf. `satisfies` держит список

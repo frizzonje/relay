@@ -70,8 +70,8 @@
 | `apps/api/src/settings/settings.service.test.ts` | тесты того же |
 | `apps/api/src/settings/audit.service.ts` | журнал: запись и чтение страницами |
 | `apps/api/src/settings/audit.service.test.ts` | тесты того же |
-| `apps/api/src/gateway/admin.handlers.ts` | обработчики панели |
-| `apps/api/src/gateway/admin.handlers.test.ts` | тесты того же |
+| `apps/api/src/gateway/admin/admin.handlers.ts` | обработчики панели |
+| `apps/api/src/gateway/admin/admin.handlers.test.ts` | тесты того же |
 | `apps/api/src/settings/overview.service.ts` | сводка: люди, сообщения, диск, база, аптайм |
 
 **Правятся (api):** `db/entities.ts`, `db/testing.ts`, `db/migrations/index.ts`,
@@ -697,8 +697,8 @@ git commit -m "feat(admin): settings live in the database, env only seeds them"
 
 **Файлы:**
 
-- Изменить: `apps/api/src/db/retention.service.ts`, `apps/api/src/uploads.ts`,
-  `apps/api/src/upload.guard.ts`, `apps/api/src/config.controller.ts`
+- Изменить: `apps/api/src/db/retention.service.ts`, `apps/api/src/uploads/uploads.service.ts`,
+  `apps/api/src/uploads/upload.guard.ts`, `apps/api/src/config.controller.ts`
 - Тест: соответствующие `*.test.ts` (дописать случаи)
 
 **Что меняется:** сегодня эти места читают `process.env` при старте. Теперь они спрашивают
@@ -745,9 +745,9 @@ git commit -m "feat(admin): retention and upload limits obey the panel"
 **Файлы:**
 
 - Изменить: `apps/api/src/gateway/perimeter.ts` (лимитер, гости, режим обслуживания),
-  `apps/api/src/gateway/chat.handlers.ts` (длина, правка, удаление, стоп-слова, только
-  чтение), `apps/api/src/gateway/dm.handlers.ts` (`direct.*`),
-  `apps/api/src/gateway/registry.handlers.ts` (квоты серверов и каналов)
+  `apps/api/src/gateway/chat/chat.handlers.ts` (длина, правка, удаление, стоп-слова, только
+  чтение), `apps/api/src/gateway/dm/dm.handlers.ts` (`direct.*`),
+  `apps/api/src/gateway/registry/registry.handlers.ts` (квоты серверов и каналов)
 - Тест: `perimeter.test.ts`, `chat.service.test.ts`, `dm.handlers.test.ts`,
   `directory.servers.test.ts` (дописать случаи)
 
@@ -779,7 +779,7 @@ git commit -m "feat(admin): perimeter, chat and direct messages obey the panel"
 
 **Файлы:** `apps/api/src/identity/identity.service.ts`, `pairing.service.ts`,
 `identity.controller.ts`, `devices.controller.ts`, `apps/api/src/auth/auth.controller.ts`,
-`apps/api/src/gateway/moderation.handlers.ts`, `apps/api/src/gateway/chat.service.ts`
+`apps/api/src/gateway/moderation/moderation.handlers.ts`, `apps/api/src/gateway/chat/chat.service.ts`
 (системные реплики) + их тесты.
 
 **Ключи (12):** `access.identityCreation`,
@@ -811,8 +811,8 @@ git commit -m "feat(admin): perimeter, chat and direct messages obey the panel"
 
 ### Задача 5б: Настройки действуют — файлы, хранение ЛС, голос и гости
 
-**Файлы:** `apps/api/src/uploads.ts`, `apps/api/src/db/retention.service.ts`,
-`apps/api/src/gateway/voice-sessions.ts`, `voice.handlers.ts`, `guests.handlers.ts`,
+**Файлы:** `apps/api/src/uploads/uploads.service.ts`, `apps/api/src/db/retention.service.ts`,
+`apps/api/src/gateway/voice/voice-sessions.ts`, `voice.handlers.ts`, `guests.handlers.ts`,
 `apps/api/src/sfu/*` + их тесты.
 
 **Ключи (11 здесь):** `files.perIdentityDailyBytes`, `files.installQuotaBytes`,
@@ -931,8 +931,8 @@ git commit -m "feat(admin): an audit trail for everything the owner does"
 
 **Файлы:**
 
-- Создать: `packages/shared/src/admin.ts`, `apps/api/src/gateway/admin.handlers.ts`,
-  `apps/api/src/gateway/admin.handlers.test.ts`, `apps/api/src/settings/overview.service.ts`
+- Создать: `packages/shared/src/admin.ts`, `apps/api/src/gateway/admin/admin.handlers.ts`,
+  `apps/api/src/gateway/admin/admin.handlers.test.ts`, `apps/api/src/settings/overview.service.ts`
 - Изменить: `apps/api/src/gateway/signaling.gateway.ts`, `gateway.testkit.ts`,
   `packages/shared/src/index.ts`, `docs/protocol.md`
 

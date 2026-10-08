@@ -13,7 +13,7 @@ import {
   explainDbFailure,
 } from './db/data-source';
 import { authGate, flatUploadsOnly, uploadStaticHeaders } from './http-gate';
-import { UPLOAD_DIR } from './uploads';
+import { UPLOAD_DIR } from './uploads/uploads.service';
 
 /**
  * Отказ, из которого понятно, что делать руками. Рамка не украшение: в логе

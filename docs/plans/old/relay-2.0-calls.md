@@ -50,8 +50,8 @@
 ## Карта файлов
 
 **Создаются:** `packages/shared/src/ring.ts` (машина состояний + протокол),
-`packages/shared/src/ring.test.ts`, `apps/api/src/gateway/presence.ts` (+ тест),
-`apps/api/src/gateway/ring.ts` (+ тест), `apps/api/src/gateway/ring.handlers.ts` (+ тест),
+`packages/shared/src/ring.test.ts`, `apps/api/src/gateway/voice/presence.ts` (+ тест),
+`apps/api/src/gateway/calls/ring.ts` (+ тест), `apps/api/src/gateway/calls/ring.handlers.ts` (+ тест),
 `apps/web/stores/presence.ts` (+ тест), `apps/web/stores/ring.ts` (+ тест),
 `apps/web/components/call/OutgoingCall.tsx`, `IncomingToast.tsx`, `MissedCallMark.tsx`,
 `apps/web/lib/call.ts`, `e2e/tests/call.spec.ts`.
@@ -89,7 +89,7 @@
 
 ### Задача 1: Глобальное присутствие — сервер
 
-**Файлы:** создать `apps/api/src/gateway/presence.ts` (+ `presence.test.ts`); изменить
+**Файлы:** создать `apps/api/src/gateway/voice/presence.ts` (+ `presence.test.ts`); изменить
 `signaling.gateway.ts`, `gateway.testkit.ts`, `packages/shared/src/index.ts`, `docs/protocol.md`.
 
 **Интерфейсы:**
@@ -198,7 +198,7 @@ it('обрыв у собеседника до ответа — «не в сет�
 
 ### Задача 4: Вызов на сервере
 
-**Файлы:** создать `apps/api/src/gateway/ring.ts` (владелец живых вызовов) и
+**Файлы:** создать `apps/api/src/gateway/calls/ring.ts` (владелец живых вызовов) и
 `ring.handlers.ts` (+ тесты); изменить `signaling.gateway.ts`, `gateway.testkit.ts`,
 `packages/shared/src/settings.ts` (группа `calls`), `docs/protocol.md`.
 
@@ -228,7 +228,7 @@ it('лимит звонков в час срабатывает и не меша�
 
 ### Задача 5: Принятый вызов становится разговором
 
-**Файлы:** изменить `apps/api/src/gateway/voice-sessions.ts`, `ring.ts`, `perimeter.ts`,
+**Файлы:** изменить `apps/api/src/gateway/voice/voice-sessions.ts`, `ring.ts`, `perimeter.ts`,
 `apps/web/lib/voice.ts`, `apps/web/lib/call.ts` (новый).
 
 **Что делает:** принятый вызов сажает двоих в голосовую комнату беседы
@@ -273,7 +273,7 @@ it('лимит звонков в час срабатывает и не меша�
 ### Задача 8: Пропущенный в переписке
 
 **Файлы:** создать `components/call/MissedCallMark.tsx`; изменить `DmThread.tsx`,
-`apps/api/src/gateway/ring.ts` (запись отметки), `chat.service.ts` (системная строка особого
+`apps/api/src/gateway/calls/ring.ts` (запись отметки), `chat.service.ts` (системная строка особого
 вида).
 
 - [ ] **Шаг 1: Тест** — отметка отличима от сообщения (пунктирная плашка, не пузырь); несёт

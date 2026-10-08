@@ -41,7 +41,7 @@ const ALLOWED = {
 
 /** Пара → где записан долг. Пустеет по мере уборки (docs/plans/code-audit.md, D4). */
 const DEBT = {
-  'apps/api/src/gateway/guests.handlers.ts ↔ apps/api/src/gateway/voice.handlers.ts':
+  'apps/api/src/gateway/moderation/guests.handlers.ts ↔ apps/api/src/gateway/voice/voice.handlers.ts':
     'одинаковый набор зависимостей в конструкторе; уходит с DI модулей Nest — фаза 2 architecture-cleanup.md',
 };
 

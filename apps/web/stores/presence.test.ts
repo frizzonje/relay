@@ -17,7 +17,7 @@ import { presenceOf, RECENT_MS, usePresenceStore } from './presence';
  *    закрыл вкладку;
  *  • неизвестный отпечаток читается как дыра (`undefined`), а не как честный
  *    `offline` — сервер никогда не шлёт офлайн-записи в снимке (см. комментарий
- *    в apps/api/src/gateway/presence.ts), так что «никогда не слышали» и
+ *    в apps/api/src/gateway/voice/presence.ts), так что «никогда не слышали» и
  *    «явно не в сети» обязаны выглядеть одинаково.
  */
 

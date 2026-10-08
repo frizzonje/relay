@@ -1,7 +1,7 @@
 import type { AppServer, AppSocket } from './socket-data';
 import type { Perimeter } from './perimeter';
-import type { ChatService } from './chat.service';
-import type { RegistryService } from './registry.service';
+import type { ChatService } from './chat/chat.service';
+import type { RegistryService } from './registry/registry.service';
 import { type PublicChannel, type PublicServer, publicChannel } from './ownership';
 
 /**

@@ -1,6 +1,8 @@
 node_modules/
 dist/
-uploads/
+# Загрузки дев-стенда — данные, не исходники (src/uploads — код).
+/uploads/
+apps/api/uploads/
 .env
 webrtc-test/
 .DS_Store

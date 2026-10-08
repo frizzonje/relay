@@ -1,7 +1,7 @@
 import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { readFile, statfs } from 'node:fs/promises';
 import { cpus, freemem, loadavg, platform, totalmem, uptime } from 'node:os';
-import { UPLOAD_DIR } from './uploads';
+import { UPLOAD_DIR } from './uploads/uploads.service';
 import type { MetricsResponse } from '@relay/shared';
 
 /**

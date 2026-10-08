@@ -28,14 +28,14 @@ import type { PresenceEntry, PresenceState } from '@relay/shared';
  *
  * `recent` угасает в `offline` и по времени клиента, а не только по приходу
  * `presence-update`. Сервер сам присылает эту дельту через `RECENT_MS` (см.
- * apps/api/src/gateway/presence.ts), но клиент, который переподключился
+ * apps/api/src/gateway/voice/presence.ts), но клиент, который переподключился
  * посреди окна или проспал его в фоновой вкладке, мог это событие пропустить
  * мимо ушей — а без подстраховки здесь «недавно» осталось бы гореть до
  * следующего чужого события, то есть как повезёт. `RECENT_MS` продублирован
  * константой, а не импортирован: `packages/shared` описывает только форму
  * события (см. `PresenceEntry`), а не серверные тайминги — ровно та же
  * граница, что api намеренно держит между собой и веб-пакетом (см.
- * комментарий у `PresenceState` в apps/api/src/gateway/presence.ts).
+ * комментарий у `PresenceState` в apps/api/src/gateway/voice/presence.ts).
  */
 export const RECENT_MS = 120_000;
 

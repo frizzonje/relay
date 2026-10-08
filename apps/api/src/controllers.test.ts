@@ -6,9 +6,9 @@ import { HealthController } from './health.controller';
 import { issueSession } from './identity/session';
 import { MetricsController } from './metrics.controller';
 import type { MetricsService } from './metrics';
-import { UploadController } from './upload.controller';
-import { UploadByteBudget, UploadRateGuard, uploadBudget } from './upload.guard';
-import type { UploadsService } from './uploads';
+import { UploadController } from './uploads/upload.controller';
+import { UploadByteBudget, UploadRateGuard, uploadBudget } from './uploads/upload.guard';
+import type { UploadsService } from './uploads/uploads.service';
 import type { Attachment, MetricsResponse } from '@relay/shared';
 
 /**

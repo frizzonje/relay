@@ -1,4 +1,4 @@
-import type { ChannelEntry, ServerEntry } from './registry';
+import type { ChannelEntry, ServerEntry } from './registry/registry';
 
 /**
  * Владение реестровыми записями и их публичная форма (audit B2).

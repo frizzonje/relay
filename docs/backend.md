@@ -48,7 +48,7 @@ apps/api/src/
 | [`identity/devices.controller.ts`](../apps/api/src/identity/devices.controller.ts) | `/api/identity/devices`, `devices/revoke`, `pair/*` |
 | [`identity/owner.controller.ts`](../apps/api/src/identity/owner.controller.ts) | `/api/identity/owner`, `owner/claim` |
 | [`config.controller.ts`](../apps/api/src/config.controller.ts) | `GET /api/config` |
-| [`upload.controller.ts`](../apps/api/src/upload.controller.ts) | `POST /api/upload` |
+| [`upload.controller.ts`](../apps/api/src/uploads/upload.controller.ts) | `POST /api/upload` |
 | [`metrics.controller.ts`](../apps/api/src/metrics.controller.ts) | `GET /api/metrics` |
 | [`health.controller.ts`](../apps/api/src/health.controller.ts) | `GET /api/health` |
 
@@ -73,16 +73,24 @@ SignalingGateway
 Порядок полей в классе и есть порядок инициализации: владельцы объявлены
 раньше обработчиков, которые их используют.
 
+Файлы лежат по доменам: в корне `gateway/` — гейтвей, периметр, витрина
+реестра и общие для всех `protocol.ts`/`socket-data.ts`; рядом — `chat/`,
+`voice/`, `calls/`, `dm/`, `registry/`, `moderation/` (с гостями), `admin/`.
+Это раскладка будущих модулей Nest (фаза 2
+[architecture-cleanup.md](plans/architecture-cleanup.md#целевая-раскладка)).
+
 ### Периметр
 
 [`gateway/perimeter.ts`](../apps/api/src/gateway/perimeter.ts) — единственное
 место, которое отвечает «кто этот сокет и что ему можно»:
 
 - `recognize` — в middleware Socket.io, до первого события: личность по куке
-  `relay_id`, владение, баны; отказ `banned` / `blocked` / `maintenance`;
+  `relay_id`, владение, баны; отказ `banned` / `blocked` / `maintenance`, а
+  сокету без личности и без живого инвайта — `identity-required`;
 - гость (`admit`, `isGuest`, `guestRoom`, `isListener`);
 - закрытые серверы (`isOpenTo`, `canSee`, `mayEnter`, `unlock*`);
-- лимитер (`allow`, `allowMessage`, `allowDiag`) — три ведра токенов на сокет;
+- лимитер (`allow`, `allowMessage`, `allowDiag`, `allowSignal`) — четыре ведра
+  токенов на сокет;
 - `httpDoor` — та же маска адресов для `authGate`.
 
 Проверка версии протокола — тоже в middleware, в `afterInit` гейтвея.
@@ -92,12 +100,12 @@ SignalingGateway
 | Класс | Файл | Держит |
 |---|---|---|
 | `Directory` | [`directory.ts`](../apps/api/src/gateway/directory.ts) | видимость реестра под сокет; рассылка `servers`/`channels` пачкой раз в 80 мс |
-| `ChatSessions` | [`chat-sessions.ts`](../apps/api/src/gateway/chat-sessions.ts) | кто в какой ленте, ростеры, `chat-closed` |
-| `VoiceSessions` | [`voice-sessions.ts`](../apps/api/src/gateway/voice-sessions.ts) | голосовая комната сокета, транспорт, пропуск SFU, мут, грейс 24 с, выгон «призраков», комнаты бесед |
-| `Presence` | [`presence.ts`](../apps/api/src/gateway/presence.ts) | присутствие личностей на инсталляции |
-| `Rings` | [`ring.ts`](../apps/api/src/gateway/ring.ts) | живые вызовы, таймауты, исходы; переходы — машина [`ring.ts`](../packages/shared/src/ring.ts) из контракта |
-| `Mentions` | [`mentions.ts`](../apps/api/src/gateway/mentions.ts) | подсказка и разбор `@`, вызов названных, счётчики упоминаний |
-| `Moderation` | [`moderation.ts`](../apps/api/src/gateway/moderation.ts) | кто модерирует, как вывести забаненного |
+| `ChatSessions` | [`chat-sessions.ts`](../apps/api/src/gateway/chat/chat-sessions.ts) | кто в какой ленте, ростеры, `chat-closed` |
+| `VoiceSessions` | [`voice-sessions.ts`](../apps/api/src/gateway/voice/voice-sessions.ts) | голосовая комната сокета, транспорт, пропуск SFU, мут, грейс 24 с, выгон «призраков», комнаты бесед |
+| `Presence` | [`presence.ts`](../apps/api/src/gateway/voice/presence.ts) | присутствие личностей на инсталляции |
+| `Rings` | [`ring.ts`](../apps/api/src/gateway/calls/ring.ts) | живые вызовы, таймауты, исходы; переходы — машина [`ring.ts`](../packages/shared/src/ring.ts) из контракта |
+| `Mentions` | [`mentions.ts`](../apps/api/src/gateway/chat/mentions.ts) | подсказка и разбор `@`, вызов названных, счётчики упоминаний |
+| `Moderation` | [`moderation.ts`](../apps/api/src/gateway/moderation/moderation.ts) | кто модерирует, как вывести забаненного |
 
 `client.data` (поля сокета, [`socket-data.ts`](../apps/api/src/gateway/socket-data.ts))
 пишут только владельцы. Обработчик не трогает его напрямую — так «выйти из
@@ -109,21 +117,21 @@ SignalingGateway
 
 | Файл | События |
 |---|---|
-| [`registry.handlers.ts`](../apps/api/src/gateway/registry.handlers.ts) | `server-*`, `channel-*` |
-| [`chat.handlers.ts`](../apps/api/src/gateway/chat.handlers.ts) | `chat-*`, `mention-suggest` (через `Mentions`), отметки пропущенных звонков |
-| [`dm.handlers.ts`](../apps/api/src/gateway/dm.handlers.ts) | `dm-*` |
-| [`ring.handlers.ts`](../apps/api/src/gateway/ring.handlers.ts) | `call-*` |
-| [`voice.handlers.ts`](../apps/api/src/gateway/voice.handlers.ts) | `join`, `leave`, `offer`, `answer`, `ice-candidate`, `media-update`, `sfu-token`, `voice-diag` |
-| [`guests.handlers.ts`](../apps/api/src/gateway/guests.handlers.ts) | `invite-create`, `guest-kick` |
+| [`registry.handlers.ts`](../apps/api/src/gateway/registry/registry.handlers.ts) | `server-*`, `channel-*` |
+| [`chat.handlers.ts`](../apps/api/src/gateway/chat/chat.handlers.ts) | `chat-*`, `mention-suggest` (через `Mentions`), отметки пропущенных звонков |
+| [`dm.handlers.ts`](../apps/api/src/gateway/dm/dm.handlers.ts) | `dm-*` |
+| [`ring.handlers.ts`](../apps/api/src/gateway/calls/ring.handlers.ts) | `call-*` |
+| [`voice.handlers.ts`](../apps/api/src/gateway/voice/voice.handlers.ts) | `join`, `leave`, `offer`, `answer`, `ice-candidate`, `media-update`, `sfu-token`, `voice-diag` |
+| [`guests.handlers.ts`](../apps/api/src/gateway/moderation/guests.handlers.ts) | `invite-create`, `guest-kick` |
 | [`personal.handlers.ts`](../apps/api/src/gateway/personal.handlers.ts) | `read-mark`, `prefs-set`, `rename`; снимки `reads`/`prefs`/`mentions` на входе |
-| [`moderation.handlers.ts`](../apps/api/src/gateway/moderation.handlers.ts) | `moderation-*` |
-| [`admin.handlers.ts`](../apps/api/src/gateway/admin.handlers.ts) | `admin-*` |
+| [`moderation.handlers.ts`](../apps/api/src/gateway/moderation/moderation.handlers.ts) | `moderation-*` |
+| [`admin.handlers.ts`](../apps/api/src/gateway/admin/admin.handlers.ts) | `admin-*` |
 
 Тела событий читаются только через `str` / `trimmed` / `optional` и режутся по
 `LIMIT` из [`gateway/protocol.ts`](../apps/api/src/gateway/protocol.ts). Там же —
 типы тел (`Untrusted<…>` от контракта). Тела негоциации (SDP и ICE), которые
 сервер пересылает соседу, собираются заново по форме WebRTC в
-[`gateway/negotiation.ts`](../apps/api/src/gateway/negotiation.ts). Ответы и рассылки обработчики
+[`gateway/voice/negotiation.ts`](../apps/api/src/gateway/voice/negotiation.ts). Ответы и рассылки обработчики
 импортируют прямо из `@relay/shared` (см.
 [architecture.md](architecture.md#контракт)).
 
@@ -145,11 +153,11 @@ SignalingGateway
 
 | Сервис | Файл | Что |
 |---|---|---|
-| `RegistryService` | [`gateway/registry.service.ts`](../apps/api/src/gateway/registry.service.ts) | серверы и каналы: память + Postgres, сиды главного сервера, одноразовый импорт `registry.json` из 0.x |
-| `ChatService` | [`gateway/chat.service.ts`](../apps/api/src/gateway/chat.service.ts) | сообщения, курсоры ленты, поиск (`to_tsvector('simple')` + префиксы), реакции |
-| `PinsService` | [`gateway/pins.service.ts`](../apps/api/src/gateway/pins.service.ts) | закреплённые: потолок канала, список, счёт для шапки |
-| `MentionsService` | [`gateway/mentions.service.ts`](../apps/api/src/gateway/mentions.service.ts) | упоминания: ник по отпечатку, подсказка после `@`, непрочитанные |
-| `DmService` | [`gateway/dm.service.ts`](../apps/api/src/gateway/dm.service.ts) | беседы 1:1, адрес беседы, список переписок |
+| `RegistryService` | [`gateway/registry/registry.service.ts`](../apps/api/src/gateway/registry/registry.service.ts) | серверы и каналы: память + Postgres, сиды главного сервера, одноразовый импорт `registry.json` из 0.x |
+| `ChatService` | [`gateway/chat/chat.service.ts`](../apps/api/src/gateway/chat/chat.service.ts) | сообщения, курсоры ленты, поиск (`to_tsvector('simple')` + префиксы), реакции |
+| `PinsService` | [`gateway/chat/pins.service.ts`](../apps/api/src/gateway/chat/pins.service.ts) | закреплённые: потолок канала, список, счёт для шапки |
+| `MentionsService` | [`gateway/chat/mentions.service.ts`](../apps/api/src/gateway/chat/mentions.service.ts) | упоминания: ник по отпечатку, подсказка после `@`, непрочитанные |
+| `DmService` | [`gateway/dm/dm.service.ts`](../apps/api/src/gateway/dm/dm.service.ts) | беседы 1:1, адрес беседы, список переписок |
 | `IdentityService` | [`identity/identity.service.ts`](../apps/api/src/identity/identity.service.ts) | челлендж, вход, ник, устройства |
 | `PairingService` | [`identity/pairing.service.ts`](../apps/api/src/identity/pairing.service.ts) | связка устройств по коду (в памяти, 3 мин) |
 | `OwnerService` | [`identity/owner.service.ts`](../apps/api/src/identity/owner.service.ts) | владелец инсталляции, ссылки-приглашения |
@@ -157,7 +165,7 @@ SignalingGateway
 | `ReadsService`, `PrefsService` | [`reads.service.ts`](../apps/api/src/identity/reads.service.ts), [`prefs.service.ts`](../apps/api/src/identity/prefs.service.ts) | отметки чтения (только растут), личные настройки |
 | `PruneService` | [`identity/prune.service.ts`](../apps/api/src/identity/prune.service.ts) | удаление давно неактивных личностей (`people.pruneInactiveDays`, по умолчанию выключено) |
 | `RetentionService` | [`db/retention.service.ts`](../apps/api/src/db/retention.service.ts) | удаление старых сообщений и их файлов |
-| `UploadsService` | [`uploads.ts`](../apps/api/src/uploads.ts) | приём файла, квоты, определение вида, уборка сирот |
+| `UploadsService` | [`uploads.ts`](../apps/api/src/uploads/uploads.service.ts) | приём файла, квоты, определение вида, уборка сирот |
 | `SettingsService` | [`settings/settings.service.ts`](../apps/api/src/settings/settings.service.ts) | значения настроек, проверка по каталогу, подписка на изменения |
 | `AuditService` | [`settings/audit.service.ts`](../apps/api/src/settings/audit.service.ts) | журнал действий владельца и системы |
 | `OverviewService` | [`settings/overview.service.ts`](../apps/api/src/settings/overview.service.ts) | сводка и список людей для панели |

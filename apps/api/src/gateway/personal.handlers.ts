@@ -1,14 +1,14 @@
 import type { Logger } from '@nestjs/common';
 import type { AppSocket } from './socket-data';
-import type { ChatSessions } from './chat-sessions';
-import type { DmService } from './dm.service';
+import type { ChatSessions } from './chat/chat-sessions';
+import type { DmService } from './dm/dm.service';
 import type { IdentityService } from '../identity/identity.service';
-import type { Mentions } from './mentions';
+import type { Mentions } from './chat/mentions';
 import type { Perimeter } from './perimeter';
 import type { PrefsService } from '../identity/prefs.service';
 import type { ReadsService } from '../identity/reads.service';
-import type { RegistryService } from './registry.service';
-import type { VoiceSessions } from './voice-sessions';
+import type { RegistryService } from './registry/registry.service';
+import type { VoiceSessions } from './voice/voice-sessions';
 import { LIMIT, trimmed, type PrefsSetPayload, type ReadMarkPayload } from './protocol';
 
 /**

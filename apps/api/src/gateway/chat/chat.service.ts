@@ -1,0 +1,639 @@
+import { Injectable, type OnModuleInit } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import { DataSource } from 'typeorm';
+import { AttachmentRow, MessageRow } from '../../db/entities';
+// Значением, а не `import type`: тип стирается при сборке, и
+// `emitDecoratorMetadata` записывает в довод конструктора `Function` вместо
+// класса — Nest такой довод не разрешает и падает при старте. Тесты этого не
+// видят: они собирают сервисы руками, минуя контейнер.
+import { SettingsService } from '../../settings/settings.service';
+import { DmService } from '../dm/dm.service';
+import { RegistryService } from '../registry/registry.service';
+import { MESSAGE_RELATIONS, isUuid, messageQuery, toMessage } from './chat-rows';
+import { toggleReaction } from './reactions';
+import { SEARCH_CONFIG, SEARCH_PAGE_SIZE, searchTerms, tsquery } from './chat-search';
+import {
+  CHAT_PREFIX,
+  type SearchHit,
+  type CallMark,
+  type ChatMessage,
+  type Person,
+  type PersonOrGuest,
+  type ReactionMap,
+  type ReplyRef,
+} from '@relay/shared';
+
+/**
+ * История текстовых каналов.
+ *
+ * До 1.0 она жила в памяти процесса: пятьдесят последних реплик на канал,
+ * двести каналов, рестарт стирает всё (audit S3). Теперь — Postgres, и вместе
+ * с ним исчезли оба лимита: их место заняла ретенция, которая считает не
+ * реплики, а дни.
+ *
+ * Гейтвей по-прежнему не знает, где лежит история: он оперирует слагом канала
+ * и получает готовые реплики. Всё, что связано с хранением — курсор, вложения,
+ * снимок цитаты, — живёт здесь.
+ *
+ * Единственное, что осталось в памяти, — время последней реплики каждого
+ * канала. Его спрашивают на каждую рассылку реестра, по каналу на строку
+ * сайдбара, и поход в базу за этим числом означал бы запрос на канал на каждый
+ * чих. Это кэш производной величины, а не второе хранилище: он пересчитывается
+ * при старте одним запросом и обновляется на каждой новой реплике.
+ */
+
+/**
+ * Окно вокруг найденной реплики — столько же сверху и снизу. Смысл перехода из
+ * поиска в том, чтобы увидеть разговор, а не одну строку: ответ на вопрос почти
+ * всегда ниже вопроса.
+ */
+export const AROUND_HALF = 25;
+
+/** Новая реплика — то, что гейтвей разобрал из тела и проверил по правам. */
+export interface NewMessage {
+  name: string;
+  /** Автор как личность. Пусто — писал гость по инвайту, за него ручается токен. */
+  identityId?: string;
+  text: string;
+  /** id загрузки (он же имя файла на диске). Проверяется по таблице вложений. */
+  uploadId?: string;
+  spoiler?: boolean;
+  /** На какое сообщение отвечаем. Снимок цитаты снимается здесь. */
+  replyToId?: string;
+  /** Кого назвали — уже сверенные с текстом (см. `mentionedIn`). */
+  mentions?: Person[];
+}
+
+/**
+ * Имя автора у системной строки. Константа, а не пустое поле: колонка
+ * `author_name` не терпит пустоты, а главное — узнавать системную строку по
+ * ИМЕНИ нельзя ни клиенту, ни серверу. Признак один — колонка `system`;
+ * положись экран на имя, и человек, назвавшийся так же, подделал бы системное
+ * сообщение.
+ */
+const SYSTEM_AUTHOR = 'system';
+
+/** Страница ленты: реплики по возрастанию времени и есть ли что-то выше. */
+export interface Page {
+  messages: ChatMessage[];
+  /** Выше есть ещё — клиент показывает «подгрузить», а не «начало истории». */
+  more: boolean;
+}
+
+/**
+ * Кусок ленты из середины истории — то, что видно после перехода из поиска.
+ * От обычной страницы отличается тем, что «ещё» бывает с обеих сторон: у ленты
+ * появился низ, которого при чтении сверху вниз никогда не было.
+ */
+export interface FeedWindow extends Page {
+  /** Ниже есть ещё — значит человек смотрит прошлое, а не живой конец канала. */
+  moreAfter: boolean;
+}
+
+export interface SearchPage {
+  hits: SearchHit[];
+  /** Есть что показать дальше — страница, а не «всё, что нашлось». */
+  more: boolean;
+}
+
+/** Курсор — «время и id последней показанной реплики», как у ленты. */
+export interface Cursor {
+  ts: number;
+  id: string;
+}
+
+@Injectable()
+export class ChatService implements OnModuleInit {
+  /** channel_id → время последней НЕсистемной реплики. Кэш, см. шапку файла. */
+  private readonly lastActivity = new Map<string, number>();
+
+  constructor(
+    private readonly db: DataSource,
+    private readonly registry: RegistryService,
+    private readonly dm: DmService,
+    private readonly settings: SettingsService,
+  ) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.warmActivity();
+  }
+
+  /** Имя socket.io-комнаты текстового канала по его слагу. */
+  room(slug: string): string {
+    return CHAT_PREFIX + slug;
+  }
+
+  /** Слаг канала по имени его комнаты. */
+  slug(room: string): string {
+    return room.slice(CHAT_PREFIX.length);
+  }
+
+  /**
+   * Последняя страница канала — то, что человек видит, войдя в него. Идём от
+   * свежих к старым (индекс по (channel_id, created_at, id)), затем
+   * переворачиваем: лента читается сверху вниз.
+   */
+  async history(slug: string): Promise<Page> {
+    const channelId = this.channelIdOf(slug);
+    if (!channelId) return { messages: [], more: false };
+    const size = this.pageSize();
+    const rows = await this.feed(size).where('m.channel_id = :channelId', { channelId }).getMany();
+    return this.page(rows, size);
+  }
+
+  /**
+   * Страница выше курсора. Курсор — «время и id самой верхней показанной
+   * реплики»: одного времени мало, в миллисекунду попадает несколько реплик, и
+   * такая страница их бы теряла или показывала дважды.
+   */
+  async older(slug: string, beforeTs: number, beforeId: string): Promise<Page> {
+    const channelId = this.channelIdOf(slug);
+    if (!channelId || !isUuid(beforeId)) return { messages: [], more: false };
+    const size = this.pageSize();
+    const rows = await this.feed(size)
+      .where('m.channel_id = :channelId', { channelId })
+      .andWhere('(m.created_at, m.id) < (:beforeAt, :beforeId)', {
+        beforeAt: new Date(beforeTs),
+        beforeId,
+      })
+      .getMany();
+    return this.page(rows, size);
+  }
+
+  /**
+   * Страница ниже курсора — то, чего до поиска не требовалось. Лента читается
+   * сверху вниз и всегда упиралась в живой конец канала; из поиска человек
+   * попадает в середину истории, и «дальше» для него означает вниз.
+   */
+  async newer(slug: string, afterTs: number, afterId: string): Promise<FeedWindow> {
+    const channelId = this.channelIdOf(slug);
+    if (!channelId || !isUuid(afterId)) return { messages: [], more: false, moreAfter: false };
+    const size = this.pageSize();
+    const rows = await messageQuery(this.db)
+      .where('m.channel_id = :channelId', { channelId })
+      .andWhere('(m.created_at, m.id) > (:afterAt, :afterId)', {
+        afterAt: new Date(afterTs),
+        afterId,
+      })
+      .orderBy('m.createdAt', 'ASC')
+      .addOrderBy('m.id', 'ASC')
+      .limit(size + 1)
+      .getMany();
+    const moreAfter = rows.length > size;
+    const slice = moreAfter ? rows.slice(0, size) : rows;
+    return { messages: slice.map(toMessage), more: false, moreAfter };
+  }
+
+  /**
+   * Окно вокруг реплики: она сама, соседи сверху и соседи снизу.
+   *
+   * Двумя запросами, а не одним с `OFFSET`: «двадцать пять до» и «двадцать пять
+   * после» — это два разных обхода одного индекса, и каждый читает ровно
+   * столько строк, сколько отдаёт.
+   */
+  async around(slug: string, id: string): Promise<FeedWindow> {
+    const empty = { messages: [], more: false, moreAfter: false };
+    const channelId = this.channelIdOf(slug);
+    if (!channelId || !isUuid(id)) return empty;
+    const target = await this.db.getRepository(MessageRow).findOne({
+      where: { id, channelId },
+      relations: MESSAGE_RELATIONS,
+    });
+    // Реплики нет — её удалили, пока человек читал результаты поиска. Пустое
+    // окно здесь честнее последней страницы канала: «нашли, но показать нечего»
+    // и «вот вам живой конец» — разные ответы, и клиент их различает.
+    if (!target) return empty;
+
+    const at = target.createdAt;
+    const [before, after] = await Promise.all([
+      messageQuery(this.db)
+        .where('m.channel_id = :channelId', { channelId })
+        .andWhere('(m.created_at, m.id) < (:at, :id)', { at, id })
+        .orderBy('m.createdAt', 'DESC')
+        .addOrderBy('m.id', 'DESC')
+        .limit(AROUND_HALF + 1)
+        .getMany(),
+      messageQuery(this.db)
+        .where('m.channel_id = :channelId', { channelId })
+        .andWhere('(m.created_at, m.id) > (:at, :id)', { at, id })
+        .orderBy('m.createdAt', 'ASC')
+        .addOrderBy('m.id', 'ASC')
+        .limit(AROUND_HALF + 1)
+        .getMany(),
+    ]);
+
+    const more = before.length > AROUND_HALF;
+    const moreAfter = after.length > AROUND_HALF;
+    const top = (more ? before.slice(0, AROUND_HALF) : before).reverse();
+    const bottom = moreAfter ? after.slice(0, AROUND_HALF) : after;
+    return { messages: [...top, target, ...bottom].map(toMessage), more, moreAfter };
+  }
+
+  /**
+   * Поиск по истории. Каналы приходят списком — гейтвей уже отобрал те, что
+   * человеку видно, и решать это здесь второй раз значило бы завести второе
+   * место, где живут права.
+   *
+   * Порядок — по времени, а не по релевантности: в чате ищут не «самое
+   * подходящее», а «то, что говорили тогда», и свежее почти всегда нужнее.
+   * Заодно это делает курсор тем же, что у ленты, — время и id.
+   */
+  async search(channelIds: string[], query: string, cursor?: Cursor): Promise<SearchPage> {
+    const terms = searchTerms(query);
+    if (!terms.length || channelIds.length === 0) return { hits: [], more: false };
+
+    const qb = messageQuery(this.db)
+      .where('m.channel_id IN (:...channelIds)', { channelIds })
+      // Системные строки — «история истекла», «удалено владельцем» — не то, что
+      // человек искал: он ищет сказанное людьми.
+      .andWhere('m.system = false')
+      .andWhere(`to_tsvector('${SEARCH_CONFIG}', m.text) @@ to_tsquery('${SEARCH_CONFIG}', :q)`, {
+        q: tsquery(terms),
+      })
+      .orderBy('m.createdAt', 'DESC')
+      .addOrderBy('m.id', 'DESC')
+      .limit(SEARCH_PAGE_SIZE + 1);
+
+    if (cursor && isUuid(cursor.id)) {
+      qb.andWhere('(m.created_at, m.id) < (:beforeAt, :beforeId)', {
+        beforeAt: new Date(cursor.ts),
+        beforeId: cursor.id,
+      });
+    }
+
+    const rows = await qb.getMany();
+    const more = rows.length > SEARCH_PAGE_SIZE;
+    const slice = more ? rows.slice(0, SEARCH_PAGE_SIZE) : rows;
+    return {
+      hits: slice.flatMap((row) => {
+        const slug = this.slugOf(row.channelId);
+        return slug ? [{ slug, message: toMessage(row) }] : [];
+      }),
+      more,
+    };
+  }
+
+  /**
+   * Новая реплика. Возвращает то, что уйдёт в эфир: id и время назначает база,
+   * а не отправитель, — иначе курсор пагинации зависел бы от часов клиента и
+   * от того, в каком порядке два сообщения дошли до сервера.
+   */
+  async add(slug: string, input: NewMessage): Promise<ChatMessage | undefined> {
+    const channelId = this.channelIdOf(slug);
+    if (!channelId) return undefined;
+
+    return this.write(slug, channelId, {
+      authorName: input.name,
+      text: input.text,
+      system: false,
+      spoiler: input.spoiler === true,
+      attachmentId: (await this.attachmentId(input.uploadId)) ?? null,
+      replyTo: await this.replySnapshot(channelId, input.replyToId),
+      mentions: input.mentions ?? [],
+      authorIdentityId: input.identityId ?? null,
+    });
+  }
+
+  /**
+   * Системная строка ленты — та, что рисуется по центру курсивом и никому не
+   * принадлежит.
+   *
+   * Пишется ТОЛЬКО когда владелец этого захотел (`messages.systemMessages`), и
+   * умолчание — «не писать»: до появления настройки таких строк в relay не
+   * возникало вовсе, и включённые по умолчанию они дописали бы в чужие каналы
+   * то, чего там не было. Возвращает `undefined`, когда писать не велено, —
+   * зовущий на это и смотрит.
+   *
+   * Само событие настройка не отменяет: выгнанный узнаёт о бане в любом случае
+   * (`banned`, `chat-closed`), просто в ленте не остаётся строки.
+   *
+   * Имя автора — константа `SYSTEM_AUTHOR`, и узнавать системную строку по ней
+   * НЕЛЬЗЯ: человек с таким ником подделал бы системное сообщение. Признак —
+   * колонка `system`, она же уезжает клиенту (см. `toMessage`).
+   */
+  async addSystem(slug: string, text: string): Promise<ChatMessage | undefined> {
+    if (!this.settings.get<boolean>('messages.systemMessages')) return undefined;
+    const channelId = this.channelIdOf(slug);
+    if (!channelId) return undefined;
+
+    return this.write(slug, channelId, {
+      authorName: SYSTEM_AUTHOR,
+      text,
+      system: true,
+      // Личности у системной строки нет — и лица рядом с ней тоже.
+      authorIdentityId: null,
+    });
+  }
+
+  /**
+   * Отметка о пропущенном звонке — «системная строка особого вида».
+   *
+   * Своя дверь, а не `addSystem`, и это не удобство, а разные обещания.
+   * `addSystem` первой строкой спрашивает `messages.systemMessages` — выключатель
+   * болтовни про входы-выходы. Отметкой о пропущенном распоряжается
+   * `calls.missedMarkEnabled`, и решает это ЗВОНОК (см. `Rings.announce`: одним
+   * вычислением и флаг `missed` в `call-ended`, и эта запись). Пройди отметка
+   * через ту дверь — владелец, убравший «Аня вошла в канал», молча перестал бы
+   * узнавать, что ему звонили, а панель продолжала бы показывать отметку
+   * включённой.
+   *
+   * Строка при этом системная (`system: true`) по всем остальным признакам:
+   * её никто не говорил, её не правят (`find` системные не отдаёт), её не
+   * находит поиск (`search` идёт по `m.system = false` — искать в чате можно
+   * только сказанное людьми, а «missed call» тут не фраза, а запаска для
+   * клиента, который поля `call` ещё не знает).
+   *
+   * Автор — ЗВОНИВШИЙ, и это единственное, чем отметка отличается от прочих
+   * системных строк, у которых личности нет вовсе. По нему обе стороны
+   * понимают, кто кому не дозвонился (лицо рядом с отметкой — то же, что и в
+   * ленте), и по нему же список переписок пишет «вы: …» тому, кто звонил.
+   */
+  async addCallMark(
+    slug: string,
+    mark: CallMark & { name: string; identityId: string },
+  ): Promise<ChatMessage | undefined> {
+    const channelId = this.channelIdOf(slug);
+    if (!channelId) return undefined;
+
+    return this.write(slug, channelId, {
+      authorName: mark.name,
+      // Текст словами — на случай клиента, который поля `call` не знает: он
+      // покажет обычную системную строку и не соврёт. Он же едет превью в
+      // список переписок. Не переведён намеренно и ровно как «X was banned»:
+      // язык читающего сервер не знает, а собрать «21:04 · 38 с дозвона» на
+      // своём языке клиенту всё равно предстоит самому — из `call`.
+      text: 'missed call',
+      system: true,
+      call: { state: mark.state, ms: mark.ms },
+      authorIdentityId: mark.identityId,
+    });
+  }
+
+  /**
+   * Записать реплику и вернуть её такой, какой её прочтёт лента. Чего у
+   * реплики нет — вложения, цитаты, упоминаний, — пусто.
+   *
+   * Читаем записанное обратно, а не собираем ответ из того, что отправили:
+   * время ставила база, вложение лежит отдельной строкой, и второй сборкой
+   * тех же данных руками мы бы завели второе место, где они могут разойтись.
+   */
+  private async write(
+    slug: string,
+    channelId: string,
+    fields: Pick<MessageRow, 'authorName' | 'text' | 'system' | 'authorIdentityId'> &
+      Partial<Pick<MessageRow, 'spoiler' | 'attachmentId' | 'replyTo' | 'mentions' | 'call'>>,
+  ): Promise<ChatMessage | undefined> {
+    const id = randomUUID();
+    await this.db
+      .getRepository(MessageRow)
+      .createQueryBuilder()
+      .insert()
+      .values({
+        id,
+        channelId,
+        spoiler: false,
+        reactions: {},
+        attachmentId: null,
+        replyTo: null,
+        mentions: [],
+        editedAt: null,
+        ...fields,
+      })
+      .execute();
+
+    const saved = await this.one(slug, id, true);
+    if (saved) this.lastActivity.set(channelId, saved.ts);
+    return saved;
+  }
+
+  /** Несистемная реплика канала по id (системные не правятся и не удаляются). */
+  async find(slug: string, id: string): Promise<ChatMessage | undefined> {
+    return this.one(slug, id, false);
+  }
+
+  /** Реплика по id, включая системные — реакции можно ставить на любую. */
+  async findAny(slug: string, id: string): Promise<ChatMessage | undefined> {
+    return this.one(slug, id, true);
+  }
+
+  /**
+   * Личность автора реплики. Тем и отличается от имени в ленте, что имя —
+   * снимок момента и не уникально, а модерация обязана попасть в того самого
+   * человека. `null` — у реплики нет автора-личности: её писал гость по
+   * инвайту или она старше самих личностей.
+   */
+  async authorOf(slug: string, id: string): Promise<string | null> {
+    const channelId = this.channelIdOf(slug);
+    if (!channelId || !isUuid(id)) return null;
+    const row = await this.db.getRepository(MessageRow).findOne({
+      where: { id, channelId },
+      select: { authorIdentityId: true },
+    });
+    return row?.authorIdentityId ?? null;
+  }
+
+  /**
+   * Новый текст своей реплики. Возвращает время правки — тоже с часов базы, —
+   * или `undefined`, если реплики уже нет.
+   *
+   * Упоминания переписываются вместе с текстом, а не остаются от прежней
+   * редакции: имя из реплики могли убрать, и «упомянут» без имени в тексте —
+   * ровно тот беззвучный вызов, который не пускает `mentionedIn`.
+   */
+  async edit(id: string, text: string, mentions: Person[]): Promise<number | undefined> {
+    const res = await this.db
+      .getRepository(MessageRow)
+      .createQueryBuilder()
+      .update()
+      .set({ text, mentions, editedAt: () => 'now()' })
+      .where({ id })
+      .returning('edited_at')
+      .execute();
+    // Строки нет — реплику удалили между проверкой правки и самой правкой.
+    const row: { edited_at: Date } | undefined = res.raw[0];
+    return row ? new Date(row.edited_at).getTime() : undefined;
+  }
+
+  /** Убирает реплику из ленты. `false` — такой в канале нет. */
+  async remove(id: string): Promise<boolean> {
+    if (!isUuid(id)) return false;
+    const res = await this.db.getRepository(MessageRow).delete({ id });
+    return (res.affected ?? 0) > 0;
+  }
+
+  /**
+   * Переключить реакцию человека и вернуть новый набор — или `undefined`, если
+   * такой реплики в канале нет. Ставить можно на любую, системные тоже.
+   *
+   * Прочитать, переключить и записать — одной транзакцией под блокировкой
+   * строки. Набор лежит в реплике целиком, и без блокировки двое, нажавшие
+   * реакцию в одну и ту же секунду, прочли бы один набор и записали бы каждый
+   * свой: вторая запись молча стёрла бы первую реакцию.
+   */
+  async react(
+    slug: string,
+    id: string,
+    who: PersonOrGuest,
+    emoji: string,
+  ): Promise<ReactionMap | undefined> {
+    const channelId = this.channelIdOf(slug);
+    if (!channelId || !isUuid(id)) return undefined;
+    return this.db.transaction(async (m) => {
+      const messages = m.getRepository(MessageRow);
+      const row = await messages.findOne({
+        where: { id, channelId },
+        select: { id: true, reactions: true },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!row) return undefined;
+      const reactions = toggleReaction(row.reactions, who, emoji);
+      await messages.update({ id }, { reactions });
+      return reactions;
+    });
+  }
+
+  /**
+   * Канал удалён — его лента ушла вместе с ним (ON DELETE CASCADE), здесь
+   * остаётся забыть кэш активности.
+   */
+  forget(slug: string): void {
+    const channelId = this.channelIdOf(slug);
+    if (channelId) this.lastActivity.delete(channelId);
+  }
+
+  /** Сколько реплик в канале (для диалога подтверждения удаления). */
+  async count(slug: string): Promise<number> {
+    const channelId = this.channelIdOf(slug);
+    if (!channelId) return 0;
+    return this.db.getRepository(MessageRow).countBy({ channelId });
+  }
+
+  /**
+   * Время последней НЕсистемной реплики канала (0 — писать ещё не начинали).
+   * Системные строки активностью не считаем: точку «непрочитано» зажигают
+   * только сообщения — ровно те же, что рассылают `chat-activity`.
+   */
+  lastTs(slug: string): number {
+    const channelId = this.channelIdOf(slug);
+    return (channelId && this.lastActivity.get(channelId)) || 0;
+  }
+
+  /**
+   * Канал с таким слагом. Сперва реестр (текстовые каналы, самый частый
+   * случай), затем беседы: они тоже строки в `channels`, но реестр о них не
+   * знает намеренно (см. `dm.service`), и без второго вопроса ЛС оставались бы
+   * лентой, в которую нельзя написать.
+   *
+   * Открыт наружу ради закреплённых (`pins.service.ts`): второе место, где
+   * реестр и беседы сводятся в один ответ, разошлось бы с этим.
+   */
+  channelIdOf(slug: string): string | undefined {
+    return (
+      this.registry.channels.find((c) => c.type === 'text' && c.slug === slug)?.id ??
+      this.dm.channelIdOf(slug)
+    );
+  }
+
+  // ── Внутреннее ────────────────────────────────────────────────────────────
+
+  /**
+   * Обратный ход: слаг канала по его id. Нужен поиску — в базе у реплики
+   * записан id канала, а клиент оперирует слагами, и переводить одно в другое
+   * должна та сторона, у которой реестр под рукой. У беседы слаг и id канала —
+   * одна и та же строка, поэтому второй вопрос ей не задаётся.
+   */
+  private slugOf(channelId: string): string | undefined {
+    return (
+      this.registry.channels.find((c) => c.id === channelId)?.slug ?? this.dm.channelIdOf(channelId)
+    );
+  }
+
+  /**
+   * Размер страницы, каким его назначил владелец.
+   *
+   * Спрашивается РАЗ на запрос, и полученное число передаётся дальше доводом:
+   * между `feed()` и `page()` стоит `await`, и правка настройки, попавшая в
+   * этот зазор, порезала бы выборку не по той длине, по которой её брали, —
+   * то есть потеряла бы реплику или соврала про «есть ещё».
+   */
+  private pageSize(): number {
+    return this.settings.get<number>('messages.pageSize');
+  }
+
+  /**
+   * Запрос ленты: свежие первыми, на одну больше страницы. Эта лишняя запись и
+   * есть ответ на вопрос «есть ли выше ещё» — считать общее число реплик
+   * канала ради одного булева значения было бы расточительно.
+   */
+  private feed(size: number) {
+    return (
+      messageQuery(this.db)
+        .orderBy('m.createdAt', 'DESC')
+        .addOrderBy('m.id', 'DESC')
+        // `limit`, а не `take`: вложение — связь «многие к одному», лишних строк
+        // от неё не бывает, и городить ради этого подзапрос с DISTINCT незачем.
+        .limit(size + 1)
+    );
+  }
+
+  private page(rows: MessageRow[], size: number): Page {
+    const more = rows.length > size;
+    const slice = more ? rows.slice(0, size) : rows;
+    return { messages: slice.reverse().map(toMessage), more };
+  }
+
+  private async one(
+    slug: string,
+    id: string,
+    includeSystem: boolean,
+  ): Promise<ChatMessage | undefined> {
+    const channelId = this.channelIdOf(slug);
+    if (!channelId || !isUuid(id)) return undefined;
+    const row = await this.db.getRepository(MessageRow).findOne({
+      where: { id, channelId, ...(includeSystem ? {} : { system: false }) },
+      relations: MESSAGE_RELATIONS,
+    });
+    return row ? toMessage(row) : undefined;
+  }
+
+  /** Загрузка существует? Клиент называет её id, а не url и не mime. */
+  private async attachmentId(uploadId: string | undefined): Promise<string | undefined> {
+    if (!uploadId) return undefined;
+    const row = await this.db.getRepository(AttachmentRow).findOneBy({ id: uploadId });
+    return row?.id;
+  }
+
+  /**
+   * Снимок цитируемого (id, имя, обрезанный текст) — копией, а не ссылкой:
+   * оригинал могут отредактировать или удалить, цитата остаётся прежней.
+   */
+  private async replySnapshot(
+    channelId: string,
+    replyToId: string | undefined,
+  ): Promise<ReplyRef | null> {
+    if (!replyToId || !isUuid(replyToId)) return null;
+    const src = await this.db
+      .getRepository(MessageRow)
+      .findOneBy({ id: replyToId, channelId, system: false });
+    if (!src) return null;
+    return { id: src.id, name: src.authorName, text: src.text.slice(0, 140) };
+  }
+
+  /**
+   * Кэш активности при старте — одним запросом на всю базу. Без него первая
+   * рассылка реестра показала бы все каналы «без единого сообщения», и
+   * «непрочитано» зажглось бы только после чьей-то новой реплики.
+   */
+  private async warmActivity(): Promise<void> {
+    const rows: { channel_id: string; last: Date }[] = await this.db
+      .getRepository(MessageRow)
+      .createQueryBuilder('m')
+      .select('m.channel_id', 'channel_id')
+      .addSelect('MAX(m.created_at)', 'last')
+      .where('m.system = false')
+      .groupBy('m.channel_id')
+      .getRawMany();
+    this.lastActivity.clear();
+    for (const r of rows) this.lastActivity.set(r.channel_id, new Date(r.last).getTime());
+  }
+}

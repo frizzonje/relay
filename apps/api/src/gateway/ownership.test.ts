@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeClientId, ownedBy, publicChannel, publicServer } from './ownership';
-import type { ChannelEntry, ServerEntry } from './registry';
+import type { ChannelEntry, ServerEntry } from './registry/registry';
 
 /**
  * Владение реестровыми записями (audit B2). Проверяем три обещания, которые

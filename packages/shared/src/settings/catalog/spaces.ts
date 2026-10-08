@@ -12,7 +12,7 @@ export const SPACES_SETTINGS: readonly SettingSpec[] = [
     options: ['everyone', 'owner'],
   },
   // MAX_SERVERS_PER_PERSON = 5, MAX_SERVERS = 50, MAX_CHANNELS_PER_SERVER = 25
-  // — потолки реестра (gateway/registry.service.ts). Ноль в личном потолке —
+  // — потолки реестра (gateway/registry/registry.service.ts). Ноль в личном потолке —
   // «своих серверов заводить нельзя».
   {
     key: 'spaces.maxServersPerIdentity',

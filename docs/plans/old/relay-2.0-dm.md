@@ -76,10 +76,10 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 | Файл | За что отвечает |
 |---|---|
 | `apps/api/src/db/migrations/1760000000000-DirectMessages.ts` | `server_id` становится необязательным, появляется таблица `conversations` |
-| `apps/api/src/gateway/dm.service.ts` | адрес пары, открытие беседы, членство, список переписок |
-| `apps/api/src/gateway/dm.service.test.ts` | тесты того же |
-| `apps/api/src/gateway/dm.handlers.ts` | обработчики `dm-open` / `dm-list` / `dm-join` / `dm-people` |
-| `apps/api/src/gateway/dm.handlers.test.ts` | тесты того же, поверх стенда гейтвея |
+| `apps/api/src/gateway/dm/dm.service.ts` | адрес пары, открытие беседы, членство, список переписок |
+| `apps/api/src/gateway/dm/dm.service.test.ts` | тесты того же |
+| `apps/api/src/gateway/dm/dm.handlers.ts` | обработчики `dm-open` / `dm-list` / `dm-join` / `dm-people` |
+| `apps/api/src/gateway/dm/dm.handlers.test.ts` | тесты того же, поверх стенда гейтвея |
 
 **Правятся (api):**
 
@@ -88,9 +88,9 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 | `apps/api/src/db/entities.ts` | `ChannelRow.serverId` → `string \| null`, новый `ConversationRow`, `ENTITIES` |
 | `apps/api/src/db/testing.ts` | `conversations` в списке TRUNCATE |
 | `apps/api/src/db/migrations/index.ts` | новая миграция в списке |
-| `apps/api/src/gateway/registry.service.ts` | реестр читает и подметает только `text`/`voice` |
-| `apps/api/src/gateway/chat.service.ts` | `channelId`/`slugOf`/`lastTs` знают про беседы |
-| `apps/api/src/gateway/chat.handlers.ts` | активность беседы уходит двоим, а не всем; закрепление в ЛС запрещено |
+| `apps/api/src/gateway/registry/registry.service.ts` | реестр читает и подметает только `text`/`voice` |
+| `apps/api/src/gateway/chat/chat.service.ts` | `channelId`/`slugOf`/`lastTs` знают про беседы |
+| `apps/api/src/gateway/chat/chat.handlers.ts` | активность беседы уходит двоим, а не всем; закрепление в ЛС запрещено |
 | `apps/api/src/gateway/personal.handlers.ts` | отметки чтения бесед доезжают до клиента |
 | `apps/api/src/gateway/protocol.ts` | валидаторы полезной нагрузки ЛС |
 | `apps/api/src/gateway/signaling.gateway.ts` | проводка `DmHandlers`, `@SubscribeMessage` |
@@ -161,9 +161,9 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 - Изменить: `apps/api/src/db/entities.ts` (`ChannelRow.serverId`, новый `ConversationRow`, `ENTITIES`)
 - Изменить: `apps/api/src/db/migrations/index.ts`
 - Изменить: `apps/api/src/db/testing.ts` (список TRUNCATE)
-- Изменить: `apps/api/src/gateway/registry.service.ts` (`load`, `deleteMissing`)
+- Изменить: `apps/api/src/gateway/registry/registry.service.ts` (`load`, `deleteMissing`)
 - Тест: `apps/api/src/db/schema.test.ts` (существующий, должен остаться зелёным),
-  `apps/api/src/gateway/registry.service.test.ts` (новый случай)
+  `apps/api/src/gateway/registry/registry.service.test.ts` (новый случай)
 
 **Интерфейсы:**
 
@@ -173,7 +173,7 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 
 - [ ] **Шаг 1: Тест — реестр не видит бесед и не подметает их**
 
-В `apps/api/src/gateway/registry.service.test.ts` дописать (стенд файла уже есть — смотреть
+В `apps/api/src/gateway/registry/registry.service.test.ts` дописать (стенд файла уже есть — смотреть
 его шапку и повторить способ получения `db`/`registry`):
 
 ```ts
@@ -342,7 +342,7 @@ export class ConversationRow {
 
 - [ ] **Шаг 5: Реестр не видит и не подметает беседы**
 
-В `apps/api/src/gateway/registry.service.ts`:
+В `apps/api/src/gateway/registry/registry.service.ts`:
 
 1. Импорт: `import { DataSource, In, type EntityManager } from 'typeorm';`
 2. В `load()` заменить чтение каналов на:
@@ -399,7 +399,7 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 - [ ] **Шаг 7: Коммит**
 
 ```bash
-git add apps/api/src/db/migrations/1760000000000-DirectMessages.ts apps/api/src/db/migrations/index.ts apps/api/src/db/entities.ts apps/api/src/db/testing.ts apps/api/src/gateway/registry.service.ts apps/api/src/gateway/registry.service.test.ts
+git add apps/api/src/db/migrations/1760000000000-DirectMessages.ts apps/api/src/db/migrations/index.ts apps/api/src/db/entities.ts apps/api/src/db/testing.ts apps/api/src/gateway/registry/registry.service.ts apps/api/src/gateway/registry/registry.service.test.ts
 git commit -m "feat(dm): a conversation is a channel without a server"
 ```
 
@@ -409,8 +409,8 @@ git commit -m "feat(dm): a conversation is a channel without a server"
 
 **Файлы:**
 
-- Создать: `apps/api/src/gateway/dm.service.ts`
-- Создать: `apps/api/src/gateway/dm.service.test.ts`
+- Создать: `apps/api/src/gateway/dm/dm.service.ts`
+- Создать: `apps/api/src/gateway/dm/dm.service.test.ts`
 - Изменить: `apps/api/src/app.module.ts` (провайдер)
 
 **Интерфейсы:**
@@ -482,7 +482,7 @@ it('помнит ник для подписи и обновляет его пр�
 
 - [ ] **Шаг 1: Тест**
 
-`apps/api/src/gateway/dm.service.test.ts`:
+`apps/api/src/gateway/dm/dm.service.test.ts`:
 
 ```ts
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -653,7 +653,7 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 
 - [ ] **Шаг 3: Реализация**
 
-`apps/api/src/gateway/dm.service.ts`:
+`apps/api/src/gateway/dm/dm.service.ts`:
 
 ```ts
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
@@ -939,7 +939,7 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 - [ ] **Шаг 6: Коммит**
 
 ```bash
-git add apps/api/src/gateway/dm.service.ts apps/api/src/gateway/dm.service.test.ts apps/api/src/app.module.ts
+git add apps/api/src/gateway/dm/dm.service.ts apps/api/src/gateway/dm/dm.service.test.ts apps/api/src/app.module.ts
 git commit -m "feat(dm): pair addressing, membership and conversation list"
 ```
 
@@ -949,9 +949,9 @@ git commit -m "feat(dm): pair addressing, membership and conversation list"
 
 **Файлы:**
 
-- Изменить: `apps/api/src/gateway/chat.service.ts` (конструктор, `channelId`, `slugOf`)
+- Изменить: `apps/api/src/gateway/chat/chat.service.ts` (конструктор, `channelId`, `slugOf`)
 - Изменить: `apps/api/src/gateway/gateway.testkit.ts` (стенд собирает `DmService`)
-- Тест: `apps/api/src/gateway/chat.service.test.ts` (дописать случай)
+- Тест: `apps/api/src/gateway/chat/chat.service.test.ts` (дописать случай)
 
 **Интерфейсы:**
 
@@ -961,7 +961,7 @@ git commit -m "feat(dm): pair addressing, membership and conversation list"
 
 - [ ] **Шаг 1: Тест**
 
-Дописать в `apps/api/src/gateway/chat.service.test.ts` (стенд файла уже есть):
+Дописать в `apps/api/src/gateway/chat/chat.service.test.ts` (стенд файла уже есть):
 
 ```ts
 it('ведёт ленту беседы так же, как ленту канала', async () => {
@@ -993,7 +993,7 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 
 - [ ] **Шаг 3: Реализация**
 
-В `apps/api/src/gateway/chat.service.ts`:
+В `apps/api/src/gateway/chat/chat.service.ts`:
 
 1. Конструктор:
 
@@ -1048,7 +1048,7 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 - [ ] **Шаг 5: Коммит**
 
 ```bash
-git add apps/api/src/gateway/chat.service.ts apps/api/src/gateway/chat.service.test.ts apps/api/src/gateway/gateway.testkit.ts
+git add apps/api/src/gateway/chat/chat.service.ts apps/api/src/gateway/chat/chat.service.test.ts apps/api/src/gateway/gateway.testkit.ts
 git commit -m "feat(dm): the feed resolves conversation addresses too"
 ```
 
@@ -1273,8 +1273,8 @@ git commit -m "feat(dm): protocol for conversations, people picker and activity"
 
 **Файлы:**
 
-- Создать: `apps/api/src/gateway/dm.handlers.ts`
-- Создать: `apps/api/src/gateway/dm.handlers.test.ts`
+- Создать: `apps/api/src/gateway/dm/dm.handlers.ts`
+- Создать: `apps/api/src/gateway/dm/dm.handlers.test.ts`
 - Изменить: `apps/api/src/gateway/signaling.gateway.ts` (поле `dmHandlers`, четыре
   `@SubscribeMessage`, конструктор принимает `DmService`)
 - Изменить: `apps/api/src/gateway/gateway.testkit.ts` (передать `DmService` в гейтвей)
@@ -1299,7 +1299,7 @@ class DmHandlers {
 
 - [ ] **Шаг 1: Тест**
 
-`apps/api/src/gateway/dm.handlers.test.ts`:
+`apps/api/src/gateway/dm/dm.handlers.test.ts`:
 
 ```ts
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -1445,7 +1445,7 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 
 - [ ] **Шаг 3: Реализация обработчиков**
 
-`apps/api/src/gateway/dm.handlers.ts`:
+`apps/api/src/gateway/dm/dm.handlers.ts`:
 
 ```ts
 import type { AppSocket } from './socket-data';
@@ -1584,7 +1584,7 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 - [ ] **Шаг 6: Коммит**
 
 ```bash
-git add apps/api/src/gateway/dm.handlers.ts apps/api/src/gateway/dm.handlers.test.ts apps/api/src/gateway/signaling.gateway.ts apps/api/src/gateway/gateway.testkit.ts
+git add apps/api/src/gateway/dm/dm.handlers.ts apps/api/src/gateway/dm/dm.handlers.test.ts apps/api/src/gateway/signaling.gateway.ts apps/api/src/gateway/gateway.testkit.ts
 git commit -m "feat(dm): open, list, join and people handlers"
 ```
 
@@ -1594,10 +1594,10 @@ git commit -m "feat(dm): open, list, join and people handlers"
 
 **Файлы:**
 
-- Изменить: `apps/api/src/gateway/chat.handlers.ts` (`message`, `queueChatActivity`, конструктор)
+- Изменить: `apps/api/src/gateway/chat/chat.handlers.ts` (`message`, `queueChatActivity`, конструктор)
 - Изменить: `apps/api/src/gateway/personal.handlers.ts` (`marksBySlug`, конструктор)
 - Изменить: `apps/api/src/gateway/signaling.gateway.ts` (передать `DmService` обоим)
-- Тест: `apps/api/src/gateway/dm.handlers.test.ts` (дописать), `apps/api/src/gateway/perimeter.test.ts` не трогать
+- Тест: `apps/api/src/gateway/dm/dm.handlers.test.ts` (дописать), `apps/api/src/gateway/perimeter.test.ts` не трогать
 
 **Интерфейсы:**
 
@@ -1611,7 +1611,7 @@ git commit -m "feat(dm): open, list, join and people handlers"
 
 - [ ] **Шаг 1: Тест**
 
-Дописать в `apps/api/src/gateway/dm.handlers.test.ts`:
+Дописать в `apps/api/src/gateway/dm/dm.handlers.test.ts`:
 
 ```ts
 describe('активность беседы', () => {
@@ -1676,7 +1676,7 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 
 - [ ] **Шаг 3: Реализация — активность**
 
-В `apps/api/src/gateway/chat.handlers.ts`:
+В `apps/api/src/gateway/chat/chat.handlers.ts`:
 
 1. Конструктор принимает `private readonly dm: DmService,` (перед `serverOf`).
 2. В конце `message()` заменить блок рассылки активности на:
@@ -1769,7 +1769,7 @@ docker run --rm --network relay-dev_default -v "$PWD":/mono -w /mono -e TEST_DAT
 - [ ] **Шаг 6: Коммит**
 
 ```bash
-git add apps/api/src/gateway/chat.handlers.ts apps/api/src/gateway/personal.handlers.ts apps/api/src/gateway/dm.service.ts apps/api/src/gateway/dm.service.test.ts apps/api/src/gateway/dm.handlers.test.ts apps/api/src/gateway/signaling.gateway.ts
+git add apps/api/src/gateway/chat/chat.handlers.ts apps/api/src/gateway/personal.handlers.ts apps/api/src/gateway/dm/dm.service.ts apps/api/src/gateway/dm/dm.service.test.ts apps/api/src/gateway/dm/dm.handlers.test.ts apps/api/src/gateway/signaling.gateway.ts
 git commit -m "feat(dm): conversation activity reaches the two, not the house"
 ```
 
@@ -1779,9 +1779,9 @@ git commit -m "feat(dm): conversation activity reaches the two, not the house"
 
 **Файлы:**
 
-- Изменить: `apps/api/src/gateway/chat.handlers.ts` (`pin`, `pins`, `search`)
-- Изменить: `apps/api/src/gateway/mentions.ts` (`ping` — молчать в беседе)
-- Тест: `apps/api/src/gateway/dm.handlers.test.ts` (дописать)
+- Изменить: `apps/api/src/gateway/chat/chat.handlers.ts` (`pin`, `pins`, `search`)
+- Изменить: `apps/api/src/gateway/chat/mentions.ts` (`ping` — молчать в беседе)
+- Тест: `apps/api/src/gateway/dm/dm.handlers.test.ts` (дописать)
 
 **Интерфейсы:**
 
@@ -1862,7 +1862,7 @@ describe('чего в беседе нет', () => {
 - [ ] **Шаг 5: Коммит**
 
 ```bash
-git add apps/api/src/gateway/chat.handlers.ts apps/api/src/gateway/mentions.ts apps/api/src/gateway/signaling.gateway.ts apps/api/src/gateway/dm.handlers.test.ts
+git add apps/api/src/gateway/chat/chat.handlers.ts apps/api/src/gateway/chat/mentions.ts apps/api/src/gateway/signaling.gateway.ts apps/api/src/gateway/dm/dm.handlers.test.ts
 git commit -m "feat(dm): no pins, no mention counters, search stays inside the conversation"
 ```
 

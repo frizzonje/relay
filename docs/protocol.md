@@ -190,7 +190,7 @@ GET  /api/identity/owner                 → {owner: boolean}
 | `GET /api/identity/devices`, `POST /devices/revoke`, `/pair/*` | [`devices.controller.ts`](../apps/api/src/identity/devices.controller.ts) | §2.3 |
 | `GET /api/identity/owner`, `POST /owner/claim` | [`owner.controller.ts`](../apps/api/src/identity/owner.controller.ts) | §2.4 |
 | `GET /api/config` | [`config.controller.ts`](../apps/api/src/config.controller.ts) | ICE и сводка, ниже |
-| `POST /api/upload` | [`upload.controller.ts`](../apps/api/src/upload.controller.ts) | загрузка вложения, ниже |
+| `POST /api/upload` | [`upload.controller.ts`](../apps/api/src/uploads/upload.controller.ts) | загрузка вложения, ниже |
 | `GET /api/metrics` | [`metrics.controller.ts`](../apps/api/src/metrics.controller.ts) | нагрузка хоста, ниже |
 | `GET /api/health` | [`health.controller.ts`](../apps/api/src/health.controller.ts) | `{ok:true}`, без пропуска — для healthcheck |
 
@@ -241,7 +241,7 @@ coturn на `SERVER_HOST` (если есть `TURN_SECRET` или статиче
 | вид не разрешён (`files.allowedKinds`) или исполняемый файл | 415 |
 | бюджет байтов на IP (гард до записи на диск) | 429 |
 
-Код — [`uploads.ts`](../apps/api/src/uploads.ts), [`upload.guard.ts`](../apps/api/src/upload.guard.ts).
+Код — [`uploads.ts`](../apps/api/src/uploads/uploads.service.ts), [`upload.guard.ts`](../apps/api/src/uploads/upload.guard.ts).
 Файлы отдаются с `/uploads/<id>`: картинки и mp3 инлайн, остальное —
 `Content-Disposition: attachment`, всегда `nosniff`.
 
@@ -325,9 +325,9 @@ coturn на `SERVER_HOST` (если есть `TURN_SECRET` или статиче
 ## 5. Серверы и каналы
 
 «Сервер» — группа каналов (как в Discord). Реестр общий на инсталляцию, живёт в
-Postgres и в памяти api ([`registry.service.ts`](../apps/api/src/gateway/registry.service.ts)),
+Postgres и в памяти api ([`registry.service.ts`](../apps/api/src/gateway/registry/registry.service.ts)),
 видимость считается под каждый сокет ([`directory.ts`](../apps/api/src/gateway/directory.ts)).
-Обработчики — [`registry.handlers.ts`](../apps/api/src/gateway/registry.handlers.ts).
+Обработчики — [`registry.handlers.ts`](../apps/api/src/gateway/registry/registry.handlers.ts).
 
 **`Server`** `{ id, name, emoji?, removable, locked?, unlocked?, mine?, moderated? }`
 
@@ -377,9 +377,9 @@ Postgres и в памяти api ([`registry.service.ts`](../apps/api/src/gateway
 
 ## 6. Текстовые каналы
 
-Хранилище — [`chat.service.ts`](../apps/api/src/gateway/chat.service.ts) (Postgres,
-таблица `messages`), обработчики — [`chat.handlers.ts`](../apps/api/src/gateway/chat.handlers.ts),
-кто в какой ленте — [`chat-sessions.ts`](../apps/api/src/gateway/chat-sessions.ts).
+Хранилище — [`chat.service.ts`](../apps/api/src/gateway/chat/chat.service.ts) (Postgres,
+таблица `messages`), обработчики — [`chat.handlers.ts`](../apps/api/src/gateway/chat/chat.handlers.ts),
+кто в какой ленте — [`chat-sessions.ts`](../apps/api/src/gateway/chat/chat-sessions.ts).
 Сокет сидит максимум в одной ленте. Гостю по ссылке чат недоступен.
 
 **`ChatMessage`**
@@ -435,7 +435,7 @@ Postgres и в памяти api ([`registry.service.ts`](../apps/api/src/gateway
 
 Беседа двух личностей — это та же лента, только без сервера над ней и без
 строки в реестре. Адрес — `dm-` + 24 hex от SHA-256 пары id
-(`DmService.address` в [`dm.service.ts`](../apps/api/src/gateway/dm.service.ts));
+(`DmService.address` в [`dm.service.ts`](../apps/api/src/gateway/dm/dm.service.ts));
 клиент его не вычисляет, а получает. Реплики, история, реакции, правка, удаление
 и поиск идут обычными `chat-*` событиями из §6. Закреплять в ЛС нельзя.
 
@@ -456,7 +456,7 @@ Postgres и в памяти api ([`registry.service.ts`](../apps/api/src/gateway
 
 Правила — группа настроек `direct`: `direct.enabled`, `direct.whoCanStart`,
 `direct.firstMessagesPerHour`, `direct.blockFromBanned`,
-`direct.attachmentsAllowed` ([`dm.handlers.ts`](../apps/api/src/gateway/dm.handlers.ts)).
+`direct.attachmentsAllowed` ([`dm.handlers.ts`](../apps/api/src/gateway/dm/dm.handlers.ts)).
 
 Переписка хранится на сервере открытым текстом, как и каналы. Сквозного
 шифрования нет.
@@ -466,7 +466,7 @@ Postgres и в памяти api ([`registry.service.ts`](../apps/api/src/gateway
 ### 8.1 Присутствие личности
 
 «Кто сейчас на связи» — на всю инсталляцию, по личностям, а не по сокетам
-([`presence.ts`](../apps/api/src/gateway/presence.ts)). Не путать с
+([`presence.ts`](../apps/api/src/gateway/voice/presence.ts)). Не путать с
 `voice-presence` (§9) — тот про состав комнат.
 
 | Направление | Событие | Payload |
@@ -481,8 +481,8 @@ Postgres и в памяти api ([`registry.service.ts`](../apps/api/src/gateway
 
 ### 8.2 Дозвон
 
-Звонок человеку, а не вход в комнату. Логика — [`ring.ts`](../apps/api/src/gateway/ring.ts)
-и [`ring.handlers.ts`](../apps/api/src/gateway/ring.handlers.ts); переходы
+Звонок человеку, а не вход в комнату. Логика — [`ring.ts`](../apps/api/src/gateway/calls/ring.ts)
+и [`ring.handlers.ts`](../apps/api/src/gateway/calls/ring.handlers.ts); переходы
 состояний — общая чистая машина [`shared/src/ring.ts`](../packages/shared/src/ring.ts),
 по ней считают и сервер, и оба экрана клиента.
 
@@ -521,7 +521,7 @@ Postgres и в памяти api ([`registry.service.ts`](../apps/api/src/gateway
 `call-state{accepted}` приносит `room` = `voice:<адрес беседы>` (`callRoomOf`).
 В комнату входит **то устройство, которое звонило или ответило**, обычным `join`
 (§9). Сервер держит у такой комнаты четыре правила
-([`voice-sessions.ts`](../apps/api/src/gateway/voice-sessions.ts), `openCallRoom`):
+([`voice-sessions.ts`](../apps/api/src/gateway/voice/voice-sessions.ts), `openCallRoom`):
 
 - войти могут только двое из вызова, остальным — `voice-refused{not-in-call}`;
 - уход любого кончает разговор: второму приходит `call-over` (грейс тот же, 24 с);
@@ -540,9 +540,9 @@ Postgres и в памяти api ([`registry.service.ts`](../apps/api/src/gateway
 
 ## 9. Голосовые комнаты
 
-Обработчики — [`voice.handlers.ts`](../apps/api/src/gateway/voice.handlers.ts),
+Обработчики — [`voice.handlers.ts`](../apps/api/src/gateway/voice/voice.handlers.ts),
 состояние (комната, транспорт, мут, грейс, призраки) —
-[`voice-sessions.ts`](../apps/api/src/gateway/voice-sessions.ts). Сокет сидит
+[`voice-sessions.ts`](../apps/api/src/gateway/voice/voice-sessions.ts). Сокет сидит
 максимум в одной комнате.
 
 ### 9.1 Вход и выбор транспорта
@@ -601,7 +601,7 @@ C→S join {room, name?, clientId?, transport: 'p2p'|'sfu'}
 ## 10. Гости по приглашению
 
 Ссылка в один голосовой канал без пароля инсталляции и без личности
-([`guests.handlers.ts`](../apps/api/src/gateway/guests.handlers.ts)).
+([`guests.handlers.ts`](../apps/api/src/gateway/moderation/guests.handlers.ts)).
 
 | Направление | Событие | Payload → ack | Примечание |
 |---|---|---|---|
@@ -622,8 +622,8 @@ C→S join {room, name?, clientId?, transport: 'p2p'|'sfu'}
 (`moderatedBy` в [`ownership.ts`](../apps/api/src/gateway/ownership.ts)). Модератор
 удаляет чужие сообщения и закрепляет; банить создатель сервера может, пока
 включено `moderation.serverOwnersCanBan`. Бан на всю инсталляцию — только владелец.
-Код — [`moderation.handlers.ts`](../apps/api/src/gateway/moderation.handlers.ts),
-[`moderation.ts`](../apps/api/src/gateway/moderation.ts),
+Код — [`moderation.handlers.ts`](../apps/api/src/gateway/moderation/moderation.handlers.ts),
+[`moderation.ts`](../apps/api/src/gateway/moderation/moderation.ts),
 [`roles.service.ts`](../apps/api/src/identity/roles.service.ts).
 
 | Направление | Событие | Payload → ack | Примечание |
@@ -643,7 +643,7 @@ C→S join {room, name?, clientId?, transport: 'p2p'|'sfu'}
 устройствами ([`personal.handlers.ts`](../apps/api/src/gateway/personal.handlers.ts),
 [`reads.service.ts`](../apps/api/src/identity/reads.service.ts),
 [`prefs.service.ts`](../apps/api/src/identity/prefs.service.ts),
-[`mentions.ts`](../apps/api/src/gateway/mentions.ts)). Только с личностью.
+[`mentions.ts`](../apps/api/src/gateway/chat/mentions.ts)). Только с личностью.
 
 | Направление | Событие | Payload | Примечание |
 |---|---|---|---|
@@ -681,7 +681,7 @@ S→C `settings` — `SettingsSnapshot` `Record<key, value>`: при входе 
 
 Все события — с ack и только для владельца; любому другому
 `{ok:false, error:'forbidden'}`. Типы — [`shared/src/admin.ts`](../packages/shared/src/admin.ts),
-обработчики — [`admin.handlers.ts`](../apps/api/src/gateway/admin.handlers.ts).
+обработчики — [`admin.handlers.ts`](../apps/api/src/gateway/admin/admin.handlers.ts).
 
 | Событие | Payload → ack | Что |
 |---|---|---|

@@ -1,0 +1,126 @@
+import type { AppServer, AppSocket } from '../socket-data';
+import type { ChatSessions } from '../chat/chat-sessions';
+import type { ChatService } from '../chat/chat.service';
+import type { Moderation } from './moderation';
+import type { Perimeter } from '../perimeter';
+import type { RegistryService } from '../registry/registry.service';
+import type { RolesService } from '../../identity/roles.service';
+import {
+  str,
+  type ModerationBanPayload,
+  type ModerationBansPayload,
+  type ModerationUnbanPayload,
+} from '../protocol';
+import type { ModerationBansResult, ModerationResult } from '@relay/shared';
+
+/**
+ * Три события модерации. Тонкие намеренно: чья это власть и что бан делает с
+ * живыми сокетами — вопрос `moderation.ts`, здесь только разбор запроса и
+ * поход в базу за самой записью о бане.
+ */
+export class ModerationHandlers {
+  constructor(
+    private readonly registry: RegistryService,
+    private readonly chat: ChatService,
+    private readonly chats: ChatSessions,
+    private readonly roles: RolesService,
+    private readonly perimeter: Perimeter,
+    private readonly moderation: Moderation,
+    private readonly serverOf: () => AppServer,
+  ) {}
+
+  /**
+   * Забанить автора сообщения.
+   *
+   * Модерирует создатель сервера — своего и только своего; поверх него владелец
+   * инсталляции, который может и это, и бан на всю инсталляцию. Охват
+   * спрашивается явно (`everywhere`): человек, выгоняющий кого-то со своего
+   * сервера, не должен случайно закрыть ему всю инсталляцию.
+   *
+   * Целью служит сообщение, а не имя: имена не уникальны, а сказанное
+   * однозначно указывает на своего автора. Автор-гость забанить себя не даёт —
+   * его личности нет, за него ручается токен приглашения, и разговор с ним
+   * заканчивается через `guest-kick`.
+   */
+  async ban(client: AppSocket, payload: ModerationBanPayload): Promise<ModerationResult> {
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
+      return { ok: false, error: 'forbidden' };
+    const me = this.perimeter.speaker(client);
+    if (!me) return { ok: false, error: 'forbidden' };
+    const room = this.chats.roomOf(client);
+    if (!room) return { ok: false, error: 'forbidden' };
+    const channel = this.registry.channels.find(
+      (c) => c.type === 'text' && c.slug === this.chat.slug(room),
+    );
+    if (!channel || !this.moderation.mayModerate(client, channel))
+      return { ok: false, error: 'forbidden' };
+
+    // Владелец инсталляции мог забрать это право у создателей серверов
+    // (`moderation.serverOwnersCanBan`). Проверка здесь, а не в `mayModerate`:
+    // удаление чужой реплики и бан — разная власть, и выключать их одним
+    // флажком значило бы оставить сервер без хозяина вовсе.
+    if (!this.moderation.mayBan(client)) return { ok: false, error: 'forbidden' };
+
+    const everywhere = payload?.everywhere === true;
+    // Бан на всю инсталляцию — только владельцу: у создателя сервера власти
+    // ровно на свой сервер, и расширять её нечем.
+    if (everywhere && !this.perimeter.isOwner(client)) return { ok: false, error: 'forbidden' };
+
+    const id = str(payload?.id);
+    const slug = this.chat.slug(room);
+    const authorId = id ? await this.chat.authorOf(slug, id) : null;
+    if (!authorId) return { ok: false, error: 'not-found' };
+    // Имя берём ДО бана: строку в ленту пишем от лица канала, а к этому моменту
+    // сообщение ещё на месте и его подпись — то самое имя, которое видели все.
+    const target = await this.chat.findAny(slug, id);
+
+    const scope = everywhere ? null : channel.serverId;
+    const done = await this.roles.ban(authorId, scope, me.id);
+    if (!done.ok) return { ok: false, error: done.reason === 'unknown' ? 'unknown' : 'forbidden' };
+    this.moderation.applyBan(authorId, scope);
+    await this.announceBan(room, slug, target?.name);
+    return { ok: true };
+  }
+
+  /**
+   * Строка в ленте о том, что здесь кого-то забанили. Пишется, только если
+   * владелец включил системные реплики (`messages.systemMessages`) — решает это
+   * `ChatService.addSystem`, а не этот код: гейт должен быть один на все будущие
+   * системные строки.
+   *
+   * Забаненный узнаёт о бане в любом случае — событием `banned` или
+   * `chat-closed`. Настройка решает только то, останется ли след в канале.
+   */
+  private async announceBan(room: string, slug: string, name: string | undefined): Promise<void> {
+    if (!name) return;
+    const line = await this.chat.addSystem(slug, `${name} was banned`);
+    if (line) this.serverOf().to(room).emit('chat', line);
+  }
+
+  /** Разбанить по отпечатку — той же ручкой, которой забаненный показан. */
+  async unban(client: AppSocket, payload: ModerationUnbanPayload): Promise<ModerationResult> {
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
+      return { ok: false, error: 'forbidden' };
+    // Кто снимает бан — теперь вопрос с ответом: снятие попадает в журнал, и
+    // приписывать его некому, если спрашивающий не назвал себя личностью.
+    const me = this.perimeter.speaker(client);
+    if (!me) return { ok: false, error: 'forbidden' };
+    const scope = this.moderation.scopeFor(client, str(payload?.server));
+    if (scope === undefined) return { ok: false, error: 'forbidden' };
+    const identityId = await this.roles.byFingerprint(payload?.fingerprint);
+    if (!identityId) return { ok: false, error: 'not-found' };
+    if (!(await this.roles.unban(identityId, scope, me.id)))
+      return { ok: false, error: 'not-found' };
+    this.moderation.liftBan(identityId, scope);
+    return { ok: true };
+  }
+
+  /** Кто забанен: на этом сервере или, если сервер не назван, на инсталляции. */
+  async list(client: AppSocket, payload: ModerationBansPayload): Promise<ModerationBansResult> {
+    if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))
+      return { ok: false, error: 'forbidden' };
+    const scope = this.moderation.scopeFor(client, str(payload?.server));
+    if (scope === undefined) return { ok: false, error: 'forbidden' };
+    return { ok: true, bans: await this.roles.bans(scope) };
+  }
+}

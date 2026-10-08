@@ -137,11 +137,11 @@ guestListen 3  identity 2  bannedFrom 2
 |---|---|---|
 | [`socket-data.ts`](../../apps/api/src/gateway/socket-data.ts) | 78 | все 18 полей `client.data` + `AppSocket`/`AppServer` |
 | [`perimeter.ts`](../../apps/api/src/gateway/perimeter.ts) | 482 | личность, устройство, гость, замки, лимитер |
-| [`voice-sessions.ts`](../../apps/api/src/gateway/voice-sessions.ts) | 399 | комната, транспорт, пропуск, мут, грейс, presence |
-| [`chat-sessions.ts`](../../apps/api/src/gateway/chat-sessions.ts) | 136 | лента сокета, подпись, ростер |
+| [`voice-sessions.ts`](../../apps/api/src/gateway/voice/voice-sessions.ts) | 399 | комната, транспорт, пропуск, мут, грейс, presence |
+| [`chat-sessions.ts`](../../apps/api/src/gateway/chat/chat-sessions.ts) | 136 | лента сокета, подпись, ростер |
 | [`directory.ts`](../../apps/api/src/gateway/directory.ts) | 150 | витрина реестра у каждого сокета + дебаунс рассылки |
-| [`moderation.ts`](../../apps/api/src/gateway/moderation.ts) | 121 | чья это власть и что бан делает с живыми сокетами |
-| [`mentions.ts`](../../apps/api/src/gateway/mentions.ts) | 87 | кого назвали, кому сказать, сколько накопилось |
+| [`moderation.ts`](../../apps/api/src/gateway/moderation/moderation.ts) | 121 | чья это власть и что бан делает с живыми сокетами |
+| [`mentions.ts`](../../apps/api/src/gateway/chat/mentions.ts) | 87 | кого назвали, кому сказать, сколько накопилось |
 
 Трёх последних в плане не было — они вылезли на шаге 5. Витрина реестра и
 дебаунс её рассылки нужны четырём файлам обработчиков; право модерировать

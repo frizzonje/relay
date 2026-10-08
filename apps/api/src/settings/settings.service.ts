@@ -5,7 +5,7 @@ import { SettingRow } from '../db/entities';
 import { parseRetention, retentionEnvComplaint } from '../db/retention.policy';
 import { hashServerPassword } from '../gateway/unlock';
 import { revokeAllSessions } from '../identity/session';
-import { parseBytes } from '../uploads.policy';
+import { parseBytes } from '../uploads/uploads.policy';
 import { AuditService } from './audit.service';
 import {
   SETTINGS,

@@ -245,8 +245,8 @@ localStorage и подделывается — это заслон от случ
 
 ### B4. Загрузки: ни квоты, ни лимита — диск кончается — ✅ СДЕЛАНО
 
-[`upload.controller.ts:34`](../../../apps/api/src/upload.controller.ts),
-[`uploads.ts:13`](../../../apps/api/src/uploads.ts)
+[`upload.controller.ts:34`](../../../apps/api/src/uploads/upload.controller.ts),
+[`uploads.ts:13`](../../../apps/api/src/uploads/uploads.service.ts)
 
 25 МБ на файл — единственное ограничение. Ни числа файлов, ни скорости, ни
 потолка на каталог. Подметание — по mtime и только через 7 суток. Один
@@ -773,8 +773,8 @@ e2e гоняет приложение, а не машину, на которую
   поддельными сокетами за секунды, и `server-delete`, `server-stats`,
   `channel-rename/delete/stats` проверены оттуда — включая «чужому срезу не
   показывают» и «читателей удалённого канала выписывают явно»
-  ([`directory.servers.test.ts`](../../../apps/api/src/gateway/directory.servers.test.ts),
-  [`directory.channels.test.ts`](../../../apps/api/src/gateway/directory.channels.test.ts));
+  ([`directory.servers.test.ts`](../../../apps/api/src/gateway/registry/directory.servers.test.ts),
+  [`directory.channels.test.ts`](../../../apps/api/src/gateway/registry/directory.channels.test.ts));
   четыре двери закрытого сервера — в
   [`perimeter.test.ts`](../../../apps/api/src/gateway/perimeter.test.ts).
 - **Диагноз флака переснят, и снимать оказалось нечего.** Обоих виновников из
