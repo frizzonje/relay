@@ -86,6 +86,30 @@ let screenAudioTrack: MediaStreamTrack | null = null;
 let screenMode: ScreenMode = 'quality';
 let screenSetups: Record<ScreenMode, ScreenSetup> = { ...DEFAULT_SETUP };
 
+/**
+ * Запрос к системе (камера или выбор экрана) ещё не ответил. Висит он столько,
+ * сколько человек читает вопрос «разрешить?», и второе нажатие за это время
+ * открыло бы второй захват: первый остался бы без хозяина, и лампочка камеры
+ * горела бы до перезагрузки. Флаг один на оба источника — слот у них общий.
+ */
+let starting = false;
+
+/**
+ * Жизнь видео-слота: выход из звонка (`teardownVideo`) начинает новую. Захват,
+ * разрешённый уже после выхода, в звонок не ложится — ни в покинутый (потока
+ * нет), ни в следующий (его там никто не заказывал), — а гасится сразу.
+ */
+let slotLife = 0;
+
+/** Пока ждали систему, звонок кончился. */
+function outlived(life: number): boolean {
+  return life !== slotLife || !around.stream();
+}
+
+function stopAll(stream: MediaStream): void {
+  for (const t of stream.getTracks()) t.stop();
+}
+
 /** Идёт ли с нас камера. */
 export function isCamOn(): boolean {
   return camOn;
@@ -360,6 +384,7 @@ export function currentVideoTrack(): MediaStreamTrack | null {
 
 export async function toggleCamera() {
   if (!around.stream() || !around.maySend()) return; // слушатель своего медиа не отдаёт
+  if (starting) return;
   if (camOn) stopCamera();
   else await startCamera();
   around.announce();
@@ -368,23 +393,22 @@ export async function toggleCamera() {
 
 async function startCamera() {
   if (screenOn) stopScreen(); // экран и камера занимают один слот — взаимоисключают
-  const saved = readStored(CAM_KEY);
+  const life = slotLife;
+  let cam: MediaStream;
+  starting = true;
   try {
-    let cam: MediaStream;
-    try {
-      cam = await navigator.mediaDevices.getUserMedia({
-        video: saved ? { ...VIDEO_CONSTRAINTS, deviceId: { exact: saved } } : VIDEO_CONSTRAINTS,
-      });
-    } catch (err) {
-      // Сохранённая камера пропала/занята — откатываемся на устройство по умолчанию
-      if ((err as { name?: string } | null)?.name !== 'OverconstrainedError') throw err;
-      cam = await navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS });
-    }
-    camTrack = cam.getVideoTracks()[0];
+    cam = await openCamera(readStored(CAM_KEY));
   } catch (err) {
     toast.error(msg('voice.toast.camUnavailable', { reason: mediaErrorText(err) }));
     return;
+  } finally {
+    starting = false;
   }
+  if (outlived(life)) {
+    stopAll(cam);
+    return;
+  }
+  camTrack = cam.getVideoTracks()[0];
 
   camTrack.contentHint = 'motion';
   // Камеру отняла система или выдернули устройство — корректно гасим у всех
@@ -401,6 +425,18 @@ async function startCamera() {
   void refreshCameraInfo();
 }
 
+async function openCamera(saved: string | null): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      video: saved ? { ...VIDEO_CONSTRAINTS, deviceId: { exact: saved } } : VIDEO_CONSTRAINTS,
+    });
+  } catch (err) {
+    // Сохранённая камера пропала/занята — откатываемся на устройство по умолчанию
+    if ((err as { name?: string } | null)?.name !== 'OverconstrainedError') throw err;
+    return navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS });
+  }
+}
+
 function stopCamera() {
   if (camTrack) {
     camTrack.onended = null;
@@ -414,6 +450,7 @@ function stopCamera() {
 
 export async function toggleScreen() {
   if (!around.stream() || !around.maySend()) return; // слушатель своего медиа не отдаёт
+  if (starting) return;
   if (screenOn) stopScreen();
   else await startScreen();
   around.announce();
@@ -432,12 +469,14 @@ async function startScreen() {
   // просим только видео. См. lib/desktop-screen-audio.ts.
   const nativeAudio = isDesktopWindows();
 
+  const life = slotLife;
   let display: MediaStream;
   // Пока открыт нативный выбор источника, оболочка знает об этом: пикер рисует
   // движок своим модальным окном, и после его закрытия окну нужна побудка
   // (см. notifyScreenPicker). Закрытие отбиваем в finally — «Отмена» здесь
   // такой же выход, как и удачный выбор.
   notifyScreenPicker(true);
+  starting = true;
   try {
     display = await navigator.mediaDevices.getDisplayMedia({
       video: captureConstraints(currentScreenProfile(), isWebKit()),
@@ -450,9 +489,29 @@ async function startScreen() {
     if (!(e && (e.name === 'NotAllowedError' || e.name === 'AbortError'))) {
       toast.error(msg('voice.toast.screenFailed', { reason: mediaErrorText(err) }));
     }
+    starting = false;
     return;
   } finally {
     notifyScreenPicker(false);
+  }
+
+  // Нативный захват без голосов relay. Может вернуть null (нативный путь
+  // недоступен) — тогда демонстрация просто без звука, это лучше эхо-петли.
+  // Ждём его до того, как что-либо занять: пока он поднимается, слот всё ещё
+  // свободен для «вышли из звонка».
+  let nativeTrack: MediaStreamTrack | null = null;
+  try {
+    if (nativeAudio && !outlived(life)) nativeTrack = await startNativeScreenAudio();
+  } finally {
+    starting = false;
+  }
+  if (outlived(life)) {
+    stopAll(display);
+    if (nativeTrack) {
+      nativeTrack.stop();
+      void stopNativeScreenAudio();
+    }
+    return;
   }
 
   // Экран реально получен — только теперь освобождаем видео-слот от камеры
@@ -463,9 +522,7 @@ async function startScreen() {
   reportCapture(screenTrack);
 
   if (nativeAudio) {
-    // Нативный захват без голосов relay. Может вернуть null (нативный путь
-    // недоступен) — тогда демонстрация просто без звука, это лучше эхо-петли.
-    screenAudioTrack = await startNativeScreenAudio();
+    screenAudioTrack = nativeTrack;
     if (screenAudioTrack) screenAudioTrack.contentHint = 'music';
   } else {
     screenAudioTrack = display.getAudioTracks()[0] || null;
@@ -551,6 +608,7 @@ function stopScreen() {
  * переживший выход, дёрнул бы `stopScreen` в уже разобранном звонке.
  */
 export function teardownVideo(): void {
+  slotLife += 1;
   if (camTrack) {
     camTrack.onended = null;
     camTrack = null;
