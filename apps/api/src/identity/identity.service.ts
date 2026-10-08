@@ -1,7 +1,8 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { DataSource } from 'typeorm';
+import { DataSource, IsNull } from 'typeorm';
 import { DeviceRow, IdentityRow } from '../db/entities';
+import { isUniqueViolation } from '../db/errors';
 // Значением, а не `import type`: тип стирается при сборке, и
 // `emitDecoratorMetadata` записывает в довод конструктора `Function` вместо
 // класса — Nest такой довод не разрешает и падает при старте. Тесты этого не
@@ -157,16 +158,8 @@ export class IdentityService {
     if (!(await verifySignature(input.publicKey, authMessage(input.nonce), input.signature)))
       return { ok: false, reason: 'bad-signature' };
 
-    const known = await this.db.getRepository(DeviceRow).findOne({
-      where: { publicKey: input.publicKey },
-      relations: { identity: true },
-    });
-
-    if (known) {
-      if (known.revokedAt) return { ok: false, reason: 'revoked' };
-      await this.touch(known);
-      return { ok: true, identity: known.identity, device: known, created: false };
-    }
+    const known = await this.knownDevice(input.publicKey);
+    if (known) return this.recognize(known);
 
     // Ключ незнакомый — значит сейчас родится личность, а её могли и запретить.
     // Спрашиваем здесь, а не в контроллере: тот же путь проходят все клиенты, а
@@ -192,6 +185,20 @@ export class IdentityService {
    */
   private creationAllowed(): boolean {
     return this.settings.get<string>('access.identityCreation') !== 'closed';
+  }
+
+  private knownDevice(publicKey: string): Promise<DeviceRow | null> {
+    return this.db.getRepository(DeviceRow).findOne({
+      where: { publicKey },
+      relations: { identity: true },
+    });
+  }
+
+  /** Устройство уже знакомо: узнать человека — или сказать, что ключ отозван. */
+  private async recognize(device: DeviceRow): Promise<VerifyResult> {
+    if (device.revokedAt) return { ok: false, reason: 'revoked' };
+    await this.touch(device);
+    return { ok: true, identity: device.identity, device, created: false };
   }
 
   /** Личность по сессии. `null` — сессия есть, а личности за ней уже нет. */
@@ -312,7 +319,12 @@ export class IdentityService {
       relations: { identity: true },
     });
     if (!row || row.revokedAt || !row.identity) return null;
-    await this.db.getRepository(DeviceRow).update({ id: deviceId }, { revokedAt: new Date() });
+    // Условие «ещё не отозвано» — в самой записи: два отзыва разом оба прочли
+    // бы живое устройство, и журнал получил бы две строки об одном.
+    const res = await this.db
+      .getRepository(DeviceRow)
+      .update({ id: deviceId, revokedAt: IsNull() }, { revokedAt: new Date() });
+    if (!res.affected) return null;
     return { fingerprint: row.identity.fingerprint, nick: row.identity.nick, name: row.name };
   }
 
@@ -338,13 +350,29 @@ export class IdentityService {
         return { ok: false, reason: 'cooldown', retryInMs: cooldownMs - (this.now() - since) };
     }
 
-    const res = await this.db
-      .getRepository(IdentityRow)
-      .update({ id: identityId }, { nick: clean });
-    if (!res.affected) return { ok: false, reason: 'unknown' };
+    // Паузу занимаем до похода в базу, той же синхронной частью, что и
+    // проверка: иначе пачка переименований, посланная разом, прошла бы её вся.
     // Помним только тогда, когда пауза кому-то нужна: при нулевой настройке
     // карта осталась бы записной книжкой всех переименований инсталляции.
+    const before = this.renamedAt.get(identityId);
     if (cooldownMs > 0) this.renamedAt.set(identityId, this.now());
+    const forget = () => {
+      if (cooldownMs <= 0) return;
+      if (before === undefined) this.renamedAt.delete(identityId);
+      else this.renamedAt.set(identityId, before);
+    };
+    try {
+      const res = await this.db
+        .getRepository(IdentityRow)
+        .update({ id: identityId }, { nick: clean });
+      if (!res.affected) {
+        forget();
+        return { ok: false, reason: 'unknown' };
+      }
+    } catch (e) {
+      forget();
+      throw e;
+    }
     return { ok: true, nick: clean };
   }
 
@@ -392,10 +420,19 @@ export class IdentityService {
 
     // Одной транзакцией: личность без устройства войти не сможет никогда, а
     // строка о ней останется навсегда — в базе нет никого, кто бы её убрал.
-    await this.db.transaction(async (m) => {
-      await m.getRepository(IdentityRow).insert(identity);
-      await m.getRepository(DeviceRow).insert({ ...device, identity: undefined });
-    });
+    try {
+      await this.db.transaction(async (m) => {
+        await m.getRepository(IdentityRow).insert(identity);
+        await m.getRepository(DeviceRow).insert({ ...device, identity: undefined });
+      });
+    } catch (e) {
+      // Тот же ключ только что завёл параллельный вход (две вкладки, двойной
+      // запрос клиента): «незнаком» было правдой у обоих, а база пустила
+      // одного. Второй — тот же человек, его надо узнать, а не уронить в 500.
+      const winner = isUniqueViolation(e) ? await this.knownDevice(publicKey) : null;
+      if (!winner) throw e;
+      return this.recognize(winner);
+    }
 
     this.logger.log(`новая личность ${print} («${identity.nick}»)`);
     return { ok: true, identity, device, created: true };

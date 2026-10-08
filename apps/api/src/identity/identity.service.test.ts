@@ -499,3 +499,71 @@ describe('возраст личности уезжает на сокет', () =>
     expect(speaker?.createdAt).toBe(first.identity.createdAt.getTime());
   });
 });
+
+describe('запросы разом', () => {
+  /**
+   * Типовая гонка этой кодовой базы: проверка → поход в базу → запись. Пачка
+   * запросов, посланная разом, проходит проверку вся, пока первый ещё в базе.
+   */
+  it('два первых входа одним ключом разом — одна личность, войти успевают оба', async () => {
+    // Так входит новый человек, у которого клиент спросил дважды (две вкладки,
+    // двойной эффект в строгом режиме React): ключ один, нонсы разные.
+    const d = await device();
+    const signed = async () => {
+      const c = identity.challenge(d.publicKey)!;
+      return {
+        publicKey: d.publicKey,
+        nonce: c.nonce,
+        signature: await d.sign(authMessage(c.nonce)),
+      };
+    };
+    const [one, two] = [await signed(), await signed()];
+    // Запись личности — поход в базу; держим его, пока второй не спросит «знаком ли ключ».
+    const real = db.transaction.bind(db) as (...args: unknown[]) => Promise<unknown>;
+    vi.spyOn(db, 'transaction').mockImplementation((async (...args: unknown[]) => {
+      await new Promise((r) => setTimeout(r, 50));
+      return real(...args);
+    }) as never);
+    const [a, b] = await Promise.all([identity.verify(one), identity.verify(two)]);
+
+    if (!a.ok || !b.ok) throw new Error('вход не прошёл');
+    expect(a.identity.id).toBe(b.identity.id);
+    expect(a.device.id).toBe(b.device.id);
+    expect([a.created, b.created].sort()).toEqual([false, true]);
+    expect(await db.getRepository(IdentityRow).count()).toBe(1);
+  });
+
+  it('пачка переименований разом проходит паузу один раз', async () => {
+    await tune(settings, 'people.nickChangeCooldownMinutes', 10);
+    const first = await login(await device(), { nick: 'Аня' });
+    if (!first.ok) throw new Error(first.reason);
+
+    const results = await Promise.all(
+      ['Боря', 'Веня', 'Гена', 'Даня', 'Женя'].map((nick) =>
+        identity.rename(first.identity.id, nick),
+      ),
+    );
+
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+  });
+
+  it('устройство, отозванное дважды разом, отзывается один раз', async () => {
+    const first = await login(await device());
+    if (!first.ok) throw new Error(first.reason);
+
+    // Запись отзыва — поход в базу; держим её, пока второй не прочтёт строку.
+    const repo = db.getRepository(DeviceRow);
+    const update = repo.update.bind(repo) as (...args: unknown[]) => Promise<unknown>;
+    vi.spyOn(repo, 'update').mockImplementation((async (...args: unknown[]) => {
+      await new Promise((r) => setTimeout(r, 50));
+      return update(...args);
+    }) as never);
+    const [a, b] = await Promise.all([
+      identity.revokeAny(first.device.id),
+      identity.revokeAny(first.device.id),
+    ]);
+
+    // Отзыв — строка журнала у владельца: второй не должен выглядеть сделанной работой.
+    expect([a, b].filter(Boolean)).toHaveLength(1);
+  });
+});
