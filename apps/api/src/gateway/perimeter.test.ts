@@ -4,7 +4,7 @@ import { issueGuestToken, issueToken } from '../auth/auth';
 import { authGate } from '../http-gate';
 import { asSocket } from './testkit';
 import { defaults, PROTOCOL_VERSION } from '@relay/shared';
-import { RL_CAPACITY, RL_REFILL_PER_SEC } from './perimeter';
+import { RL_CAPACITY, RL_REFILL_PER_SEC, type Perimeter } from './perimeter';
 import {
   MAIN,
   connect,
@@ -303,6 +303,46 @@ describe('server-unlock', () => {
     }
     a.clear();
     await gw.handleServerUnlock(asSocket(a), { id: 'srv', password: 'пароль' });
+    expect(a.last('server-unlock-result')).toEqual({ id: 'srv', ok: false });
+  });
+
+  // Простой спрашивается до сверки хэша, а неудача записывалась после неё — и
+  // пачка попыток, посланных разом с разных сокетов, проходила проверку вся, до
+  // первой записанной неудачи. Верный пароль в хвосте такой пачки — это и есть
+  // перебор, которому простой не помешал.
+  it('пачка одновременных попыток не обходит простой', async () => {
+    const { gw, server } = await withLocked();
+    const socks = Array.from({ length: 12 }, (_, i) =>
+      connect(gw, server, { id: `burst-${i}`, ip: '9.9.9.9' }),
+    );
+    await Promise.all(
+      socks.map((sock, i) =>
+        gw.handleServerUnlock(asSocket(sock), {
+          id: 'srv',
+          password: i === socks.length - 1 ? 'пароль' : `мимо-${i}`,
+        }),
+      ),
+    );
+    expect(socks.at(-1)!.last('server-unlock-result')).toEqual({ id: 'srv', ok: false });
+  });
+
+  it('сервер пересоздали, пока сверяли пароль, — прежний пароль его не открывает', async () => {
+    const { gw, server, owner } = await withLocked();
+    const a = connect(gw, server, { id: 'a' });
+    const perimeter = (gw as unknown as { perimeter: Perimeter }).perimeter;
+    const real = perimeter.passwordFits.bind(perimeter);
+    let go!: () => void;
+    const gate = new Promise<void>((r) => (go = r));
+    vi.spyOn(perimeter, 'passwordFits').mockImplementationOnce(async (hash, password) => {
+      const ok = await real(hash, password);
+      await gate;
+      return ok;
+    });
+    const pending = gw.handleServerUnlock(asSocket(a), { id: 'srv', password: 'пароль' });
+    await gw.handleServerDelete(asSocket(owner), { id: 'srv' });
+    await gw.handleServerCreate(asSocket(owner), { id: 'srv', name: 'тайный', password: 'другой' });
+    go();
+    await pending;
     expect(a.last('server-unlock-result')).toEqual({ id: 'srv', ok: false });
   });
 

@@ -210,48 +210,52 @@ export class RegistryHandlers {
       client.emit('server-unlock-result', { id, ok: false });
       return;
     }
-    const ok = await this.perimeter.passwordFits(srv.passwordHash, password);
-    // Пока считался хэш, сервер могли удалить — тогда разблокировать нечего.
-    if (!this.registry.servers.some((s) => s.id === id)) {
+    // Попытка записывается сразу, той же синхронной частью, что и проверка
+    // простоя, — как неудача, которую снимет успех. Между проверкой и ответом
+    // scrypt стоит `await`, и пачка попыток с разных сокетов, записывай мы
+    // неудачу по ответу, прошла бы проверку вся: перебор без простоя.
+    const attempt = this.perimeter.noteUnlockAttempt(client, id);
+    const hash = srv.passwordHash;
+    const ok = await this.perimeter.passwordFits(hash, password);
+    // Пока считался хэш, сервер могли удалить, а то и завести заново под тем же
+    // id и с другим паролем. Ответ scrypt — про тот хэш, что был ДО `await`, и
+    // открыть им можно только его же.
+    const fresh = this.registry.servers.find((s) => s.id === id);
+    if (!fresh || fresh.passwordHash !== hash) {
       client.emit('server-unlock-result', { id, ok: false });
       return;
     }
     if (!ok) {
       // Пишем каждую неудачу, а не только превышение порога: по одной строчке
-      // «превышено» не видно ни начала подбора, ни его темпа.
-      const { count, until } = this.perimeter.noteUnlockFailure(client, id);
-      // Адрес — только для строчки в логе: считает и помнит попытки контур, а
-      // разбирают подбор по логу, и без адреса он там бесполезен.
+      // «превышено» не видно ни начала подбора, ни его темпа. Адрес — только
+      // для лога: считает и помнит попытки контур, а разбирают подбор по логу.
       const ip = clientIp(client.handshake);
       const cooldown =
-        until > Date.now() ? `, cooldown ${Math.round((until - Date.now()) / 1000)}s` : '';
-      this.logger.warn(`server-unlock: failed attempt ${count} for "${id}" from ${ip}${cooldown}`);
+        attempt.until > Date.now()
+          ? `, cooldown ${Math.round((attempt.until - Date.now()) / 1000)}s`
+          : '';
+      this.logger.warn(
+        `server-unlock: failed attempt ${attempt.count} for "${id}" from ${ip}${cooldown}`,
+      );
+      client.emit('server-unlock-result', { id, ok: false });
+      return;
     }
-    if (ok) {
-      this.perimeter.noteUnlockSuccess(client, id, srv.passwordHash, password);
-      this.perimeter.markUnlocked(client, id);
-      // Пароль подошёл — теперь этому сокету видны каналы сервера…
-      client.emit('channels', this.directory.channelsFor(client));
-      // …и состав их эфиров. Без этого строки каналов стоят пустыми до первого
-      // чужого входа-выхода: присутствие теперь режется по видимости, и
-      // прошлую рассылку этот сокет получил ещё запертым.
-      client.emit('voice-presence', this.voice.snapshotFor(client));
-      // …и счётчики упоминаний в них: снимок на подключении собирался, когда
-      // эти каналы были ещё не видны, и «тебя звали» в них молчало бы до
-      // следующего захода.
-      void this.mentions.sendSnapshot(client);
-      // Пропуск на будущие подключения: с ним разблокировка переживает
-      // реконнект, а пароль остаётся там, где ему и место, — у человека.
-      // Хэш перечитываем: пока считался scrypt, пароль могли сменить, и
-      // подписать пропуск прежним значило бы выдать заведомо мёртвый.
-      const fresh = this.registry.servers.find((s) => s.id === id);
-      if (fresh?.passwordHash) {
-        const { token } = issueUnlockToken(id, fresh.passwordHash);
-        client.emit('server-unlock-result', { id, ok, token });
-        return;
-      }
-    }
-    client.emit('server-unlock-result', { id, ok });
+    this.perimeter.noteUnlockSuccess(client, id, hash, password);
+    this.perimeter.markUnlocked(client, id);
+    // Пароль подошёл — теперь этому сокету видны каналы сервера…
+    client.emit('channels', this.directory.channelsFor(client));
+    // …и состав их эфиров. Без этого строки каналов стоят пустыми до первого
+    // чужого входа-выхода: присутствие теперь режется по видимости, и
+    // прошлую рассылку этот сокет получил ещё запертым.
+    client.emit('voice-presence', this.voice.snapshotFor(client));
+    // …и счётчики упоминаний в них: снимок на подключении собирался, когда
+    // эти каналы были ещё не видны, и «тебя звали» в них молчало бы до
+    // следующего захода.
+    void this.mentions.sendSnapshot(client);
+    // Пропуск на будущие подключения: с ним разблокировка переживает
+    // реконнект, а пароль остаётся там, где ему и место, — у человека.
+    const { token } = issueUnlockToken(id, hash);
+    client.emit('server-unlock-result', { id, ok, token });
   }
   async deleteServer(client: AppSocket, payload: ServerDeletePayload): Promise<ServerDeleteResult> {
     if (!this.perimeter.allow(client) || this.perimeter.isGuest(client))

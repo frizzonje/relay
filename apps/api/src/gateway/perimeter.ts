@@ -573,8 +573,12 @@ export class Perimeter {
       : verifyServerPassword(password, storedHash);
   }
 
-  /** Неудачная попытка: её номер и конец простоя — оба идут в лог. */
-  noteUnlockFailure(client: AppSocket, serverId: string): { count: number; until: number } {
+  /**
+   * Записать попытку — как неудачу, которую снимет `noteUnlockSuccess`. Её
+   * номер и конец простоя идут в лог. Пишется ДО сверки хэша: иначе пачка
+   * попыток, посланных разом, проходила бы проверку простоя вся.
+   */
+  noteUnlockAttempt(client: AppSocket, serverId: string): { count: number; until: number } {
     return this.unlockAttempts.fail(this.network(client), serverId);
   }
 
