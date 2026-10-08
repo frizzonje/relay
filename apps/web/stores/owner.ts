@@ -23,10 +23,20 @@ interface OwnerState {
   refresh: () => Promise<void>;
 }
 
+/**
+ * Номер последнего вопроса. Спрашивают двое — вход и взятие власти, — и ответ
+ * на вопрос входа, приехавший позже, затирал бы свежее «да» прежним «нет».
+ */
+let seq = 0;
+
 export const useOwnerStore = create<OwnerState>((set) => ({
   claiming: null,
   owner: false,
   claim: (token) => set({ claiming: token }),
   close: () => set({ claiming: null }),
-  refresh: async () => set({ owner: await amIOwner() }),
+  refresh: async () => {
+    const mine = (seq += 1);
+    const owner = await amIOwner();
+    if (mine === seq) set({ owner });
+  },
 }));
