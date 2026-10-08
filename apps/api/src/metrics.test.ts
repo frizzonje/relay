@@ -64,6 +64,19 @@ describe('cpuSample', () => {
 });
 
 describe('MetricsService', () => {
+  it('замер снимается вместе с модулем, а не тикает до конца процесса', () => {
+    vi.useFakeTimers();
+    try {
+      const service = new MetricsService();
+      service.onModuleInit();
+      expect(vi.getTimerCount()).toBe(1);
+      service.onModuleDestroy();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });

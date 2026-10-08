@@ -1,4 +1,4 @@
-import { Injectable, type OnModuleInit } from '@nestjs/common';
+import { Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { readFile, statfs } from 'node:fs/promises';
 import { cpus, freemem, loadavg, platform, totalmem, uptime } from 'node:os';
 import { UPLOAD_DIR } from './uploads/uploads.service';
@@ -108,14 +108,22 @@ async function readDisk(path: string): Promise<{ total: number; used: number } |
 }
 
 @Injectable()
-export class MetricsService implements OnModuleInit {
+export class MetricsService implements OnModuleInit, OnModuleDestroy {
   private last: CpuSample = cpuSample();
   private usage: number | null = null;
   private cache: { at: number; value: MetricsResponse } | null = null;
 
+  private timer: ReturnType<typeof setInterval> | null = null;
+
   onModuleInit() {
-    const timer = setInterval(() => this.tick(), SAMPLE_MS);
-    timer.unref?.(); // чистильщик не держит процесс живым
+    this.timer = setInterval(() => this.tick(), SAMPLE_MS);
+    this.timer.unref?.(); // чистильщик не держит процесс живым
+  }
+
+  /** Замер снимается вместе с модулем — как и расписания уборщиков (`Periodic`). */
+  onModuleDestroy() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
   }
 
   private tick() {
