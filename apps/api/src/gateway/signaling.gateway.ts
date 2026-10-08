@@ -28,7 +28,7 @@ import { Perimeter } from './perimeter';
 import { Presence } from './presence';
 import { Rings } from './ring';
 import { VoiceSessions } from './voice-sessions';
-import { isAuthorized, useAddressDoor, verifyGuestToken } from '../auth/auth';
+import { isAuthorized, useAddressDoor } from '../auth/auth';
 import { IdentityService } from '../identity/identity.service';
 import { OwnerService } from '../identity/owner.service';
 import { PrefsService } from '../identity/prefs.service';
@@ -149,6 +149,14 @@ const SERVER_OUTDATED_ERROR = 'server-outdated';
  * по-разному, и сказать одно вместо другого значит соврать.
  */
 const MAINTENANCE_ERROR = 'maintenance';
+
+/**
+ * Отказ во входе сокету без личности и без инвайта. Не приговор, а «сначала
+ * назовись»: веб подключается, только когда ключ уже доказан, и слышит это
+ * слово, лишь если сессия личности истекла или устройство отозвали, — тогда он
+ * доказывает ключ заново и стучится снова.
+ */
+const IDENTITY_REQUIRED_ERROR = 'identity-required';
 
 /**
  * Отказ во входе с закрытого адреса. Слово своё, не банное, и это решение, а не
@@ -553,6 +561,10 @@ export class SignalingGateway
               next(new Error(BLOCKED_ERROR));
               return;
             }
+            if (refusal === 'anonymous') {
+              next(new Error(IDENTITY_REQUIRED_ERROR));
+              return;
+            }
             // Текст обслуживания едет ВМЕСТЕ с отказом, а не снимком настроек:
             // снимок приезжает по сокету, которого у отвергнутого как раз и нет.
             // socket.io доставляет `data` рядом с сообщением ошибки — это
@@ -634,8 +646,7 @@ export class SignalingGateway
     // handshake.auth.guest. Валиден → сокет помечен гостем и «пришит» к своему
     // войс-каналу; реестры серверов/каналов ему НЕ шлём (нечего подглядывать),
     // presence — только срез его комнаты.
-    const guestRaw = (client.handshake.auth as { guest?: unknown } | undefined)?.guest;
-    const guest = typeof guestRaw === 'string' ? verifyGuestToken(guestRaw) : null;
+    const guest = this.perimeter.guestPass(client);
     if (!guest && !isAuthorized(client.handshake)) {
       client.disconnect(true);
       return;

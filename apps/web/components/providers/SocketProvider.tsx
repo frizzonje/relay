@@ -8,7 +8,7 @@ import type {
   CallStateRelay,
   VoiceRefusedRelay,
 } from '@relay/shared';
-import { getSocket } from '@/lib/socket';
+import { getSocket, guestTokenFromLocation } from '@/lib/socket';
 import { initVoice, relabelSelf } from '@/lib/voice';
 import { initCall } from '@/lib/call';
 import { initHotkeys } from '@/lib/hotkeys';
@@ -42,6 +42,9 @@ import { useNotifyStore } from '@/stores/notify';
 import { adoptPrefs, onPref } from '@/lib/prefs';
 import { tx } from '@/lib/i18n';
 import { chatRefusalKey, voiceRefusalKey } from '@/lib/refusals';
+
+/** Пауза перед повторным стуком после «сначала назовись» от двери. */
+const IDENTITY_RETRY_MS = 3000;
 
 /**
  * Поднимает единственный socket.io-клиент и навешивает глобальную логику чата
@@ -524,7 +527,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // отказом двери при следующей попытке — там сокет не подключается вовсе, и
     // без разбора причины человек видел бы вечное «переподключаюсь».
     socket.on('banned', () => useModerationStore.getState().setBanned(true));
-    socket.on('connect_error', (err: Error) => {
+    let identityRetry: ReturnType<typeof setTimeout> | undefined;
+    const onConnectError = (err: Error) => {
       if (err?.message === 'banned') useModerationStore.getState().setBanned(true);
       // Дверь не пустила из-за версии контракта. Сторону сервер называет сам:
       // «обнови приложение» и «этот relay старее твоего приложения» — советы
@@ -541,7 +545,26 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       // Адрес закрыт списком владельца. Слово своё, не банное: попавший под
       // маску мог не делать ничего, и экран у него тоже свой (см. BlockedGate).
       if (err?.message === 'blocked') useContractStore.getState().setBlocked(true);
-    });
+      // Дверь не узнала личность: сессия истекла или устройство отозвали, пока
+      // вкладка жила. Сам socket.io после отказа миддлвары не переподключается
+      // — доказываем ключ заново и стучимся снова, с паузой: если сервер не
+      // узнаёт и свежую сессию, частый стук ничего не изменит.
+      if (err?.message === 'identity-required') {
+        void useIdentityStore
+          .getState()
+          .restore()
+          .then(() => {
+            // Не доказали — экран личности уже объясняет почему, и стучаться
+            // с той же бедой незачем.
+            const { me, status } = useIdentityStore.getState();
+            if (!me || status === 'failed') return;
+            identityRetry = setTimeout(() => {
+              if (!socket.connected) socket.connect();
+            }, IDENTITY_RETRY_MS);
+          });
+      }
+    };
+    socket.on('connect_error', onConnectError);
 
     // Названо по имени по той же причине, что и обработчики вызова выше:
     // `connect` и `disconnect` слушает ещё и `initVoice` (переподписка на
@@ -706,28 +729,28 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       window.addEventListener('storage', onStorage);
     }
 
-    // Личность узнаётся один раз, миддлварой на подключении, — а рождается она
-    // на первом заходе уже ПОСЛЕ того, как сокет подключился. Без этой
-    // переподписки первое соединение человека остаётся безымянным до
-    // перезагрузки страницы: его сервер записался бы на устройство, а реплики
-    // ушли бы в ленту без лица.
     // Звук каналов поменяли на другом устройстве — список в сторе обязан это
     // заметить: иначе сайдбар остался бы с прежними значками до перезагрузки.
     const unsubSound = onPref('sound', (value) => useNotifyStore.getState().adoptLoud(value));
 
+    // Дверь пускает только личность или гостя по инвайту (сокет без ключа
+    // обходил бы баны и «тихий час» новичка). Личность узнаётся один раз,
+    // миддлварой на подключении, — поэтому стучимся, когда ключ уже доказан, а
+    // сменилась личность — переподключаемся: старая осталась бы на сокете.
     let known = useIdentityStore.getState().me?.id ?? null;
     const unsubIdentity = useIdentityStore.subscribe((state) => {
       const id = state.me?.id ?? null;
       if (id === known) return;
       known = id;
-      if (!id || !socket.connected) return;
-      socket.disconnect();
+      if (!id) return;
+      if (socket.connected) socket.disconnect();
       socket.connect();
     });
 
-    if (!socket.connected) socket.connect();
+    if (!socket.connected && (known || guestTokenFromLocation())) socket.connect();
 
     return () => {
+      clearTimeout(identityRetry);
       unsub();
       unsubIdentity();
       unsubSound();
@@ -775,6 +798,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       socket.off('server-unlock-result');
       socket.off('channels');
       socket.off('connect', onConnect);
+      socket.off('connect_error', onConnectError);
     };
   }, []);
 

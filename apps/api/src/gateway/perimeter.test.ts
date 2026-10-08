@@ -65,7 +65,7 @@ describe('версия контракта', () => {
 
   it('своя версия проходит дверь', async () => {
     const { gw, server } = await makeGateway();
-    const sock = server.connect();
+    const sock = server.connect({ cookie: (await personCookie('Аня')).cookie });
     expect(await server.run(sock)).toBeUndefined();
     gw.handleConnection(asSocket(sock));
     expect(sock.got('servers')).toBe(true);
@@ -90,6 +90,29 @@ describe('подключение', () => {
     gw.handleConnection(asSocket(sock));
     expect(sock.disconnected).toBe(false);
     expect(sock.got('servers')).toBe(true);
+  });
+
+  // Без личности дверь не открывается: бан, «тихий час» новичка и подпись
+  // реплики держатся на ключе, и сокет, не назвавший себя, обходил бы все три
+  // разом — достаточно не прислать куку.
+  it('без личности и без инвайта в дверь не пускают', async () => {
+    const { gw, server } = await makeGateway();
+    expect((await knock(gw, server, '')).refused?.message).toBe('identity-required');
+  });
+
+  it('гость по живому инвайту проходит без личности, по протухшему — нет', async () => {
+    const { server } = await makeGateway();
+    const fresh = server.connect({ auth: { guest: issueGuestToken('voice-obshchii').token } });
+    expect(await server.run(fresh)).toBeUndefined();
+    const { token } = issueGuestToken('voice-obshchii', { ttlMs: -1000 });
+    const stale = server.connect({ auth: { guest: token } });
+    expect((await server.run(stale))?.message).toBe('identity-required');
+  });
+
+  it('личность есть — инвайт ей не нужен', async () => {
+    const { gw, server } = await makeGateway();
+    const anya = await personCookie('Аня');
+    expect((await knock(gw, server, anya.cookie)).refused).toBeUndefined();
   });
 
   it('права не прочитались — личность на сокет не кладётся вовсе', async () => {

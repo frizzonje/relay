@@ -3,7 +3,7 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { IdentityService, type Speaker } from '../identity/identity.service';
 import { OwnerService } from '../identity/owner.service';
 import { RolesService } from '../identity/roles.service';
-import type { AddressDoor } from '../auth/auth';
+import { verifyGuestToken, type AddressDoor } from '../auth/auth';
 import { addressBlocked } from '@relay/shared';
 import type { SettingsService } from '../settings/settings.service';
 import type { AppServer, AppSocket } from './socket-data';
@@ -27,12 +27,13 @@ export interface GuestPass {
  * отвергнутого сокета нет, а «переподключаюсь» вместо объяснения — худший из
  * ответов на «почему меня не пускает».
  *
- * Причин три, и разными они сделаны намеренно. `blocked` — не `banned`: за
+ * Причин четыре, и разными они сделаны намеренно. `blocked` — не `banned`: за
  * одним адресом сидит подъезд, институт, оператор, и попавший под маску мог не
  * делать ничего. Сказать ему «вас забанили» значит обвинить невиновного, а
- * делать по этим двум новостям надо разное.
+ * делать по этим двум новостям надо разное. `anonymous` — и вовсе не отказ, а
+ * «сначала назовись»: клиент доказывает ключ и стучится снова.
  */
-export type DoorRefusal = 'banned' | 'maintenance' | 'blocked';
+export type DoorRefusal = 'banned' | 'maintenance' | 'blocked' | 'anonymous';
 
 /**
  * Общий лимитер действий сокета: всплеск и скорость пополнения.
@@ -190,6 +191,12 @@ export class Perimeter {
     // что интерфейс не показал кнопку, и первым же запертым снаружи оказался бы
     // тот, кто его включил.
     if (this.maintenance() && !this.isOwner(socket)) return 'maintenance';
+    // Внутрь — только личность или гость по живому инвайту. Бан, «тихий час»
+    // новичка и подпись реплики держатся на ключе, и сокет без куки обходил бы
+    // их все разом: не назвавшегося нечем забанить, а назваться он мог бы кем
+    // угодно. Последним — потому что это не приговор, а «сначала назовись»:
+    // забаненному и запертому снаружи честнее услышать свою причину.
+    if (!socket.data.identity && !this.guestPass(socket)) return 'anonymous';
     return null;
   }
 
@@ -365,6 +372,16 @@ export class Perimeter {
    */
   guestsAllowed(): boolean {
     return this.settings.get<boolean>('access.guestsEnabled');
+  }
+
+  /**
+   * Инвайт, предъявленный в handshake, — если он подлинный и живой. Поле своё
+   * (`auth.guest`), а не `auth.token` обычного пропуска: гость с личностью —
+   * обычная вкладка, где человек открыл чужую ссылку, и у него есть оба.
+   */
+  guestPass(socket: AppSocket): GuestPass | null {
+    const raw = (socket.handshake.auth as { guest?: unknown } | undefined)?.guest;
+    return typeof raw === 'string' ? verifyGuestToken(raw) : null;
   }
 
   /** Впустить гостя по инвайту: он пришит к одному каналу и на всю сессию. */

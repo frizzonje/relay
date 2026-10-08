@@ -341,7 +341,11 @@ export async function connectAs(
   return sock;
 }
 
-/** Подключение с прохождением handleConnection — как в жизни. */
+/**
+ * Подключение через `handleConnection`, но мимо двери (миддлвары): личность не
+ * спрашивается, и сокет без неё — допущение теста ради краткости, а не то, что
+ * бывает в жизни. Дверь проверяют `knock` и `connectAs`.
+ */
 export function connect(
   gw: SignalingGateway,
   server: FakeServer,

@@ -91,8 +91,10 @@ const socket = vi.hoisted(() => {
 vi.mock('@/lib/socket', async () => {
   const { timeoutOf } = await import('@/lib/testing/socket');
   const timed = Object.assign(socket, { timeout: timeoutOf(socket.emit) });
-  return { getSocket: () => timed };
+  return { getSocket: () => timed, guestTokenFromLocation: () => guestToken.value };
 });
+/** Инвайт в адресе страницы: `null` — обычная вкладка. */
+const guestToken = vi.hoisted(() => ({ value: null as string | null }));
 
 import { SocketProvider } from './SocketProvider';
 import { notifyCall, notifyDirect } from '@/lib/notify';
@@ -102,12 +104,24 @@ import { useDmStore } from '@/stores/dm';
 import { usePinsStore } from '@/stores/pins';
 import { useUiStore } from '@/stores/ui';
 import { useUnreadStore } from '@/stores/unread';
+import { useIdentityStore } from '@/stores/identity';
 import { useRingStore } from '@/stores/ring';
 
 const slugA = 'dm-aaaaaaaaaaaaaaaaaaaaaaaa';
 const slugB = 'dm-bbbbbbbbbbbbbbbbbbbbbbbb';
 const peerA: Person = { fingerprint: '1111-aaaa-2222-bbbb', nick: 'Аня' };
 const peerB: Person = { fingerprint: '3333-cccc-4444-dddd', nick: 'Боря' };
+
+const ME = {
+  id: 'id-me',
+  publicKey: 'ключ',
+  fingerprint: '9999-eeee-8888-ffff',
+  nick: 'Я',
+  device: { id: 'dev', name: 'этот' },
+  created: false,
+};
+/** Настоящий `restore` — тесты подменяют его шпионом, а соседям он нужен прежним. */
+const realRestore = useIdentityStore.getState().restore;
 
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
@@ -117,6 +131,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   socket._handlers.clear();
   socket.connected = false;
+  guestToken.value = null;
+  useIdentityStore.setState({ me: ME, status: 'in', failure: null, restore: realRestore });
 
   // watching() смотрит и на фокус вкладки — без этого тесты зависели бы от
   // того, есть ли у jsdom-окна фокус на конкретной машине CI.
@@ -150,6 +166,10 @@ beforeEach(() => {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
+  mount();
+});
+
+function mount() {
   act(() => {
     root.render(
       <SocketProvider>
@@ -157,7 +177,16 @@ beforeEach(() => {
       </SocketProvider>,
     );
   });
-});
+}
+
+/** Снять провайдер и поставить заново — с тем состоянием, что выставил тест. */
+function remount() {
+  act(() => root.unmount());
+  vi.clearAllMocks();
+  socket._handlers.clear();
+  root = createRoot(host);
+  mount();
+}
 
 afterEach(() => {
   act(() => root.unmount());
@@ -564,5 +593,61 @@ describe('правка настройки из другой сессии вла�
     );
 
     expect(useAdminStore.getState().values['direct.enabled']).toBe(false);
+  });
+});
+
+describe('дверь пускает только личность', () => {
+  it('личность уже доказана — стучимся сразу', () => {
+    expect(socket.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('без личности не стучимся; доказали ключ — стучимся', () => {
+    useIdentityStore.setState({ me: null, status: 'checking' });
+    remount();
+    expect(socket.connect).not.toHaveBeenCalled();
+    act(() => useIdentityStore.setState({ me: ME, status: 'in' }));
+    expect(socket.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('гость по инвайту стучится без личности', () => {
+    useIdentityStore.setState({ me: null, status: 'checking' });
+    guestToken.value = 'g2.токен';
+    remount();
+    expect(socket.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('«сначала назовись» — доказываем ключ заново и стучимся снова', async () => {
+    vi.useFakeTimers();
+    try {
+      const restore = vi.fn(async () => {});
+      useIdentityStore.setState({ restore });
+      socket.connect.mockClear();
+      socket._fire('connect_error', new Error('identity-required'));
+      expect(restore).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+      expect(socket.connect).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ключ не доказался — не стучимся по кругу', async () => {
+    vi.useFakeTimers();
+    try {
+      const restore = vi.fn(async () => {
+        useIdentityStore.setState({ status: 'failed' });
+      });
+      useIdentityStore.setState({ restore });
+      socket.connect.mockClear();
+      socket._fire('connect_error', new Error('identity-required'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(socket.connect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
