@@ -150,7 +150,7 @@ describe('уборка по сроку', () => {
     expect(await alive(fresh)).toBe(true);
   });
 
-  it('на пустой выборке не открывает транзакцию впустую', async () => {
+  it('на пустой выборке никого не трогает', async () => {
     await person({ lastSeen: ago(1) });
     await tune(settings, 'people.pruneInactiveDays', 30);
     expect(await prune.sweep()).toBe(0);
@@ -238,5 +238,29 @@ describe('расписание', () => {
     await tune(settings, 'people.pruneInactiveDays', 30);
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(await alive(ancient)).toBe(true);
+  });
+});
+
+describe('выборка и удаление — одно решение', () => {
+  it('забаненный между выборкой и удалением не удаляется', async () => {
+    // Выборка и удаление разделены походом в базу. Бан, поставленный в это
+    // окно, уборка обязана увидеть: иначе снесла бы его вместе с личностью.
+    const outcast = await person();
+    await tune(settings, 'people.pruneInactiveDays', 30);
+    const real = db.transaction.bind(db) as (...args: unknown[]) => Promise<unknown>;
+    vi.spyOn(db, 'transaction').mockImplementation((async (...args: unknown[]) => {
+      await db.getRepository(RoleRow).insert({
+        id: randomUUID(),
+        identityId: outcast,
+        serverId: null,
+        role: BANNED_ROLE,
+        grantedBy: null,
+        createdAt: new Date(),
+      });
+      return real(...args);
+    }) as never);
+
+    expect(await prune.sweep()).toBe(0);
+    expect(await alive(outcast)).toBe(true);
   });
 });

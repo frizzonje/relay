@@ -1,6 +1,5 @@
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
-import { DataSource, In } from 'typeorm';
-import { DeviceRow, IdentityRow } from '../db/entities';
+import { DataSource } from 'typeorm';
 import { Periodic } from '../periodic';
 import { SettingsService } from '../settings/settings.service';
 
@@ -68,33 +67,34 @@ export class PruneService implements OnModuleInit, OnModuleDestroy {
     const days = this.days();
     if (days <= 0) return 0;
 
-    const doomed = await this.db
-      .getRepository(IdentityRow)
-      .createQueryBuilder('i')
-      .select('i.id', 'id')
-      // Никогда не входившая личность считается по своему рождению: `null` в
-      // сравнении с интервалом дал бы `null`, то есть «не подходит», и такие
-      // строки копились бы вечно.
-      .where(`COALESCE(i.last_seen_at, i.created_at) < now() - (:days || ' days')::interval`, {
-        days,
-      })
-      .andWhere('NOT EXISTS (SELECT 1 FROM roles r WHERE r.identity_id = i.id)')
-      .andWhere('NOT EXISTS (SELECT 1 FROM servers s WHERE s.creator_identity_id = i.id)')
-      .getRawMany<{ id: string }>();
-    if (!doomed.length) return 0;
-
-    const ids = doomed.map((row) => row.id);
-    await this.db.transaction(async (m) => {
-      // Личное чистится явно: у отметок чтения и настроек нет внешнего ключа
-      // (ключ там составной и первичный), и каскад до них не дотянется —
-      // остались бы строки, которых никто уже не прочитает.
-      await m.query('DELETE FROM reads WHERE identity_id = ANY($1::uuid[])', [ids]);
-      await m.query('DELETE FROM prefs WHERE identity_id = ANY($1::uuid[])', [ids]);
-      // Устройства уходят каскадом от личности, но сносим их первыми и сами:
-      // так порядок удаления не зависит от того, каким объявлен внешний ключ.
-      await m.getRepository(DeviceRow).delete({ identityId: In(ids) });
-      await m.getRepository(IdentityRow).delete(ids);
+    const ids = await this.db.transaction(async (m) => {
+      // Решение «кого» и удаление — одним запросом. Раздельно между ними стоял
+      // бы поход в базу, и бан, поставленный в это окно, уборка снесла бы
+      // вместе с личностью (а вошедший в это окно человек потерял бы себя).
+      // Устройства уходят каскадом по внешнему ключу.
+      // На DELETE драйвер Postgres у TypeORM отвечает парой [строки, счётчик].
+      const [rows]: [{ id: string }[], number] = await m.query(
+        // Никогда не входившая личность считается по своему рождению: `null` в
+        // сравнении с интервалом дал бы `null`, то есть «не подходит», и такие
+        // строки копились бы вечно.
+        `DELETE FROM identities i
+          WHERE COALESCE(i.last_seen_at, i.created_at) < now() - ($1 || ' days')::interval
+            AND NOT EXISTS (SELECT 1 FROM roles r WHERE r.identity_id = i.id)
+            AND NOT EXISTS (SELECT 1 FROM servers s WHERE s.creator_identity_id = i.id)
+        RETURNING i.id`,
+        [days],
+      );
+      const gone = rows.map((row) => row.id);
+      if (gone.length) {
+        // Личное чистится явно: у отметок чтения и настроек нет внешнего ключа
+        // (ключ там составной и первичный), и каскад до них не дотянется —
+        // остались бы строки, которых никто уже не прочитает.
+        await m.query('DELETE FROM reads WHERE identity_id = ANY($1::uuid[])', [gone]);
+        await m.query('DELETE FROM prefs WHERE identity_id = ANY($1::uuid[])', [gone]);
+      }
+      return gone;
     });
+    if (!ids.length) return 0;
 
     this.logger.log(`уборка личностей: удалено — ${ids.length} (бездействие ${days} дн.)`);
     return ids.length;
