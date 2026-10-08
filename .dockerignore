@@ -29,11 +29,12 @@ clients
 
 # Документация, референсы, e2e, CI, редактор — в рантайм-образы не нужны
 docs
-scripts
 e2e
 reference
 .github
 .claude
 
-# Загрузки (монтируются как volume)
+# Загрузки и реестр дев-стенда (в проде — volume)
 uploads
+apps/api/uploads
+apps/api/data
