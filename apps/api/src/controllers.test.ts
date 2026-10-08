@@ -9,7 +9,7 @@ import type { MetricsService } from './metrics';
 import { UploadController } from './uploads/upload.controller';
 import { UploadByteBudget, UploadRateGuard, uploadBudget } from './uploads/upload.guard';
 import type { UploadsService } from './uploads/uploads.service';
-import type { Attachment, MetricsResponse } from '@relay/shared';
+import { MAX_UPLOAD_BYTES, type Attachment, type MetricsResponse } from '@relay/shared';
 
 /**
  * Мелкие http-ручки и гард загрузок. Ручки тонкие нарочно, и проверять в них
@@ -111,13 +111,14 @@ describe('POST /api/upload', () => {
   });
 
   it('списывает настоящий размер записанного файла, а не Content-Length', async () => {
-    const charge = vi.spyOn(uploadBudget, 'charge');
+    const settle = vi.spyOn(uploadBudget, 'settle');
     await new UploadController(service()).upload(
       { ip: '10.0.0.1', headers: {} } as unknown as Request,
       file,
     );
-    expect(charge).toHaveBeenCalledWith('10.0.0.1', 1234);
-    charge.mockRestore();
+    // Гард бронировал предельный файл — записано 1234 байта.
+    expect(settle).toHaveBeenCalledWith('10.0.0.1', MAX_UPLOAD_BYTES, 1234);
+    settle.mockRestore();
   });
 });
 
@@ -139,6 +140,20 @@ describe('гард загрузок', () => {
     expect(() => new UploadRateGuard().canActivate(ctx('10.0.0.100'))).toThrow(HttpException);
     // Свежий бюджет того же класса при этом ни при чём — состояние не глобальное.
     expect(budget.allow('10.0.0.100')).toBe(true);
+  });
+
+  it('пачка запросов разом не проходит гард вся: файл бронируется до записи', () => {
+    // Списание идёт после записи, по настоящему размеру. Без брони сотня
+    // запросов, посланных разом, прошла бы гард вся — гигабайты на диске до
+    // первого списания. Бронь — предельный файл; лишнее вернётся после записи.
+    const passed = Array.from({ length: 30 }, () => {
+      try {
+        return new UploadRateGuard().canActivate(ctx('10.0.0.150'));
+      } catch {
+        return false;
+      }
+    }).filter(Boolean).length;
+    expect(passed).toBe(Math.ceil((300 * 1024 ** 2) / MAX_UPLOAD_BYTES));
   });
 
   it('запрос без адреса не роняет гард', () => {

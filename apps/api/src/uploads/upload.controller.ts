@@ -66,7 +66,8 @@ export class UploadController {
     @UploadedFile() file?: MulterFile,
   ): Promise<Attachment & { id: string }> {
     if (!file) throw new BadRequestException('файл не получен');
-    uploadBudget.charge(requestNetwork(req), file.size);
+    // Гард забронировал предельный файл; записан настоящий — разницу назад.
+    uploadBudget.settle(requestNetwork(req), MAX_UPLOAD_BYTES, file.size);
     // Кто принёс — нужно суточной квоте (`files.perIdentityDailyBytes`).
     // Личность берём из куки сессии и ничего у неё не спрашиваем: квоте нужен
     // ключ, а не права — их уже проверил гейт. Устройство сюда не идёт

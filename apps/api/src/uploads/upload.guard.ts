@@ -9,17 +9,21 @@ import type { Request } from 'express';
 import { SettingsService } from '../settings/settings.service';
 import { refill, type TokenBucket } from '../token-bucket';
 import { requestNetwork } from '../client-address';
+import { MAX_UPLOAD_BYTES } from '@relay/shared';
 
 /**
  * Лимит на `POST /api/upload` — единственный публичный POST, который пишет на
  * диск. 25 МБ на файл его не ограничивают никак: файлов можно послать сколько
  * угодно и как угодно быстро.
  *
- * Считаем БАЙТЫ, а не запросы, и списываем их ПОСЛЕ записи файла, по его
- * настоящему размеру. Content-Length для этого не годится — его пишет клиент, и
- * бюджет, который верит клиенту, обходится одной строкой заголовка. Плата за
- * такой порядок: первый запрос всегда проходит (не больше 25 МБ, потолок на
- * файл), а отказ приходит следующему. Для защиты диска этого достаточно.
+ * Считаем БАЙТЫ, а не запросы. Content-Length для этого не годится — его
+ * пишет клиент, и бюджет, который верит клиенту, обходится одной строкой
+ * заголовка. Поэтому на входе бронируется предельный файл (`MAX_UPLOAD_BYTES`
+ * — до него multer дописать не даст), а после записи бронь пересчитывается по
+ * настоящему размеру. Бронь — не формальность: списывай мы только после
+ * записи, сотня запросов, посланных разом, прошла бы гард вся, и диск получил
+ * бы гигабайты раньше первого списания. Веб грузит файлы по одному, так что
+ * живого человека бронь не задевает.
  */
 
 // Всплеск: примерно дюжина файлов предельного размера или сотни скриншотов
@@ -51,12 +55,28 @@ export class UploadByteBudget {
     return this.refill(key, now).tokens > 0;
   }
 
-  /** Списать настоящий размер записанного файла. */
+  /**
+   * Пустить и сразу забронировать `bytes` — той же синхронной частью, что и
+   * проверка. `false` — бюджет исчерпан, ничего не списано.
+   */
+  reserve(key: string, bytes: number, now = Date.now()): boolean {
+    if (!this.allow(key, now)) return false;
+    this.charge(key, bytes, now);
+    return true;
+  }
+
+  /** Бронь закрыта записанным файлом: вернуть то, что он не занял. */
+  settle(key: string, reserved: number, actual: number, now = Date.now()): void {
+    this.charge(key, actual - reserved, now);
+  }
+
+  /** Списать байты (отрицательное число — вернуть). */
   charge(key: string, bytes: number, now = Date.now()): void {
     const b = this.refill(key, now);
     // В минус уходить разрешаем — но не глубже, чем на один всплеск: иначе один
-    // предельный файл при крошечном потолке запирал бы адрес на часы.
-    b.tokens = Math.max(-this.capacity, b.tokens - bytes);
+    // предельный файл при крошечном потолке запирал бы адрес на часы. Выше
+    // потолка возврат не поднимает: бюджет не копится впрок.
+    b.tokens = Math.min(this.capacity, Math.max(-this.capacity, b.tokens - bytes));
   }
 
   // Полный бюджет — это «как будто и не приходил»: такие записи можно забыть.
@@ -79,7 +99,7 @@ export class UploadRateGuard implements CanActivate {
     const req = ctx.switchToHttp().getRequest<Request>();
     // `trust proxy: 1` (main.ts) — req.ip это адрес, который подставил наш
     // Caddy, а не то, что клиент написал в X-Forwarded-For.
-    if (uploadBudget.allow(requestNetwork(req))) return true;
+    if (uploadBudget.reserve(requestNetwork(req), MAX_UPLOAD_BYTES)) return true;
     throw new HttpException('too many uploads', HttpStatus.TOO_MANY_REQUESTS);
   }
 }

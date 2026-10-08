@@ -304,6 +304,18 @@ describe('бюджет байтов на адрес', () => {
     expect(b.allow('ip', 20_000)).toBe(true); // 20 с × 100 Б/с добирают -1000 до 1000
   });
 
+  it('бронь занимает бюджет сразу, а расчёт возвращает незанятое', () => {
+    const b = new UploadByteBudget(1000, 0);
+    expect([1, 2, 3, 4].map(() => b.reserve('ip', 400, 0))).toEqual([true, true, true, false]);
+    // Три файла оказались по сотне байт — бюджет получает назад по триста.
+    for (let i = 0; i < 3; i += 1) b.settle('ip', 400, 100, 0);
+    expect(b.allow('ip', 0)).toBe(true);
+    b.charge('ip', 699, 0);
+    expect(b.allow('ip', 0)).toBe(true);
+    b.charge('ip', 1, 0);
+    expect(b.allow('ip', 0)).toBe(false);
+  });
+
   it('адреса считаются порознь', () => {
     const b = new UploadByteBudget(1000, 0);
     b.charge('ip-1', 1000, 0);
