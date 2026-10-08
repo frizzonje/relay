@@ -1,10 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { types } from 'mediasoup';
-import {
-  type SfuPeerSnapshot,
-  type SfuProducerInfo,
-  type SfuSource,
-} from '@relay/shared';
+import { type SfuPeerSnapshot, type SfuProducerInfo, type SfuSource } from '@relay/shared';
 import { MEDIA_CODECS, webRtcTransportOptions } from './media.config';
 import { WorkersService } from './workers.service';
 

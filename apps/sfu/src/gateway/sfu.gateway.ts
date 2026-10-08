@@ -9,12 +9,7 @@ import {
 import { Logger } from '@nestjs/common';
 import type { types } from 'mediasoup';
 import { Server, Socket } from 'socket.io';
-import {
-  Peer,
-  type TransportParams,
-  producerInfo,
-  RoomsService,
-} from '../media/rooms.service';
+import { Peer, type TransportParams, producerInfo, RoomsService } from '../media/rooms.service';
 import { verifySfuToken } from '../token';
 import {
   SFU_SOURCES,
