@@ -298,6 +298,51 @@ describe('обгон при прыжках по каналам', () => {
   });
 });
 
+describe('выход, пока спрашивали микрофон', () => {
+  /** getUserMedia, который ждёт ответа человека на вопрос о разрешении. */
+  function promptedMic(): () => void {
+    let grant!: () => void;
+    getUserMedia.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          grant = () => {
+            const mic = makeStream();
+            takenMics.push(mic);
+            resolve(mic.stream);
+          };
+        }),
+    );
+    return () => grant();
+  }
+
+  it('ушли совсем (вызов отбили) — разрешённый следом микрофон гасится', async () => {
+    const grant = promptedMic();
+    const entering = voice.joinVoice('dm-room', 'Разговор');
+    await settle();
+    // Звонящий бросил трубку, пока человек читал «разрешить микрофон?».
+    voice.leaveVoice(true);
+    grant();
+    await expect(entering).resolves.toBe(false);
+
+    expect(takenMics).toHaveLength(1);
+    expect(takenMics[0].track.stop).toHaveBeenCalled();
+  });
+
+  it('ушли мягко в соседний канал — микрофон достаётся следующему заходу живым', async () => {
+    const grant = promptedMic();
+    const first = voice.joinVoice('room-a', 'A');
+    await settle();
+    const second = voice.joinVoice('room-b', 'B');
+    grant();
+    await settle();
+    await Promise.all([first, second]);
+
+    expect(takenMics).toHaveLength(1);
+    expect(takenMics[0].track.stop).not.toHaveBeenCalled();
+    expect(joins().at(-1)?.[1]).toMatchObject({ room: 'room-b' });
+  });
+});
+
 describe('расщепление на входе', () => {
   it('пока транспорт не выбран, состав комнаты не считается расщеплением', async () => {
     await warmMic();

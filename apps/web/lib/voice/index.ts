@@ -371,6 +371,13 @@ function leaveTransports() {
 let migration = 0;
 
 /**
+ * Последний выход был полным, и нового захода с тех пор не начинали. Заход,
+ * дождавшийся микрофона уже после такого выхода, гасит его сам: выход гасил
+ * устройства, когда потока ещё не было (см. `joinVoice`).
+ */
+let demobilized = false;
+
+/**
  * Подключить транспорт к комнате и объявиться на сигналинге.
  *
  * `gen` спрашиваем, а не берём сами: номер принадлежит тому заходу или переезду,
@@ -760,6 +767,7 @@ export async function joinVoice(newRoom: string, label: string): Promise<boolean
   // второго транспорта за спиной.
   if (room) leaveVoice(false); // мягко переключаемся между голосовыми — поток живёт
   const gen = ++migration;
+  demobilized = false;
   sfuMisses = 0; // свежий заход — пауза круга ожидания опять с базы
   sfuOutage = false;
 
@@ -781,7 +789,14 @@ export async function joinVoice(newRoom: string, label: string): Promise<boolean
       sfx().play('error'); // отказано в доступе к устройству
       return false;
     }
-    if (gen !== migration) return false; // пока ждали микрофон, ушли в другой канал
+    if (gen !== migration) {
+      // Пока ждали микрофон, ушли. В соседний канал — поток подхватит его
+      // заход; совсем (вызов отбили, пока человек читал «разрешить?») — поток
+      // открылся уже после того, как выход гасил устройства, и гасить его
+      // больше некому, кроме нас.
+      if (demobilized) releaseLocalStream();
+      return false;
+    }
   }
 
   room = newRoom;
@@ -814,6 +829,15 @@ export async function joinVoice(newRoom: string, label: string): Promise<boolean
 
 // hard=true — полная демобилизация (освобождаем камеру/микрофон, меняем вид).
 // hard=false — мягкий выход при переключении голосовых: поток и вид оставит вызывающий.
+/** Погасить свои устройства: дорожки потока и всё, что микрофон навесил на них. */
+function releaseLocalStream(): void {
+  if (localStream) {
+    localStream.getTracks().forEach((t) => t.stop());
+    localStream = null;
+  }
+  teardownMic();
+}
+
 export function leaveVoice(hard = true) {
   const left = room;
   if (hard && room) sfx().play('leave'); // покидаем звонок (не при смене канала)
@@ -865,11 +889,8 @@ export function leaveVoice(hard = true) {
   if (!hard) return;
 
   // Камеру и микрофон освобождаем только при полном выходе
-  if (localStream) {
-    localStream.getTracks().forEach((t) => t.stop());
-    localStream = null;
-  }
-  teardownMic();
+  demobilized = true;
+  releaseLocalStream();
   resetSpeaking();
   teardownVideo();
   // Микрофон к следующему входу включаем, но глушилка переживает выход из эфира —
