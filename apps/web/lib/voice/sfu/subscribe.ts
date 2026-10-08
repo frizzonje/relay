@@ -106,8 +106,21 @@ export function createSubscriber({
   // Подписки, которые уже идут. Одна и та же дорожка приезжает к нам разными
   // путями почти разом — `new-producer`, снимок комнаты, очередь, — а запись в
   // `consumers` появляется только после двух ожиданий, и проверка по ней
-  // пропускает обе: сервер послушно отдаёт копию.
-  const consuming = new Set<string>();
+  // пропускает обе: сервер послушно отдаёт копию. По дорожке — чья она и
+  // жетон попытки.
+  const consuming = new Map<string, { peerId: string; attempt: object }>();
+  // Попытки, чья дорожка кончилась, пока они шли: собеседник закрыл её или
+  // ушёл, приём разобрали. Среди живых подписки ещё нет — закрывать было
+  // нечего, — и доехавшая попытка обязана закрыться сама, а не лечь туда
+  // мёртвой (замёрзший кадр на плитке). Жетон, а не id дорожки: после
+  // пересборки приёма та же дорожка подписывается заново, и новую попытку
+  // старый приговор задевать не должен.
+  const abandoned = new WeakSet<object>();
+  function abandon(match: (producerId: string, peerId: string) => boolean): void {
+    for (const [producerId, { peerId, attempt }] of consuming) {
+      if (match(producerId, peerId)) abandoned.add(attempt);
+    }
+  }
   // Высота плитки трансляции на экране зрителя в пикселях устройства — по
   // собеседнику; и что мы уже попросили у сервера для каждой подписки экрана.
   const viewPx = new Map<string, number>();
@@ -319,7 +332,8 @@ export function createSubscriber({
         host.diag('sfu consume deferred', `${info.source} from ${peerId}`);
         return;
       }
-      consuming.add(info.id);
+      const attempt = {};
+      consuming.set(info.id, { peerId, attempt });
       let c: ConsumerPayload;
       let consumer: Consumer;
       try {
@@ -346,7 +360,13 @@ export function createSubscriber({
         host.diag('sfu consume failed', `${info.source} ${String((err as Error)?.message ?? err)}`);
         return;
       } finally {
-        consuming.delete(info.id);
+        if (consuming.get(info.id)?.attempt === attempt) consuming.delete(info.id);
+      }
+      if (abandoned.has(attempt)) {
+        // Сервер свою половину уже закрыл сам: дорожки или собеседника нет,
+        // либо этот приём им разобран.
+        consumer.close();
+        return;
       }
       // Пока подписка шла, зритель успел нажать «Перестать смотреть»: снимать
       // ему было ещё нечего, и поток иначе пошёл бы к тому, кто от него отказался.
@@ -395,6 +415,7 @@ export function createSubscriber({
     dropConsumer,
 
     producerClosed(producerId) {
+      abandon((id) => id === producerId);
       for (const [peerId, known] of streams) {
         if (!known.delete(producerId)) continue;
         if (!known.size) streams.delete(peerId);
@@ -434,6 +455,7 @@ export function createSubscriber({
     },
 
     dropPeer(peerId) {
+      abandon((_, owner) => owner === peerId);
       for (const entry of [...consumers.values()]) {
         if (entry.peerId === peerId) dropConsumer(entry.producerId);
       }
@@ -483,6 +505,7 @@ export function createSubscriber({
 
     clear() {
       pending.length = 0;
+      abandon(() => true);
       consuming.clear();
       streams.clear();
       watching.clear();

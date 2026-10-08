@@ -14,7 +14,8 @@ vi.stubGlobal('MediaStream', class {});
  * его получает, и в канале на десятерых раздавать его всем подряд значит
  * класть порт сервера ради тех, кто трансляцию даже не открывал.
  */
-function setup() {
+/** `gate` придерживает ответ сервера на `consume`, пока тест его не отпустит. */
+function setup(opts: { gate?: Promise<void> } = {}) {
   const watch = new Map<string, string | null>();
   const host = {
     addTile: vi.fn(),
@@ -29,6 +30,7 @@ function setup() {
   const ask = vi.fn(async (event: string, payload: { producerId?: string }) => {
     asked.push({ event, payload });
     if (event === 'consume') {
+      await opts.gate;
       return {
         ok: true,
         consumer: {
@@ -64,7 +66,7 @@ function setup() {
     asked.filter((a) => a.event === 'consume').map((a) => a.payload.producerId);
   const byEvent = (event: string) =>
     asked.filter((a) => a.event === event).map((a) => a.payload) as Record<string, unknown>[];
-  return { subscriber, watch, consumed, asked: byEvent };
+  return { subscriber, watch, consumed, asked: byEvent, transport };
 }
 
 const info = (peer: string, source: SfuProducerInfo['source']): SfuProducerInfo => ({
@@ -217,5 +219,57 @@ describe('слой трансляции', () => {
     subscriber.setView('a', 900);
     expect(asked('resume')).toHaveLength(1);
     expect(asked('preferred-layers').at(-1)?.spatialLayer).toBe(1);
+  });
+});
+
+/**
+ * Подписка — два запроса подряд, и пока они идут, дорожка успевает кончиться:
+ * собеседник выключил камеру или ушёл, медиасервер разобрали. Подписки в этот
+ * момент ещё нет среди живых, и закрывать было нечего, — доехав, она ложилась
+ * туда мёртвой, и на плитке оставался замёрзший кадр того, чего уже нет.
+ */
+describe('дорожка кончилась, пока на неё подписывались', () => {
+  function held() {
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    return { gate, open };
+  }
+
+  it('собеседник закрыл дорожку — подписка не ложится в живые', async () => {
+    const { gate, open } = held();
+    const { subscriber } = setup({ gate });
+    subscriber.addPeer('a', 'Аня');
+    const consuming = subscriber.consume('a', info('a', 'cam'));
+    subscriber.producerClosed('a:cam');
+    open();
+    await consuming;
+    expect(subscriber.entries()).toEqual([]);
+  });
+
+  it('собеседник ушёл — подписка не ложится в живые', async () => {
+    const { gate, open } = held();
+    const { subscriber } = setup({ gate });
+    subscriber.addPeer('a', 'Аня');
+    const consuming = subscriber.consume('a', info('a', 'mic'));
+    subscriber.dropPeer('a');
+    open();
+    await consuming;
+    expect(subscriber.entries()).toEqual([]);
+  });
+
+  it('приём разобрали и собрали заново — новая подписка того же потока живёт', async () => {
+    const { gate, open } = held();
+    const { subscriber, transport } = setup({ gate });
+    subscriber.addPeer('a', 'Аня');
+    const stale = subscriber.consume('a', info('a', 'mic'));
+    subscriber.clear();
+    subscriber.addPeer('a', 'Аня');
+    const fresh = subscriber.consume('a', info('a', 'mic'));
+    open();
+    await Promise.all([stale, fresh]);
+    const [old, current] = await Promise.all(transport.consume.mock.results.map((r) => r.value));
+    // Старая — на разобранном приёме: закрыта, а не забыта под ногами у свежей.
+    expect(old.close).toHaveBeenCalled();
+    expect(subscriber.entries().map((e) => e.consumer)).toEqual([current]);
   });
 });
