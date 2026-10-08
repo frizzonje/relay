@@ -96,12 +96,8 @@ export class VoiceHandlers {
     // Режим канала — не декорация: пропуск выдаём только тем каналам, что
     // помечены sfu. Дефолтные (всегда p2p) отсюда уходят ни с чем.
     // Пропуск — только в видимый канал: закрытый сервер запирает и медиасервер,
-    // иначе пароль обходится одним слагом. Гость идёт по своей комнате: реестра
-    // у него нет, а к каналу он уже пришит проверкой выше.
-    const channel = (
-      this.perimeter.isGuest(client) ? this.registry.channels : this.directory.channelsFor(client)
-    ).find((c) => c.type === 'voice' && c.slug === room);
-    if (!channel || channel.mode !== 'sfu') {
+    // иначе пароль обходится одним слагом.
+    if (!this.sfuChannelVisible(client, room)) {
       forget();
       return { ok: false, error: 'not-sfu' };
     }
@@ -127,6 +123,13 @@ export class VoiceHandlers {
       forget();
       return { ok: false, error: 'unavailable' };
     }
+    // Пинг — сетевой запрос, и пока он шёл, канал могли удалить, перевести в
+    // p2p или запереть паролем. Решение выше принято по миру до `await` —
+    // пропуск выдаём только если оно всё ещё верно.
+    if (!this.sfuChannelVisible(client, room)) {
+      forget();
+      return { ok: false, error: 'not-sfu' };
+    }
     // Имя берём из запроса: пропуск спрашивают ДО `join`, и имя на сокете
     // в этот момент ещё пусто (заполняется оно только при пере-выдаче во время
     // звонка). Лимит — тот же, что у `join`.
@@ -147,6 +150,17 @@ export class VoiceHandlers {
     this.voice.grantPass(client, room);
     this.logger.log(`sfu-token issued to ${name || '?'} (${client.id}) room "${room}"`);
     return { ok: true, token, exp, url };
+  }
+
+  /**
+   * Комната — sfu-канал, видимый этому сокету. Гость идёт по своей комнате:
+   * реестра у него нет, а к каналу он пришит проверкой в `sfuToken`.
+   */
+  private sfuChannelVisible(client: AppSocket, room: string): boolean {
+    const channels = this.perimeter.isGuest(client)
+      ? this.registry.channels
+      : this.directory.channelsFor(client);
+    return channels.some((c) => c.type === 'voice' && c.slug === room && c.mode === 'sfu');
   }
 
   // Клиентские вехи звонка (выбор транспорта, фолбэк в p2p, обрывы) — в лог

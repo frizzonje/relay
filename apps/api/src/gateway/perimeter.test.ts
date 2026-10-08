@@ -13,6 +13,7 @@ import {
   makeGateway,
   makeOwner,
   personCookie,
+  registryOf,
   settle,
   slugOf,
   tune,
@@ -717,6 +718,22 @@ describe('sfu-token', () => {
       ok: false,
       error: 'forbidden',
     });
+  });
+
+  it('канал удалили, пока спрашивали медиасервер, — пропуска нет', async () => {
+    // Пинг медиасервера — сетевой запрос, и за время ответа канал могут
+    // удалить (или запереть сервер). Пропуск, выданный по проверке до пинга,
+    // вёл бы в комнату, которой уже нет.
+    const { gw, owner } = await withSfuChannel();
+    const room = slugOf('эфир');
+    const id = registryOf(gw).channels.find((c) => c.slug === room)!.id;
+    let answer!: (ok: boolean) => void;
+    sfuHealthy.mockImplementationOnce(() => new Promise<boolean>((r) => (answer = r)));
+    const pending = gw.handleSfuToken(asSocket(owner), { room });
+    await gw.handleChannelDelete(asSocket(owner), { id });
+    answer(true);
+    expect(await pending).toEqual({ ok: false, error: 'not-sfu' });
+    expect(owner.data.sfuPassRoom).toBeUndefined();
   });
 
   it('канал закрытого сервера запирает и медиасервер', async () => {
