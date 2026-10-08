@@ -47,7 +47,7 @@ export function callRoomOf(address: string): string {
  * что у `isDmSlug`).
  */
 export function isCallRoom(room: string): boolean {
-  return /^voice:dm-[0-9a-f]{24}$/.test(room);
+  return room.startsWith(CALL_ROOM_PREFIX) && isDmSlug(room.slice(CALL_ROOM_PREFIX.length));
 }
 
 /** Человек в списке выбора: собеседник плюс «когда его видели». */
