@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { SettingsService } from '../settings/settings.service';
 import { authEnabled, issueToken, passwordMatches } from './auth';
 import { requestNetwork } from '../client-address';
+import { WindowCounter } from '../window-counter';
 import { AUTH_COOKIE } from '@relay/shared';
 
 // Защита от подбора: на IP — не больше `access.unlockAttempts` неудач за окно.
@@ -26,19 +27,14 @@ const ATTEMPT_WINDOW_MS = 10 * 60 * 1000;
  */
 const RATE_WINDOW_MS = 60 * 1000;
 
-interface AttemptEntry {
-  count: number;
-  resetAt: number;
-}
-
 // Страница логина теперь во фронте (apps/web/app/login/page.tsx) и постит сюда.
 // Nest отдаёт только POST /api/login (rate-limit + выдача HMAC-куки); редирект
 // неавторизованных на /login делает middleware Next (verifyToken из @relay/shared).
 @Controller()
 export class AuthController {
-  private readonly attempts = new Map<string, AttemptEntry>();
-  /** Попытки за минуту — отдельная карта: у неё своё окно и свой смысл. */
-  private readonly rate = new Map<string, AttemptEntry>();
+  private readonly failures = new WindowCounter(ATTEMPT_WINDOW_MS);
+  /** Попытки за минуту — отдельный счёт: у него своё окно и свой смысл. */
+  private readonly rate = new WindowCounter(RATE_WINDOW_MS);
   private readonly logger = new Logger(AuthController.name);
 
   constructor(private readonly settings: SettingsService) {}
@@ -76,13 +72,13 @@ export class AuthController {
     // Попытка записывается неудачей ДО сверки, той же синхронной частью, что и
     // проверка простоя выше, — успех её снимет. Запиши мы неудачу по ответу,
     // пачка запросов, посланных разом, прошла бы проверку простоя вся.
-    this.recordFailure(ip);
+    this.failures.hit(ip);
     if (!password || !(await passwordMatches(password))) {
       res.status(401).json({ error: 'invalid password' });
       return;
     }
 
-    this.attempts.delete(ip);
+    this.failures.clear(ip);
     const token = issueToken();
     res.cookie(AUTH_COOKIE, token.value, {
       httpOnly: true,
@@ -110,44 +106,10 @@ export class AuthController {
   private tooFast(ip: string): boolean {
     const perMinute = this.settings.get<number>('access.loginRatePerMinute');
     if (perMinute <= 0) return false;
-    const now = Date.now();
-    const entry = this.rate.get(ip);
-    if (!entry || now > entry.resetAt) {
-      this.rate.set(ip, { count: 1, resetAt: now + RATE_WINDOW_MS });
-      // Карта чистится здесь же: своего таймера у неё нет, а без уборки она
-      // росла бы на каждый новый адрес до конца жизни процесса.
-      if (this.rate.size > 10000) {
-        for (const [key, e] of this.rate) if (now > e.resetAt) this.rate.delete(key);
-      }
-      return false;
-    }
-    entry.count += 1;
-    return entry.count > perMinute;
+    return this.rate.hit(ip) > perMinute;
   }
 
   private isRateLimited(ip: string): boolean {
-    const entry = this.attempts.get(ip);
-    if (!entry) return false;
-    if (Date.now() > entry.resetAt) {
-      this.attempts.delete(ip);
-      return false;
-    }
-    return entry.count >= this.settings.get<number>('access.unlockAttempts');
-  }
-
-  private recordFailure(ip: string) {
-    const now = Date.now();
-    const entry = this.attempts.get(ip);
-    if (!entry || now > entry.resetAt) {
-      this.attempts.set(ip, { count: 1, resetAt: now + ATTEMPT_WINDOW_MS });
-    } else {
-      entry.count++;
-    }
-    // Старые записи не копим бесконечно
-    if (this.attempts.size > 10000) {
-      for (const [key, e] of this.attempts) {
-        if (now > e.resetAt) this.attempts.delete(key);
-      }
-    }
+    return this.failures.count(ip) >= this.settings.get<number>('access.unlockAttempts');
   }
 }

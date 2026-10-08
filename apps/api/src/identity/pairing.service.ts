@@ -8,6 +8,7 @@ import { DeviceRow, IdentityRow, MessageRow, RoleRow } from '../db/entities';
 import { SettingsService } from '../settings/settings.service';
 import { fingerprint, newPairCode, verifySignature } from './crypto';
 import { certificateMessage, isPairCode, type PairOffer } from '@relay/shared';
+import { WindowCounter } from '../window-counter';
 
 /**
  * Связка второго устройства с уже живущей личностью.
@@ -82,7 +83,7 @@ interface Waiting {
 export class PairingService {
   private readonly logger = new Logger('pairing');
   private readonly waiting = new Map<string, Waiting>();
-  private readonly misses = new Map<string, { count: number; until: number }>();
+  private readonly misses = new WindowCounter(MISS_WINDOW_MS);
 
   constructor(
     private readonly db: DataSource,
@@ -287,25 +288,17 @@ export class PairingService {
   }
 
   private blocked(identityId: string): boolean {
-    const seen = this.misses.get(identityId);
-    if (!seen || seen.until < this.now()) return false;
-    return seen.count >= MAX_MISSES;
+    return this.misses.count(identityId, this.now()) >= MAX_MISSES;
   }
 
   private miss(identityId: string): void {
-    const now = this.now();
-    const seen = this.misses.get(identityId);
-    if (!seen || seen.until < now) {
-      this.misses.set(identityId, { count: 1, until: now + MISS_WINDOW_MS });
-      return;
-    }
-    seen.count += 1;
-    if (seen.count === MAX_MISSES) this.logger.warn(`перебор кодов связки от ${identityId}`);
+    if (this.misses.hit(identityId, this.now()) === MAX_MISSES)
+      this.logger.warn(`перебор кодов связки от ${identityId}`);
   }
 
   private sweep(): void {
     const now = this.now();
     for (const [code, w] of this.waiting) if (w.expiresAt < now) this.waiting.delete(code);
-    for (const [id, seen] of this.misses) if (seen.until < now) this.misses.delete(id);
+    this.misses.forgetExpired(now);
   }
 }
