@@ -146,14 +146,20 @@ describe('гард загрузок', () => {
     // Списание идёт после записи, по настоящему размеру. Без брони сотня
     // запросов, посланных разом, прошла бы гард вся — гигабайты на диске до
     // первого списания. Бронь — предельный файл; лишнее вернётся после записи.
-    const passed = Array.from({ length: 30 }, () => {
-      try {
-        return new UploadRateGuard().canActivate(ctx('10.0.0.150'));
-      } catch {
-        return false;
-      }
-    }).filter(Boolean).length;
-    expect(passed).toBe(Math.ceil((300 * 1024 ** 2) / MAX_UPLOAD_BYTES));
+    // Часы стоят: «разом» — это без единой миллисекунды на подрастание бюджета.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const passed = Array.from({ length: 30 }, () => {
+        try {
+          return new UploadRateGuard().canActivate(ctx('10.0.0.150'));
+        } catch {
+          return false;
+        }
+      }).filter(Boolean).length;
+      expect(passed).toBe(Math.ceil((300 * 1024 ** 2) / MAX_UPLOAD_BYTES));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('запрос без адреса не роняет гард', () => {
