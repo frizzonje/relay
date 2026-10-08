@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import { PIN_LIMIT, type ChatMessage } from '@relay/shared';
 import { request } from '@/lib/request';
 import { tx } from '@/lib/i18n';
+import { isNarrowNow } from '@/lib/use-mobile';
 import { useChatStore } from '@/stores/chat';
 import { useSearchStore } from '@/stores/search';
 import { useUiStore } from '@/stores/ui';
@@ -48,12 +49,6 @@ interface PinsState {
   applyPinned: (id: string, pinned: boolean, count: number) => void;
   /** Показать закреплённое в ленте — там, где оно было сказано. */
   openPin: (id: string) => Promise<void>;
-}
-
-/** Панель на мобиле занимает весь экран — после перехода её надо убрать. */
-function narrow(): boolean {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
-  return window.matchMedia('(max-width: 767px)').matches;
 }
 
 /**
@@ -139,7 +134,8 @@ export const usePinsStore = create<PinsState>((set, get) => ({
     // человеком ради перехода на два экрана вверх.
     if (useChatStore.getState().messages.some((m) => m.id === id)) {
       useChatStore.getState().setJump(id);
-      if (narrow()) set({ open: false });
+      // Панель на мобиле занимает весь экран — после перехода её надо убрать.
+      if (isNarrowNow()) set({ open: false });
       return;
     }
     const slug = useUiStore.getState().textRoom;
@@ -153,6 +149,6 @@ export const usePinsStore = create<PinsState>((set, get) => ({
     }
     useChatStore.getState().setWindow(win.messages, win.more, win.moreAfter);
     useChatStore.getState().setJump(id);
-    if (narrow()) set({ open: false });
+    if (isNarrowNow()) set({ open: false });
   },
 }));
