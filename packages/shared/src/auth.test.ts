@@ -8,6 +8,13 @@ import {
   verifyGuestToken,
   verifyToken,
   parseCookies,
+  guestTokenSigned,
+  readGuestToken,
+  readSfuToken,
+  readSiteToken,
+  safeEqual,
+  sfuTokenSigned,
+  siteTokenSigned,
 } from './auth';
 
 const PASS = 'secret-пароль-123';
@@ -158,5 +165,59 @@ describe('parseCookies', () => {
     const out = parseCookies('bad=%E0%A4%A; good=ok');
     expect(out.good).toBe('ok');
     expect('bad' in out).toBe(false);
+  });
+});
+
+/**
+ * Формат — один на всех: api подписывает node-crypto, middleware Next — Web
+ * Crypto, медиасервер проверяет node-crypto, и все трое собирают и разбирают
+ * токен этими функциями. Эталонные строки держат сам формат: поменяй его —
+ * и мёртвыми станут ссылки и пропуска, уже розданные людям.
+ */
+describe('формат токенов (без подписи)', () => {
+  it('гостевой: g2, слаг в base64url, режим, срок', () => {
+    expect(guestTokenSigned('voice', true, 5)).toBe('g2.dm9pY2U.listen.5');
+    expect(guestTokenSigned('voice', false, 5)).toBe('g2.dm9pY2U.talk.5');
+    expect(readGuestToken('g2.dm9pY2U.listen.5.sig', 0)).toEqual({
+      signed: 'g2.dm9pY2U.listen.5',
+      sig: 'sig',
+      payload: { slug: 'voice', exp: 5, listen: true },
+    });
+  });
+
+  it('медиасервер: s1 и клеймы JSON; listen пишется, только когда он что-то запрещает', () => {
+    const claims = { room: 'r', peerId: 'p', name: 'n', listen: false, exp: 1 };
+    expect(sfuTokenSigned(claims)).toBe(
+      's1.eyJyb29tIjoiciIsInBlZXJJZCI6InAiLCJuYW1lIjoibiIsImV4cCI6MX0',
+    );
+    const listener = sfuTokenSigned({ ...claims, listen: true });
+    expect(readSfuToken(`${listener}.sig`, 0)).toEqual({
+      signed: listener,
+      sig: 'sig',
+      payload: { ...claims, listen: true },
+    });
+  });
+
+  it('медиасервер: без комнаты, без участника, с протухшим сроком и мусор — null', () => {
+    const ok = { room: 'r', peerId: 'p', name: 'n', listen: false, exp: 10 };
+    expect(readSfuToken(`${sfuTokenSigned(ok)}.s`, 11)).toBeNull();
+    expect(readSfuToken(`${sfuTokenSigned({ ...ok, room: '' })}.s`, 0)).toBeNull();
+    expect(readSfuToken(`${sfuTokenSigned({ ...ok, peerId: '' })}.s`, 0)).toBeNull();
+    for (const bad of ['', 'abc', 's1.abc', 's2.a.b', 's1.bm90IGpzb24.s', null, 42, {}]) {
+      expect(readSfuToken(bad)).toBeNull();
+    }
+  });
+
+  it('пропуск сайта: подписан сам срок', () => {
+    expect(siteTokenSigned(42)).toBe('42');
+    expect(readSiteToken('42.sig', 0)).toEqual({ signed: '42', sig: 'sig', payload: { exp: 42 } });
+    expect(readSiteToken('42.sig', 43)).toBeNull();
+  });
+
+  it('safeEqual: равные строки — да, разные и разной длины — нет', () => {
+    expect(safeEqual('abc', 'abc')).toBe(true);
+    expect(safeEqual('abc', 'abd')).toBe(false);
+    expect(safeEqual('abc', 'abcd')).toBe(false);
+    expect(safeEqual('', '')).toBe(true);
   });
 });

@@ -31,8 +31,6 @@ const PATHS = [
 
 /** Пара «файл ↔ файл» (по алфавиту) → почему копия намеренная. */
 const ALLOWED = {
-  'apps/api/src/auth/auth.ts ↔ packages/shared/src/auth.ts':
-    'синхронный близнец пропуска на node:crypto; формат сторожит тест parity в auth.test.ts',
   'apps/api/src/gateway/testkit.ts ↔ apps/sfu/src/media/testkit.ts':
     'подделка сокета socket.io в двух приложениях, которые друг от друга не зависят',
   'apps/api/src/db/entities.ts ↔ apps/api/src/db/entities.ts':
@@ -74,6 +72,11 @@ for (const [k, places] of found) {
 }
 for (const k of Object.keys(DEBT)) {
   if (!found.has(k)) problems.push(`долг убран, а запись осталась — удалите из DEBT: ${k}`);
+}
+// Разрешение без клона — тоже ложь в списке: следующая копия в той же паре
+// прошла бы молча под чужой причиной.
+for (const k of Object.keys(ALLOWED)) {
+  if (!found.has(k)) problems.push(`клона больше нет — удалите из ALLOWED: ${k}`);
 }
 
 if (problems.length) {

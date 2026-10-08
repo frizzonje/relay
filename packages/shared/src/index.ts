@@ -11,6 +11,21 @@ export {
   type GuestTokenPayload,
 } from './auth';
 
+export {
+  GUEST_KEY_CONTEXT,
+  SFU_KEY_CONTEXT,
+  SITE_KEY_CONTEXT,
+  guestTokenSigned,
+  readGuestToken,
+  readSfuToken,
+  readSiteToken,
+  safeEqual,
+  sfuTokenSigned,
+  siteTokenSigned,
+  type ReadToken,
+  type SfuClaims,
+} from './auth';
+
 // Личность на ключах: кодирование, отпечаток и текст подписываемого сообщения.
 // Считается одним кодом на обеих сторонах — см. ./identity.
 export {

@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { Logger } from '@nestjs/common';
+import { SFU_KEY_CONTEXT, sfuTokenSigned } from '@relay/shared';
 import type { Socket } from 'socket.io';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RoomsService } from '../media/rooms.service';
@@ -17,20 +18,16 @@ import { SfuGateway } from './sfu.gateway';
 
 const SECRET = 'секрет-медиасервера';
 
-/** Пропуск в том виде, в каком его выдаёт api (формат байт-в-байт). */
+/** Пропуск в том виде, в каком его выдаёт api: формат из контракта. */
 function issue(
   claims: { room: string; peerId: string; name?: string; listen?: boolean },
   ttlMs = 60_000,
 ) {
-  const body = Buffer.from(
-    JSON.stringify({ name: '', ...claims, exp: Date.now() + ttlMs }),
-    'utf8',
-  ).toString('base64url');
-  const prefix = `s1.${body}`;
-  const sig = createHmac('sha256', 'relay-sfu-v1:' + (process.env.SFU_SECRET ?? ''))
-    .update(prefix)
+  const signed = sfuTokenSigned({ name: '', listen: false, ...claims, exp: Date.now() + ttlMs });
+  const sig = createHmac('sha256', SFU_KEY_CONTEXT + (process.env.SFU_SECRET ?? ''))
+    .update(signed)
     .digest('base64url');
-  return `${prefix}.${sig}`;
+  return `${signed}.${sig}`;
 }
 
 let io: FakeIo;

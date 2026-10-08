@@ -1,19 +1,16 @@
 import { createHmac } from 'node:crypto';
+import { SFU_KEY_CONTEXT, sfuTokenSigned } from '@relay/shared';
 
 /**
- * Выдача пропуска в медиасервер. Проверяющий близнец — apps/sfu/src/token.ts,
- * формат обязан совпадать байт-в-байт.
- *
- * Токен: `s1.<base64url(JSON claims)>.<HMAC-SHA256(ключ, префикс)>`,
- * ключ = 'relay-sfu-v1:' + SFU_SECRET.
+ * Выдача пропуска в медиасервер. Формат — `sfuTokenSigned` в `@relay/shared`,
+ * его же разбирает медиасервер (`apps/sfu/src/token.ts`); здесь только ключ и
+ * подпись.
  *
  * Выдаём его по сокету, а не отдельным HTTP-эндпоинтом: сигналинг уже знает,
  * кто ты (пропуск или гостевой токен), в какой ты комнате и какой у тебя id —
  * значит и `room`, и `peerId` берутся из состояния сокета, а не из запроса.
  * Подделать чужой peerId или напроситься в чужую комнату так нельзя в принципе.
  */
-
-const KEY_PREFIX = 'relay-sfu-v1:';
 
 // Короткий срок: токен нужен ровно на момент подключения к /sfu.
 const SFU_TOKEN_TTL_MS = 60 * 1000;
@@ -43,15 +40,9 @@ export function issueSfuToken({
   exp: number;
 } {
   const exp = Date.now() + SFU_TOKEN_TTL_MS;
-  // Клейм пишем только тем, кому он что-то запрещает: поле `listen: false` в
-  // каждом токене — это лишний повод гадать, что значит его отсутствие.
-  const body = Buffer.from(
-    JSON.stringify({ room, peerId, name, ...(listen ? { listen: true } : {}), exp }),
-    'utf8',
-  ).toString('base64url');
-  const prefix = `s1.${body}`;
-  const sig = createHmac('sha256', KEY_PREFIX + sfuSecret())
-    .update(prefix)
+  const signed = sfuTokenSigned({ room, peerId, name, listen: !!listen, exp });
+  const sig = createHmac('sha256', SFU_KEY_CONTEXT + sfuSecret())
+    .update(signed)
     .digest('base64url');
-  return { token: `${prefix}.${sig}`, exp };
+  return { token: `${signed}.${sig}`, exp };
 }

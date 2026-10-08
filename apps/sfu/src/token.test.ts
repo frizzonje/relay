@@ -1,21 +1,19 @@
 import { createHmac } from 'node:crypto';
+import { SFU_KEY_CONTEXT, sfuTokenSigned } from '@relay/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { verifySfuToken } from './token';
 
-// Копия выдающей стороны (apps/api/src/sfu/sfu-token.ts) — тест на то, что
-// формат близнецов сходится. Разъедутся — здесь и заметим.
+// Выдающая сторона — api; формат у обоих из контракта, своя здесь только
+// подпись: её и проверяем.
 function issue(
-  claims: Record<string, unknown>,
+  claims: { room: string; peerId: string; name: string; listen?: boolean },
   { secret = 'test-secret', ttlMs = 60_000 } = {},
 ): string {
-  const body = Buffer.from(JSON.stringify({ ...claims, exp: Date.now() + ttlMs })).toString(
-    'base64url',
-  );
-  const prefix = `s1.${body}`;
-  const sig = createHmac('sha256', 'relay-sfu-v1:' + secret)
-    .update(prefix)
+  const signed = sfuTokenSigned({ listen: false, ...claims, exp: Date.now() + ttlMs });
+  const sig = createHmac('sha256', SFU_KEY_CONTEXT + secret)
+    .update(signed)
     .digest('base64url');
-  return `${prefix}.${sig}`;
+  return `${signed}.${sig}`;
 }
 
 const CLAIMS = { room: 'voice-general', peerId: 'abc123', name: 'Аня' };

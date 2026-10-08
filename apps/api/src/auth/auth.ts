@@ -2,9 +2,16 @@ import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { verifyServerPassword } from '../gateway/unlock';
 import {
   AUTH_COOKIE,
+  GUEST_KEY_CONTEXT,
   GUEST_TOKEN_TTL_MS,
+  SITE_KEY_CONTEXT,
   TOKEN_TTL_MS,
+  guestTokenSigned,
   parseCookies,
+  readGuestToken,
+  readSiteToken,
+  safeEqual,
+  siteTokenSigned,
   type GuestTokenPayload,
 } from '@relay/shared';
 
@@ -115,7 +122,7 @@ export function addressOwner(cookie: string | undefined): Promise<boolean> {
  *
  * Для пароля из `.env` это сам пароль — байт в байт как до панели, иначе
  * обновление обесценило бы все выданные куки и заодно разошлось бы с
- * Web-Crypto близнецом в `packages/shared/src/auth.ts`, который проверяет ту же
+ * Web-Crypto подписью в `packages/shared/src/auth.ts`, которая проверяет ту же
  * куку в middleware фронта. Для пароля из панели — его хэш: другого стабильного
  * материала у нас нет, а хэш меняется вместе с паролем, чего и надо.
  */
@@ -128,41 +135,32 @@ export function authEnabled(): boolean {
   return siteSecret().kind !== 'none';
 }
 
-function sign(exp: number): string {
-  return createHmac('sha256', 'relay-auth-v1:' + keyMaterial())
-    .update(String(exp))
-    .digest('base64url');
+/**
+ * HMAC-SHA256 в base64url — синхронно, через `node:crypto`. Формат токенов —
+ * в `@relay/shared` (auth.ts), один на api, медиасервер и middleware Next;
+ * здесь только подпись, и синхронная она намеренно: её спрашивают дверь
+ * сокета и http-гейт, где `await` между проверкой и решением — окно.
+ */
+function hmac(key: string, message: string): string {
+  return createHmac('sha256', key).update(message).digest('base64url');
 }
 
 export function issueToken(): { value: string; maxAgeMs: number } {
-  const exp = Date.now() + TOKEN_TTL_MS;
-  return { value: `${exp}.${sign(exp)}`, maxAgeMs: TOKEN_TTL_MS };
+  const signed = siteTokenSigned(Date.now() + TOKEN_TTL_MS);
+  return {
+    value: `${signed}.${hmac(SITE_KEY_CONTEXT + keyMaterial(), signed)}`,
+    maxAgeMs: TOKEN_TTL_MS,
+  };
 }
 
 export function verifyToken(token: string | undefined): boolean {
   if (!authEnabled()) return true;
-  if (!token) return false;
-  const dot = token.indexOf('.');
-  if (dot < 0) return false;
-  const exp = Number(token.slice(0, dot));
-  if (!Number.isFinite(exp) || exp < Date.now()) return false;
-  const expected = Buffer.from(sign(exp));
-  const actual = Buffer.from(token.slice(dot + 1));
-  return expected.length === actual.length && timingSafeEqual(expected, actual);
+  const read = readSiteToken(token);
+  return !!read && safeEqual(hmac(SITE_KEY_CONTEXT + keyMaterial(), read.signed), read.sig);
 }
 
-// ── Гостевой инвайт-токен (sync-близнец packages/shared/src/auth.ts) ──────
-// Формат: `g2.<b64url(slug)>.<режим>.<exp>.<sig>`, sig = HMAC всего префикса на
-// ключе 'relay-guest-v1:'+пароль — отдельный контекст, гостевой токен не пройдёт
-// как relay_pass. Подпись/срок проверяются даже при пустом SITE_PASSWORD: токен
-// несёт scope (какой войс-канал и на каких правах), а не просто «доступ».
-// Байт-в-байт с shared, включая приём ссылок прошлой версии (g1, без режима).
-
-function guestHmac(message: string): string {
-  return createHmac('sha256', 'relay-guest-v1:' + keyMaterial())
-    .update(message)
-    .digest('base64url');
-}
+// Гостевой инвайт: подпись и срок проверяются даже при пустом SITE_PASSWORD —
+// токен несёт scope (какой войс-канал и на каких правах), а не просто «доступ».
 
 export function issueGuestToken(
   slug: string,
@@ -172,38 +170,16 @@ export function issueGuestToken(
   exp: number;
 } {
   const exp = Date.now() + (opts.ttlMs ?? GUEST_TOKEN_TTL_MS);
-  const mode = opts.listen ? 'listen' : 'talk';
-  const prefix = `g2.${Buffer.from(slug, 'utf8').toString('base64url')}.${mode}.${exp}`;
-  return { token: `${prefix}.${guestHmac(prefix)}`, exp };
+  const signed = guestTokenSigned(slug, !!opts.listen, exp);
+  return { token: `${signed}.${hmac(GUEST_KEY_CONTEXT + keyMaterial(), signed)}`, exp };
 }
 
 export function verifyGuestToken(token: string | undefined): GuestTokenPayload | null {
-  if (!token) return null;
-  const parts = token.split('.');
-  // g2 — с режимом, g1 — ссылки прошлого формата (всегда с правом говорить).
-  let listen = false;
-  if (parts.length === 5) {
-    if (parts[0] !== 'g2') return null;
-    if (parts[2] !== 'listen' && parts[2] !== 'talk') return null;
-    listen = parts[2] === 'listen';
-  } else if (parts.length !== 4 || parts[0] !== 'g1') {
-    return null;
-  }
-  const b64slug = parts[1];
-  const sig = parts[parts.length - 1];
-  const exp = Number(parts[parts.length - 2]);
-  if (!Number.isFinite(exp) || exp < Date.now()) return null;
-  let slug: string;
-  try {
-    slug = Buffer.from(b64slug, 'base64url').toString('utf8');
-  } catch {
-    return null;
-  }
-  if (!slug || slug.includes('�')) return null;
-  const expected = Buffer.from(guestHmac(parts.slice(0, -1).join('.')));
-  const actual = Buffer.from(sig);
-  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null;
-  return { slug, exp, listen };
+  const read = readGuestToken(token);
+  if (!read) return null;
+  return safeEqual(hmac(GUEST_KEY_CONTEXT + keyMaterial(), read.signed), read.sig)
+    ? read.payload
+    : null;
 }
 
 /**
