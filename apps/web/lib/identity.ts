@@ -1,4 +1,5 @@
 import { randomCallsign } from '@/lib/avatar';
+import { readStored, writeStored } from '@/lib/storage';
 
 /**
  * Имя гостя по инвайт-ссылке — и только его.
@@ -33,19 +34,11 @@ export function sanitizeTag(raw: string): string {
 }
 
 export function loadTag(): string {
-  try {
-    return (localStorage.getItem(TAG_KEY) ?? '').trim();
-  } catch {
-    return '';
-  }
+  return (readStored(TAG_KEY) ?? '').trim();
 }
 
 export function saveTag(tag: string): void {
-  try {
-    localStorage.setItem(TAG_KEY, tag);
-  } catch {
-    /* приватный режим / заблокированное хранилище — молча живём без запоминания */
-  }
+  writeStored(TAG_KEY, tag);
 }
 
 /** Случайный тег-подсказка при первом выборе. */
@@ -59,24 +52,18 @@ export function suggestTag(): string {
  * оставшийся в голосовом после перезагрузки страницы, — чтобы не двоило.
  */
 export function loadClientId(): string {
-  try {
-    let id = localStorage.getItem(CID_KEY) ?? '';
-    if (!id) {
-      id =
-        typeof crypto !== 'undefined' && crypto.randomUUID
-          ? crypto.randomUUID()
-          : Math.random().toString(36).slice(2) + Date.now().toString(36);
-      localStorage.setItem(CID_KEY, id);
-    }
-    return id;
-  } catch {
-    // Приватный режим / заблокированное хранилище: id живёт до перезагрузки
-    // страницы. Но один и тот же — новый на каждый вызов означал бы, что после
-    // любого реконнекта сокета человек перестаёт владеть тем, что сам сейчас
-    // создал (владение считается по этому id, audit B2), и что «призрака» в
-    // эфире больше не по чему выгнать. Переживать F5 без хранилища всё равно
-    // нечем — это край, и он остаётся краем.
-    ephemeralClientId ||= Math.random().toString(36).slice(2);
-    return ephemeralClientId;
-  }
+  const saved = readStored(CID_KEY);
+  if (saved) return saved;
+  // Хранилище недоступно (приватный режим, запрет) — id живёт до перезагрузки
+  // страницы. Но один и тот же — новый на каждый вызов означал бы, что после
+  // любого реконнекта сокета человек перестаёт владеть тем, что сам сейчас
+  // создал (владение считается по этому id, audit B2), и что «призрака» в
+  // эфире больше не по чему выгнать. Переживать F5 без хранилища всё равно
+  // нечем — это край, и он остаётся краем.
+  ephemeralClientId ||=
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2) + Date.now().toString(36);
+  writeStored(CID_KEY, ephemeralClientId);
+  return ephemeralClientId;
 }

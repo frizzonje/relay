@@ -1,5 +1,6 @@
 import type { PrefKey } from '@relay/shared';
 import { getSocket } from '@/lib/socket';
+import { readStoredJson, writeStoredJson } from '@/lib/storage';
 
 /**
  * Настройки, принадлежащие человеку, а не браузеру.
@@ -33,24 +34,11 @@ const listeners = new Map<PrefKey, Set<Listener>>();
 
 /** Локальная копия настройки. `fallback` — когда её нет или она испорчена. */
 export function readPref<T>(key: PrefKey, fallback: T): T {
-  try {
-    if (typeof localStorage === 'undefined') return fallback;
-    const raw = localStorage.getItem(PREF_STORAGE[key]);
-    if (raw === null) return fallback;
-    const parsed: unknown = JSON.parse(raw);
-    return (parsed ?? fallback) as T;
-  } catch {
-    return fallback;
-  }
+  return (readStoredJson(PREF_STORAGE[key]) ?? fallback) as T;
 }
 
 function cache(key: PrefKey, value: unknown): void {
-  try {
-    if (typeof localStorage === 'undefined') return;
-    localStorage.setItem(PREF_STORAGE[key], JSON.stringify(value));
-  } catch {
-    // приватный режим/квота — настройка просто не переживёт перезагрузку
-  }
+  writeStoredJson(PREF_STORAGE[key], value);
 }
 
 /**

@@ -25,6 +25,7 @@ import {
   type ScreenProfile,
   type ScreenSetup,
 } from '@/lib/voice/screen-profile';
+import { readStored, writeStored } from '@/lib/storage';
 
 /**
  * Камера и демонстрация экрана — два источника, делящих один видео-слот.
@@ -160,7 +161,7 @@ const DISPLAY_OPTIONS = {
 async function refreshCameraInfo() {
   const store = useVoiceStore.getState();
   const settings = camTrack?.getSettings?.();
-  const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(CAM_KEY) : null;
+  const saved = readStored(CAM_KEY);
   store.setCurrentCamera(settings?.deviceId ?? saved, camTrack?.label ?? '');
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
@@ -180,7 +181,7 @@ export function refreshCameras() {
  * с новым устройством (startCamera читает сохранённый deviceId).
  */
 export async function setCamera(deviceId: string) {
-  if (typeof localStorage !== 'undefined') localStorage.setItem(CAM_KEY, deviceId);
+  writeStored(CAM_KEY, deviceId);
   if (camOn) {
     stopCamera();
     await startCamera();
@@ -208,21 +209,13 @@ const SCREEN_SETUP_KEYS: Record<ScreenMode, string> = {
   fps: 'relay-screen-motion',
 };
 
-function readPref(key: string): string | null {
-  return typeof localStorage === 'undefined' ? null : localStorage.getItem(key);
-}
-
-function writePref(key: string, value: string) {
-  if (typeof localStorage !== 'undefined') localStorage.setItem(key, value);
-}
-
 /** Поднять выбор из браузера в модуль и в стор (при старте приложения). */
 export function loadScreenPrefs() {
-  const mode = readPref(SCREEN_MODE_KEY);
+  const mode = readStored(SCREEN_MODE_KEY);
   if (mode === 'quality' || mode === 'fps') screenMode = mode;
   screenSetups = {
-    quality: parseSetup(readPref(SCREEN_SETUP_KEYS.quality)) ?? DEFAULT_SETUP.quality,
-    fps: parseSetup(readPref(SCREEN_SETUP_KEYS.fps)) ?? DEFAULT_SETUP.fps,
+    quality: parseSetup(readStored(SCREEN_SETUP_KEYS.quality)) ?? DEFAULT_SETUP.quality,
+    fps: parseSetup(readStored(SCREEN_SETUP_KEYS.fps)) ?? DEFAULT_SETUP.fps,
   };
   useVoiceStore.getState().setMedia({ screenMode, screenSetups });
 }
@@ -337,7 +330,7 @@ async function retuneScreen() {
 export function setScreenMode(mode: ScreenMode) {
   if (mode === screenMode) return;
   screenMode = mode;
-  writePref(SCREEN_MODE_KEY, mode);
+  writeStored(SCREEN_MODE_KEY, mode);
   useVoiceStore.getState().setMedia({ screenMode });
   void retuneScreen();
 }
@@ -347,7 +340,7 @@ export function setScreenSetup(mode: ScreenMode, change: Partial<ScreenSetup>) {
   const next = { ...screenSetups[mode], ...change };
   if (next.height === screenSetups[mode].height && next.fps === screenSetups[mode].fps) return;
   screenSetups = { ...screenSetups, [mode]: next };
-  writePref(SCREEN_SETUP_KEYS[mode], formatSetup(next));
+  writeStored(SCREEN_SETUP_KEYS[mode], formatSetup(next));
   useVoiceStore.getState().setMedia({ screenSetups });
   if (screenMode === mode) void retuneScreen();
 }
@@ -375,7 +368,7 @@ export async function toggleCamera() {
 
 async function startCamera() {
   if (screenOn) stopScreen(); // экран и камера занимают один слот — взаимоисключают
-  const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(CAM_KEY) : null;
+  const saved = readStored(CAM_KEY);
   try {
     let cam: MediaStream;
     try {

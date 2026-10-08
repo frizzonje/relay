@@ -97,6 +97,7 @@ import {
   syncPeerRoles,
   tileOf,
 } from '@/lib/voice/tiles';
+import { readStored, writeStored } from '@/lib/storage';
 
 // Плитки, роли собеседников, громкости и крупный план живут в `voice/tiles.ts`
 // — это витрина, и дирижёру от неё нужно только уметь её звать. Наружу они
@@ -804,12 +805,8 @@ export async function joinVoice(newRoom: string, label: string): Promise<boolean
   // Подсказка про смену микрофона — один раз, чтобы знали, где переключить.
   // Слушателю её не показываем: у него нет ни микрофона, ни самой кнопки, на
   // которую она указывает.
-  if (
-    !listenOnly &&
-    typeof localStorage !== 'undefined' &&
-    !localStorage.getItem('relay-mic-hint')
-  ) {
-    localStorage.setItem('relay-mic-hint', '1');
+  if (!listenOnly && !readStored('relay-mic-hint')) {
+    writeStored('relay-mic-hint', '1');
     toast(msg('voice.toast.micHint'), { duration: 7000 });
   }
   return true;

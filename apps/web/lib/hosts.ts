@@ -1,3 +1,4 @@
+import { readStoredJson, writeStoredJson } from '@/lib/storage';
 /**
  * «Другие хосты» — чужие инсталляции relay в рейке (например, сервер друга на
  * своём домене). Это не гильдии одного бэкенда, а отдельные origin'ы: клик по
@@ -15,24 +16,16 @@ export interface RemoteHost {
 }
 
 export function loadHosts(): RemoteHost[] {
-  try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(HOSTS_KEY) ?? '[]');
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (h): h is RemoteHost =>
-        !!h && typeof h === 'object' && typeof (h as RemoteHost).url === 'string',
-    );
-  } catch {
-    return [];
-  }
+  const parsed = readStoredJson(HOSTS_KEY);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter(
+    (h): h is RemoteHost =>
+      !!h && typeof h === 'object' && typeof (h as RemoteHost).url === 'string',
+  );
 }
 
 export function saveHosts(hosts: RemoteHost[]): void {
-  try {
-    localStorage.setItem(HOSTS_KEY, JSON.stringify(hosts));
-  } catch {
-    /* приватный режим — живём без запоминания */
-  }
+  writeStoredJson(HOSTS_KEY, hosts);
 }
 
 /**

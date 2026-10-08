@@ -7,6 +7,7 @@ import { useVoiceStore } from '@/stores/voice';
 import { diag } from '@/lib/voice/diag';
 import { cmpMid } from '@/lib/voice/mid';
 import { roleOf, setTileScreenAudio, tileOf } from '@/lib/voice/tiles';
+import { readStored, writeStored } from '@/lib/storage';
 
 let vadBuf: Uint8Array<ArrayBuffer> | null = null;
 
@@ -117,8 +118,7 @@ function ensurePeerAudio(peerId: string, stream: MediaStream | null): PeerAudio 
     sink.style.display = 'none';
     if (stream) sink.srcObject = stream;
     document.body.appendChild(sink);
-    const savedSpeaker =
-      typeof localStorage !== 'undefined' ? localStorage.getItem(SPEAKER_KEY) : null;
+    const savedSpeaker = readStored(SPEAKER_KEY);
     if (savedSpeaker) {
       const s = sink as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> };
       if (typeof s.setSinkId === 'function') void s.setSinkId(savedSpeaker).catch(() => {});
@@ -248,7 +248,7 @@ export function cleanupPeerAudio(peerId: string) {
 /** Обновляет список устройств вывода (audiooutput) и текущий выбор в сторе. */
 async function refreshSpeakerInfo() {
   const store = useVoiceStore.getState();
-  const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(SPEAKER_KEY) : null;
+  const saved = readStored(SPEAKER_KEY);
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
     const speakers = devices.filter((d) => d.kind === 'audiooutput');
@@ -271,7 +271,7 @@ export function refreshSpeakers() {
  * Сохраняет выбор в localStorage — применяется к новым синкам автоматически.
  */
 export async function setSpeaker(deviceId: string) {
-  if (typeof localStorage !== 'undefined') localStorage.setItem(SPEAKER_KEY, deviceId);
+  writeStored(SPEAKER_KEY, deviceId);
 
   type SinkEl = HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> };
   type SinkCtx = AudioContext & { setSinkId?: (id: string) => Promise<void> };

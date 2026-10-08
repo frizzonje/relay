@@ -1,3 +1,5 @@
+import { readStoredJson, writeStoredJson } from '@/lib/storage';
+
 /**
  * Пропуска в закрытые серверы: подписанные сервером токены «пароль этого
  * сервера предъявляли» (выдаются в `server-unlock-result`, см. gateway/unlock).
@@ -17,30 +19,23 @@ const KEY = 'relay-unlock';
 
 type Store = Record<string, string>;
 
+/**
+ * Приватный режим, заблокированное хранилище или битый JSON — живём без
+ * запомненных разблокировок: пароль просто спросят заново.
+ */
 function read(): Store {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return {};
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    const out: Store = {};
-    for (const [id, token] of Object.entries(parsed)) {
-      if (typeof token === 'string' && token) out[id] = token;
-    }
-    return out;
-  } catch {
-    // Приватный режим, заблокированное хранилище или битый JSON — живём без
-    // запомненных разблокировок: пароль просто спросят заново.
-    return {};
+  const parsed = readStoredJson(KEY);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  const out: Store = {};
+  for (const [id, token] of Object.entries(parsed)) {
+    if (typeof token === 'string' && token) out[id] = token;
   }
+  return out;
 }
 
+/** Хранилище недоступно — разблокировка не переживёт реконнект, и только. */
 function write(store: Store): void {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(store));
-  } catch {
-    /* хранилище недоступно — разблокировка не переживёт реконнект, и только */
-  }
+  writeStoredJson(KEY, store);
 }
 
 /** Все пропуска — в handshake уходит именно этот список (см. lib/socket). */

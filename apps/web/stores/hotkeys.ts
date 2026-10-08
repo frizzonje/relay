@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { MessageKey } from '@/lib/i18n/translate';
+import { readStoredJson, writeStoredJson } from '@/lib/storage';
 
 /**
  * Горячие клавиши голосового канала. По умолчанию НИЧЕГО не назначено —
@@ -24,22 +25,12 @@ type Binds = Partial<Record<HotkeyAction, string>>;
 const KEY = 'relay-hotkeys';
 
 function load(): Binds {
-  try {
-    if (typeof localStorage === 'undefined') return {};
-    const parsed = JSON.parse(localStorage.getItem(KEY) || '{}');
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
+  const parsed = readStoredJson(KEY);
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Binds) : {};
 }
 
 function save(binds: Binds) {
-  try {
-    if (typeof localStorage === 'undefined') return;
-    localStorage.setItem(KEY, JSON.stringify(binds));
-  } catch {
-    // приватный режим/квота — переживём, привязки просто не запомнятся
-  }
+  writeStoredJson(KEY, binds);
 }
 
 interface HotkeysState {

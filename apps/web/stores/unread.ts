@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { getSocket } from '@/lib/socket';
+import { readStored, writeStoredJson } from '@/lib/storage';
 
 /**
  * Непрочитанное по текстовым каналам.
@@ -50,21 +51,11 @@ function parseMarks(raw: string | null): Marks {
 }
 
 function loadLastRead(): Marks {
-  if (typeof localStorage === 'undefined') return {};
-  try {
-    return parseMarks(localStorage.getItem(LAST_READ_KEY));
-  } catch {
-    return {};
-  }
+  return parseMarks(readStored(LAST_READ_KEY));
 }
 
 function saveLastRead(map: Marks) {
-  try {
-    if (typeof localStorage === 'undefined') return;
-    localStorage.setItem(LAST_READ_KEY, JSON.stringify(map));
-  } catch {
-    // приватный режим/квота — переживём, отметка просто не запомнится
-  }
+  writeStoredJson(LAST_READ_KEY, map);
 }
 
 /**

@@ -12,6 +12,7 @@ import {
   getAudioCtx,
   refreshOutputDevices,
 } from '@/lib/voice/output';
+import { readStored, writeStored } from '@/lib/storage';
 
 /**
  * Захват микрофона: устройство, шумовой гейт, push-to-talk, мут и анализатор,
@@ -98,7 +99,7 @@ const PTT_KEY = 'relay-ptt';
  * значит выбор его, и владелец панели ему не указ.
  */
 function chosen(key: string): string | null {
-  return typeof localStorage === 'undefined' ? null : localStorage.getItem(key);
+  return readStored(key);
 }
 
 /**
@@ -162,7 +163,7 @@ let localVadGain: GainNode | null = null;
 const MIC_KEY = 'relay-mic-id';
 
 async function acquireMic(): Promise<MediaStream> {
-  const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(MIC_KEY) : null;
+  const saved = readStored(MIC_KEY);
   if (saved) {
     try {
       return await navigator.mediaDevices.getUserMedia({
@@ -217,7 +218,7 @@ export async function ensureLocalStream(): Promise<void> {
 export function setMicThreshold(value: number) {
   const t = Math.max(0, Math.min(1, value));
   micThreshold = t;
-  if (typeof localStorage !== 'undefined') localStorage.setItem(MIC_THRESHOLD_KEY, String(t));
+  writeStored(MIC_THRESHOLD_KEY, String(t));
   useVoiceStore.getState().setMicThreshold(t);
   // Порог выключили — затвор открывается сразу, не дожидаясь тика.
   if (t <= 0) setGate({ open: true, openUntil: 0 });
@@ -297,7 +298,7 @@ let micSwitch = 0;
  * собеседников без пересборки SDP. Выбор запоминаем в localStorage.
  */
 export async function setMic(deviceId: string) {
-  if (typeof localStorage !== 'undefined') localStorage.setItem(MIC_KEY, deviceId);
+  writeStored(MIC_KEY, deviceId);
 
   // Не в звонке — просто запомнили выбор, применится при следующем входе
   if (!around.stream()) return;
@@ -352,7 +353,7 @@ export async function setMic(deviceId: string) {
  * устройства: constraint'ы действуют только на новом захвате.
  */
 async function rememberAndRecapture(key: string, on: boolean) {
-  if (typeof localStorage !== 'undefined') localStorage.setItem(key, on ? '1' : '0');
+  writeStored(key, on ? '1' : '0');
   if (around.stream()) await setMic(useVoiceStore.getState().currentMicId ?? '');
 }
 
@@ -449,7 +450,7 @@ export function desktopPtt(pressed: boolean) {
  */
 export function setPushToTalk(on: boolean) {
   if (on === pushToTalkOn()) return;
-  if (typeof localStorage !== 'undefined') localStorage.setItem(PTT_KEY, on ? '1' : '0');
+  writeStored(PTT_KEY, on ? '1' : '0');
   useVoiceStore.getState().setPushToTalk(on);
   if (typeof window === 'undefined') return;
   if (on) {
@@ -579,8 +580,7 @@ export function startGate(): void {
  * применится при следующем входе в эфир.
  */
 export function loadMicThreshold(): void {
-  const saved =
-    typeof localStorage !== 'undefined' ? Number(localStorage.getItem(MIC_THRESHOLD_KEY)) : NaN;
+  const saved = Number(readStored(MIC_THRESHOLD_KEY));
   if (Number.isFinite(saved) && saved >= 0 && saved <= 1) {
     micThreshold = saved;
     useVoiceStore.getState().setMicThreshold(saved);

@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import { getSocket } from '@/lib/socket';
 import { request } from '@/lib/request';
 import { tx } from '@/lib/i18n';
+import { forgetStored, readStored, storedKeys } from '@/lib/storage';
 
 /**
  * Действия над реестром серверов. Как и каналы — сервер единственный источник
@@ -116,26 +117,16 @@ export function unlockServer(id: string, password: string): void {
 const PW_PREFIX = 'relay-server-pw:';
 
 export function forgetServerPassword(id: string): void {
-  try {
-    localStorage.removeItem(PW_PREFIX + id);
-  } catch {
-    /* no-op */
-  }
+  forgetStored(PW_PREFIX + id);
 }
 
 /** Пароли, сохранённые прежними версиями, — их меняют на пропуска и стирают. */
 export function storedServerPasswords(): { id: string; password: string }[] {
   const out: { id: string; password: string }[] = [];
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith(PW_PREFIX)) {
-        const password = localStorage.getItem(key);
-        if (password) out.push({ id: key.slice(PW_PREFIX.length), password });
-      }
-    }
-  } catch {
-    /* no-op */
+  for (const key of storedKeys()) {
+    if (!key.startsWith(PW_PREFIX)) continue;
+    const password = readStored(key);
+    if (password) out.push({ id: key.slice(PW_PREFIX.length), password });
   }
   return out;
 }

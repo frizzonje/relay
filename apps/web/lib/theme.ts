@@ -1,4 +1,5 @@
 import { setting } from '@/stores/config';
+import { readStored, writeStored } from '@/lib/storage';
 
 // Тема оформления (тёмная/светлая). Хранится в localStorage и применяется
 // атрибутом data-theme на <html>; светлые значения токенов — в globals.css
@@ -11,8 +12,7 @@ const KEY = 'relay-theme';
 
 /** Выбор человека в этом браузере или `null` — не выбирал. */
 function stored(): Theme | null {
-  if (typeof localStorage === 'undefined') return null;
-  const raw = localStorage.getItem(KEY);
+  const raw = readStored(KEY);
   return raw === 'light' || raw === 'dark' ? raw : null;
 }
 
@@ -52,7 +52,7 @@ export function applyTheme(theme: Theme): void {
 
 /** Сохранить выбор и применить его немедленно. */
 export function setTheme(theme: Theme): void {
-  if (typeof localStorage !== 'undefined') localStorage.setItem(KEY, theme);
+  writeStored(KEY, theme);
   applyTheme(theme);
 }
 
