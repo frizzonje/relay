@@ -207,7 +207,7 @@ infra/          Caddy, coturn, relay CLI, dev and e2e compose files
 e2e/            Playwright tests on the production stack
 ```
 
-Tests, lint, e2e and conventions: [CONTRIBUTING.md](CONTRIBUTING.md).
+Tests, lint, e2e and conventions: [CONTRIBUTING.md](CONTRIBUTING.md). Found a vulnerability? See [SECURITY.md](SECURITY.md).
 
 ## Documentation
 

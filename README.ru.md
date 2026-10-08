@@ -186,7 +186,7 @@ infra/          Caddy, coturn, relay CLI, compose для dev и e2e
 e2e/            Playwright-тесты на прод-стеке
 ```
 
-Тесты, линт, e2e и соглашения — [CONTRIBUTING.md](CONTRIBUTING.md).
+Тесты, линт, e2e и соглашения — [CONTRIBUTING.md](CONTRIBUTING.md). Нашли уязвимость — [SECURITY.md](SECURITY.md).
 
 ## Документация
 
