@@ -19,7 +19,10 @@ import { type KeyStore, SignerError, type StoredPair, getSigner, webSigner } fro
  * ли приватная половина, что видит человек при отказе, — проверяется здесь.
  */
 
-/** Хранилище в памяти. `save` кладёт то же самое, что положила бы IndexedDB. */
+/**
+ * Хранилище в памяти. `save` ведёт себя как IndexedDB `add`: уже лежащий ключ
+ * не перезаписывается, а возвращается.
+ */
 function memoryStore(): KeyStore & { saves: number } {
   let saved: StoredPair | undefined;
   const store = {
@@ -27,7 +30,8 @@ function memoryStore(): KeyStore & { saves: number } {
     load: async () => saved,
     save: async (pair: StoredPair) => {
       store.saves += 1;
-      saved = pair;
+      saved ??= pair;
+      return saved;
     },
     clear: async () => {
       saved = undefined;
@@ -104,6 +108,20 @@ describe('ключ этого устройства', () => {
     const a = await webSigner(memoryStore());
     const b = await webSigner(memoryStore());
     expect(a.publicKey).not.toBe(b.publicKey);
+  });
+});
+
+describe('две вкладки при первом визите', () => {
+  it('рождают один ключ на двоих, а не два, из которых выживет последний', async () => {
+    // Обе прочли «ключа нет» и сгенерировали свой. Перезапиши вторая первую —
+    // первая вошла бы ключом, которого больше нет нигде, и её личность
+    // потерялась бы с перезагрузкой.
+    const store = memoryStore();
+    const [a, b] = await Promise.all([webSigner(store), webSigner(store)]);
+    expect(a.publicKey).toBe(b.publicKey);
+    expect((await webSigner(store)).publicKey).toBe(a.publicKey);
+    const signature = await a.sign(authMessage('n'));
+    expect(await verify(b.publicKey, authMessage('n'), signature)).toBe(true);
   });
 });
 

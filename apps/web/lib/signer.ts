@@ -64,7 +64,13 @@ export interface StoredPair {
 
 export interface KeyStore {
   load(): Promise<StoredPair | undefined>;
-  save(pair: StoredPair): Promise<void>;
+  /**
+   * Сохранить ключ, если его ещё нет, — и вернуть тот, что лежит в итоге.
+   * Уже лежащий не перезаписывается: две вкладки при первом визите обе
+   * сгенерировали по ключу, и вторая, затерев первую, оставила бы её с ключом,
+   * которого больше нет нигде. Выигрывает первая, вторая берёт её ключ.
+   */
+  save(pair: StoredPair): Promise<StoredPair>;
   clear(): Promise<void>;
 }
 
@@ -125,7 +131,16 @@ function indexedDbStore(): KeyStore {
   return {
     load: () => inStore<StoredPair | undefined>('readonly', (s) => s.get(RECORD)),
     save: async (pair) => {
-      await inStore('readwrite', (s) => s.put(pair, RECORD));
+      try {
+        // `add`, а не `put`: занятая запись — ConstraintError, а не перезапись.
+        await inStore('readwrite', (s) => s.add(pair, RECORD));
+        return pair;
+      } catch (err) {
+        if (!(err instanceof DOMException && err.name === 'ConstraintError')) throw err;
+        const kept = await inStore<StoredPair | undefined>('readonly', (s) => s.get(RECORD));
+        if (!kept) throw err;
+        return kept;
+      }
     },
     clear: async () => {
       await inStore('readwrite', (s) => s.delete(RECORD));
@@ -182,7 +197,7 @@ export async function webSigner(store: KeyStore = indexedDbStore()): Promise<Sig
       throw new SignerError('no-crypto', `движок не умеет ${SIGN_ALGORITHM}`, err);
     }
     try {
-      await store.save(pair);
+      pair = await store.save(pair);
     } catch (err) {
       throw err instanceof SignerError
         ? err
