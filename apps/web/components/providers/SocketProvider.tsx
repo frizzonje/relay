@@ -763,6 +763,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       }
       clearTyping();
       socket.off('chat');
+      socket.off('settings');
+      socket.off('chat-refused');
+      socket.off('banned');
       socket.off('chat-history');
       socket.off('chat-roster');
       socket.off('presence');

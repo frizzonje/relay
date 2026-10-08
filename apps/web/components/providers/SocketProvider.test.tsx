@@ -651,3 +651,21 @@ describe('дверь пускает только личность', () => {
     }
   });
 });
+
+describe('уборка при перемонтировании', () => {
+  // Строгий режим React монтирует эффект дважды, и не снятый обработчик
+  // остаётся вторым: отказ в чате показал бы два одинаковых тоста подряд.
+  it('каждое событие провайдера после перемонтирования слушается один раз', () => {
+    // Без `remount()`: тот чистит шину, а здесь проверяется ровно то, что
+    // осталось на ней после уборки самого провайдера.
+    act(() => root.unmount());
+    root = createRoot(host);
+    mount();
+    toast.mockClear();
+    for (const event of ['banned', 'chat-refused', 'settings', 'connect_error']) {
+      expect(socket._handlers.get(event), event).toHaveLength(1);
+    }
+    socket._fire('chat-refused', { reason: 'banned' });
+    expect(toast).toHaveBeenCalledTimes(1);
+  });
+});
