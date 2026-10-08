@@ -245,8 +245,8 @@ HTTP API устройств, которые api и web объявляли каж
 | 2.2 ✅ | `apps/api/src/gateway` — [итог](audit/2.2-api-gateway.md) (без e2e) | ~45 | R1, R5, R7: состояние в памяти + база |
 | 2.3 ✅ | `apps/api/src` (остальное: db, identity, auth, settings, uploads) — [итог](audit/2.3-api-rest.md) | ~55 | C5, R6, транзакции |
 | 2.4 ✅ | `packages/shared/src` — [итог](audit/2.4-shared.md) | ~35 | D1 (обратная сторона), C1, совместимость контракта |
-| 2.5 | `apps/web/lib/voice/**`, `lib/voice/index.ts`, `lib/call.ts` | ~30 | R3, R4, R5 — пересекается с фазой 3 |
-| 2.6 | `apps/web/stores`, `lib` (остальное), `providers` | ~60 | R3, R5, D2 |
+| 2.5 ◐ | `apps/web/lib/voice/**`, `lib/voice/index.ts`, `lib/call.ts` — [ход](audit/2.5-web-voice.md) | ~30 | R3, R4, R5 — пересекается с фазой 3 |
+| 2.6 ◐ | `apps/web/stores`, `lib` (остальное), `providers` — [ход](audit/2.6-web-state.md) | ~60 | R3, R5, D2 |
 | 2.7 | `apps/web/components`, `app` | ~100 | R4 в эффектах, D4, C2 |
 
 Как идёт партия:
