@@ -533,6 +533,27 @@ describe('квота личности на сутки', () => {
     expect(await svc.exists('соседний.bin')).toBe(true);
   });
 
+  it('загрузки разом не обгоняют квоту: место занимается до записи в базу', async () => {
+    // Проверка квоты и списание разделены походом в базу: без брони пачка,
+    // пришедшая разом, проверку прошла бы вся.
+    const svc = untouched();
+    await tune(settings, 'files.perIdentityDailyBytes', 1000);
+    const outcomes = await Promise.allSettled(
+      ['а.bin', 'б.bin', 'в.bin'].map((name) => svc.register(put(name, 600, 0), кто)),
+    );
+    expect(outcomes.filter((o) => o.status === 'fulfilled')).toHaveLength(1);
+  });
+
+  it('несостоявшаяся загрузка квоту не тратит', async () => {
+    const svc = untouched();
+    await tune(settings, 'files.perIdentityDailyBytes', 1000);
+    // Строка не записалась (тот же id уже в базе) — место надо вернуть.
+    await svc.register(put('один.bin', 100, 0), кто);
+    await expect(svc.register(put('один.bin', 800, 0), кто)).rejects.toThrow();
+    await svc.register(put('два.bin', 900, 0), кто);
+    expect(await svc.exists('два.bin')).toBe(true);
+  });
+
   it('сутки скользящие: вчерашнее не занимает сегодняшнюю квоту', async () => {
     // Подменяем ТОЛЬКО часы: настоящие таймеры оставляем, иначе запрос в базу
     // повис бы вместе со всем прогоном.

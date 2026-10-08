@@ -219,12 +219,23 @@ export class UploadsService implements OnModuleInit, OnModuleDestroy {
     return mine.reduce((sum, row) => sum + row.bytes, 0) + size <= limit;
   }
 
-  /** Записать потраченное. Зовётся ПОСЛЕ того, как загрузка состоялась. */
-  private chargeDaily(by: Uploader, size: number): void {
-    if (this.settings.get<number>('files.perIdentityDailyBytes') <= 0) return;
+  /**
+   * Занять место в квоте — той же синхронной частью, что и проверка: между
+   * ними и записью строки стоит поход в базу, и пачка загрузок, пришедшая
+   * разом, иначе прошла бы проверку вся. Возвращает отмену: загрузка не
+   * состоялась — место возвращается.
+   */
+  private chargeDaily(by: Uploader, size: number): () => void {
+    if (this.settings.get<number>('files.perIdentityDailyBytes') <= 0) return () => {};
     const key = by.identityId ?? by.network;
-    if (!key) return;
-    this.daily.set(key, [...(this.daily.get(key) ?? []), { at: Date.now(), bytes: size }]);
+    if (!key) return () => {};
+    const row = { at: Date.now(), bytes: size };
+    this.daily.set(key, [...(this.daily.get(key) ?? []), row]);
+    return () => {
+      const left = (this.daily.get(key) ?? []).filter((r) => r !== row);
+      if (left.length) this.daily.set(key, left);
+      else this.daily.delete(key);
+    };
   }
 
   /** Убрать тело, строки для которого ещё нет: отказ не должен копить мусор. */
@@ -256,14 +267,19 @@ export class UploadsService implements OnModuleInit, OnModuleDestroy {
       throw new HttpException(REFUSAL[refusal].text, REFUSAL[refusal].status);
     }
 
-    await this.db.getRepository(AttachmentRow).insert({
-      id: file.filename,
-      name,
-      size: file.size,
-      mime,
-      kind,
-    });
-    this.chargeDaily(by, file.size);
+    const refund = this.chargeDaily(by, file.size);
+    try {
+      await this.db.getRepository(AttachmentRow).insert({
+        id: file.filename,
+        name,
+        size: file.size,
+        mime,
+        kind,
+      });
+    } catch (e) {
+      refund();
+      throw e;
+    }
     this.total += file.size;
     // Только что записанный файл не вытесняем: иначе отправитель получил бы в
     // ответ ссылку на то, чего уже нет.
