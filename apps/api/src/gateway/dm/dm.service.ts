@@ -10,6 +10,7 @@ import {
   type Person,
   type DmPerson,
 } from '@relay/shared';
+import { escapeLike } from '../../db/like';
 
 /** Сколько знаков хэша в адресе. 24 знака шестнадцатеричных — 96 бит. */
 const ADDRESS_LEN = 24;
@@ -233,7 +234,7 @@ export class DmService implements OnModuleInit {
    * человек.
    */
   async people(meId: string, query: string, limit: number): Promise<DmPerson[]> {
-    const like = `%${query.trim().toLowerCase()}%`;
+    const like = `%${escapeLike(query.trim().toLowerCase())}%`;
     const rows: Array<{ fingerprint: string; nick: string; last_seen_at: Date | null }> =
       await this.db.query(
         `SELECT i.fingerprint, i.nick, i.last_seen_at
@@ -242,7 +243,7 @@ export class DmService implements OnModuleInit {
             AND NOT EXISTS (
                   SELECT 1 FROM roles r
                    WHERE r.identity_id = i.id AND r.server_id IS NULL AND r.role = 'banned')
-            AND ($2 = '%%' OR lower(i.nick) LIKE $2 OR lower(i.fingerprint) LIKE $2)
+            AND ($2 = '%%' OR lower(i.nick) LIKE $2 ESCAPE '\\' OR lower(i.fingerprint) LIKE $2 ESCAPE '\\')
           ORDER BY i.last_seen_at DESC NULLS LAST, i.nick ASC
           LIMIT $3`,
         [meId, like, limit],

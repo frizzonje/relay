@@ -291,6 +291,9 @@ describe('люди', () => {
     expect((await dm.people(me.id, 'нин', 20)).map((p) => p.nick)).toEqual(['Нина']);
     expect(await dm.people(me.id, you.fingerprint.slice(0, 6), 20)).toHaveLength(1);
     expect(await dm.people(me.id, 'никого', 20)).toEqual([]);
+    // Знак подстановки в запросе — буква, а не «любой знак».
+    expect(await dm.people(me.id, '_', 20)).toEqual([]);
+    expect(await dm.people(me.id, '%', 20)).toEqual([]);
   });
 });
 

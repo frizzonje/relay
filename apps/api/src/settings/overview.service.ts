@@ -6,6 +6,7 @@ import { BANNED_ROLE } from '../identity/roles.service';
 import { serverVersion } from '../version';
 import { SettingsService } from './settings.service';
 import type { AdminDevice, AdminOverview, AdminPerson } from '@relay/shared';
+import { escapeLike } from '../db/like';
 
 /**
  * Витрина панели: сводка и таблица людей.
@@ -135,8 +136,10 @@ export class OverviewService {
     }
     if (opts.cursor) {
       const parsed = CURSOR_RE.exec(opts.cursor);
-      if (!parsed) return { people: [] };
-      params.push(new Date(Number(parsed[1])), parsed[2]);
+      const at = new Date(Number(parsed?.[1]));
+      // Цифры без предела длины — это и `Infinity`: Invalid Date уронил бы запрос.
+      if (!parsed || Number.isNaN(at.getTime())) return { people: [] };
+      params.push(at, parsed[2]);
       where.push(`(i.created_at, i.id) < ($${params.length - 1}, $${params.length})`);
     }
     params.push(PAGE_SIZE + 1);
@@ -200,13 +203,4 @@ export class OverviewService {
     }
     return out;
   }
-}
-
-/**
- * Экранирование для `ILIKE`. Без него ник «100%» находил бы всех подряд, а
- * подчёркивание в поиске означало бы «любой знак» — то есть поиск врал бы тем
- * тише, чем реже им пользуются.
- */
-function escapeLike(text: string): string {
-  return text.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 }

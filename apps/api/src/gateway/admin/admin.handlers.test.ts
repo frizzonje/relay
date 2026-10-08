@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -391,6 +392,12 @@ describe('люди', () => {
     const { gw, sock } = await ownerOnline();
     const res = await gw.handleAdminPeople(asSocket(sock), { cursor: 'что-то не то' });
     expect(res).toEqual({ ok: true, people: [] });
+    // Похоже на курсор, но время за пределами Date: запрос к базе упал бы.
+    const huge = `${'9'.repeat(400)}.${randomUUID()}`;
+    expect(await gw.handleAdminPeople(asSocket(sock), { cursor: huge })).toEqual({
+      ok: true,
+      people: [],
+    });
   });
 
   it('банит и разбанивает по отпечатку', async () => {

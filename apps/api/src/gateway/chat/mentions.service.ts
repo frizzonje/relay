@@ -3,6 +3,7 @@ import { DataSource } from 'typeorm';
 import { IdentityRow, MessageRow } from '../../db/entities';
 import { LIMIT } from '../protocol';
 import type { Person } from '@relay/shared';
+import { escapeLike } from '../../db/like';
 
 /**
  * Упоминания в базе: кто стоит за отпечатком, кого предложить после `@` и
@@ -89,7 +90,7 @@ export class MentionsService {
     // ILIKE — искать по началу имени, не различая регистр. Спецсимволы шаблона
     // экранируем: `%` в набранном человеком префиксе иначе означал бы «любой
     // хвост», то есть подсказку из всех подряд.
-    const pattern = prefix.replace(/[\\%_]/g, (c) => '\\' + c) + '%';
+    const pattern = escapeLike(prefix) + '%';
     return this.db
       .getRepository(MessageRow)
       .createQueryBuilder('m')
