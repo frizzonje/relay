@@ -1,7 +1,8 @@
 import { Logger } from '@nestjs/common';
 import type { types } from 'mediasoup';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PRODUCER_SOURCES, RoomsService, producerInfo } from './rooms.service';
+import { SFU_SOURCES } from '@relay/shared';
+import { RoomsService, producerInfo } from './rooms.service';
 import type { Peer } from './rooms.service';
 import type { WorkersService } from './workers.service';
 import { FakeProducer, FakeTransport, FakeWorkers } from './testkit';
@@ -225,7 +226,7 @@ describe('снимок комнаты для новичка', () => {
 
 describe('producerInfo', () => {
   it('назначение берётся из appData', () => {
-    for (const source of PRODUCER_SOURCES) {
+    for (const source of SFU_SOURCES) {
       const p = new FakeProducer('video', { source });
       expect(producerInfo(p as unknown as types.Producer).source).toBe(source);
     }

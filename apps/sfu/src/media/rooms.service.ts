@@ -1,21 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { types } from 'mediasoup';
 import {
-  SFU_SOURCES,
   type SfuPeerSnapshot,
   type SfuProducerInfo,
   type SfuSource,
 } from '@relay/shared';
 import { MEDIA_CODECS, webRtcTransportOptions } from './media.config';
 import { WorkersService } from './workers.service';
-
-/**
- * Назначение дорожки. Клиент присылает его в appData при `produce`, сервер
- * пересылает остальным вместе с producerId — по нему дирижёр решает, куда
- * приткнуть входящий трек: микрофон в микшер, камера/экран в плитку.
- */
-
-export const PRODUCER_SOURCES = SFU_SOURCES;
 
 export interface Peer {
   /** Совпадает с id участника в основном сигналинге — плитки общие. */

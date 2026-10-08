@@ -11,19 +11,19 @@ import type { types } from 'mediasoup';
 import { Server, Socket } from 'socket.io';
 import {
   Peer,
-  PRODUCER_SOURCES,
   type TransportParams,
   producerInfo,
   RoomsService,
 } from '../media/rooms.service';
 import { verifySfuToken } from '../token';
-import type {
-  SfuAck,
-  SfuMedia,
-  SfuRequest,
-  SfuRequests,
-  SfuSource,
-  Untrusted,
+import {
+  SFU_SOURCES,
+  type SfuAck,
+  type SfuMedia,
+  type SfuRequest,
+  type SfuRequests,
+  type SfuSource,
+  type Untrusted,
 } from '@relay/shared';
 
 /** Медиатипы серверной стороны контракта. */
@@ -338,7 +338,7 @@ export class SfuGateway implements OnGatewayConnection {
     if (!transport) return fail('no-transport');
     const kind = payload?.kind === 'video' ? 'video' : payload?.kind === 'audio' ? 'audio' : null;
     if (!kind) return fail('bad-kind');
-    const source = PRODUCER_SOURCES.includes(payload?.source as SfuSource)
+    const source = SFU_SOURCES.includes(payload?.source as SfuSource)
       ? (payload.source as SfuSource)
       : null;
     if (!source) return fail('bad-source');
