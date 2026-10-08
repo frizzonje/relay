@@ -15,13 +15,23 @@ export interface RemoteHost {
   label?: string;
 }
 
+/**
+ * Список из хранилища. Адрес проходит ту же `normalizeHostUrl`, что и
+ * введённый руками: клик по строке рейки — `location.assign(url)`, и
+ * `javascript:`, пролежавший в хранилище, исполнился бы на этом origin.
+ */
 export function loadHosts(): RemoteHost[] {
   const parsed = readStoredJson(HOSTS_KEY);
   if (!Array.isArray(parsed)) return [];
-  return parsed.filter(
-    (h): h is RemoteHost =>
-      !!h && typeof h === 'object' && typeof (h as RemoteHost).url === 'string',
-  );
+  const hosts: RemoteHost[] = [];
+  for (const h of parsed) {
+    if (!h || typeof h !== 'object') continue;
+    const { url: raw, label } = h as { url?: unknown; label?: unknown };
+    const url = typeof raw === 'string' ? normalizeHostUrl(raw) : null;
+    if (!url) continue;
+    hosts.push(typeof label === 'string' ? { url, label } : { url });
+  }
+  return hosts;
 }
 
 export function saveHosts(hosts: RemoteHost[]): void {

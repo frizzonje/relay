@@ -70,6 +70,21 @@ describe('хранилище хостов', () => {
     expect(loadHosts()).toEqual([{ url: 'https://a.example' }]);
   });
 
+  it('адрес из хранилища проходит ту же проверку, что и введённый', () => {
+    // Клик по строке рейки — `location.assign(url)`: `javascript:` отсюда
+    // исполнился бы на этом origin. Хранилище общее с прошлыми версиями и с
+    // руками в devtools, и его содержимому верят не больше, чем полю ввода.
+    localStorage.setItem(
+      'relay-hosts',
+      JSON.stringify([
+        { url: 'javascript:alert(1)' },
+        { url: 'https://a.example/путь' },
+        { url: 'два слова' },
+      ]),
+    );
+    expect(loadHosts()).toEqual([{ url: 'https://a.example' }]);
+  });
+
   it('приватный режим — просто не запоминаем, без исключения наружу', () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('quota');
