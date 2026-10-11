@@ -1,6 +1,6 @@
 'use client';
 
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
+import { BlockingNotice } from '@/components/gates/BlockingNotice';
 import { useContractStore } from '@/stores/contract';
 import { useT } from '@/lib/i18n';
 
@@ -28,26 +28,12 @@ export function BlockedGate() {
   const blocked = useContractStore((s) => s.blocked);
 
   return (
-    <Dialog open={blocked}>
-      <DialogContent
-        className="max-w-[420px]"
-        onEscapeKeyDown={(e) => e.preventDefault()}
-        onPointerDownOutside={(e) => e.preventDefault()}
-        onInteractOutside={(e) => e.preventDefault()}
-      >
-        <div className="px-7 pb-6 pt-6 text-center">
-          <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-bg-deep text-2xl">
-            🚧
-          </div>
-          <DialogTitle className="text-xl">{t('blocked.title')}</DialogTitle>
-          <DialogDescription
-            className="mx-auto mt-1.5 max-w-[320px] text-[13px] leading-relaxed"
-            data-testid="blocked-message"
-          >
-            {t('blocked.body')}
-          </DialogDescription>
-        </div>
-      </DialogContent>
-    </Dialog>
+    <BlockingNotice
+      open={blocked}
+      icon="🚧"
+      title={t('blocked.title')}
+      body={t('blocked.body')}
+      bodyTestId="blocked-message"
+    />
   );
 }

@@ -21,6 +21,8 @@ export function AudioUnlock() {
       className="fixed left-1/2 top-[60px] z-[1003] -translate-x-1/2 cursor-pointer rounded-lg border-0 bg-bg-active px-[18px] py-[11px] text-[13px] font-bold text-text-header shadow-[0_8px_30px_rgba(0,0,0,0.6)] transition-colors hover:bg-bg-hover"
       onClick={() => {
         document.querySelectorAll('video').forEach((v) => {
+          // Отказ здесь — тот же запрет автовоспроизведения, ради которого
+          // кнопка и висит: она останется, и человек нажмёт ещё раз.
           void v.play().catch(() => {});
         });
         resumeVoiceAudio();

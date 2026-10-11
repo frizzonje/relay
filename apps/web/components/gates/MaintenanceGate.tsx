@@ -1,6 +1,6 @@
 'use client';
 
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
+import { BlockingNotice } from '@/components/gates/BlockingNotice';
 import { useContractStore } from '@/stores/contract';
 import { useT } from '@/lib/i18n';
 
@@ -25,26 +25,13 @@ export function MaintenanceGate() {
   const message = useContractStore((s) => s.maintenance);
 
   return (
-    <Dialog open={message !== null}>
-      <DialogContent
-        className="max-w-[420px]"
-        onEscapeKeyDown={(e) => e.preventDefault()}
-        onPointerDownOutside={(e) => e.preventDefault()}
-        onInteractOutside={(e) => e.preventDefault()}
-      >
-        <div className="px-7 pb-6 pt-6 text-center">
-          <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-bg-deep text-2xl">
-            🛠
-          </div>
-          <DialogTitle className="text-xl">{t('maintenance.title')}</DialogTitle>
-          <DialogDescription
-            className="mx-auto mt-1.5 max-w-[320px] whitespace-pre-line text-[13px] leading-relaxed"
-            data-testid="maintenance-message"
-          >
-            {message || t('maintenance.body')}
-          </DialogDescription>
-        </div>
-      </DialogContent>
-    </Dialog>
+    <BlockingNotice
+      open={message !== null}
+      icon="🛠"
+      title={t('maintenance.title')}
+      body={message || t('maintenance.body')}
+      bodyTestId="maintenance-message"
+      multiline
+    />
   );
 }

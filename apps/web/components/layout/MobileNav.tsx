@@ -15,8 +15,7 @@ import { useUiStore, type MobilePanel } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
 import { useChatStore } from '@/stores/chat';
 import { useSetting } from '@/stores/config';
-import { usePinsStore } from '@/stores/pins';
-import { useSearchStore } from '@/stores/search';
+import { FeedActions } from '@/components/layout/FeedActions';
 import { PRESENCE_LABEL_KEY, usePresence } from '@/stores/presence';
 import { CallIconButton } from '@/components/call/CallIconButton';
 import { toggleMic, leaveVoice, showVoiceStage } from '@/lib/voice';
@@ -121,7 +120,6 @@ export function MobileNav() {
   const roster = useChatStore((s) => s.roster);
   const showFingerprints = useSetting<boolean>('people.showFingerprints');
   const typing = useChatStore((s) => s.typing);
-  const pins = usePinsStore((s) => s.count);
 
   // Состав осмыслен только в канале (голос/текст). В лобби вкладку прячем, а
   // если она была активной — считаем активной сцену (иначе пустой экран).
@@ -259,31 +257,8 @@ export function MobileNav() {
           </AnimatePresence>
         </div>
 
-        {/* Поиск живёт в шапке канала — там же, где он на десктопе. На мобиле
-            он откроется во весь экран: делить 375 точек между лентой и
-            результатами не на что. */}
-        {view === 'text' && !people && pins > 0 && (
-          <button
-            type="button"
-            onClick={() => usePinsStore.getState().setOpen(true)}
-            aria-label={t('pins.open')}
-            className="flex h-9 shrink-0 items-center gap-1 rounded-full px-1.5 text-text-muted outline-none transition-colors active:bg-bg-hover active:text-text-header"
-          >
-            <Icon name="pin" className="text-[18px]" />
-            <span className="text-[12px] font-semibold tabular-nums">{pins}</span>
-          </button>
-        )}
-
-        {view === 'text' && !people && (
-          <button
-            type="button"
-            onClick={() => useSearchStore.getState().setOpen(true)}
-            aria-label={t('search.open')}
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-text-muted outline-none transition-colors active:bg-bg-hover active:text-text-header"
-          >
-            <Icon name="search" className="text-[19px]" />
-          </button>
-        )}
+        {/* Закреплённые и поиск — там же, где на десктопе: в шапке ленты. */}
+        {(view === 'text' || view === 'dm') && !people && <FeedActions touch />}
 
         {/* Контекстное действие беседы — звонок (задача 6 плана B); 44px —
             минимум для цели с пальца (кадры `2a`-`2h` референса). */}

@@ -1,7 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
-import { sanitizeNick, type Channel, type VoiceMode, MAIN_SERVER_ID } from '@relay/shared';
+import {
+  NICK_MAX,
+  sanitizeNick,
+  type Channel,
+  type VoiceMode,
+  MAIN_SERVER_ID,
+} from '@relay/shared';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Icon } from '@/components/ui/icon';
 import { Toolbar } from '@/components/layout/Toolbar';
@@ -221,7 +227,6 @@ function Category({
   );
 }
 
-/** Три точки — вход в меню канала (тот же набор, что по правой кнопке). */
 function ChannelRow({
   active,
   connected,
@@ -431,11 +436,6 @@ export function Sidebar() {
   // Список забаненных этого сервера: null — закрыт.
   const [bansTarget, setBansTarget] = useState<BansTarget | null>(null);
 
-  // Управление реестровой записью — по флагу `mine`: сервер считает его под
-  // наш сокет и присылает вместе с реестром (audit B2). Id владельца клиенту
-  // не показывают и сравнивать его не с чем — кнопки рисуем ровно там, где
-  // сервер уже сказал «твоё».
-
   // Занятые эфиры, которых нет ни в одном сервере реестра (напр. канал удалили,
   // пока в нём сидят) — не роняем из виду. Слаги считаем глобально (не по активному
   // серверу), иначе живые каналы других серверов утекли бы сюда как «сироты».
@@ -548,6 +548,10 @@ export function Sidebar() {
             <Icon name="user-x" className="text-[14px]" />
           </button>
         )}
+        {/* Управление реестровой записью — по флагу `mine`: сервер считает его
+            под наш сокет и присылает вместе с реестром. Id владельца клиенту не
+            показывают, и сравнивать его не с чем — кнопки рисуем ровно там, где
+            сервер уже сказал «твоё». */}
         {!isMain && activeServer?.removable && activeServer.mine && (
           <button
             // Удаление необратимо и видно всем — спрашиваем своим диалогом,
@@ -567,7 +571,7 @@ export function Sidebar() {
       {/* Полоса тулбара — здесь, а не выше сайдбара: референс (кадр `2a`) ставит
           её СРАЗУ ПОД именем сервера, и это не вкус. Выше шапки она отодвигала
           имя сервера от верхнего края, а на экране переписок оказывалась над
-          чужим списком, к которому три её цели отношения не имеют. Внутри
+          чужим списком, к которому обе её цели отношения не имеют. Внутри
           сайдбара она живёт ровно там, где нужна, — над каналами, — и на экране
           Direct её нет вовсе (там сайдбара нет: его подменяет DmList). */}
       {mobile && <Toolbar />}
@@ -773,7 +777,7 @@ export function Sidebar() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter') e.currentTarget.blur();
               }}
-              maxLength={20}
+              maxLength={NICK_MAX}
               title={t('user.nick.hint')}
               className="w-full border-0 border-b border-transparent bg-transparent p-0 text-sm font-semibold text-text-header outline-none focus:border-accent"
             />

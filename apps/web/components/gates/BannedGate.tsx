@@ -1,6 +1,6 @@
 'use client';
 
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
+import { BlockingNotice } from '@/components/gates/BlockingNotice';
 import { useIdentityStore } from '@/stores/identity';
 import { useModerationStore } from '@/stores/moderation';
 import { useT } from '@/lib/i18n';
@@ -24,28 +24,15 @@ export function BannedGate() {
   const me = useIdentityStore((s) => s.me);
 
   return (
-    <Dialog open={banned}>
-      <DialogContent
-        className="max-w-[420px]"
-        // Ни Esc, ни клика мимо: закрывать тут нечего — за окном приложение,
-        // которое всё равно не работает.
-        onEscapeKeyDown={(e) => e.preventDefault()}
-        onPointerDownOutside={(e) => e.preventDefault()}
-        onInteractOutside={(e) => e.preventDefault()}
-      >
-        <div className="px-7 pb-6 pt-6 text-center">
-          <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-bg-deep text-2xl">
-            🚫
-          </div>
-          <DialogTitle className="text-xl">{t('moderation.banned.title')}</DialogTitle>
-          <DialogDescription className="mx-auto mt-1.5 max-w-[320px] text-[13px] leading-relaxed">
-            {t('moderation.banned.body')}
-          </DialogDescription>
-          {me?.fingerprint && (
-            <p className="mt-4 font-mono text-[12px] text-text-muted">{me.fingerprint}</p>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
+    <BlockingNotice
+      open={banned}
+      icon="🚫"
+      title={t('moderation.banned.title')}
+      body={t('moderation.banned.body')}
+    >
+      {me?.fingerprint && (
+        <p className="mt-4 font-mono text-[12px] text-text-muted">{me.fingerprint}</p>
+      )}
+    </BlockingNotice>
   );
 }

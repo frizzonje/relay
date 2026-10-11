@@ -13,6 +13,7 @@ import { useIdentityStore } from '@/stores/identity';
 import { useSetting } from '@/stores/config';
 import { useT, type MessageKey } from '@/lib/i18n';
 import { LinkDevicePanel } from '@/components/devices/LinkDevicePanel';
+import { NoticeBody } from '@/components/gates/BlockingNotice';
 
 /**
  * Первый вход. Регистрации нет и быть не может: личность — это ключевая пара,
@@ -202,15 +203,7 @@ function Failure({ failure, onRetry }: { failure: LoginFailure; onRetry: () => v
   const screen = screenFor(failure);
 
   return (
-    <div className="px-7 pb-6 pt-6 text-center">
-      <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-bg-deep text-2xl">
-        🔑
-      </div>
-      <DialogTitle className="text-xl">{t(screen.title)}</DialogTitle>
-      <DialogDescription className="mx-auto mt-1.5 max-w-[320px] text-[13px] leading-relaxed">
-        {t(screen.body)}
-      </DialogDescription>
-
+    <NoticeBody icon="🔑" title={t(screen.title)} body={t(screen.body)}>
       {screen.retry && (
         <Button variant="primary" size="lg" className="mt-5 w-full" onClick={onRetry}>
           {t('identity.retry')}
@@ -226,6 +219,6 @@ function Failure({ failure, onRetry }: { failure: LoginFailure; onRetry: () => v
           {t('identity.fail.gate.action')}
         </Button>
       )}
-    </div>
+    </NoticeBody>
   );
 }
