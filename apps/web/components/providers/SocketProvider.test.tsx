@@ -106,6 +106,7 @@ import { useUiStore } from '@/stores/ui';
 import { useUnreadStore } from '@/stores/unread';
 import { useIdentityStore } from '@/stores/identity';
 import { useRingStore } from '@/stores/ring';
+import { useVoiceStore } from '@/stores/voice';
 
 const slugA = 'dm-aaaaaaaaaaaaaaaaaaaaaaaa';
 const slugB = 'dm-bbbbbbbbbbbbbbbbbbbbbbbb';
@@ -132,6 +133,7 @@ beforeEach(() => {
   socket._handlers.clear();
   socket.connected = false;
   guestToken.value = null;
+  useVoiceStore.setState({ inviteRefused: false });
   useIdentityStore.setState({ me: ME, status: 'in', failure: null, restore: realRestore });
 
   // watching() смотрит и на фокус вкладки — без этого тесты зависели бы от
@@ -616,6 +618,19 @@ describe('дверь пускает только личность', () => {
     expect(socket.connect).toHaveBeenCalledTimes(1);
   });
 
+  // Гостя без личности дверь пускает только по инвайту — значит, «сначала
+  // назовись» на инвайт-странице и есть «приглашение не принято» (подпись
+  // проверяет api: страница ключа владельца не знает). Доказывать ключ тут
+  // незачем: гость пришёл не за личностью, и стук по кругу ничего не изменит.
+  it('гостю отказ двери — это негодное приглашение, а не повод заводить личность', () => {
+    const restore = vi.fn(async () => {});
+    useIdentityStore.setState({ restore });
+    guestToken.value = 'g2.подделка';
+    socket._fire('connect_error', new Error('identity-required'));
+    expect(restore).not.toHaveBeenCalled();
+    expect(useVoiceStore.getState().inviteRefused).toBe(true);
+  });
+
   it('«сначала назовись» — доказываем ключ заново и стучимся снова', async () => {
     vi.useFakeTimers();
     try {
@@ -629,6 +644,29 @@ describe('дверь пускает только личность', () => {
       });
       expect(socket.connect).toHaveBeenCalledTimes(1);
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Провайдер сняли (строгий режим, уход со страницы), пока доказывали ключ:
+  // уборка уже прошла, и таймер, взведённый следом, некому было снять.
+  it('снятый посреди доказательства провайдер потом не стучится', async () => {
+    vi.useFakeTimers();
+    try {
+      let proven!: () => void;
+      const restore = vi.fn(() => new Promise<void>((resolve) => (proven = resolve)));
+      useIdentityStore.setState({ restore });
+      socket._fire('connect_error', new Error('identity-required'));
+      act(() => root.unmount());
+      socket.connect.mockClear();
+      await act(async () => {
+        proven();
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(socket.connect).not.toHaveBeenCalled();
+    } finally {
+      root = createRoot(host);
+      mount();
       vi.useRealTimers();
     }
   });

@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { AUTH_COOKIE, verifyToken } from '@relay/shared';
+import { AUTH_COOKIE, readSiteToken, verifyToken } from '@relay/shared';
 
 /**
  * Гейт доступа (план §7). Без пропуска relay_pass — редирект на /login.
@@ -39,25 +39,15 @@ export async function middleware(req: NextRequest) {
     // (или подписанной новым паролем) кукой не попал бы на страницу входа.
     return ok ? NextResponse.redirect(new URL('/', req.url)) : NextResponse.next();
   }
-  if (ok || unexpired(token)) return NextResponse.next();
+  // Пропуск на руках и не просрочен: срок лежит в токене открыто и читается
+  // без ключа, а годность подписи — вопрос к api.
+  if (ok || readSiteToken(token)) return NextResponse.next();
   return NextResponse.redirect(new URL('/login', req.url));
-}
-
-/**
- * Пропуск на руках и ещё не просрочен. Срок лежит в самом токене открыто
- * (`<exp>.<подпись>`), и прочесть его можно без ключа — а больше здесь ничего
- * и не проверяется: годность подписи — вопрос к api.
- */
-function unexpired(token: string | undefined): boolean {
-  const dot = token ? token.indexOf('.') : -1;
-  if (dot < 0) return false;
-  const exp = Number(token!.slice(0, dot));
-  return Number.isFinite(exp) && exp > Date.now();
 }
 
 export const config = {
   // Пропускаем без проверки: api/*, uploads/* (гейтит Nest), invite/* (гостевой
-  // вход — токен проверяет сама страница), внутренние пути Next (_next/*) и
+  // вход — по своему токену, его подпись проверяет api), внутренние пути Next (_next/*) и
   // любую статику с расширением (точка в пути) — ассеты логина.
   matcher: ['/((?!api/|uploads/|invite/|_next/|.*\\.).*)'],
 };

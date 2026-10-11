@@ -42,7 +42,7 @@ export interface VoiceTile {
   videoOn?: boolean;
   /**
    * Громкость голоса (микрофона) собеседника, 0–2 (1 = 100%). Применяется
-   * к GainNode в lib/voice.ts. У своей плитки не используется.
+   * к GainNode в lib/voice/output.ts. У своей плитки не используется.
    */
   volume?: number;
   /** Громкость звука демонстрации экрана собеседника, 0–2 (1 = 100%). */
@@ -98,7 +98,8 @@ export interface TileSend {
 }
 
 /**
- * Качество P2P-связи с собеседником, снятое с getStats (lib/voice.updatePeerQuality).
+ * Качество связи с собеседником, снятое с getStats (`updatePeerQuality` в
+ * lib/voice/{mesh,sfu}/metrics.ts).
  * Метрики округлены на стороне менеджера, чтобы плитка не перерисовывалась на
  * каждый микроскачок float.
  */
@@ -224,6 +225,11 @@ interface VoiceState {
   listenOnly: boolean;
   /** Нас выгнали из эфира — гостевая сцена показывает это вместо формы входа. */
   kicked: boolean;
+  /**
+   * Дверь не приняла инвайт этой страницы: подпись не сошлась (пароль сменили,
+   * ссылку подделали). Проверяет её api — у страницы ключа нет.
+   */
+  inviteRefused: boolean;
 
   setTiles: (tiles: VoiceTile[]) => void;
   setMedia: (
@@ -283,6 +289,7 @@ export const useVoiceStore = create<VoiceState>((set) => ({
   uplink: 'ok',
   listenOnly: false,
   kicked: false,
+  inviteRefused: false,
 
   setTiles: (tiles) => set({ tiles }),
   setMedia: (m) => set(m),

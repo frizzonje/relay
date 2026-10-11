@@ -1,15 +1,21 @@
 import type { Metadata } from 'next';
-import { verifyGuestToken } from '@relay/shared';
+import { readGuestToken } from '@relay/shared';
 import { GuestStage } from '@/components/stage/GuestStage';
 import { InviteInvalid } from '@/components/stage/InviteInvalid';
+import { decodeOrNull } from '@/lib/decode';
 import { getT } from '@/lib/i18n/server';
 
 /**
  * Гостевой вход по инвайт-ссылке `/invite/<token>`. Middleware пропускает этот
- * путь без куки relay_pass — подпись и срок токена проверяем здесь, на сервере
- * (SITE_PASSWORD есть только у него). Валидный токен → минимальная гостевая
- * сцена (ввод имени → сразу в эфир конкретного войс-канала); битый/протухший →
- * карточка об ошибке. Второй рубеж — socket-handshake на гейтвее.
+ * путь без куки relay_pass. Здесь — только форма и срок токена: подписан он
+ * паролем инсталляции, а тот может жить не в `SITE_PASSWORD`, а в настройках
+ * api (владелец задал его из панели), где фронт его не видит. Проверять подпись
+ * старым ключом значило бы объявить негодной каждую ссылку такой инсталляции.
+ *
+ * Подлинность решает api на socket-handshake — тем же порядком, что и у
+ * пропуска в middleware. Не принял — сцена показывает ту же карточку (см.
+ * `inviteRefused`). Годный по форме токен → гостевая сцена (ввод имени → сразу
+ * в эфир войс-канала); битый/протухший → карточка сразу.
  */
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getT();
@@ -24,10 +30,9 @@ export default async function InvitePage({
   searchParams: Promise<{ l?: string }>;
 }) {
   const { token } = await params;
-  const payload = await verifyGuestToken(
-    decodeURIComponent(token),
-    process.env.SITE_PASSWORD ?? '',
-  );
+  // Обрезанная ссылка с битой кодировкой — такое же негодное приглашение, а не 500.
+  const raw = decodeOrNull(token);
+  const payload = raw && readGuestToken(raw)?.payload;
   if (!payload) return <InviteInvalid />;
 
   // ?l= — косметическое имя канала для приветствия (не подписано, только текст).

@@ -2,15 +2,17 @@
 
 import { useEffect, useState, type FormEvent } from 'react';
 import { motion } from 'framer-motion';
+import { sanitizeNick } from '@relay/shared';
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
 import { Logo } from '@/components/ui/Logo';
 import { NickField } from '@/components/ui/nick-field';
 import { AudioUnlock } from '@/components/stage/AudioUnlock';
+import { InviteInvalid } from '@/components/stage/InviteInvalid';
 import { VideoGrid } from '@/components/stage/VideoGrid';
 import { Controls } from '@/components/layout/Controls';
 import { avatarStyle } from '@/lib/avatar';
-import { loadTag, sanitizeTag, saveTag, suggestTag } from '@/lib/identity';
+import { loadTag, saveTag, suggestTag } from '@/lib/identity';
 import { joinVoice, setListenOnly } from '@/lib/voice';
 import { useUiStore } from '@/stores/ui';
 import { useVoiceStore } from '@/stores/voice';
@@ -41,6 +43,7 @@ export function GuestStage({
   const voiceRoom = useUiStore((s) => s.voiceRoom);
   const status = useVoiceStore((s) => s.status);
   const kicked = useVoiceStore((s) => s.kicked);
+  const refused = useVoiceStore((s) => s.inviteRefused);
 
   const [draft, setDraft] = useState('');
   const [joining, setJoining] = useState(false);
@@ -75,7 +78,7 @@ export function GuestStage({
     return () => clearTimeout(timer);
   }, [exp]);
 
-  const clean = sanitizeTag(draft);
+  const clean = sanitizeNick(draft);
 
   async function join(e?: FormEvent) {
     e?.preventDefault();
@@ -89,6 +92,9 @@ export function GuestStage({
       setJoining(false);
     }
   }
+
+  // Подпись инвайта не принял api: та же карточка, что и на битой ссылке.
+  if (refused) return <InviteInvalid />;
 
   if (inCall) {
     return (

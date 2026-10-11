@@ -15,14 +15,15 @@ import { initHotkeys } from '@/lib/hotkeys';
 import { initDesktopBridge } from '@/lib/desktop';
 import { initFreshness } from '@/lib/freshness';
 import { isNarrowNow } from '@/lib/use-mobile';
-import { useUiStore, myName } from '@/stores/ui';
+import { useUiStore, myName, openFeed } from '@/stores/ui';
 import { useChatStore } from '@/stores/chat';
 import { useUnreadStore, LAST_READ_KEY } from '@/stores/unread';
-import { useDmStore } from '@/stores/dm';
+import { joinDm, useDmStore } from '@/stores/dm';
 import { usePresenceStore } from '@/stores/presence';
 import { useRingStore } from '@/stores/ring';
 import { useChannelsStore } from '@/stores/channels';
 import { useIdentityStore } from '@/stores/identity';
+import { useVoiceStore } from '@/stores/voice';
 import { useContractStore } from '@/stores/contract';
 import { useModerationStore } from '@/stores/moderation';
 import { useConfigStore } from '@/stores/config';
@@ -106,7 +107,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
      * преемственности: до задачи 11 это был единственный вариант, и весь
      * остальной код ниже уже настроен на его приоритет.
      */
-    const openSlug = () => ui().textRoom ?? ui().dmRoom;
+    const openSlug = () => openFeed(ui());
 
     /**
      * Список переписок с сервера. Спрашиваем на каждом connect — так же, как
@@ -528,6 +529,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // без разбора причины человек видел бы вечное «переподключаюсь».
     socket.on('banned', () => useModerationStore.getState().setBanned(true));
     let identityRetry: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
     const onConnectError = (err: Error) => {
       if (err?.message === 'banned') useModerationStore.getState().setBanned(true);
       // Дверь не пустила из-за версии контракта. Сторону сервер называет сам:
@@ -549,7 +551,12 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       // вкладка жила. Сам socket.io после отказа миддлвары не переподключается
       // — доказываем ключ заново и стучимся снова, с паузой: если сервер не
       // узнаёт и свежую сессию, частый стук ничего не изменит.
-      if (err?.message === 'identity-required') {
+      // Гостя без личности дверь пускает только по инвайту, так что на
+      // инвайт-странице «сначала назовись» значит «приглашение не принято».
+      // Личность заводить незачем — гость пришёл не за ней.
+      if (err?.message === 'identity-required' && guestTokenFromLocation()) {
+        useVoiceStore.setState({ inviteRefused: true });
+      } else if (err?.message === 'identity-required') {
         void useIdentityStore
           .getState()
           .restore()
@@ -557,7 +564,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             // Не доказали — экран личности уже объясняет почему, и стучаться
             // с той же бедой незачем.
             const { me, status } = useIdentityStore.getState();
-            if (!me || status === 'failed') return;
+            // Провайдер мог уйти, пока доказывали ключ: уборка уже прошла, и
+            // таймер, взведённый после неё, стучался бы сокетом в никуда.
+            if (disposed || !me || status === 'failed') return;
+            clearTimeout(identityRetry);
             identityRetry = setTimeout(() => {
               if (!socket.connected) socket.connect();
             }, IDENTITY_RETRY_MS);
@@ -607,11 +617,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       if (dmRoom) {
         clearTyping();
         chat().reset();
-        socket.emit('dm-join', { slug: dmRoom }, (res) => {
-          if (res.ok || ui().dmRoom !== dmRoom) return;
-          ui().leaveDm();
-          toast(tx('dm.join.forbidden'));
-        });
+        joinDm(dmRoom);
       }
       // Раздел ЛС открыт — список переписок тоже пережил обрыв только на этой
       // вкладке, сервер о нём знать не обязан.
@@ -687,15 +693,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           // что и у канала: иначе syncWatch ниже перезатрёт только что
           // поставленную линию «новые».
           watched = watching();
-          socket.emit('dm-join', { slug }, (res) => {
-            // Отказали (не сторона беседы) или адрес не существует — а сцена
-            // уже могла уехать дальше, пока шёл ответ: тогда закрывать нечего.
-            if (res.ok || ui().dmRoom !== slug) return;
-            // Та же фигура, что у `chat-closed` ниже: беседа не откроется
-            // никогда, значит держать на ней экран — значит держать пустоту.
-            ui().leaveDm();
-            toast(tx('dm.join.forbidden'));
-          });
+          joinDm(slug);
         } else {
           chat().reset();
           pins().reset();
@@ -750,6 +748,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     if (!socket.connected && (known || guestTokenFromLocation())) socket.connect();
 
     return () => {
+      disposed = true;
       clearTimeout(identityRetry);
       unsub();
       unsubIdentity();

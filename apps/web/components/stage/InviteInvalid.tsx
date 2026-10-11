@@ -1,13 +1,16 @@
+'use client';
+
 import Link from 'next/link';
 import { Logo } from '@/components/ui/Logo';
-import { getT } from '@/lib/i18n/server';
+import { useT } from '@/lib/i18n';
 
 /**
- * Карточка «приглашение недействительно»: битый или протухший инвайт-токен.
- * Серверный компонент — рисуется страницей /invite/[token] без клиентского кода.
+ * Карточка «приглашение недействительно». Рисуют её двое: страница
+ * /invite/[token] — на битом или протухшем токене, и гостевая сцена — когда
+ * подпись не принял api (см. `inviteRefused`).
  */
-export async function InviteInvalid() {
-  const t = await getT();
+export function InviteInvalid() {
+  const t = useT();
   return (
     <main className="relative z-10 grid min-h-dvh place-items-center p-4">
       <div className="panel flex w-full max-w-[420px] flex-col items-center gap-3 rounded-2xl border border-line px-7 py-8 text-center">
