@@ -1,6 +1,6 @@
 'use client';
 
-import { boostVideoBitrate, boostAudioBitrate } from '@/lib/voice/sdp';
+import { boostVideoBitrate, boostAudioBitrate, OPUS_MAX_BITRATE } from '@/lib/voice/sdp';
 import { setting } from '@/stores/config';
 import type { TransportHost } from '../types';
 import { meshScreenEncoding } from '../screen-profile';
@@ -23,8 +23,8 @@ import { describeSender, setSenderParameters } from '../sender-params';
 // ─────────────────────────────────────────────────────────────────────────
 
 // Потолок звука демонстрации (музыка/фильм) — заметно жирнее голоса: там
-// слышно разницу.
-const SCREEN_AUDIO_MAX_BITRATE = 256_000;
+// слышно разницу. Это весь потолок кодека из SDP.
+const SCREEN_AUDIO_MAX_BITRATE = OPUS_MAX_BITRATE;
 
 /**
  * Потолки камеры и голоса выбирает владелец инсталляции

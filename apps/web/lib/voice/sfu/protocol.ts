@@ -8,6 +8,7 @@ import type {
   TransportOptions,
 } from 'mediasoup-client/types';
 import type { SfuConsumer, SfuEvents, SfuMedia, SfuRequests } from '@relay/shared';
+import { OPUS_MAX_BITRATE } from '../sdp';
 
 /**
  * Что чем является на проводе между нами и медиасервером.
@@ -75,7 +76,7 @@ export const MIC_CODEC_OPTIONS = {
 export const SCREEN_AUDIO_CODEC_OPTIONS = {
   opusStereo: true,
   opusFec: true,
-  opusMaxAverageBitrate: 256_000,
+  opusMaxAverageBitrate: OPUS_MAX_BITRATE,
 };
 
 /** Верхний слой simulcast (индекс), он же «дай максимум». */

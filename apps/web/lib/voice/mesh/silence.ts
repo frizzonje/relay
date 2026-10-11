@@ -1,6 +1,7 @@
 'use client';
 
 import type { TransportHost } from '../types';
+import { SILENCE_MS } from '../quality';
 
 /**
  * Сторож односторонней тишины — ровно тот сбой, на который жалуются: `pc` бодро
@@ -17,9 +18,6 @@ import type { TransportHost } from '../types';
  * этом продолжает идти (DTX в SDP выключен принудительно), а собеседника, который
  * не слал звук НИ РАЗУ, отсекает условие `prev.bytes > 0`.
  */
-
-// Связь «есть», а входящего звука нет столько — считаем поломкой и чиним.
-const SILENCE_MS = 8000;
 
 /** Что сторожу нужно знать о собеседнике на этом тике. */
 export interface SilenceProbe {

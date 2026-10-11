@@ -2,7 +2,7 @@
 
 import type { Transport } from 'mediasoup-client/types';
 import type { TransportHost } from '../types';
-import { gradeQuality, pingGrade } from '../quality';
+import { gradeQuality, pingGrade, SILENCE_MS } from '../quality';
 import { createScreenSendMeter } from '../screen-send';
 import { createScreenTelemetry } from '../screen-telemetry';
 import {
@@ -26,11 +26,6 @@ import type { UplinkStatus } from '@/stores/voice';
  * ../stats.ts). Поэтому и предмет один: разведи их по разным местам, и они
  * снова начнут спрашивать `getStats` каждый сам, каждый в свой момент времени.
  */
-
-// Столько молчания входящей дорожки считаем сбоем, а не паузой в разговоре.
-// Порог тот же, что и в mesh: мут у нас — `track.enabled = false`, RTP при этом
-// продолжает идти, так что молчащий собеседник байты всё равно шлёт.
-const SILENCE_MS = 8_000;
 
 /** Отсев пропавших снимков, он же сужение типа: `undefined` из карты сюда не едет. */
 const isSnapshot = (s: StatsSnapshot | undefined): s is StatsSnapshot => s !== undefined;
