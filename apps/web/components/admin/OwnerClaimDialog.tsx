@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -38,6 +38,10 @@ export function OwnerClaimDialog() {
   const close = useOwnerStore((s) => s.close);
   const me = useIdentityStore((s) => s.me);
   const [phase, setPhase] = useState<Phase>({ kind: 'offer' });
+  // Ссылка на экране сейчас. Окно закрыли и открыли другой ссылкой, пока шла
+  // заявка, — ответ про прежнюю не рисуется на новой.
+  const shown = useRef(token);
+  shown.current = token;
 
   useEffect(() => {
     if (token !== null) setPhase({ kind: 'offer' });
@@ -51,8 +55,9 @@ export function OwnerClaimDialog() {
       // Права в этой же вкладке: без этого человек, только что взявший власть,
       // не увидел бы ни одной новой кнопки до перезагрузки страницы.
       await useOwnerStore.getState().refresh();
-      setPhase({ kind: 'done' });
+      if (shown.current === token) setPhase({ kind: 'done' });
     } catch (err) {
+      if (shown.current !== token) return;
       setPhase({ kind: 'failed', reason: err instanceof OwnerError ? err.reason : 'network' });
     }
   }

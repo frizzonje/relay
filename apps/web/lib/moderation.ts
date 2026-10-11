@@ -33,8 +33,12 @@ export async function unban(fingerprint: string, server?: string): Promise<Moder
   return res ?? OFFLINE;
 }
 
-/** Кто забанен в этом охвате. Отказ и обрыв выглядят одинаково: пустой список. */
-export async function listBans(server?: string): Promise<BanEntry[]> {
+/**
+ * Кто забанен в этом охвате; `null` — список не получили (отказ или обрыв).
+ * Пустой список вместо него значил бы «никто не забанен» — и модератор
+ * поверил бы этому про человека, которого банил вчера.
+ */
+export async function listBans(server?: string): Promise<BanEntry[] | null> {
   const res = await request('moderation-bans', { ...(server ? { server } : {}) });
-  return res?.ok ? res.bans : [];
+  return res?.ok ? res.bans : null;
 }

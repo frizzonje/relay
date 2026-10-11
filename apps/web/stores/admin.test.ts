@@ -128,6 +128,35 @@ describe('открытие панели', () => {
     expect(admin().loaded).toBe(false);
   });
 
+  /**
+   * Панель закрыли, пока состояние ехало: `reset` вернул стор к пустому, а
+   * ответ, доехав, вписал бы вчерашний снимок обратно — при следующем
+   * открытии он мелькал бы до свежего, вместе с давно не актуальной ошибкой.
+   */
+  it('ответ, догнавший закрытую панель, в стор не ложится', async () => {
+    const loading = admin().load();
+    admin().reset();
+    replyLast({ ok: true, catalog, values: { [LENGTH]: 500 }, overview });
+    await loading;
+    expect(admin().loaded).toBe(false);
+    expect(admin().catalog).toEqual([]);
+
+    const failing = admin().load();
+    admin().reset();
+    replyLast({ ok: false, error: 'forbidden' });
+    await failing;
+    expect(admin().error).toBeNull();
+  });
+
+  it('список банов, догнавший закрытую панель, в стор не ложится', async () => {
+    const loading = admin().loadBans();
+    admin().reset();
+    replyLast({ ok: true, bans: [{ fingerprint: 'a', nick: 'a', at: '1', by: null }] });
+    await loading;
+    expect(admin().bans).toEqual([]);
+    expect(admin().bansLoaded).toBe(false);
+  });
+
   it('отказ на состояние виден, а не выглядит пустой панелью', async () => {
     const loading = admin().load();
     replyLast({ ok: false, error: 'forbidden' });

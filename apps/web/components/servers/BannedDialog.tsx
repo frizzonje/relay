@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BanEntry } from '@relay/shared';
 import {
   Dialog,
@@ -39,16 +39,23 @@ export function BannedDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const t = useT();
-  const [bans, setBans] = useState<BanEntry[] | null>(null);
+  // undefined — грузим, null — не загрузилось, массив — ответ сервера.
+  const [bans, setBans] = useState<BanEntry[] | null | undefined>(undefined);
   const server = target?.server;
+  // Номер чтения: ответ про прежний сервер (окно закрыли и открыли на другом)
+  // не встаёт в чужой список — разбан из него ушёл бы с чужим охватом.
+  const reads = useRef(0);
 
   const load = useCallback(async () => {
-    setBans(await listBans(server));
+    const mine = ++reads.current;
+    const list = await listBans(server);
+    if (mine === reads.current) setBans(list);
   }, [server]);
 
   useEffect(() => {
+    reads.current += 1;
     if (!target) return;
-    setBans(null);
+    setBans(undefined);
     void load();
   }, [target, load]);
 
@@ -68,8 +75,10 @@ export function BannedDialog({
           <DialogDescription>{t('moderation.bans.body')}</DialogDescription>
         </DialogHeader>
 
-        {bans === null ? (
+        {bans === undefined ? (
           <p className="px-1 py-2 text-[13px] text-text-muted">{t('moderation.bans.loading')}</p>
+        ) : bans === null ? (
+          <p className="px-1 py-2 text-[13px] text-danger">{t('moderation.bans.failed')}</p>
         ) : bans.length === 0 ? (
           <p className="px-1 py-2 text-[13px] text-text-muted">{t('moderation.bans.empty')}</p>
         ) : (

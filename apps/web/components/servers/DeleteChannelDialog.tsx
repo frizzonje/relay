@@ -25,20 +25,20 @@ export function DeleteChannelDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const t = useT();
-  const { stats, busy, setBusy, shown } = useDeletionStats(target, channelStats);
+  const { stats, busy, run, shown } = useDeletionStats(target, channelStats);
 
   const isVoice = shown?.type === 'voice';
   // Занятый эфир — запрет, а не предупреждение (сервер откажет в любом случае).
   const blocked = isVoice && (stats?.occupants ?? 0) > 0;
 
   async function confirm() {
-    if (!target || blocked) return;
-    setBusy(true);
-    const ok = await deleteChannel(target.id);
-    setBusy(false);
+    if (blocked) return;
     // Отказ сервера уже показан тостом (lib/channels) — диалог оставляем
     // открытым, чтобы человек видел, о каком канале речь.
-    if (ok) onOpenChange(false);
+    await run(
+      ({ id }) => deleteChannel(id),
+      () => onOpenChange(false),
+    );
   }
 
   return (

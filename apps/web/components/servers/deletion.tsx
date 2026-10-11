@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useTargetAction } from '@/lib/use-target-action';
 
 /**
  * Общее у удаления канала и сервера. Оба диалога на открытии спрашивают у
@@ -20,12 +21,11 @@ export function useDeletionStats<T extends { id: string }, S>(
   ask: (id: string) => Promise<S | null>,
 ) {
   const [stats, setStats] = useState<S | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { busy, run } = useTargetAction(target);
 
   useEffect(() => {
     if (!target) return;
     setStats(null);
-    setBusy(false);
     let alive = true;
     void ask(target.id).then((s) => {
       if (alive) setStats(s);
@@ -37,7 +37,7 @@ export function useDeletionStats<T extends { id: string }, S>(
 
   const last = useRef<T | null>(null);
   if (target) last.current = target;
-  return { stats, busy, setBusy, shown: target ?? last.current };
+  return { stats, busy, run, shown: target ?? last.current };
 }
 
 /**

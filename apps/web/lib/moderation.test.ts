@@ -105,15 +105,13 @@ describe('список забаненных', () => {
     await expect(promise).resolves.toEqual(bans);
   });
 
-  it('отказ и молчание выглядят одинаково: пустой список', async () => {
-    // Показывать «ошибка» там, где сервер ответил «не твоё», незачем: список и
-    // не должен был открыться, кнопку рисует тот же флаг прав.
+  it('отказ и молчание — «не знаю», а не «никто не забанен»', async () => {
     const refused = listBans('srv');
     reply({ ok: false, error: 'forbidden' });
-    await expect(refused).resolves.toEqual([]);
+    await expect(refused).resolves.toBeNull();
 
     const silent = listBans('srv');
     await vi.advanceTimersByTimeAsync(9000);
-    await expect(silent).resolves.toEqual([]);
+    await expect(silent).resolves.toBeNull();
   });
 });

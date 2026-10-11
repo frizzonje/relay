@@ -31,20 +31,20 @@ export function DeleteServerDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const t = useT();
-  const { stats, busy, setBusy, shown } = useDeletionStats(target, serverStats);
+  const { stats, busy, run, shown } = useDeletionStats(target, serverStats);
 
   // Пока в эфирах сервера кто-то есть — сервер откажет (occupied), и кнопку мы
   // не предлагаем: отключённая с объяснением честнее отказа после клика.
   const blocked = (stats?.occupants ?? 0) > 0;
 
   async function confirm() {
-    if (!target || blocked) return;
-    setBusy(true);
-    const ok = await deleteServer(target.id);
-    setBusy(false);
+    if (blocked) return;
     // Отказ сервера уже показан тостом (lib/servers) — диалог оставляем
     // открытым, чтобы человек видел, о каком сервере речь.
-    if (ok) onOpenChange(false);
+    await run(
+      ({ id }) => deleteServer(id),
+      () => onOpenChange(false),
+    );
   }
 
   return (

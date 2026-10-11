@@ -13,6 +13,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { ChannelNameField } from '@/components/servers/ChannelNameField';
 import { renameChannel } from '@/lib/channels';
+import { useTargetAction } from '@/lib/use-target-action';
 import { useT } from '@/lib/i18n';
 import { useSetting } from '@/stores/config';
 
@@ -38,14 +39,11 @@ export function RenameChannelDialog({
   // держит.
   const nameMaxLength = useSetting<number>('spaces.channelNameMaxLength');
   const [name, setName] = useState('');
-  const [busy, setBusy] = useState(false);
+  const { busy, run } = useTargetAction(target);
 
   // Каждое открытие начинается с текущего имени — его чаще правят, чем меняют.
   useEffect(() => {
-    if (target) {
-      setName(target.name);
-      setBusy(false);
-    }
+    if (target) setName(target.name);
   }, [target]);
 
   const trimmed = name.trim();
@@ -55,11 +53,11 @@ export function RenameChannelDialog({
     e.preventDefault();
     if (!target || !trimmed || busy) return;
     if (unchanged) return onOpenChange(false);
-    setBusy(true);
-    const ok = await renameChannel(target.id, trimmed);
-    setBusy(false);
     // Отказ сервера объясняет тост (lib/channels) — диалог не закрываем.
-    if (ok) onOpenChange(false);
+    await run(
+      ({ id }) => renameChannel(id, trimmed),
+      () => onOpenChange(false),
+    );
   }
 
   // Тип держим и на время закрытия (диалог уезжает с анимацией, а `target`

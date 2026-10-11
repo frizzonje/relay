@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -87,7 +87,12 @@ export function CreateServerDialog({
   const markUnlocked = useServersStore((s) => s.markUnlocked);
   const openCreateChannel = useUiStore((s) => s.openCreateChannel);
 
+  // Сеанс окна: растёт на каждом открытии и закрытии. Ответ, приехавший после
+  // «Отмены» (её «занято» не держит), не переводит человека на сервер и не
+  // зовёт заводить в нём канал — он передумал.
+  const session = useRef(0);
   useEffect(() => {
+    session.current += 1;
     if (open) {
       setName('');
       setEmoji(undefined);
@@ -110,21 +115,25 @@ export function CreateServerDialog({
     const trimmed = name.trim();
     if (!trimmed || !id || busy) return;
     const pw = password.trim();
+    const mine = session.current;
     setBusy(true);
     setError('');
     const res = await createServer({ id, name: trimmed, emoji, password: pw || undefined });
+    // Пропуск создателя сохраняем, даже если окно уже закрыли: сервер заведён,
+    // и без пропуска в свой же закрытый сервер пришлось бы входить паролем.
+    if (res?.ok && pw) {
+      if (res.token) saveUnlockToken(id, res.token);
+      markUnlocked(id);
+    }
+    if (mine !== session.current) return;
     setBusy(false);
     if (!res?.ok) {
       setError(createRefusalText(res?.ok === false ? res : null));
       return;
     }
-    // Создатель знает пароль — сервер сразу считается разблокированным, а
-    // пропуск из ответа доносит это до следующего подключения. Пароль здесь и
+    // Создатель знает пароль — сервер сразу считается разблокированным (выше),
+    // а пропуск из ответа доносит это до следующего подключения. Пароль здесь и
     // заканчивается: в хранилище браузера ему делать нечего (audit S5).
-    if (pw) {
-      if (res.token) saveUnlockToken(id, res.token);
-      markUnlocked(id);
-    }
     setActiveServer(id);
     onOpenChange(false);
     // Пустой сервер сразу зовёт создать первый канал (после закрытия этой модалки).

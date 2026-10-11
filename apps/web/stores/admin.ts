@@ -77,6 +77,12 @@ const confirmed = new Map<string, SettingValue>();
  */
 let peopleGen = 0;
 let auditGen = 0;
+/**
+ * Жизнь панели: растёт на каждом `reset` (панель закрыли). Ответ на состояние
+ * или список банов, догнавший закрытую панель, в стор не ложится — иначе при
+ * следующем открытии мелькал бы вчерашний снимок.
+ */
+let panelLife = 0;
 
 interface AdminState {
   /** Состояние панели приехало. До этого рисовать нечего — каталог с сервера. */
@@ -263,7 +269,9 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
       patch({ error: 'forbidden' });
       return;
     }
+    const life = panelLife;
     const res = await answered(request('admin-state'));
+    if (life !== panelLife) return;
     if (!res.ok) {
       patch({ error: res.error });
       return;
@@ -434,8 +442,10 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
   },
 
   loadBans: async () => {
+    const life = panelLife;
     patch({ bansBusy: true, listError: null });
     const res = await answered(request('admin-bans'));
+    if (life !== panelLife) return;
     if (!res.ok) {
       patch({ bansBusy: false, listError: res.error });
       return;
@@ -555,6 +565,7 @@ export const useAdminStore = create<AdminState>((patch, get) => ({
     confirmed.clear();
     peopleGen += 1;
     auditGen += 1;
+    panelLife += 1;
     patch({ ...initial });
   },
 }));
