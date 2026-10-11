@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useSetting } from '@/stores/config';
+import { decodeOrNull } from '@/lib/decode';
 import {
   DEFAULT_LOCALE,
   LOCALE_COOKIE,
@@ -136,7 +137,7 @@ function syncCurrentLocale(locale: Locale): void {
 function readLocaleCookie(): Locale | null {
   if (typeof document === 'undefined') return null;
   const hit = document.cookie.match(new RegExp(`(?:^|; )${LOCALE_COOKIE}=([^;]*)`));
-  const value = hit?.[1] && decodeURIComponent(hit[1]);
+  const value = hit?.[1] && decodeOrNull(hit[1]);
   return isLocale(value) ? value : null;
 }
 

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { Icon } from '@/components/ui/icon';
+import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { springTab, tabPanel } from '@/lib/motion';
 import { PaneHeader } from '@/components/ui/pane-header';
@@ -62,7 +62,7 @@ const TABS: { id: Tab; label: MessageKey; desktopOnly?: boolean }[] = [
   { id: 'about', label: 'settings.tab.about' },
 ];
 
-/** Стилизованный native <select> с шевроном — общая обёртка для селектов настроек. */
+/** Поле выбора с подписью сверху — строка личных настроек. */
 function SelectField({
   label,
   value,
@@ -79,16 +79,9 @@ function SelectField({
       <span className="mb-1.5 block font-mono text-[11px] uppercase tracking-[0.16em] text-text-faint">
         {label}
       </span>
-      <div className="relative">
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="w-full appearance-none rounded-[10px] border border-line bg-bg-elev py-2.5 pl-3.5 pr-10 text-[14px] text-text outline-none transition focus:border-line-strong"
-        >
-          {children}
-        </select>
-        <Icon name="chevron-down" className="text-[16px]" />
-      </div>
+      <Select value={value} onChange={onChange}>
+        {children}
+      </Select>
     </label>
   );
 }

@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils';
 import { springTab, tabPanel } from '@/lib/motion';
 import { PaneHeader } from '@/components/ui/pane-header';
 import { useT, type MessageKey } from '@/lib/i18n';
+import { translateOr } from '@/lib/i18n/translate';
 import { adminRefusalKey } from '@/lib/refusals';
 import { useAdminStore } from '@/stores/admin';
 import { useOwnerStore } from '@/stores/owner';
@@ -306,7 +307,5 @@ function groupsOf(catalog: SettingSpec[]): SettingGroup[] {
  * лучше пустого места, за которое не взяться.
  */
 function tabName(t: (key: MessageKey) => string, tab: AdminTab): string {
-  const message = (isExtra(tab) ? `admin.tab.${tab}` : `settings.group.${tab}`) as MessageKey;
-  const text = t(message);
-  return text === message ? tab : text;
+  return translateOr(t, isExtra(tab) ? `admin.tab.${tab}` : `settings.group.${tab}`, tab);
 }

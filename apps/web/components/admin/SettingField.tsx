@@ -3,11 +3,12 @@
 import { useEffect, useState } from 'react';
 import type { SettingSpec, SettingValue } from '@relay/shared';
 import { cn } from '@/lib/utils';
-import { Icon } from '@/components/ui/icon';
+import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { fmtBytes } from '@/lib/format';
 import { useT, type MessageKey, type Translate } from '@/lib/i18n';
+import { translateOr } from '@/lib/i18n/translate';
 import { adminRefusalKey } from '@/lib/refusals';
 import { useAdminStore } from '@/stores/admin';
 
@@ -45,16 +46,12 @@ const DEFAULT_BYTE_STEP = 2;
  * человеку нечего прочитать.
  */
 function textOf(t: Translate, key: string, part: 'label' | 'hint'): string {
-  const message = `settings.key.${key}.${part}` as MessageKey;
-  const text = t(message);
-  return text === message ? '' : text;
+  return translateOr(t, `settings.key.${key}.${part}`, '');
 }
 
 /** Название варианта селекта или чипа — тем же способом, что и подпись поля. */
 function optionOf(t: Translate, key: string, option: string): string {
-  const message = `settings.option.${key}.${option}` as MessageKey;
-  const text = t(message);
-  return text === message ? option : text;
+  return translateOr(t, `settings.option.${key}.${option}`, option);
 }
 
 /** Наибольшая единица, в которой размер остаётся целым числом. */
@@ -330,24 +327,13 @@ function SelectControl({
 }) {
   const t = useT();
   return (
-    <div className="relative">
-      <select
-        value={value}
-        aria-label={label}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full appearance-none rounded-[10px] border border-line bg-bg-elev py-2 pl-3.5 pr-10 text-[14px] text-text outline-none transition focus:border-line-strong"
-      >
-        {(spec.options ?? []).map((option) => (
-          <option key={option} value={option}>
-            {optionOf(t, spec.key, option)}
-          </option>
-        ))}
-      </select>
-      <Icon
-        name="chevron-down"
-        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[16px] text-text-muted"
-      />
-    </div>
+    <Select value={value} label={label} onChange={onChange}>
+      {(spec.options ?? []).map((option) => (
+        <option key={option} value={option}>
+          {optionOf(t, spec.key, option)}
+        </option>
+      ))}
+    </Select>
   );
 }
 
@@ -517,29 +503,23 @@ function NumberControl({
         className="w-[140px] rounded-[10px] border border-line bg-bg-elev px-3 py-2 text-[14px] text-text outline-none transition focus:border-line-strong"
       />
       {bytes && (
-        <div className="relative">
-          <select
-            value={BYTE_UNITS[step]}
-            aria-label={t('admin.unit')}
-            onChange={(e) => {
-              const at = BYTE_UNITS.indexOf(e.target.value as (typeof BYTE_UNITS)[number]);
-              if (at < 0) return;
-              setStep(at);
-              commit(draft, at);
-            }}
-            className="appearance-none rounded-[10px] border border-line bg-bg-elev py-2 pl-3 pr-9 text-[14px] text-text outline-none transition focus:border-line-strong"
-          >
-            {BYTE_UNITS.map((unit) => (
-              <option key={unit} value={unit}>
-                {t(`stats.unit.${unit}` as MessageKey)}
-              </option>
-            ))}
-          </select>
-          <Icon
-            name="chevron-down"
-            className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[16px] text-text-muted"
-          />
-        </div>
+        <Select
+          compact
+          value={BYTE_UNITS[step]}
+          label={t('admin.unit')}
+          onChange={(unit) => {
+            const at = BYTE_UNITS.indexOf(unit as (typeof BYTE_UNITS)[number]);
+            if (at < 0) return;
+            setStep(at);
+            commit(draft, at);
+          }}
+        >
+          {BYTE_UNITS.map((unit) => (
+            <option key={unit} value={unit}>
+              {t(`stats.unit.${unit}` as MessageKey)}
+            </option>
+          ))}
+        </Select>
       )}
       {bytes && <span className="text-[12px] text-text-muted">{fmtBytes(value)}</span>}
     </div>

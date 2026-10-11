@@ -2,6 +2,7 @@ import { toast } from 'sonner';
 import { useContextMenuStore, type MenuEntry } from '@/stores/context-menu';
 import { useUiStore } from '@/stores/ui';
 import { tx } from '@/lib/i18n';
+import { decodeOrNull } from '@/lib/decode';
 
 /**
  * Своё контекстное меню вместо меню движка.
@@ -234,6 +235,12 @@ function linkEntries(a: HTMLAnchorElement): MenuEntry[] {
   ];
 }
 
+/** Имя файла по адресу картинки: последний сегмент, раскодированный, если получится. */
+function defaultImageName(src: string): string {
+  const last = src.split('/').pop() || 'image';
+  return decodeOrNull(last) ?? last;
+}
+
 /** Пункты картинки: сохранить (как у вложений — <a download>) и адрес. */
 function imageEntries(img: HTMLImageElement): MenuEntry[] {
   const src = img.currentSrc || img.src;
@@ -245,7 +252,7 @@ function imageEntries(img: HTMLImageElement): MenuEntry[] {
       run: () => {
         const a = document.createElement('a');
         a.href = src;
-        a.download = img.dataset.filename || decodeURIComponent(src.split('/').pop() || 'image');
+        a.download = img.dataset.filename || defaultImageName(src);
         a.rel = 'noopener';
         document.body.appendChild(a);
         a.click();

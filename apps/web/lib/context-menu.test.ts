@@ -78,6 +78,23 @@ describe('targetEntries', () => {
     expect(ids(targetEntries(img, ''))).toEqual(['img-save', 'img-copy-link']);
   });
 
+  it('«сохранить» картинку с битой кодировкой в имени не бросает — имя берётся как есть', () => {
+    const img = mount(document.createElement('img'));
+    img.src = 'https://overhype.tech/uploads/%E0%A4.png';
+    const save = targetEntries(img, '').find((e) => e.id === 'img-save') as { run: () => void };
+    let saved = '';
+    const click = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) {
+      saved = this.download;
+    };
+    try {
+      expect(() => save.run()).not.toThrow();
+    } finally {
+      HTMLAnchorElement.prototype.click = click;
+    }
+    expect(saved).toBe('%E0%A4.png');
+  });
+
   it('картинка внутри ссылки и выделение — три группы через разделители', () => {
     const a = mount(document.createElement('a'));
     a.href = 'https://overhype.tech/uploads/cat.png';

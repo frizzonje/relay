@@ -165,9 +165,11 @@ describe('отказы сервера объясняются человеку', 
 });
 
 describe('переименование', () => {
-  it('имя режется до 32 символов ещё на клиенте', async () => {
-    const p = renameChannel('ch-1', 'и'.repeat(100));
-    expect((emit.mock.calls[0][1] as { name: string }).name).toHaveLength(32);
+  // Потолок — настройка инсталляции (до 64), и режет по ней сервер. Своё
+  // число на клиенте обрезало бы имя короче, чем разрешил владелец.
+  it('клиент не режет имя своим числом', async () => {
+    const p = renameChannel('ch-1', ` ${'и'.repeat(50)} `);
+    expect((emit.mock.calls[0][1] as { name: string }).name).toBe('и'.repeat(50));
     reply({ ok: true });
     expect(await p).toBe(true);
   });
@@ -224,10 +226,10 @@ describe('смена транспорта канала', () => {
 });
 
 describe('создание сервера', () => {
-  it('имя обрезается, пустой пароль не превращается в закрытый сервер', () => {
-    void createServer({ id: 'srv-2', name: '  и'.repeat(40), password: '' });
+  it('имя без пробелов по краям, пустой пароль не превращается в закрытый сервер', () => {
+    void createServer({ id: 'srv-2', name: `  ${'и'.repeat(50)}  `, password: '' });
     expect(emit.mock.calls[0][1]).toMatchObject({ id: 'srv-2', password: undefined });
-    expect((emit.mock.calls[0][1] as { name: string }).name.length).toBeLessThanOrEqual(32);
+    expect((emit.mock.calls[0][1] as { name: string }).name).toBe('и'.repeat(50));
   });
 
   it('без id или имени не отправляется', async () => {

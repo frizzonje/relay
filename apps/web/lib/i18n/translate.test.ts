@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Messages } from './translate';
-import { translate } from './translate';
+import { translate, translateOr } from './translate';
 import { matchLocale, parseAcceptLanguage, type Locale } from './config';
 
 // The real dictionaries grow every day; these tests describe the engine, so
@@ -91,5 +91,19 @@ describe('types', () => {
     const locale: Locale = 'en';
     expect(Object.keys(dict)).toHaveLength(2);
     expect(locale).toBe('en');
+  });
+});
+
+describe('translateOr', () => {
+  const t = (key: string) => translate('en', key);
+
+  it('a key the dictionary knows is translated', () => {
+    expect(translateOr(t, 'plain', 'x')).toBe('Hello');
+  });
+
+  it('a key built from newer server data falls back instead of showing itself', () => {
+    expect(translateOr(t, 'admin.audit.action.from-the-future', 'from-the-future')).toBe(
+      'from-the-future',
+    );
   });
 });

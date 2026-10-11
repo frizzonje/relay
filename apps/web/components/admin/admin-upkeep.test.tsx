@@ -383,6 +383,35 @@ describe('вкладка «Обслуживание»', () => {
     expect(testid('admin-owner-link')).toBeNull();
   });
 
+  it('буфер закрыт — ссылку выделяют для ручного копирования, а не пишут «скопировано»', async () => {
+    const token = 'A'.repeat(43);
+    await render(<UpkeepTab />);
+
+    click(testid('admin-action-owner-link'));
+    confirmWith(en['admin.upkeep.owner-link.apply']);
+    await answer('admin-action', {
+      ok: true,
+      action: 'owner-link',
+      link: { token, expiresAt: Date.now() + 24 * HOUR },
+    });
+
+    const field = testid('admin-owner-link')!.querySelector('input') as HTMLInputElement;
+    const link = ownerLink('http://localhost:3000', token);
+
+    writeText.mockRejectedValue(new Error('blocked'));
+    click(testid('admin-owner-link-copy'));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(testid('admin-owner-link-copy')!.textContent).toBe(en['admin.upkeep.owner-link.copy']);
+    // Ссылка выделена целиком — Ctrl/Cmd+C возьмёт ровно её.
+    expect([field.selectionStart, field.selectionEnd]).toEqual([0, link.length]);
+
+    click(testid('admin-owner-link-hide'));
+    expect(testid('admin-owner-link')).toBeNull();
+  });
+
   it('импорт перечисляет отвергнутое, а не только применённое', async () => {
     await render(<UpkeepTab />);
 

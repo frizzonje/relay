@@ -63,6 +63,16 @@ function resolve(messages: Messages, key: string, vars: Vars | undefined, locale
  * Core lookup: locale dictionary → English → the key itself. Returning the key
  * keeps the UI usable (and makes the gap obvious) when a translation is missing.
  */
+/**
+ * Перевод ключа, собранного из данных (`settings.key.<ключ>.label`, имя
+ * действия журнала): такого ключа в словаре может не оказаться — сервер новее
+ * клиента. Тогда — `fallback`, а не сам ключ строкой на экране.
+ */
+export function translateOr(t: (key: MessageKey) => string, key: string, fallback: string): string {
+  const text = t(key as MessageKey);
+  return text === key ? fallback : text;
+}
+
 export function translate(locale: Locale, key: MessageKey | string, vars?: Vars): string {
   const own = resolve(messagesFor(locale), key, vars, locale);
   if (own !== undefined) return interpolate(own, vars);

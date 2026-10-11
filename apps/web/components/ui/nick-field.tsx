@@ -1,5 +1,6 @@
 'use client';
 
+import { NICK_MAX } from '@relay/shared';
 import { useT } from '@/lib/i18n';
 import type { MessageKey } from '@/lib/i18n/translate';
 
@@ -31,7 +32,7 @@ export function NickField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={t(placeholder)}
-        maxLength={24}
+        maxLength={NICK_MAX}
         autoFocus
         spellCheck={false}
         autoComplete="off"

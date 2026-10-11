@@ -8,6 +8,9 @@ import { readStoredJson, writeStoredJson } from '@/lib/storage';
 
 const HOSTS_KEY = 'relay-hosts';
 
+/** Подпись хоста длиннее не помещается в подсказку рейки. */
+export const HOST_LABEL_MAX = 24;
+
 export interface RemoteHost {
   /** Origin инсталляции: https://relay.example.com */
   url: string;

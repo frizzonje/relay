@@ -22,7 +22,9 @@ export async function createServer(server: {
   emoji?: string;
   password?: string;
 }): Promise<ServerCreateResult | null> {
-  const name = server.name.trim().slice(0, 32);
+  // Потолок длины — настройка `spaces.channelNameMaxLength`: его держит поле
+  // ввода, а режет сервер. Своё число здесь резало бы короче, чем разрешено.
+  const name = server.name.trim();
   if (!server.id || !name) return { ok: false, error: 'bad-name' };
   const res = await request('server-create', {
     id: server.id,

@@ -13,6 +13,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
 import { request } from '@/lib/request';
+import { copyText } from '@/lib/context-menu';
 import { useT } from '@/lib/i18n';
 
 type InviteState =
@@ -57,14 +58,13 @@ export function InviteDialog({
   }, [target]);
 
   async function copy(url: string) {
-    try {
-      await navigator.clipboard.writeText(url);
+    if (await copyText(url)) {
       toast(t('invite.copied'));
-    } catch {
-      // Буфер недоступен (http/старый браузер) — выделяем текст для ручного Cmd+C.
-      inputRef.current?.select();
-      toast(t('invite.copyManually'));
+      return;
     }
+    // Буфер недоступен (http/старый браузер) — выделяем текст для ручного Cmd+C.
+    inputRef.current?.select();
+    toast(t('common.copyLinkManually'));
   }
 
   return (

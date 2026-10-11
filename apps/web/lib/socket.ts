@@ -5,6 +5,7 @@ import {
   type ServerToClientEvents,
 } from '@relay/shared';
 import { loadClientId } from '@/lib/identity';
+import { decodeOrNull } from '@/lib/decode';
 import { loadUnlockTokens } from '@/lib/unlock-tokens';
 
 export type RelaySocket = Socket<ServerToClientEvents, ClientToServerEvents>;
@@ -25,14 +26,9 @@ let socket: RelaySocket | null = null;
 export function guestTokenFromLocation(): string | null {
   if (typeof window === 'undefined') return null;
   const m = /^\/invite\/([^/]+)/.exec(window.location.pathname);
-  if (!m) return null;
-  try {
-    return decodeURIComponent(m[1]);
-  } catch {
-    // Битая кодировка (обрезанная ссылка) — токена нет: вызывают из провайдера
-    // сокета и запроса конфига, бросок отсюда ронял бы страницу целиком.
-    return null;
-  }
+  // Битая кодировка (обрезанная ссылка) — токена нет: вызывают из провайдера
+  // сокета и запроса конфига, бросок отсюда ронял бы страницу целиком.
+  return m ? decodeOrNull(m[1]) : null;
 }
 
 export function getSocket(): RelaySocket {

@@ -10,7 +10,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { hostLabel, isCurrentHost, normalizeHostUrl } from '@/lib/hosts';
+import { HOST_LABEL_MAX, hostLabel, isCurrentHost, normalizeHostUrl } from '@/lib/hosts';
 import { useHostsStore } from '@/stores/hosts';
 import { useRichT, useT } from '@/lib/i18n';
 import type { MessageKey } from '@/lib/i18n';
@@ -53,7 +53,10 @@ export function AddHostDialog({
       setError('addHost.error.current');
       return;
     }
-    addHost({ url: origin, ...(label.trim() ? { label: label.trim().slice(0, 24) } : {}) });
+    addHost({
+      url: origin,
+      ...(label.trim() ? { label: label.trim().slice(0, HOST_LABEL_MAX) } : {}),
+    });
     onOpenChange(false);
   }
 
@@ -116,7 +119,7 @@ export function AddHostDialog({
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               placeholder={preview ? hostLabel({ url: preview }) : t('addHost.label.placeholder')}
-              maxLength={24}
+              maxLength={HOST_LABEL_MAX}
               className="w-full rounded-lg border border-black/40 bg-bg-deep/70 px-3 py-2.5 text-[15px] text-text outline-none placeholder:text-text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent/60"
             />
           </div>

@@ -1,9 +1,11 @@
 'use client';
 
 import { useRef, useState, type ReactNode } from 'react';
+import { toast } from 'sonner';
 import { ownerLink, type AdminAction, type AdminImportRejection } from '@relay/shared';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { cn } from '@/lib/utils';
+import { copyText } from '@/lib/context-menu';
 import { useT, type MessageKey, type Translate } from '@/lib/i18n';
 import { adminRefusalKey, type AdminFieldError } from '@/lib/refusals';
 import { useAdminStore } from '@/stores/admin';
@@ -252,6 +254,7 @@ function Rejected({ t, items }: { t: Translate; items: AdminImportRejection[] })
 function OwnerLink({ issued, onHide }: { issued: Issued; onHide: () => void }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
+  const linkField = useRef<HTMLInputElement>(null);
   const link = ownerLink(typeof window === 'undefined' ? '' : window.location.origin, issued.token);
 
   return (
@@ -262,6 +265,7 @@ function OwnerLink({ issued, onHide }: { issued: Issued; onHide: () => void }) {
       <p className="text-[12px] leading-relaxed text-text">{t('admin.upkeep.owner-link.warn')}</p>
       <div className="mt-2 flex items-center gap-1.5">
         <input
+          ref={linkField}
           readOnly
           value={link}
           onFocus={(e) => e.currentTarget.select()}
@@ -270,13 +274,16 @@ function OwnerLink({ issued, onHide }: { issued: Issued; onHide: () => void }) {
         <button
           type="button"
           data-testid="admin-owner-link-copy"
-          onClick={() => {
-            void navigator.clipboard?.writeText(link).then(
-              () => setCopied(true),
-              // Буфер может быть закрыт политикой браузера. Молчать нельзя:
-              // человек уйдёт, думая, что скопировал, — а ключа больше нет.
-              () => setCopied(false),
-            );
+          onClick={async () => {
+            if (await copyText(link)) {
+              setCopied(true);
+              return;
+            }
+            // Буфер может быть закрыт политикой браузера. Молчать нельзя:
+            // человек уйдёт, думая, что скопировал, — а ключа больше нет.
+            setCopied(false);
+            linkField.current?.select();
+            toast(t('common.copyLinkManually'));
           }}
           className="shrink-0 rounded-[6px] border border-line-strong bg-bg-active px-2.5 py-1.5 text-[12px] text-text outline-none transition-colors hover:bg-line-strong"
         >

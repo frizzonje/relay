@@ -1,3 +1,4 @@
+import { sanitizeNick } from '@relay/shared';
 import { randomCallsign } from '@/lib/avatar';
 import { readStored, writeStored } from '@/lib/storage';
 
@@ -21,18 +22,6 @@ const CID_KEY = 'relay-cid';
 // loadClientId), а не новый на каждый вызов.
 let ephemeralClientId = '';
 
-/** Приводим ввод к чистому тегу: убираем ведущий @, пробелы→дефис, режем мусор. */
-export function sanitizeTag(raw: string): string {
-  return raw
-    .replace(/^@+/, '')
-    .trim()
-    .replace(/\s+/g, '-')
-    .replace(/[^\p{L}\p{N}_-]/gu, '')
-    .replace(/-{2,}/g, '-')
-    .replace(/^-+/, '')
-    .slice(0, 20);
-}
-
 export function loadTag(): string {
   return (readStored(TAG_KEY) ?? '').trim();
 }
@@ -43,7 +32,7 @@ export function saveTag(tag: string): void {
 
 /** Случайный тег-подсказка при первом выборе. */
 export function suggestTag(): string {
-  return sanitizeTag(randomCallsign());
+  return sanitizeNick(randomCallsign());
 }
 
 /**

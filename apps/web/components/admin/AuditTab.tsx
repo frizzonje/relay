@@ -6,6 +6,7 @@ import { Icon } from '@/components/ui/icon';
 import { Identicon } from '@/components/ui/Identicon';
 import { fmtDayTime, shortFingerprint } from '@/lib/format';
 import { useT, type MessageKey, type Translate } from '@/lib/i18n';
+import { translateOr } from '@/lib/i18n/translate';
 import { adminRefusalKey } from '@/lib/refusals';
 import { useAdminStore } from '@/stores/admin';
 
@@ -111,7 +112,7 @@ function Row({ entry }: { entry: AuditEntry }) {
           <span className="font-medium">
             {entry.system ? t('admin.audit.system') : entry.actorNick}
           </span>{' '}
-          <span className="text-text-muted">{t(actionKey(entry.action))}</span>
+          <span className="text-text-muted">{actionName(t, entry.action)}</span>
         </div>
         {entry.target && (
           <div className="truncate font-mono text-[11px] tracking-[0.04em] text-text-faint">
@@ -130,8 +131,8 @@ function Row({ entry }: { entry: AuditEntry }) {
  * Название действия. Незнакомое — это сервер новее клиента: показываем машинное
  * имя, потому что пустое место в журнале хуже непонятного слова.
  */
-function actionKey(action: string): MessageKey {
-  return `admin.audit.action.${action}` as MessageKey;
+function actionName(t: (key: MessageKey) => string, action: string): string {
+  return translateOr(t, `admin.audit.action.${action}`, action);
 }
 
 /**

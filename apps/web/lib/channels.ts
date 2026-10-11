@@ -87,9 +87,12 @@ export async function deleteChannel(id: string): Promise<boolean> {
   return false;
 }
 
-/** Переименовать канал (имя, не адрес). Пустое имя не отправляем вовсе. */
+/**
+ * Переименовать канал (имя, не адрес). Пустое имя не отправляем вовсе; длину
+ * режет сервер по настройке `spaces.channelNameMaxLength`, как и при создании.
+ */
 export async function renameChannel(id: string, name: string): Promise<boolean> {
-  const trimmed = name.trim().slice(0, 32);
+  const trimmed = name.trim();
   if (!id || !trimmed) return false;
   const res = await request('channel-rename', { id, name: trimmed });
   if (res?.ok) return true;
