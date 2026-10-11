@@ -1,4 +1,10 @@
-import { certificateMessage, isPublicKey, type OwnDevice, type PairOffer } from '@relay/shared';
+import {
+  certificateMessage,
+  fingerprint,
+  isPublicKey,
+  type OwnDevice,
+  type PairOffer,
+} from '@relay/shared';
 import { SignerError, getSigner, type Signer } from './signer';
 import { apiUrl } from './api-url';
 
@@ -101,9 +107,24 @@ export async function askPairing(): Promise<{ code: string; expiresIn: number }>
   return (await post('/api/identity/pair/ask')) as { code: string; expiresIn: number };
 }
 
-/** Что стоит за кодом — до всякого подтверждения. */
+/**
+ * Что стоит за кодом — до всякого подтверждения. Отпечаток считаем сами из
+ * присланного ключа: человек сверяет глазами его, а подписывает ключ, и
+ * расходиться им нельзя — иначе ответ сервера мог бы показать лицо своего
+ * устройства над чужим ключом.
+ */
 export async function peekPairing(code: string): Promise<PairOffer> {
-  return (await ask(`/api/identity/pair/${encodeURIComponent(code)}`)) as PairOffer;
+  const offer = (await ask(
+    `/api/identity/pair/${encodeURIComponent(code)}`,
+  )) as Partial<PairOffer> | null;
+  const publicKey = offer?.publicKey;
+  if (!isPublicKey(publicKey)) throw new DeviceError('bad-signature');
+  return {
+    publicKey,
+    fingerprint: await fingerprint(publicKey),
+    deviceName: typeof offer?.deviceName === 'string' ? offer.deviceName : '',
+    expiresIn: typeof offer?.expiresIn === 'number' ? offer.expiresIn : 0,
+  };
 }
 
 /**

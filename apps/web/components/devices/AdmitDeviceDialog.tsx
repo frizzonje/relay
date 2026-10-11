@@ -45,14 +45,21 @@ export function AdmitDeviceDialog() {
   const identityId = useIdentityStore((s) => s.me?.id);
   const [phase, setPhase] = useState<Phase>({ kind: 'entry' });
   const [draft, setDraft] = useState('');
+  // Номер вопроса к серверу. Растёт на каждом открытии и каждом новом вопросе:
+  // ответ про прежний код (окно закрыли и открыли другой ссылкой) не встаёт
+  // под новый — подтвердить чужое устройство, глядя на свой экран, нельзя.
+  const asked = useRef(0);
 
   const look = useCallback(async (raw: string) => {
     const clean = readPairCode(raw);
     if (!clean) return;
+    const mine = ++asked.current;
     setPhase({ kind: 'looking' });
     try {
-      setPhase({ kind: 'found', code: clean, offer: await peekPairing(clean) });
+      const offer = await peekPairing(clean);
+      if (mine === asked.current) setPhase({ kind: 'found', code: clean, offer });
     } catch (err) {
+      if (mine !== asked.current) return;
       setPhase({ kind: 'failed', reason: err instanceof DeviceError ? err.reason : 'network' });
     }
   }, []);
@@ -60,6 +67,7 @@ export function AdmitDeviceDialog() {
   // Открылись — начинаем с чистого листа. Код из ссылки проверяем сразу: он уже
   // введён человеком, просто не руками.
   useEffect(() => {
+    asked.current += 1;
     if (code === null) return;
     setDraft('');
     setPhase({ kind: 'entry' });
@@ -68,12 +76,15 @@ export function AdmitDeviceDialog() {
 
   async function admit() {
     if (phase.kind !== 'found' || !identityId) return;
+    const mine = ++asked.current;
     setPhase({ kind: 'admitting', code: phase.code, offer: phase.offer });
     try {
       await admitDevice(phase.code, identityId, phase.offer.publicKey);
-      setPhase({ kind: 'done' });
+      // Устройство впущено, даже если окно уже закрыли: об этом — тостом.
       toast(t('pair.admit.done'));
+      if (mine === asked.current) setPhase({ kind: 'done' });
     } catch (err) {
+      if (mine !== asked.current) return;
       setPhase({ kind: 'failed', reason: err instanceof DeviceError ? err.reason : 'network' });
     }
   }
@@ -219,6 +230,10 @@ function Scanner({ onFound, onGiveUp }: { onFound: (text: string) => void; onGiv
   const t = useT();
   const video = useRef<HTMLVideoElement>(null);
   const [denied, setDenied] = useState(false);
+  // Обработчик — в ссылке, а не в зависимостях эффекта: родитель передаёт
+  // новую функцию на каждой отрисовке, и каждая перезапрашивала бы камеру.
+  const found = useRef(onFound);
+  found.current = onFound;
 
   useEffect(() => {
     let stream: MediaStream | null = null;
@@ -229,10 +244,16 @@ function Scanner({ onFound, onGiveUp }: { onFound: (text: string) => void; onGiv
       try {
         // Задняя камера: код показывают на другом экране, и снимают его именно
         // ею. Это пожелание, а не требование — ноутбук отдаст единственную.
-        stream = await navigator.mediaDevices.getUserMedia({
+        const granted = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'environment' },
         });
-        if (!alive || !video.current) return;
+        // Пока висел вопрос о камере, сканер успели закрыть: уборка уже прошла,
+        // и поток, выданный следом, кроме нас остановить некому.
+        if (!alive || !video.current) {
+          granted.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        stream = granted;
         video.current.srcObject = stream;
         await video.current.play().catch(() => {});
         const detector = new (
@@ -246,9 +267,14 @@ function Scanner({ onFound, onGiveUp }: { onFound: (text: string) => void; onGiv
           if (busy || !video.current) return;
           busy = true;
           try {
-            const found = await detector.detect(video.current).catch(() => []);
-            const text = found[0]?.rawValue;
-            if (alive && text) onFound(text);
+            const codes = await detector.detect(video.current).catch(() => []);
+            const text = codes[0]?.rawValue;
+            if (!alive || !text || !readPairCode(text)) return;
+            // Код прочитан — дальше его проверяет сервер; кадры, на которых он
+            // ещё виден, задавали бы тот же вопрос каждые 300 мс. Чужой QR
+            // (не код связки) сканер не останавливает.
+            if (timer) clearInterval(timer);
+            found.current(text);
           } finally {
             busy = false;
           }
@@ -264,7 +290,7 @@ function Scanner({ onFound, onGiveUp }: { onFound: (text: string) => void; onGiv
       if (timer) clearInterval(timer);
       stream?.getTracks().forEach((track) => track.stop());
     };
-  }, [onFound]);
+  }, []);
 
   if (denied) {
     return (

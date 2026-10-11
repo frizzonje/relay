@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { certificateMessage } from '@relay/shared';
-import { DeviceError, admitDevice, askPairing, listDevices, revokeDevice } from './devices';
+import { certificateMessage, fingerprint } from '@relay/shared';
+import {
+  DeviceError,
+  admitDevice,
+  askPairing,
+  listDevices,
+  peekPairing,
+  revokeDevice,
+} from './devices';
 import type { Signer } from './signer';
 
 /**
@@ -97,6 +104,38 @@ describe('просьба о связке', () => {
   it('пожившая личность узнаёт об этом сразу, а не после подтверждения', async () => {
     server({ '/api/identity/pair/ask': { status: 400, body: { error: 'has-history' } } });
     await expect(askPairing()).rejects.toMatchObject({ reason: 'has-history' });
+  });
+});
+
+describe('что стоит за кодом', () => {
+  /**
+   * Человек сверяет глазами отпечаток, а подписывает ключ. Отпечаток, который
+   * прислал сервер, а не посчитали мы из того же ключа, мог бы показать лицо
+   * своего устройства над чужим ключом — и подпись отдала бы личность.
+   */
+  it('отпечаток считается из ключа, а не берётся из ответа', async () => {
+    server({
+      '/api/identity/pair/428913': {
+        body: {
+          publicKey: KEY,
+          fingerprint: '0000-0000-0000-0000',
+          deviceName: 'iPad',
+          expiresIn: 1,
+        },
+      },
+    });
+    const offer = await peekPairing('428913');
+    expect(offer.fingerprint).toBe(await fingerprint(KEY));
+    expect(offer.publicKey).toBe(KEY);
+  });
+
+  it('вместо ключа мусор — это не предложение', async () => {
+    server({
+      '/api/identity/pair/428913': {
+        body: { publicKey: 'не-ключ', fingerprint: 'x', deviceName: 'iPad', expiresIn: 1 },
+      },
+    });
+    await expect(peekPairing('428913')).rejects.toMatchObject({ reason: 'bad-signature' });
   });
 });
 

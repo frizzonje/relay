@@ -89,8 +89,18 @@ export function LinkDevicePanel({ onClose }: { onClose?: () => void }) {
       if (busy) return;
       busy = true;
       try {
-        const me = await whoAmI().catch(() => null);
+        let me: Awaited<ReturnType<typeof whoAmI>>;
+        try {
+          me = await whoAmI();
+        } catch {
+          // Сеть моргнула или сервер ответил 5xx — это не «никто», а «не
+          // знаю»: спросим на следующем круге, а не объявим связку.
+          return;
+        }
         if (!alive) return;
+        // Личность на момент открытия могла ещё не доехать — тогда первая
+        // успешная сверка её и задаёт.
+        before.current ??= me?.id;
         if (me && me.id === before.current) return;
         alive = false;
         setPhase({ kind: 'linked' });
