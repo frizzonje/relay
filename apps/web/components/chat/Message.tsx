@@ -109,8 +109,8 @@ function ReplyQuote({ reply, onJump }: { reply: ReplyRef; onJump: () => void }) 
 /**
  * Инлайн-правка прямо по тексту сообщения — без отдельного окна. Редактируем
  * сам абзац (contentEditable), так что текст правится «на месте». Enter —
- * сохранить, Esc — отмена. Лимит 500 стережём на вводе (у contentEditable нет
- * maxLength).
+ * сохранить, Esc — отмена. Лимит — тот же `messages.maxLength`, что у поля
+ * ввода, и стережём его на вводе: у contentEditable нет maxLength.
  */
 function EditBox({
   initial,
@@ -122,6 +122,7 @@ function EditBox({
   onCancel: () => void;
 }) {
   const t = useT();
+  const maxLength = useSetting<number>('messages.maxLength');
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = ref.current;
@@ -151,8 +152,9 @@ function EditBox({
 
   function onInput() {
     const el = ref.current;
-    if (el && (el.textContent?.length ?? 0) > 500) {
-      el.textContent = el.textContent!.slice(0, 500);
+    const text = el?.textContent ?? '';
+    if (el && text.length > maxLength) {
+      el.textContent = text.slice(0, maxLength);
       const sel = window.getSelection();
       const range = document.createRange();
       range.selectNodeContents(el);

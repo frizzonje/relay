@@ -6,6 +6,7 @@ import { DM_PEOPLE_LIMIT, type DmPerson } from '@relay/shared';
 import { PeoplePicker } from './PeoplePicker';
 import { shortFingerprint } from '@/lib/format';
 import { usePresenceStore } from '@/stores/presence';
+import { useUiStore } from '@/stores/ui';
 
 /**
  * `request` — единственная дверь наружу у `PeoplePicker` (dm-people, dm-open).
@@ -224,5 +225,55 @@ describe('выбор собеседника', () => {
     await advance(0);
 
     expect(host.textContent).not.toContain(ghost.nick);
+  });
+  /**
+   * «Открыть беседу» — запрос к серверу. Пока он летит, панель могли закрыть
+   * или выбрать другого человека: поздний ответ не должен открывать беседу,
+   * от которой отказались, и не должен перебивать последний выбор.
+   */
+  it('ответ на выбор после закрытия панели беседу не открывает', async () => {
+    const p = person({});
+    const open = deferred<unknown>();
+    askMock
+      .mockResolvedValueOnce({ ok: true, people: [p] })
+      .mockImplementationOnce(() => open.promise);
+    useUiStore.setState({ dmRoom: null, dmPeer: null, view: 'lobby', stageLive: false });
+
+    renderPicker(true);
+    await advance(0);
+    await flush();
+    act(() => (host.querySelector('[role="button"]') as HTMLElement).click());
+
+    renderPicker(false);
+    open.resolve({ ok: true, conversation: { slug: 'dm-late', peer: p, lastTs: 0 } });
+    await flush();
+
+    expect(useUiStore.getState().dmRoom).toBeNull();
+  });
+
+  it('из двух быстрых выборов побеждает последний, а не последний ответ', async () => {
+    const a = person({});
+    const b = person({ fingerprint: '1111-2222-3333-4444', nick: 'Игорь' });
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    askMock
+      .mockResolvedValueOnce({ ok: true, people: [a, b] })
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    useUiStore.setState({ dmRoom: null, dmPeer: null, view: 'lobby', stageLive: false });
+
+    renderPicker(true);
+    await advance(0);
+    await flush();
+    const rows = host.querySelectorAll('[role="button"]');
+    act(() => (rows[0] as HTMLElement).click());
+    act(() => (rows[1] as HTMLElement).click());
+
+    second.resolve({ ok: true, conversation: { slug: 'dm-b', peer: b, lastTs: 0 } });
+    await flush();
+    first.resolve({ ok: true, conversation: { slug: 'dm-a', peer: a, lastTs: 0 } });
+    await flush();
+
+    expect(useUiStore.getState().dmRoom).toBe('dm-b');
   });
 });

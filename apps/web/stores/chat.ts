@@ -33,13 +33,20 @@ interface ChatState {
    * поиска, иногда вместе со сменой канала.
    */
   jump: string | null;
+  /**
+   * Номер ленты. Растёт на каждой её замене целиком — сброс, свежая история,
+   * окно поиска. Страница «ещё» спрашивается без канала (сервер берёт его из
+   * комнаты сокета) и несёт номер ленты, для которой её просили: страница
+   * сменённой ленты отбрасывается, а не ложится в новую.
+   */
+  feed: number;
   reset: () => void;
   addMessage: (m: ChatMessage) => void;
   setHistory: (list: ChatMessage[], more: boolean) => void;
   /** Страница сверху: приезжает при подгрузке вверх. */
-  prependHistory: (list: ChatMessage[], more: boolean) => void;
+  prependHistory: (list: ChatMessage[], more: boolean, feed: number) => void;
   /** Страница снизу — только когда лента стоит в прошлом. */
-  appendHistory: (list: ChatMessage[], moreAfter: boolean) => void;
+  appendHistory: (list: ChatMessage[], moreAfter: boolean, feed: number) => void;
   /** Окно вокруг найденного: заменяет ленту целиком, «ещё» с обеих сторон. */
   setWindow: (list: ChatMessage[], more: boolean, moreAfter: boolean) => void;
   setJump: (id: string | null) => void;
@@ -64,8 +71,10 @@ export const useChatStore = create<ChatState>((set) => ({
   moreAfter: false,
   loadingAfter: false,
   jump: null,
+  feed: 0,
   reset: () =>
-    set({
+    set((s) => ({
+      feed: s.feed + 1,
       messages: [],
       roster: [],
       typing: [],
@@ -74,7 +83,7 @@ export const useChatStore = create<ChatState>((set) => ({
       moreAfter: false,
       loadingAfter: false,
       jump: null,
-    }),
+    })),
   // Новая реплика в ленту, стоящую в прошлом, не попадает: она не «следующая»
   // за показанным, между ними лежит непрогруженное. Ждать её человеку не надо —
   // канал у него не заканчивается на видимом, о чём и говорит `moreAfter`.
@@ -82,26 +91,36 @@ export const useChatStore = create<ChatState>((set) => ({
   // Живая последняя страница — это и есть «вернулись к последним»: ни низа за
   // горизонтом, ни цели перехода, которой в новой ленте может уже не быть.
   setHistory: (list, more) =>
-    set({
+    set((s) => ({
+      feed: s.feed + 1,
       messages: list,
       more,
       loadingMore: false,
       moreAfter: false,
       loadingAfter: false,
       jump: null,
-    }),
-  appendHistory: (list, moreAfter) =>
+    })),
+  appendHistory: (list, moreAfter, feed) =>
     set((s) => {
+      if (feed !== s.feed) return s;
       const known = new Set(s.messages.map((m) => m.id));
       const fresh = list.filter((m) => !m.id || !known.has(m.id));
       return { messages: [...s.messages, ...fresh], moreAfter, loadingAfter: false };
     }),
   setWindow: (list, more, moreAfter) =>
-    set({ messages: list, more, moreAfter, loadingMore: false, loadingAfter: false }),
+    set((s) => ({
+      feed: s.feed + 1,
+      messages: list,
+      more,
+      moreAfter,
+      loadingMore: false,
+      loadingAfter: false,
+    })),
   setJump: (id) => set({ jump: id }),
   setLoadingAfter: (value) => set({ loadingAfter: value }),
-  prependHistory: (list, more) =>
+  prependHistory: (list, more, feed) =>
     set((s) => {
+      if (feed !== s.feed) return s;
       // Страница могла обогнать удаление или прийти дважды по двойному клику:
       // склеиваем по id, а не по длине.
       const known = new Set(s.messages.map((m) => m.id));

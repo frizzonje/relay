@@ -1,6 +1,10 @@
 import { create } from 'zustand';
 import { request } from '@/lib/request';
+import { getSocket } from '@/lib/socket';
 import type { DmActivityRelay, DmConversation } from '@relay/shared';
+import { toast } from 'sonner';
+import { tx } from '@/lib/i18n';
+import { useUiStore } from './ui';
 import { useUnreadStore } from './unread';
 
 /**
@@ -224,4 +228,20 @@ export function unreadIn(slug: string): boolean {
   const ts = useDmStore.getState().activity[slug] ?? 0;
   const lastRead = useUnreadStore.getState().lastRead[slug] ?? 0;
   return ts > lastRead;
+}
+
+/**
+ * Войти в беседу — подписать сокет на её ленту. Отказ (не сторона беседы,
+ * адреса нет) значит, что она не откроется никогда: экран с неё уводим — если
+ * человек к ответу ещё на ней.
+ *
+ * Без срока, мимо `request` (см. его комментарий): вход, отправленный при
+ * лежащем сокете, обязан уйти на реконнекте, а срок выкинул бы его из буфера.
+ */
+export function joinDm(slug: string): void {
+  getSocket().emit('dm-join', { slug }, (res) => {
+    if (!res || res.ok || useUiStore.getState().dmRoom !== slug) return;
+    useUiStore.getState().leaveDm();
+    toast(tx('dm.join.forbidden'));
+  });
 }

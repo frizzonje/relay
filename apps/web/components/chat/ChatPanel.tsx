@@ -17,15 +17,15 @@ import { getSocket } from '@/lib/socket';
 import { request } from '@/lib/request';
 import { notifySent } from '@/lib/notify';
 import { useRetention } from '@/lib/use-sfu';
-import { useUiStore } from '@/stores/ui';
+import { myName, openFeed, useUiStore } from '@/stores/ui';
 import { useChannelsStore } from '@/stores/channels';
 import { useChatStore } from '@/stores/chat';
+import { joinDm } from '@/stores/dm';
 import { useSetting } from '@/stores/config';
 import { useOwnerStore } from '@/stores/owner';
 import { useServersStore } from '@/stores/servers';
 import { useUnreadStore } from '@/stores/unread';
 import { useSearchStore } from '@/stores/search';
-import { myName } from '@/stores/ui';
 import { BanAuthorDialog, type BanTarget } from '@/components/chat/BanAuthorDialog';
 import { DeleteMessageDialog } from '@/components/chat/DeleteMessageDialog';
 import { Message, UnreadDivider } from '@/components/chat/Message';
@@ -140,7 +140,7 @@ export function ChatPanel() {
   // про Scene) ровно затем, чтобы остальной каркас различал их смысл — состав,
   // реестр каналов, шапка. Ленте это различие ни к чему: ей нужен только сам
   // адрес, `room`, взамен обеих полей, обнулённых на любой сцене, кроме своей.
-  const room = textRoom ?? dmRoom;
+  const room = openFeed({ textRoom, dmRoom });
   const pendingScene = useUiStore((s) => s.pendingScene);
   const commitScene = useUiStore((s) => s.commitScene);
   const callsign = useUiStore((s) => s.callsign);
@@ -314,12 +314,19 @@ export function ChatPanel() {
     const top = state.messages[0];
     if (!el || !state.more || state.loadingMore || !top?.id) return;
 
+    const { feed } = state;
     state.setLoadingMore(true);
     anchorHeight.current = el.scrollHeight;
     const page = await request('chat-history-more', {
       beforeTs: top.ts,
       beforeId: top.id,
     });
+    if (useChatStore.getState().feed !== feed) {
+      // Лента сменилась, пока страница летела: и она, и якорь прокрутки — от
+      // прежней, а флаг загрузки новая лента завела свой.
+      anchorHeight.current = null;
+      return;
+    }
     if (!page) {
       // Ответа не дождались — не врём, что история кончилась: пусть попробует
       // ещё раз, прокрутив ленту.
@@ -327,7 +334,7 @@ export function ChatPanel() {
       useChatStore.getState().setLoadingMore(false);
       return;
     }
-    useChatStore.getState().prependHistory(page.messages, page.more);
+    useChatStore.getState().prependHistory(page.messages, page.more, feed);
   }
 
   /**
@@ -340,16 +347,18 @@ export function ChatPanel() {
     const bottom = state.messages[state.messages.length - 1];
     if (!state.moreAfter || state.loadingAfter || !bottom?.id) return;
 
+    const { feed } = state;
     state.setLoadingAfter(true);
     const page = await request('chat-history-after', {
       afterTs: bottom.ts,
       afterId: bottom.id,
     });
+    if (useChatStore.getState().feed !== feed) return;
     if (!page) {
       useChatStore.getState().setLoadingAfter(false);
       return;
     }
-    useChatStore.getState().appendHistory(page.messages, page.moreAfter);
+    useChatStore.getState().appendHistory(page.messages, page.moreAfter, feed);
   }
 
   /**
@@ -362,7 +371,7 @@ export function ChatPanel() {
     if (useChatStore.getState().moreAfter && room) {
       // Переспросить канал — тот же вход, каким он открывается; у беседы это
       // `dm-join`, а не `chat-join` (см. комментарий у `room` выше).
-      if (dmRoom) getSocket().emit('dm-join', { slug: dmRoom }, () => {});
+      if (dmRoom) joinDm(dmRoom);
       else if (textRoom) getSocket().emit('chat-join', { room: textRoom, name: myName() });
       pinnedFor.current = null;
       setHasNew(false);
@@ -472,8 +481,8 @@ export function ChatPanel() {
   async function send(e: React.FormEvent) {
     e.preventDefault();
     if (!room) return;
-    const t = text.trim();
-    if (!t && pending.length === 0) return;
+    const body = text.trim();
+    if (!body && pending.length === 0) return;
     // Отклик на Enter — сразу, а не после загрузки вложений: подтверждать
     // действие через две секунды поздно, человек к тому времени уже сомневается,
     // ушло ли оно.
@@ -483,30 +492,42 @@ export function ChatPanel() {
     // Из выбранного в подсказке уезжает только то, чьё имя осталось в тексте.
     // Сервер проверит это же ещё раз — здесь мы просто не отправляем заведомо
     // лишнего, а не «доверяем клиенту».
-    const named = writtenIn(t, picked.current).map((p) => p.fingerprint);
+    const named = writtenIn(body, picked.current).map((p) => p.fingerprint);
     picked.current = [];
     setPending([]);
     setText('');
     setReply(null);
     setMentionToken(null);
 
-    // Ответ вешаем на текстовое сообщение; если текста нет — на первый файл.
-    for (let i = 0; i < files.length; i++) {
-      const p = files[i];
-      const useReply = !t && i === 0 ? replyId : undefined;
-      await uploadAndSend(p, useReply);
-      if (p.previewUrl) URL.revokeObjectURL(p.previewUrl);
+    // Реплика без адреса: сервер кладёт её в ту комнату, где сокет сейчас.
+    // Пока грузятся файлы, человек мог уйти в другой канал или беседу — и
+    // остаток сообщения уехал бы туда, другим людям. Такой остаток не шлём.
+    const feed = openFeed(useUiStore.getState());
+    const left = () => openFeed(useUiStore.getState()) !== feed;
+    let sent = 0;
+    try {
+      // Ответ вешаем на текстовое сообщение; если текста нет — на первый файл.
+      for (; sent < files.length && !left(); sent++) {
+        const useReply = !body && sent === 0 ? replyId : undefined;
+        await uploadAndSend(files[sent], useReply, left);
+      }
+    } finally {
+      for (const p of files) if (p.previewUrl) URL.revokeObjectURL(p.previewUrl);
     }
-    if (t) {
+    if (left()) {
+      if (sent < files.length || body) toast.error(t('chat.upload.leftFeed'));
+      return;
+    }
+    if (body) {
       getSocket().emit('chat-message', {
-        text: t,
+        text: body,
         ...(replyId ? { replyTo: replyId } : {}),
         ...(named.length ? { mentions: named } : {}),
       });
     }
   }
 
-  async function uploadAndSend(p: PendingFile, replyToId?: string) {
+  async function uploadAndSend(p: PendingFile, replyToId: string | undefined, left: () => boolean) {
     if (!room) return;
     setUploading(true);
     try {
@@ -519,6 +540,7 @@ export function ChatPanel() {
       });
       if (!res.ok) throw new Error(`upload failed: ${res.status}`);
       const att = (await res.json()) as UploadResponse;
+      if (left()) return;
       getSocket().emit('chat-message', {
         uploadId: att.id,
         ...(p.spoiler ? { spoiler: true } : {}),

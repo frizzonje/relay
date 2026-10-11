@@ -298,7 +298,7 @@ describe('лента чата', () => {
 
   it('страница снизу склеивается по id, а не по длине', () => {
     s().setWindow([msg('1'), msg('2')], false, true);
-    s().appendHistory([msg('2'), msg('3')], false);
+    s().appendHistory([msg('2'), msg('3')], false, s().feed);
     expect(s().messages.map((m) => m.id)).toEqual(['1', '2', '3']);
     expect(s().moreAfter).toBe(false);
   });

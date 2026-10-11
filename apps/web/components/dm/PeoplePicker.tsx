@@ -139,6 +139,8 @@ export function PeoplePicker({
    * тот же приём в stores/search.ts).
    */
   const seqRef = useRef(0);
+  /** Номер выбора собеседника: ответ на обогнанный выбор беседу не открывает. */
+  const chooseRef = useRef(0);
 
   // Открыли — курсор сразу в поле поиска, список стерт: прошлый выбор больше
   // ни при чём. Закрыли — сбрасываем всё, чтобы следующее открытие не мигнуло
@@ -152,6 +154,7 @@ export function PeoplePicker({
       // ответ приходит уже после него. Так же поступает и stores/search.ts,
       // когда поле опустело.
       seqRef.current += 1;
+      chooseRef.current += 1;
       setQuery('');
       setPeople([]);
       setAsked(false);
@@ -181,9 +184,13 @@ export function PeoplePicker({
   }, [open, query]);
 
   async function choose(person: DmPerson) {
+    // Пока сервер заводит беседу, панель могли закрыть или выбрать другого:
+    // открыть стоит только последний выбор, сделанный в открытой панели.
+    const mine = (chooseRef.current += 1);
     const res = await request('dm-open', { fingerprint: person.fingerprint });
     if (!res?.ok) return;
     useDmStore.getState().remember(res.conversation);
+    if (mine !== chooseRef.current) return;
     useUiStore.getState().openDm(res.conversation.slug, person.fingerprint, person.nick);
     onOpenChange(false);
   }

@@ -292,6 +292,13 @@ export const targetView = (s: UiState): ShellView => sceneTarget(s).view;
 /** Текстовый канал, к которому мы идём (`null` — уходим из текста). */
 export const targetRoom = (s: UiState): string | null => sceneTarget(s).textRoom;
 
+/**
+ * Адрес открытой ленты — канал или беседа, одно из двух. По нему сокет держит
+ * комнату чата, и реплика без адреса уходит именно туда.
+ */
+export const openFeed = (s: Pick<UiState, 'textRoom' | 'dmRoom'>): string | null =>
+  s.textRoom ?? s.dmRoom;
+
 /** Имя для сокета/чата — пустой тег превращаем в «Аноним» (как myName()). */
 export function myName(): string {
   return useUiStore.getState().callsign.trim() || tx('common.anonymous');
