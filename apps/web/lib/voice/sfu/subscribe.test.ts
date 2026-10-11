@@ -272,4 +272,24 @@ describe('дорожка кончилась, пока на неё подписы
     expect(old.close).toHaveBeenCalled();
     expect(subscriber.entries().map((e) => e.consumer)).toEqual([current]);
   });
+  /**
+   * Пересборка транспортов (ступень 2 лестницы) переподписывает то, что уже
+   * слушали. Подписка, бывшая в полёте, в этот список не попадала: её
+   * транспорт закрыт, ответ ей не придёт, а новая на ту же дорожку упиралась
+   * в «уже подписываемся» — человек молчал до конца звонка.
+   */
+  it('пересборка забирает и подписки в полёте — их можно подписать заново', async () => {
+    const { gate, open } = held();
+    const { subscriber, transport } = setup({ gate });
+    subscriber.addPeer('a', 'Аня');
+    const stale = subscriber.consume('a', info('a', 'mic'));
+    const again = subscriber.detachInFlight();
+    expect(again.map(({ peerId, info: i }) => [peerId, i.id])).toEqual([['a', 'a:mic']]);
+    const fresh = subscriber.consume('a', info('a', 'mic'));
+    open();
+    await Promise.all([stale, fresh]);
+    const [old, current] = await Promise.all(transport.consume.mock.results.map((r) => r.value));
+    expect(old.close).toHaveBeenCalled();
+    expect(subscriber.entries().map((e) => e.consumer)).toEqual([current]);
+  });
 });

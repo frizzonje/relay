@@ -206,3 +206,90 @@ describe('кодировщик трансляции', () => {
     vi.unstubAllGlobals();
   });
 });
+
+/**
+ * Публикация — запрос к медиасерверу, и пока он летит, роль успевают снять:
+ * камеру выключили, показ остановили, транспорт разобрали на пересборке.
+ * `closeProducer` и `closeAll` видят только уже опубликованное, так что
+ * доехавший следом producer ложился в живые — у зрителей висел замёрзший кадр
+ * выключенной камеры, а сервер держал его до следующей сверки.
+ */
+describe('публикация, которую сняли на лету', () => {
+  function setup() {
+    const cam = { kind: 'video', readyState: 'live' } as unknown as MediaStreamTrack;
+    const mic = { kind: 'audio', readyState: 'live' } as unknown as MediaStreamTrack;
+    let video: MediaStreamTrack | null = cam;
+    const releases: Array<() => void> = [];
+    const made: Array<{ id: string; close: ReturnType<typeof vi.fn> }> = [];
+    const produce = vi.fn(
+      async (opts: { track: MediaStreamTrack; appData: { source: string } }) => {
+        await new Promise<void>((r) => releases.push(r));
+        const producer = {
+          id: `p-${opts.appData.source}-${made.length}`,
+          kind: opts.track.kind,
+          track: opts.track,
+          closed: false,
+          rtpParameters: { codecs: [{ mimeType: 'x' }] },
+          replaceTrack: vi.fn(async () => {}),
+          close: vi.fn(),
+        };
+        made.push(producer);
+        return producer;
+      },
+    );
+    const ask = vi.fn(async () => null);
+    const host = {
+      localStream: () => ({ getAudioTracks: () => [mic] }),
+      screenAudioTrack: () => null,
+      videoTrack: () => video,
+      screenOn: () => false,
+      diag: vi.fn(),
+    } as unknown as TransportHost;
+    const publisher = createPublisher({
+      host,
+      sendTransport: () => ({ produce }) as unknown as Transport,
+      device: () => ({ canProduce: () => true }) as unknown as Device,
+      ask,
+    });
+    return {
+      publisher,
+      produce,
+      ask,
+      made,
+      mic,
+      camOff: () => (video = null),
+      release: () => releases.shift()?.(),
+    };
+  }
+
+  it('камеру выключили, пока она публиковалась, — producer закрыт и у сервера', async () => {
+    const { publisher, produce, ask, made, camOff, release } = setup();
+    const on = publisher.syncVideo();
+    await vi.waitFor(() => expect(produce).toHaveBeenCalledTimes(1));
+    camOff();
+    await publisher.syncVideo();
+    release();
+    await on;
+
+    expect(publisher.count()).toBe(0);
+    expect(made[0].close).toHaveBeenCalled();
+    expect(ask).toHaveBeenCalledWith('close-producer', { producerId: made[0].id });
+  });
+
+  it('транспорт разобрали посреди публикации — следующая публикуется заново, а не ждёт мёртвую', async () => {
+    const { publisher, produce, made, mic, release } = setup();
+    const first = publisher.replaceMic(mic);
+    await vi.waitFor(() => expect(produce).toHaveBeenCalledTimes(1));
+    publisher.closeAll();
+
+    const second = publisher.replaceMic(mic);
+    await vi.waitFor(() => expect(produce).toHaveBeenCalledTimes(2));
+    release();
+    release();
+    await Promise.all([first, second]);
+
+    expect(made[0].close).toHaveBeenCalled();
+    expect(made[1].close).not.toHaveBeenCalled();
+    expect(publisher.count()).toBe(1);
+  });
+});

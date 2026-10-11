@@ -64,6 +64,11 @@ export interface Subscriber {
   peerIds(): string[];
   nameOf(peerId: string): string | undefined;
   entries(): ConsumerEntry[];
+  /**
+   * Пересборка приёма: подписки в полёте брошены — их транспорт закрыт, ответа
+   * не будет, а доехавшая закроется сама. Возвращает, на что подписаться заново.
+   */
+  detachInFlight(): { peerId: string; info: SfuProducerInfo }[];
   /** Крупный план сменился — перекладываем слои simulcast. */
   setFocus(id: string | null): void;
   /**
@@ -108,7 +113,7 @@ export function createSubscriber({
   // `consumers` появляется только после двух ожиданий, и проверка по ней
   // пропускает обе: сервер послушно отдаёт копию. По дорожке — чья она и
   // жетон попытки.
-  const consuming = new Map<string, { peerId: string; attempt: object }>();
+  const consuming = new Map<string, { peerId: string; info: SfuProducerInfo; attempt: object }>();
   // Попытки, чья дорожка кончилась, пока они шли: собеседник закрыл её или
   // ушёл, приём разобрали. Среди живых подписки ещё нет — закрывать было
   // нечего, — и доехавшая попытка обязана закрыться сама, а не лечь туда
@@ -333,7 +338,7 @@ export function createSubscriber({
         return;
       }
       const attempt = {};
-      consuming.set(info.id, { peerId, attempt });
+      consuming.set(info.id, { peerId, info, attempt });
       let c: ConsumerPayload;
       let consumer: Consumer;
       try {
@@ -502,6 +507,13 @@ export function createSubscriber({
     },
 
     sayTileState,
+
+    detachInFlight() {
+      const again = [...consuming.values()].map(({ peerId, info }) => ({ peerId, info }));
+      abandon(() => true);
+      consuming.clear();
+      return again;
+    },
 
     clear() {
       pending.length = 0;

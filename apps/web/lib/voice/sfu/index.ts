@@ -302,14 +302,18 @@ export function createSfuTransport(host: TransportHost): VoiceTransport {
     // через несколько ожиданий, и разобрать звонок за это время успевают.
     const session = sock;
     const stale = () => sock !== session;
-    const wanted = subscriber.entries().map((entry) => ({
-      peerId: entry.peerId,
-      info: {
-        id: entry.producerId,
-        kind: entry.consumer.kind,
-        source: entry.source,
-      } as SfuProducerInfo,
-    }));
+    const wanted = [
+      ...subscriber.entries().map((entry) => ({
+        peerId: entry.peerId,
+        info: {
+          id: entry.producerId,
+          kind: entry.consumer.kind,
+          source: entry.source,
+        } as SfuProducerInfo,
+      })),
+      // Подписки в полёте умрут вместе со старым приёмом — их тоже заново.
+      ...subscriber.detachInFlight(),
+    ];
     for (const entry of subscriber.entries()) subscriber.dropConsumer(entry.producerId);
     publisher.closeAll();
     for (const transport of [sendTransport, recvTransport]) {

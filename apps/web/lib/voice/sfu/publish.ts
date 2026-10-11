@@ -115,6 +115,16 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
   // проверку «уже течёт»: сервер оставлял вторую, а первая так и кодировалась
   // у нас сиротой — для экрана это двойная нагрузка на процессор и аплинк.
   const inflight = new Map<SfuSource, Promise<boolean>>();
+  // Публикация — запрос к медиасерверу, и пока он летит, роль успевают снять
+  // (`closeProducer`: камеру выключили, показ остановили) или разобрать всё
+  // (`closeAll`: пересборка, выход). Снятие видит только опубликованное, поэтому
+  // каждая публикация несёт номер жизни своей роли и номер эпохи транспорта:
+  // доехавшая после снятия закрывается сразу, а не ложится в живые замёрзшим
+  // кадром у зрителей.
+  const lives = new Map<SfuSource, number>();
+  let epoch = 0;
+  type Ticket = { life: number; epoch: number };
+  const ticketOf = (source: SfuSource): Ticket => ({ life: lives.get(source) ?? 0, epoch });
   // Что реально уходит с трансляции — по слоям, в серверный лог.
   const telemetry = createScreenTelemetry((event, detail) => host.diag(event, detail));
 
@@ -127,16 +137,21 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
       if (live && live.track !== track) await live.replaceTrack({ track }).catch(() => {});
       return !!live;
     }
-    const run = produceNow(source, track);
+    const run = produceNow(source, track, ticketOf(source));
     inflight.set(source, run);
     try {
       return await run;
     } finally {
-      inflight.delete(source);
+      // Снятие роли уже могло освободить место следующей публикации.
+      if (inflight.get(source) === run) inflight.delete(source);
     }
   }
 
-  async function produceNow(source: SfuSource, track: MediaStreamTrack): Promise<boolean> {
+  async function produceNow(
+    source: SfuSource,
+    track: MediaStreamTrack,
+    ticket: Ticket,
+  ): Promise<boolean> {
     const transport = sendTransport();
     const dev = device();
     if (!transport || !dev) {
@@ -168,18 +183,19 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
     // кадром до следующей сверки.
     if (track.readyState === 'ended') return false;
     if (codec) {
-      const ok = await produceWith(source, track, codec);
+      const ok = await produceWith(source, track, ticket, codec);
       if (ok) return true;
       // H264 не поднялся (движок передумал, отказал кодировщик) — трансляция
       // важнее кодека: уходим, как раньше, на умолчании.
       host.diag('sfu produce fallback', `${source} ${codec.mimeType} → default`);
     }
-    return produceWith(source, track);
+    return produceWith(source, track, ticket);
   }
 
   async function produceWith(
     source: SfuSource,
     track: MediaStreamTrack,
+    ticket: Ticket,
     codec?: RtpCodecCapability,
   ): Promise<boolean> {
     const transport = sendTransport();
@@ -219,6 +235,16 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
             ? { codecOptions: screenCodecOptions(host.screenProfile()) }
             : {}),
       });
+      if (ticket.epoch !== epoch) {
+        // Транспорт разобран: сервер забыл его вместе с producer'ами.
+        producer.close();
+        return false;
+      }
+      if (ticket.life !== (lives.get(source) ?? 0) || track.readyState === 'ended') {
+        producer.close();
+        void ask('close-producer', { producerId: producer.id });
+        return false;
+      }
       producers.set(source, producer);
       // Какой кодек реально согласовали — виден в консоли обеих сторон и на
       // сервере. По нему сразу ясно, что ушло (video/VP8, video/H264…), а не
@@ -248,6 +274,8 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
 
   /** Закрыть свой producer и сказать серверу — иначе он останется висеть. */
   function closeProducer(source: SfuSource) {
+    lives.set(source, (lives.get(source) ?? 0) + 1);
+    inflight.delete(source);
     const producer = producers.get(source);
     if (!producer) return;
     producers.delete(source);
@@ -342,6 +370,8 @@ export function createPublisher({ host, sendTransport, device, ask }: PublishDep
     },
 
     closeAll() {
+      epoch += 1;
+      inflight.clear();
       producers.forEach((p) => p.close());
       producers.clear();
     },

@@ -577,10 +577,14 @@ export const VideoTile = memo(function VideoTile({
         // при этом продолжает играть новый поток. Показывать из-за него «браузер
         // заглушил звук» значит врать в лицо.
         if ((err as { name?: string })?.name !== 'NotAllowedError') return;
-        if (!tile.isLocal) useAudioUnlockStore.getState().show();
+        // Отказ мог догнать плитку, которая уже показывает другой поток.
+        if (!tile.isLocal && video.srcObject === stream) useAudioUnlockStore.getState().show();
       });
     }
     if (!stream) {
+      // Поток ушёл — не держим его в элементе: иначе декодер жил бы дальше и
+      // последний кадр оставался под заглушкой.
+      video.srcObject = null;
       setHasVideo(false);
       return;
     }
@@ -594,11 +598,15 @@ export const VideoTile = memo(function VideoTile({
       setVideoRes(vt && h ? `${h}p` : null);
       setQuality(vt ? 'tile.quality.video' : 'tile.quality.audio');
     };
-    // addEventListener вместо onX — не перебиваем обработчики voice.ts (onended и др.)
+    // addEventListener вместо onX — не перебиваем обработчики lib/voice (onended и др.).
+    // Дорожки живут дольше плитки (поток держит стор голоса), поэтому каждую
+    // подписку запоминаем и снимаем в уборке.
+    const TRACK_EVENTS = ['mute', 'unmute', 'ended'] as const;
+    const watched = new Set<MediaStreamTrack>();
     const watchTrack = (t: MediaStreamTrack) => {
-      t.addEventListener('mute', refresh);
-      t.addEventListener('unmute', refresh);
-      t.addEventListener('ended', refresh);
+      if (watched.has(t)) return;
+      watched.add(t);
+      for (const name of TRACK_EVENTS) t.addEventListener(name, refresh);
     };
     stream.getTracks().forEach(watchTrack);
 
@@ -622,6 +630,8 @@ export const VideoTile = memo(function VideoTile({
     refresh();
 
     return () => {
+      for (const t of watched)
+        for (const name of TRACK_EVENTS) t.removeEventListener(name, refresh);
       stream.removeEventListener('addtrack', handleAddTrack);
       stream.removeEventListener('removetrack', refresh);
       video.removeEventListener('loadedmetadata', refresh);

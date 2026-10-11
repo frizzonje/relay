@@ -190,19 +190,27 @@ export function createMetrics({
       if (!inRoom()) return;
       const table = peers();
       const { snaps, sends } = await collect(table);
+      // Пока ждали `getStats`, звонок могли покинуть — цифрам некуда ехать.
+      if (!inRoom()) return;
       sendMeter.report(mergeSendVideo(sends), ![...table.keys()].some((id) => receivesScreen(id)));
       updatePing(table, snaps);
       // Палочки — до сторожа: сторож чинит связь, и после его ступени снимок
       // этого тика описывал бы соединение, которого уже нет.
       updatePeerQuality(table, snaps);
 
-      const probes = [...table].map(([id, peer]) => ({
-        id,
-        name: peer.name,
-        pc: peer.pc,
-        connected: peer.connected,
-        audioBytesRecv: snaps.get(id)?.audioBytesRecv ?? null,
-      }));
+      // Собеседника за то же время могли пересобрать новым pc. Снимок старого
+      // новому соединению не годится: сторож тишины записал бы ему чужой
+      // счётчик байтов и «чинил» здоровую связь.
+      const live = peers();
+      const probes = [...table]
+        .filter(([id, peer]) => live.get(id)?.pc === peer.pc)
+        .map(([id, peer]) => ({
+          id,
+          name: peer.name,
+          pc: peer.pc,
+          connected: peer.connected,
+          audioBytesRecv: snaps.get(id)?.audioBytesRecv ?? null,
+        }));
       for (const { peerId, fix } of silence.check(probes)) repair(peerId, fix);
     },
 

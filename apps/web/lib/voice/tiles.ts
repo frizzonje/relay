@@ -79,6 +79,16 @@ export function tileOf(peerId: string): VoiceTile | undefined {
 const PEER_VOL_MAX = 3;
 type PeerVol = { voice?: number; screen?: number };
 
+/** Уровень в пределах ползунка. */
+const clampVol = (v: number) => Math.max(0, Math.min(PEER_VOL_MAX, v));
+
+/**
+ * Записанный уровень — данные снаружи: настройка едет с сервера, её писали и
+ * прежние версии. Не число — записи нет; число вне ползунка — к его краю.
+ */
+const savedLevel = (v: unknown): number | undefined =>
+  typeof v === 'number' && Number.isFinite(v) ? clampVol(v) : undefined;
+
 function loadPeerVols(): Record<string, PeerVol> {
   const value = readPref<unknown>('volume', {});
   return value && typeof value === 'object' ? (value as Record<string, PeerVol>) : {};
@@ -92,7 +102,10 @@ function volumeKey(peerId: string, name: string): string {
 /** Сохранённая громкость: по отпечатку, а если его нет — по имени (старые записи). */
 function peerVol(peerId: string, name: string): PeerVol {
   const all = loadPeerVols();
-  return all[volumeKey(peerId, name)] ?? all[name] ?? {};
+  const saved: unknown = all[volumeKey(peerId, name)] ?? all[name];
+  if (!saved || typeof saved !== 'object') return {};
+  const { voice, screen } = saved as Record<string, unknown>;
+  return { voice: savedLevel(voice), screen: savedLevel(screen) };
 }
 
 export function savePeerVol(peerId: string, name: string, patch: PeerVol) {
@@ -311,7 +324,7 @@ function applySavedVolume(peerId: string, name: string) {
 
 /** Громкость голоса собеседника, 0–3 (1 = 100%). Дёргается из VideoTile. */
 export function setPeerVolume(peerId: string, vol: number) {
-  const v = Math.max(0, Math.min(PEER_VOL_MAX, vol));
+  const v = clampVol(vol);
   around.setGain(peerId, 'voice', v);
   const t = tiles.get(peerId);
   if (t) {
@@ -323,7 +336,7 @@ export function setPeerVolume(peerId: string, vol: number) {
 
 /** Громкость звука демонстрации собеседника, 0–3 (1 = 100%). */
 export function setPeerScreenVolume(peerId: string, vol: number) {
-  const v = Math.max(0, Math.min(PEER_VOL_MAX, vol));
+  const v = clampVol(vol);
   around.setGain(peerId, 'screen', v);
   const t = tiles.get(peerId);
   if (t) {
