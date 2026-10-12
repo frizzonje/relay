@@ -5,6 +5,68 @@ it: every entry says what changes on your machine and for the people using it.
 Releases before 1.0.0 are on the [releases page](https://github.com/frizzonje/relay/releases) —
 reconstructing notes for them after the fact would be invention, not history.
 
+## 2.1.0 — 2026-10-12
+
+Nothing to do on your side: no database changes, no new ports, no new `.env`
+lines. `relay update` takes you here; `:latest` stays where it was.
+
+### Added
+
+- **Screen sharing up to 1440p at 60 fps.** A new Streaming tab in settings
+  picks resolution and frame rate for each kind of stream, the stream is
+  encoded on the GPU where the device can, and the streamer sees what
+  actually goes out.
+- **Streams are watched on request.** A shared screen shows a Watch cover
+  instead of playing for everyone; the viewer gets it sized to their tile,
+  and the server stops sending it when they stop watching. Works in direct
+  channels too, capped at 720p there.
+- **An open window picks up a server update.** A tab or desktop window kept
+  open for days used to run the old interface until restarted. It now
+  reloads when the server is updated — at once if hidden, with a "Reload"
+  prompt if in front, and never in the middle of a call.
+- **Voice settings:** an automatic gain toggle, and a new ringtone for
+  incoming calls.
+
+### Changed
+
+- **A media server holds far more people.** Every connection used to take a
+  port of its own from `SFU_RTC_MIN_PORT`–`SFU_RTC_MAX_PORT`, which capped a
+  server at about 50 people. Each media-server worker now listens on one port
+  of that range for all its connections. A worker count larger than the range
+  is lowered with a warning; an explicit `SFU_WORKERS` that does not fit stops
+  the media server at start, saying why.
+- **Clearer voice in direct calls.** The microphone goes out in mono with
+  redundancy against packet loss; screen audio stays stereo.
+
+### Fixed
+
+- **Calls through the media server survive a network blip.** A short drop of
+  either connection resumes the same session instead of tearing it down, a
+  dead connection is noticed in 20 seconds instead of 45, and a blip the
+  connection already survived no longer shows "Lost the server". One silent
+  person no longer makes everyone else rebuild their connection.
+- **Invite links work on a server whose password was set in the panel.**
+  Every such link used to open as "invalid".
+- **Many races closed** — two requests or clicks at once, or an answer
+  arriving after you moved on, no longer double-count, overwrite or land in
+  the wrong place: reactions, uploads and their quotas, device pairing,
+  identity writes, bans, chat replies sent while switching channels, dialogs
+  closed before the server answered, camera and screen prompts.
+- **A background job can no longer take the api down**, and malformed paging
+  or search input returns an empty page instead of a server error.
+- **The desktop app opens chat links in your browser.**
+
+### Security
+
+- **A connection must carry an identity or a valid invite.** One without
+  either used to be let in anonymously, past bans and the newcomer quiet
+  period; it is now refused.
+- **Bursts no longer outrun limits:** login lockout, server passwords, new
+  conversations, uploads and signaling each hold under parallel requests.
+  Per-address limits count an IPv6 subscriber's /64, not one address.
+- **A kicked guest stays out** by network, device and identity, not just the
+  one connection.
+
 ## 2.0.1 — 2026-09-24
 
 ### Fixed
